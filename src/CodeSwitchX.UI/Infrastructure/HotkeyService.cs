@@ -5,7 +5,13 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Infrastructure;
 
-/// <summary>Ctrl+Alt+Y toggles Yard/Cab; Ctrl+Alt+1..9 jumps to a tile.</summary>
+public sealed record HotkeyBinding(int Id, HotkeyModifiers Modifiers, uint VirtualKey, string Label);
+
+/// <summary>
+/// Ctrl+Alt+Y toggles Yard/Cab; Ctrl+Shift+Alt+1..9 jumps to a tile. The digit row deliberately adds Shift:
+/// AltGr is reported to RegisterHotKey as Ctrl+Alt, so a bare Ctrl+Alt+digit hotkey would swallow AltGr+2/3/7/8/9/0
+/// (² ³ { [ ] }) in every application on German and many other European layouts while CodeSwitchX runs.
+/// </summary>
 public sealed class HotkeyService
 {
     private const int ToggleId = 1;
@@ -23,6 +29,23 @@ public sealed class HotkeyService
         _logger = logger;
     }
 
+    public static IReadOnlyList<HotkeyBinding> Bindings { get; } = BuildBindings();
+
+    private static HotkeyBinding[] BuildBindings()
+    {
+        var bindings = new List<HotkeyBinding>
+        {
+            new(ToggleId, HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat, VkY, "Ctrl+Alt+Y"),
+        };
+        for (var i = 1; i <= 9; i++)
+        {
+            bindings.Add(new(JumpBaseId + i, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat,
+                Vk1 + (uint)(i - 1), $"Ctrl+Shift+Alt+{i}"));
+        }
+
+        return bindings.ToArray();
+    }
+
     public void Attach(nint hwnd, ShellViewModel shell)
     {
         _hwnd = hwnd;
@@ -30,10 +53,12 @@ public sealed class HotkeyService
         _source = HwndSource.FromHwnd(hwnd);
         _source?.AddHook(WndProc);
 
-        Register(ToggleId, VkY, "Ctrl+Alt+Y");
-        for (var i = 1; i <= 9; i++)
+        foreach (var binding in Bindings)
         {
-            Register(JumpBaseId + i, Vk1 + (uint)(i - 1), $"Ctrl+Alt+{i}");
+            if (!HotkeyInterop.Register(_hwnd, binding.Id, binding.Modifiers, binding.VirtualKey))
+            {
+                _logger.LogWarning("Global hotkey {Hotkey} is already taken by another application", binding.Label);
+            }
         }
     }
 
@@ -44,23 +69,14 @@ public sealed class HotkeyService
             return;
         }
 
-        HotkeyInterop.Unregister(_hwnd, ToggleId);
-        for (var i = 1; i <= 9; i++)
+        foreach (var binding in Bindings)
         {
-            HotkeyInterop.Unregister(_hwnd, JumpBaseId + i);
+            HotkeyInterop.Unregister(_hwnd, binding.Id);
         }
 
         _source?.RemoveHook(WndProc);
         _source = null;
         _hwnd = 0;
-    }
-
-    private void Register(int id, uint virtualKey, string label)
-    {
-        if (!HotkeyInterop.Register(_hwnd, id, HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat, virtualKey))
-        {
-            _logger.LogWarning("Global hotkey {Hotkey} is already taken by another application", label);
-        }
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)

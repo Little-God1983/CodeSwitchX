@@ -64,6 +64,7 @@ public partial class MainWindow : Window
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();
         Activated += OnActivated;
+        StateChanged += (_, _) => _shell.SetShellMinimized(WindowState == WindowState.Minimized);
     }
 
     /// <summary>Activating the shell raises it above the docked VS Code window; put VS Code back on top while in Cab mode.</summary>

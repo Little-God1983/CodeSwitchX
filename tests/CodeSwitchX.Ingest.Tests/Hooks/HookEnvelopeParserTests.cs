@@ -31,7 +31,7 @@ public class HookEnvelopeParserTests
         e.At.ShouldBe(Received);
         e.RelayPid.ShouldBe(4242);
         e.ParentChain.ShouldBe([new ProcessRef(100, "cmd.exe"), new ProcessRef(200, "claude.exe")]);
-        e.RawJson.ShouldContain("\"tool_name\"");
+        e.RawJson.ShouldNotBeNull().ShouldContain("\"tool_name\"");
     }
 
     [Theory]

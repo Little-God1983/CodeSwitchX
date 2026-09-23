@@ -10,7 +10,10 @@ namespace CodeSwitchX.Ingest.Transcripts;
 
 /// <summary>
 /// Tails every <c>*.jsonl</c> under <c>~/.claude/projects</c> from its stored byte offset and publishes
-/// <see cref="TranscriptUpdated"/> with titles, usage deltas and an inferred state signal.
+/// <see cref="TranscriptUpdated"/> with titles, usage deltas, an inferred state signal and the new cursor.
+/// The cursor is persisted by the <c>PersistenceWriter</c> in the same transaction as the usage, never here.
+/// No failure of a single tick, folder or file ends the loop: indexing must survive Claude Code's cleanup deleting
+/// folders mid-scan, files pending deletion and a locked database.
 /// </summary>
 public sealed class TranscriptIndexer : BackgroundService
 {
@@ -58,10 +61,25 @@ public sealed class TranscriptIndexer : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                if (_dirty || _watcher is null)
+                if (!_dirty && _watcher is not null)
                 {
-                    _dirty = false;
+                    continue;
+                }
+
+                _dirty = false;
+                try
+                {
                     await ScanAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // A bad tick must never end indexing for the rest of the process lifetime.
+                    _logger.LogError(ex, "Transcript scan failed; retrying on the next tick");
+                    _dirty = true;
                 }
             }
         }
@@ -70,32 +88,50 @@ public sealed class TranscriptIndexer : BackgroundService
         }
     }
 
+    /// <summary>One pass over every transcript. Never throws for I/O or store failures; it re-arms itself instead.</summary>
     internal async Task ScanAsync(CancellationToken ct)
     {
         await _scanGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await EnsureCursorsLoadedAsync(ct).ConfigureAwait(false);
+            if (!await TryLoadCursorsAsync(ct).ConfigureAwait(false))
+            {
+                _dirty = true;
+                return;
+            }
+
             if (!Directory.Exists(_claude.ProjectsDirectory))
             {
                 return;
             }
 
-            var changed = new List<TranscriptCursor>();
-            foreach (var path in Directory.EnumerateFiles(_claude.ProjectsDirectory, "*.jsonl", SearchOption.AllDirectories))
+            List<string> files;
+            try
+            {
+                // Materialise first: Claude Code's cleanupPeriodDays can delete a project folder mid-enumeration.
+                files = Directory.EnumerateFiles(_claude.ProjectsDirectory, "*.jsonl",
+                    new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true }).ToList();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Enumerating {Dir} failed; retrying on the next scan", _claude.ProjectsDirectory);
+                _dirty = true;
+                return;
+            }
+
+            foreach (var path in files)
             {
                 ct.ThrowIfCancellationRequested();
-                var cursor = ProcessFileCore(path);
-                if (cursor is not null)
+                try
                 {
-                    changed.Add(cursor);
+                    ProcessFile(path);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Transcript {Path} could not be indexed in this pass", path);
+                    _dirty = true;
                 }
             }
-
-            if (changed.Count > 0)
-            {
-                await _cursorStore.UpsertCursorsAsync(changed, ct).ConfigureAwait(false);
-            }
         }
         finally
         {
@@ -103,32 +139,25 @@ public sealed class TranscriptIndexer : BackgroundService
         }
     }
 
-    internal async Task ProcessFileAsync(string path, CancellationToken ct)
-    {
-        await _scanGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            await EnsureCursorsLoadedAsync(ct).ConfigureAwait(false);
-            var cursor = ProcessFileCore(path);
-            if (cursor is not null)
-            {
-                await _cursorStore.UpsertCursorsAsync([cursor], ct).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            _scanGate.Release();
-        }
-    }
-
-    private async Task EnsureCursorsLoadedAsync(CancellationToken ct)
+    private async Task<bool> TryLoadCursorsAsync(CancellationToken ct)
     {
         if (_cursorsLoaded)
         {
-            return;
+            return true;
         }
 
-        foreach (var cursor in await _cursorStore.GetCursorsAsync(ct).ConfigureAwait(false))
+        IReadOnlyList<TranscriptCursor> cursors;
+        try
+        {
+            cursors = await _cursorStore.GetCursorsAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Transcript cursors could not be loaded; retrying on the next scan");
+            return false;
+        }
+
+        foreach (var cursor in cursors)
         {
             _files[cursor.Path] = new FileState(_options.MessageIdMemory)
             {
@@ -140,9 +169,10 @@ public sealed class TranscriptIndexer : BackgroundService
         }
 
         _cursorsLoaded = true;
+        return true;
     }
 
-    private TranscriptCursor? ProcessFileCore(string path)
+    private void ProcessFile(string path)
     {
         var key = PathNormalizer.Normalize(path);
         FileInfo info;
@@ -151,12 +181,13 @@ public sealed class TranscriptIndexer : BackgroundService
             info = new FileInfo(path);
             if (!info.Exists)
             {
-                return null;
+                return;
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return null;
+            _logger.LogDebug(ex, "Transcript {Path} is not accessible right now", path);
+            return;
         }
 
         if (!_files.TryGetValue(key, out var state))
@@ -167,7 +198,7 @@ public sealed class TranscriptIndexer : BackgroundService
 
         if (info.Length == state.Offset && state.Offset > 0)
         {
-            return null;
+            return;
         }
 
         TailResult tail;
@@ -175,10 +206,10 @@ public sealed class TranscriptIndexer : BackgroundService
         {
             tail = TranscriptTailer.ReadNewLines(path, state.Offset, _options.MaxBytesPerPass);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogDebug(ex, "Transcript {Path} is not readable right now", path);
-            return null;
+            return;
         }
 
         if (tail.Truncated)
@@ -194,7 +225,7 @@ public sealed class TranscriptIndexer : BackgroundService
 
         if (tail.Lines.Count == 0 && tail.NewOffset == state.Offset)
         {
-            return null;
+            return;
         }
 
         var lastWriteUtc = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
@@ -202,18 +233,12 @@ public sealed class TranscriptIndexer : BackgroundService
         var update = BuildUpdate(path, state, tail.Lines, historical, IsSubagentTranscript(path));
         state.Offset = tail.NewOffset;
         state.LastWriteUtc = lastWriteUtc;
-        if (update is not null)
-        {
-            _bus.Publish(new TranscriptUpdated(update));
-        }
 
-        return new TranscriptCursor
-        {
-            Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
-        };
+        var cursor = new TranscriptCursor { Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId };
+        _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
 
-    private TranscriptUpdate? BuildUpdate(string path, FileState state, IReadOnlyList<string> lines, bool historical, bool subagent)
+    private TranscriptUpdate BuildUpdate(string path, FileState state, IReadOnlyList<string> lines, bool historical, bool subagent)
     {
         var usage = new List<UsageDelta>();
         string? newTitle = null;
@@ -314,10 +339,12 @@ public sealed class TranscriptIndexer : BackgroundService
             };
         }
 
+        // Spec: a write within the working window means Working; otherwise a trailing assistant tool call
+        // without its result means Waiting (best effort, e.g. a permission prompt); otherwise Idle.
         var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
-        var inferred = !recentlyWritten ? SessionSignal.Stop
+        var inferred = recentlyWritten ? SessionSignal.ToolUse
             : pendingToolUse ? SessionSignal.Notification
-            : SessionSignal.ToolUse;
+            : SessionSignal.Stop;
 
         return new TranscriptUpdate
         {
@@ -331,6 +358,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Usage = usage,
             LatestContext = latestContext,
             InferredSignal = inferred,
+            PendingToolUse = pendingToolUse,
             Historical = historical,
         };
     }

@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using NSubstitute;
 
 namespace CodeSwitchX.Data.Tests;
 
@@ -41,7 +42,7 @@ public class PersistenceWriterTests : IAsyncLifetime
 
         await _writer.FlushAsync(CancellationToken.None);
 
-        var records = await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1));
+        var records = await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1), TestContext.Current.CancellationToken);
         records.ShouldHaveSingleItem().State.ShouldBe(SessionState.Working);
         _writer.Pending.ShouldBe(0);
     }
@@ -56,7 +57,7 @@ public class PersistenceWriterTests : IAsyncLifetime
 
         await _writer.FlushAsync(CancellationToken.None);
 
-        var stored = (await _db.Get<ISessionStore>().GetEventsAsync("s1", 10)).ShouldHaveSingleItem();
+        var stored = (await _db.Get<ISessionStore>().GetEventsAsync("s1", 10, TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
         stored.Kind.ShouldBe("PreToolUse");
         stored.ToolName.ShouldBe("Edit");
         stored.PayloadJson.ShouldBeNull();
@@ -79,7 +80,7 @@ public class PersistenceWriterTests : IAsyncLifetime
 
         await _writer.FlushAsync(CancellationToken.None);
 
-        var buckets = await _db.Get<IUsageStore>().GetBucketsAsync(at, at.AddMinutes(5));
+        var buckets = await _db.Get<IUsageStore>().GetBucketsAsync(at, at.AddMinutes(5), TestContext.Current.CancellationToken);
         buckets.Count.ShouldBe(2);
         buckets[0].Input.ShouldBe(30);
         buckets[0].CacheRead.ShouldBe(300);
@@ -96,7 +97,7 @@ public class PersistenceWriterTests : IAsyncLifetime
         _time.Advance(TimeSpan.FromMilliseconds(300));
         await WaitUntilAsync(() => _writer.Pending == 0);
 
-        (await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1))).Count.ShouldBe(1);
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1), TestContext.Current.CancellationToken)).Count.ShouldBe(1);
         await _writer.StopAsync(CancellationToken.None);
     }
 
@@ -108,5 +109,51 @@ public class PersistenceWriterTests : IAsyncLifetime
         }
 
         condition().ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Usage_and_its_transcript_cursor_are_committed_in_one_store_call()
+    {
+        var usage = Substitute.For<IUsageStore>();
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), usage, _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        writer.Subscribe();
+        var at = _time.GetUtcNow();
+        var cursor = new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 512, LastWriteUtc = at, SessionId = "s1" };
+        _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = cursor.Path, ObservedAt = at, Cursor = cursor,
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+        }));
+
+        await writer.FlushAsync(CancellationToken.None);
+
+        await usage.Received(1).CommitAsync(
+            Arg.Is<IReadOnlyCollection<UsageBucket>>(b => b.Single().Input == 10),
+            Arg.Is<IReadOnlyCollection<TranscriptCursor>>(c => c.Single().ByteOffset == 512),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_failed_batch_is_retried_on_the_next_flush_instead_of_being_dropped()
+    {
+        var usage = Substitute.For<IUsageStore>();
+        usage.CommitAsync(Arg.Any<IReadOnlyCollection<UsageBucket>>(), Arg.Any<IReadOnlyCollection<TranscriptCursor>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => throw new InvalidOperationException("database is locked"), _ => Task.CompletedTask);
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), usage, _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        writer.Subscribe();
+        var at = _time.GetUtcNow();
+        _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+        }));
+
+        await writer.FlushAsync(CancellationToken.None);
+        await writer.FlushAsync(CancellationToken.None);
+
+        await usage.Received(2).CommitAsync(
+            Arg.Is<IReadOnlyCollection<UsageBucket>>(b => b.Single().Input == 10),
+            Arg.Any<IReadOnlyCollection<TranscriptCursor>>(),
+            Arg.Any<CancellationToken>());
     }
 }

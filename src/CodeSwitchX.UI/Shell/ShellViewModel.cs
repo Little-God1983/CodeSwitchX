@@ -25,6 +25,8 @@ public sealed partial class ShellViewModel : ObservableObject
     [ObservableProperty]
     private string? _statusMessage;
 
+    private bool _shellMinimized;
+
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
         HostManager host, ILogger<ShellViewModel> logger)
     {
@@ -148,9 +150,42 @@ public sealed partial class ShellViewModel : ObservableObject
     [RelayCommand]
     public void CloseSettings() => Mode = ShellMode.Yard;
 
+    /// <summary>
+    /// Called by the window when it is minimised or restored. A minimised shell reports an off-screen host rectangle;
+    /// docking VS Code there would leave an invisible window holding keyboard focus, so it is hidden instead and
+    /// docked again on restore.
+    /// </summary>
+    public void SetShellMinimized(bool minimized)
+    {
+        if (_shellMinimized == minimized)
+        {
+            return;
+        }
+
+        _shellMinimized = minimized;
+        if (Mode != ShellMode.Cab)
+        {
+            return;
+        }
+
+        if (minimized)
+        {
+            _host.HideAll();
+        }
+        else if (ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
+        {
+            _host.ShowInCab(id, rect);
+        }
+    }
+
     /// <summary>Called by the Cab view whenever the host area's screen rectangle changes.</summary>
     public void UpdateCabRect(ScreenRect rect)
     {
+        if (_shellMinimized)
+        {
+            return; // a minimised window measures at roughly (-32000, -32000)
+        }
+
         Cab.LastHostRect = rect;
         if (Mode == ShellMode.Cab && ActiveWorkspaceId is { } id)
         {

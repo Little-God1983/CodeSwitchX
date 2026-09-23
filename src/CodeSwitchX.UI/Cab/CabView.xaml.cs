@@ -48,9 +48,10 @@ public partial class CabView : UserControl
 
     private void Publish()
     {
-        if (!IsVisible || HostArea.ActualWidth <= 0 || HostArea.ActualHeight <= 0 || PresentationSource.FromVisual(HostArea) is not { } source)
+        if (!IsVisible || _window?.WindowState == WindowState.Minimized || HostArea.ActualWidth <= 0 || HostArea.ActualHeight <= 0
+            || PresentationSource.FromVisual(HostArea) is not { } source)
         {
-            return;
+            return; // a minimised window reports an off-screen rectangle; the shell hides VS Code instead
         }
 
         var scale = source.CompositionTarget?.TransformToDevice ?? Matrix.Identity;

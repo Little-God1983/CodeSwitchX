@@ -50,6 +50,11 @@ public sealed class HostManager
         }
     }
 
+    /// <summary>
+    /// Starts (or adopts) VS Code for the workspace and waits for its window. Whatever goes wrong during discovery,
+    /// the record never stays in <see cref="HostState.Starting"/>: it ends Running or Stopped with the reason, so the tile
+    /// can always be opened again.
+    /// </summary>
     public async Task<HostedWorkspace> OpenAsync(Workspace workspace, CancellationToken ct)
     {
         HostedWorkspace hosted;
@@ -74,6 +79,25 @@ public sealed class HostManager
             Transition(hosted, HostState.Starting, error: null);
         }
 
+        try
+        {
+            await DiscoverAsync(workspace, hosted, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            Stop(hosted, "Opening was cancelled");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Opening {Workspace} failed", workspace.Name);
+            Stop(hosted, ex.Message);
+        }
+
+        return hosted;
+    }
+
+    private async Task DiscoverAsync(Workspace workspace, HostedWorkspace hosted, CancellationToken ct)
+    {
         var displayName = VsCodeLauncher.DisplayNameForMatching(workspace);
         var before = _windows.TopLevelWindows();
 
@@ -82,54 +106,72 @@ public sealed class HostManager
         var existing = VsCodeWindowMatcher.FindExisting(before, displayName, _windows.ProcessName);
         if (existing is not null)
         {
-            lock (_gate)
+            if (TryAdopt(hosted, existing, cloak: false))
             {
-                Adopt(hosted, existing);
-                Transition(hosted, HostState.Running, error: null);
+                _logger.LogInformation("Adopted existing VS Code window {Hwnd} for {Workspace}", existing.Hwnd, workspace.Name);
             }
 
-            _logger.LogInformation("Adopted existing VS Code window {Hwnd} for {Workspace}", existing.Hwnd, workspace.Name);
-            return hosted;
+            return;
         }
 
         var launch = _launcher.Launch(workspace);
         if (!launch.Started)
         {
             _logger.LogWarning("Launching VS Code for {Workspace} failed: {Error}", workspace.Name, launch.Error);
-            lock (_gate)
-            {
-                Transition(hosted, HostState.Stopped, launch.Error ?? "launch failed");
-            }
-
-            return hosted;
+            Stop(hosted, launch.Error ?? "launch failed");
+            return;
         }
 
         var deadline = _time.GetUtcNow() + _options.DiscoveryTimeout;
         while (_time.GetUtcNow() < deadline)
         {
             await Task.Delay(_options.PollInterval, _time, ct).ConfigureAwait(false);
+            if (!IsTracked(hosted))
+            {
+                Stop(hosted, "Workspace was removed while VS Code was starting");
+                return;
+            }
+
             var match = VsCodeWindowMatcher.FindNew(before, _windows.TopLevelWindows(), displayName, _windows.ProcessName);
             if (match is not null)
             {
-                lock (_gate)
+                // Keep the fresh window out of sight until the Cab docks it, so it never flashes undocked on the desktop.
+                if (TryAdopt(hosted, match, cloak: true))
                 {
-                    Adopt(hosted, match);
-                    // Keep the fresh window out of sight until the Cab docks it, so it never flashes undocked on the desktop.
-                    _docker.Cloak(match.Hwnd);
-                    Transition(hosted, HostState.Running, error: null);
+                    _logger.LogInformation("VS Code window {Hwnd} found for {Workspace}", match.Hwnd, workspace.Name);
                 }
 
-                _logger.LogInformation("VS Code window {Hwnd} found for {Workspace}", match.Hwnd, workspace.Name);
-                return hosted;
+                return;
             }
         }
 
+        Stop(hosted, $"No VS Code window titled '{displayName}' appeared within {_options.DiscoveryTimeout.TotalSeconds:0}s");
+    }
+
+    /// <summary>Records the window as Running, unless the workspace was forgotten meanwhile: then the window is left alone, uncloaked.</summary>
+    private bool TryAdopt(HostedWorkspace hosted, WindowInfo window, bool cloak)
+    {
         lock (_gate)
         {
-            Transition(hosted, HostState.Stopped, $"No VS Code window titled '{displayName}' appeared within {_options.DiscoveryTimeout.TotalSeconds:0}s");
-        }
+            if (!IsTrackedLocked(hosted))
+            {
+                Transition(hosted, HostState.Stopped, "Workspace was removed while VS Code was starting");
+                return false;
+            }
 
-        return hosted;
+            hosted.Hwnd = window.Hwnd;
+            hosted.ProcessId = window.ProcessId;
+            hosted.StartedAt = DateTimeOffset.UtcNow;
+            hosted.Visible = false;
+            hosted.TargetRect = null;
+            if (cloak)
+            {
+                _docker.Cloak(window.Hwnd);
+            }
+
+            Transition(hosted, HostState.Running, error: null);
+            return true;
+        }
     }
 
     public void ShowInCab(Guid workspaceId, ScreenRect rect)
@@ -227,13 +269,26 @@ public sealed class HostManager
         }
     }
 
-    private static void Adopt(HostedWorkspace hosted, WindowInfo window)
+    private bool IsTracked(HostedWorkspace hosted)
     {
-        hosted.Hwnd = window.Hwnd;
-        hosted.ProcessId = window.ProcessId;
-        hosted.StartedAt = DateTimeOffset.UtcNow;
-        hosted.Visible = false;
-        hosted.TargetRect = null;
+        lock (_gate)
+        {
+            return IsTrackedLocked(hosted);
+        }
+    }
+
+    private bool IsTrackedLocked(HostedWorkspace hosted) =>
+        _hosted.TryGetValue(hosted.WorkspaceId, out var tracked) && ReferenceEquals(tracked, hosted);
+
+    private void Stop(HostedWorkspace hosted, string error)
+    {
+        lock (_gate)
+        {
+            if (hosted.State != HostState.Stopped)
+            {
+                Transition(hosted, HostState.Stopped, error);
+            }
+        }
     }
 
     private void Transition(HostedWorkspace hosted, HostState state, string? error)

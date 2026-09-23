@@ -151,14 +151,15 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task Cursors_are_persisted_after_each_scan_and_restored_on_start()
+    public async Task Cursors_travel_with_the_update_so_they_commit_together_with_the_usage_and_restored_cursors_skip_covered_bytes()
     {
         File.WriteAllLines(Transcript("s1"), [User("s1", "Fix")]);
         await _indexer.ScanAsync(CancellationToken.None);
 
-        await _cursors.Received(1).UpsertCursorsAsync(
-            Arg.Is<IReadOnlyCollection<TranscriptCursor>>(c => c.Count == 1 && c.First().SessionId == "s1" && c.First().ByteOffset == new FileInfo(Transcript("s1")).Length),
-            Arg.Any<CancellationToken>());
+        var cursor = _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull();
+        cursor.SessionId.ShouldBe("s1");
+        cursor.ByteOffset.ShouldBe(new FileInfo(Transcript("s1")).Length);
+        await _cursors.DidNotReceive().UpsertCursorsAsync(Arg.Any<IReadOnlyCollection<TranscriptCursor>>(), Arg.Any<CancellationToken>());
 
         var restored = Substitute.For<IUsageStore>();
         restored.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
@@ -174,18 +175,24 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task Inferred_signal_is_working_when_recent_waiting_with_pending_tool_and_stop_otherwise()
+    public async Task Inferred_signal_follows_the_spec_recent_write_is_working_then_pending_tool_is_waiting_otherwise_idle()
     {
         var recent = _time.GetUtcNow().AddSeconds(-2).ToString("O");
         File.WriteAllLines(Transcript("recent"), [User("recent", "go", recent), Assistant("recent", "m", TextBlock, ts: recent)]);
-        File.WriteAllLines(Transcript("pending"), [Assistant("pending", "m", ToolBlock, ts: recent)]);
-        File.WriteAllLines(Transcript("old"), [User("old", "go"), Assistant("old", "m", TextBlock)]);
+        File.WriteAllLines(Transcript("recent-pending"), [Assistant("recent-pending", "m", ToolBlock, ts: recent)]);
+        File.WriteAllLines(Transcript("quiet-pending"), [Assistant("quiet-pending", "m", ToolBlock)]);
+        File.WriteAllLines(Transcript("quiet"), [User("quiet", "go"), Assistant("quiet", "m", TextBlock)]);
 
         await _indexer.ScanAsync(CancellationToken.None);
 
-        _updates.Single(u => u.SessionId == "recent").InferredSignal.ShouldBe(SessionSignal.ToolUse);
-        _updates.Single(u => u.SessionId == "pending").InferredSignal.ShouldBe(SessionSignal.Notification);
-        _updates.Single(u => u.SessionId == "old").InferredSignal.ShouldBe(SessionSignal.Stop);
+        var recentUpdate = _updates.Single(u => u.SessionId == "recent");
+        recentUpdate.InferredSignal.ShouldBe(SessionSignal.ToolUse);
+        recentUpdate.PendingToolUse.ShouldBe(false);
+        var recentPending = _updates.Single(u => u.SessionId == "recent-pending");
+        recentPending.InferredSignal.ShouldBe(SessionSignal.ToolUse, "a fresh write is Working even with a tool call in flight");
+        recentPending.PendingToolUse.ShouldBe(true);
+        _updates.Single(u => u.SessionId == "quiet-pending").InferredSignal.ShouldBe(SessionSignal.Notification);
+        _updates.Single(u => u.SessionId == "quiet").InferredSignal.ShouldBe(SessionSignal.Stop);
     }
 
     [Fact]
@@ -225,5 +232,21 @@ public class TranscriptIndexerTests : IDisposable
         subagent.InferredSignal.ShouldBeNull();
         subagent.LatestContext.ShouldBeNull();
         subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
+    }
+
+    [Fact]
+    public async Task A_scan_that_fails_to_load_cursors_does_not_throw_and_the_next_scan_indexes_normally()
+    {
+        _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(
+            _ => throw new InvalidOperationException("database is locked"),
+            _ => Task.FromResult<IReadOnlyList<TranscriptCursor>>([]));
+        File.WriteAllLines(Transcript("s1"), [User("s1", "Fix")]);
+
+        await Should.NotThrowAsync(() => _indexer.ScanAsync(CancellationToken.None));
+        _updates.ShouldBeEmpty();
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().SessionId.ShouldBe("s1");
     }
 }

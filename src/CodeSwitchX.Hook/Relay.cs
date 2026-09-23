@@ -8,12 +8,20 @@ namespace CodeSwitchX.Hook;
 /// <summary>
 /// Forwards one Claude Code hook payload (stdin) to the running CodeSwitchX instance.
 /// Never writes to stdout, never throws, always exits 0, so Claude Code is never disturbed.
+/// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
+/// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
 internal static class Relay
 {
     internal const int ConnectTimeoutMs = 150;
     internal const int TotalTimeoutMs = 1000;
-    internal const int MaxPayloadBytes = 1024 * 1024;
+    internal const int MaxStdinBytes = 16 * 1024 * 1024;
+
+    /// <summary>Strings in the forwarded payload are cut here: the engine only needs ids, names and the start of a prompt.</summary>
+    internal const int MaxStringChars = 2000;
+
+    /// <summary>Nested objects and arrays larger than this (raw JSON) are omitted from the forwarded payload.</summary>
+    internal const int MaxNestedBytes = 8 * 1024;
     internal const int MaxParentDepth = 8;
 
     internal static string DefaultDataDirectory =>
@@ -89,6 +97,10 @@ internal static class Relay
         {
             return false;
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return true; // exists but cannot be queried
+        }
     }
 
     internal static string? ReadToken(string file)
@@ -112,9 +124,9 @@ internal static class Relay
     internal static async Task<string> ReadPayloadAsync(Stream stdin)
     {
         using var buffer = new MemoryStream();
-        var chunk = new byte[16 * 1024];
+        var chunk = new byte[64 * 1024];
         int read;
-        while (buffer.Length < MaxPayloadBytes && (read = await stdin.ReadAsync(chunk).ConfigureAwait(false)) > 0)
+        while (buffer.Length < MaxStdinBytes && (read = await stdin.ReadAsync(chunk).ConfigureAwait(false)) > 0)
         {
             buffer.Write(chunk, 0, read);
         }
@@ -146,18 +158,63 @@ internal static class Relay
             {
                 using (document)
                 {
-                    document.RootElement.WriteTo(writer);
+                    if (document.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        WriteTrimmedObject(writer, document.RootElement);
+                    }
+                    else
+                    {
+                        document.RootElement.WriteTo(writer);
+                    }
                 }
             }
             else
             {
-                writer.WriteStringValue(payload);
+                writer.WriteStringValue(Truncate(payload));
             }
 
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
+    }
+
+    private static void WriteTrimmedObject(Utf8JsonWriter writer, JsonElement obj)
+    {
+        writer.WriteStartObject();
+        foreach (var property in obj.EnumerateObject())
+        {
+            switch (property.Value.ValueKind)
+            {
+                case JsonValueKind.String:
+                    writer.WriteString(property.Name, Truncate(property.Value.GetString() ?? string.Empty));
+                    break;
+                case JsonValueKind.Object or JsonValueKind.Array when property.Value.GetRawText().Length > MaxNestedBytes:
+                    // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size.
+                    break;
+                default:
+                    property.WriteTo(writer);
+                    break;
+            }
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static string Truncate(string value)
+    {
+        if (value.Length <= MaxStringChars)
+        {
+            return value;
+        }
+
+        var length = MaxStringChars;
+        if (char.IsHighSurrogate(value[length - 1]))
+        {
+            length--; // never split a surrogate pair; the writer rejects lone surrogates
+        }
+
+        return value[..length];
     }
 
     private static bool TryParseJson(string text, out JsonDocument document)

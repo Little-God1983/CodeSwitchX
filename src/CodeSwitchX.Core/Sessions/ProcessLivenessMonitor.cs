@@ -26,7 +26,15 @@ public sealed class ProcessLivenessMonitor : BackgroundService
         using var timer = new PeriodicTimer(Interval, _time);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
-            Tick();
+            try
+            {
+                Tick();
+            }
+            catch (Exception ex)
+            {
+                // One bad tick must not end liveness detection for the rest of the process lifetime.
+                _logger.LogError(ex, "Liveness tick failed; retrying on the next interval");
+            }
         }
     }
 
@@ -39,7 +47,19 @@ public sealed class ProcessLivenessMonitor : BackgroundService
                 continue;
             }
 
-            if (!_probe.IsAlive(pid))
+            bool alive;
+            try
+            {
+                alive = _probe.IsAlive(pid);
+            }
+            catch (Exception ex)
+            {
+                // A PID we cannot query (access denied, PID reused by a protected process) is not evidence of death.
+                _logger.LogDebug(ex, "Cannot query process {Pid} for session {SessionId}; leaving it alone", pid, snapshot.SessionId);
+                continue;
+            }
+
+            if (!alive)
             {
                 _logger.LogInformation("Process {Pid} for session {SessionId} is gone", pid, snapshot.SessionId);
                 _engine.MarkProcessGone(snapshot.SessionId);

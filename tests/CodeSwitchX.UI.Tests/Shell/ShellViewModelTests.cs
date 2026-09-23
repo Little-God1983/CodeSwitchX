@@ -120,4 +120,27 @@ public class ShellViewModelTests
         _h.Docker.Received().Cloak(500);
         _h.Docker.DidNotReceive().Uncloak(500);
     }
+
+    [Fact]
+    public async Task Minimising_the_shell_in_cab_mode_hides_vscode_and_restoring_redocks_it()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _h.Shell.Cab.LastHostRect = rect;
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Docker.ClearReceivedCalls();
+
+        _h.Shell.SetShellMinimized(true);
+        _h.Docker.Received(1).Cloak(500);
+
+        var offScreen = ScreenRect.FromSize(-32000, -32000, 1600, 900);
+        _h.Shell.UpdateCabRect(offScreen);
+        _h.Docker.DidNotReceive().MoveTo(500, offScreen);
+
+        _h.Shell.SetShellMinimized(false);
+        _h.Docker.Received(1).Uncloak(500);
+        _h.Docker.Received(1).MoveTo(500, rect);
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+    }
 }

@@ -21,6 +21,12 @@ public sealed record SessionSnapshot
 
     /// <summary>True once a hook event arrived in this process; not persisted, so restored sessions follow inference until hooks speak again.</summary>
     public bool HookSeen { get; init; }
+
+    /// <summary>Transcript ends with a tool call awaiting its result; drives the inferred Working-to-Waiting decay. Not persisted.</summary>
+    public bool AwaitingToolResult { get; init; }
+
+    /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
+    public long Version { get; init; }
     public int? ClaudePid { get; init; }
     public TokenUsage LatestContext { get; init; }
 }

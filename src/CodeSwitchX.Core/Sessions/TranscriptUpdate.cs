@@ -18,4 +18,10 @@ public sealed record TranscriptUpdate
 
     /// <summary>True when the transcript was last written longer ago than the history window; such updates never create sessions.</summary>
     public bool Historical { get; init; }
+
+    /// <summary>Whether the transcript ends with an assistant tool call that has no result yet; null when unknown (sub-agent files).</summary>
+    public bool? PendingToolUse { get; init; }
+
+    /// <summary>The byte offset this update brings the file to; persisted together with the usage it covers.</summary>
+    public Persistence.TranscriptCursor? Cursor { get; init; }
 }

@@ -9,10 +9,14 @@ namespace CodeSwitchX.Data;
 
 /// <summary>
 /// Drains bus messages into SQLite in batches so bursts of tool events never block the publisher
-/// or contend on the database.
+/// or contend on the database. Usage deltas and the transcript cursors that cover them are committed in one
+/// transaction; a batch whose write fails is kept and retried on the next flush instead of being dropped.
 /// </summary>
 public sealed class PersistenceWriter : BackgroundService
 {
+    /// <summary>Upper bound on retained records after repeated failures; beyond it the retained batch is dropped with an error.</summary>
+    internal const int MaxCarriedItems = 5000;
+
     private readonly IEventBus _bus;
     private readonly ISessionStore _sessions;
     private readonly IUsageStore _usage;
@@ -26,6 +30,7 @@ public sealed class PersistenceWriter : BackgroundService
     private readonly Channel<bool> _flushSignal = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _flushTimer;
+    private Batch? _carry;
     private int _pending;
 
     public PersistenceWriter(IEventBus bus, ISessionStore sessions, IUsageStore usage, TimeProvider time,
@@ -53,7 +58,7 @@ public sealed class PersistenceWriter : BackgroundService
         _subscriptions.Add(_bus.Subscribe<HookEventReceived>(m => Enqueue(m.Event)));
         _subscriptions.Add(_bus.Subscribe<TranscriptUpdated>(m =>
         {
-            if (m.Update.Usage.Count > 0)
+            if (m.Update.Usage.Count > 0 || m.Update.Cursor is not null)
             {
                 Enqueue(m.Update);
             }
@@ -88,64 +93,44 @@ public sealed class PersistenceWriter : BackgroundService
 
     internal async Task FlushAsync(CancellationToken ct)
     {
-        var sessions = new Dictionary<string, SessionRecord>(StringComparer.Ordinal);
-        var events = new List<SessionEventRecord>();
-        var buckets = new Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket>();
+        var batch = _carry ?? new Batch();
+        _carry = null;
         var taken = 0;
 
         while (taken < _options.MaxBatch && _queue.Reader.TryRead(out var item))
         {
             taken++;
-            switch (item)
-            {
-                case SessionSnapshot snapshot:
-                    sessions[snapshot.SessionId] = SessionRecord.FromSnapshot(snapshot);
-                    break;
-                case HookEvent hook:
-                    events.Add(new SessionEventRecord
-                    {
-                        SessionId = hook.SessionId,
-                        Kind = hook.EventName,
-                        ToolName = hook.ToolName,
-                        At = hook.At,
-                        PayloadJson = _options.StorePayloads ? hook.RawJson : null,
-                    });
-                    break;
-                case TranscriptUpdate update:
-                    foreach (var delta in update.Usage)
-                    {
-                        var minute = UsageBucket.FloorToMinute(delta.At);
-                        var key = (update.SessionId, delta.Model, minute);
-                        if (!buckets.TryGetValue(key, out var bucket))
-                        {
-                            bucket = new UsageBucket { SessionId = update.SessionId, Model = delta.Model, MinuteUtc = minute };
-                            buckets[key] = bucket;
-                        }
-
-                        bucket.Input += delta.Tokens.Input;
-                        bucket.Output += delta.Tokens.Output;
-                        bucket.CacheWrite += delta.Tokens.CacheWrite;
-                        bucket.CacheRead += delta.Tokens.CacheRead;
-                    }
-
-                    break;
-            }
+            batch.Add(item, _options.StorePayloads);
         }
 
-        if (taken == 0)
+        if (batch.IsEmpty)
         {
             return;
         }
 
         try
         {
-            await _sessions.UpsertAsync(sessions.Values.ToArray(), ct).ConfigureAwait(false);
-            await _sessions.AppendEventsAsync(events, ct).ConfigureAwait(false);
-            await _usage.AddUsageAsync(buckets.Values.ToArray(), ct).ConfigureAwait(false);
+            // Each step clears what it saved, so a retry after a failure only repeats the part that did not commit
+            // (events are append-only and must not be written twice).
+            await _sessions.UpsertAsync(batch.Sessions.Values.ToArray(), ct).ConfigureAwait(false);
+            batch.Sessions.Clear();
+            await _sessions.AppendEventsAsync(batch.Events.ToArray(), ct).ConfigureAwait(false);
+            batch.Events.Clear();
+            await _usage.CommitAsync(batch.Buckets.Values.ToArray(), batch.Cursors.Values.ToArray(), ct).ConfigureAwait(false);
+            batch.Buckets.Clear();
+            batch.Cursors.Clear();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogError(ex, "Persisting a batch of {Count} items failed; the batch is dropped", taken);
+            if (batch.Count > MaxCarriedItems)
+            {
+                _logger.LogError(ex, "Persisting {Count} retained items keeps failing; dropping them", batch.Count);
+            }
+            else
+            {
+                _carry = batch;
+                _logger.LogWarning(ex, "Persisting a batch of {Count} items failed; it will be retried on the next flush", batch.Count);
+            }
         }
         finally
         {
@@ -171,6 +156,61 @@ public sealed class PersistenceWriter : BackgroundService
         if (_queue.Writer.TryWrite(item))
         {
             Interlocked.Increment(ref _pending);
+        }
+    }
+
+    /// <summary>Records collapsed for one write: latest snapshot per session, every hook event, usage per minute bucket, latest cursor per file.</summary>
+    private sealed class Batch
+    {
+        public Dictionary<string, SessionRecord> Sessions { get; } = new(StringComparer.Ordinal);
+        public List<SessionEventRecord> Events { get; } = [];
+        public Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket> Buckets { get; } = [];
+        public Dictionary<string, TranscriptCursor> Cursors { get; } = new(StringComparer.Ordinal);
+
+        public int Count => Sessions.Count + Events.Count + Buckets.Count + Cursors.Count;
+        public bool IsEmpty => Count == 0;
+
+        public void Add(object item, bool storePayloads)
+        {
+            switch (item)
+            {
+                case SessionSnapshot snapshot:
+                    Sessions[snapshot.SessionId] = SessionRecord.FromSnapshot(snapshot);
+                    break;
+                case HookEvent hook:
+                    Events.Add(new SessionEventRecord
+                    {
+                        SessionId = hook.SessionId,
+                        Kind = hook.EventName,
+                        ToolName = hook.ToolName,
+                        At = hook.At,
+                        PayloadJson = storePayloads ? hook.RawJson : null,
+                    });
+                    break;
+                case TranscriptUpdate update:
+                    foreach (var delta in update.Usage)
+                    {
+                        var minute = UsageBucket.FloorToMinute(delta.At);
+                        var key = (update.SessionId, delta.Model, minute);
+                        if (!Buckets.TryGetValue(key, out var bucket))
+                        {
+                            bucket = new UsageBucket { SessionId = update.SessionId, Model = delta.Model, MinuteUtc = minute };
+                            Buckets[key] = bucket;
+                        }
+
+                        bucket.Input += delta.Tokens.Input;
+                        bucket.Output += delta.Tokens.Output;
+                        bucket.CacheWrite += delta.Tokens.CacheWrite;
+                        bucket.CacheRead += delta.Tokens.CacheRead;
+                    }
+
+                    if (update.Cursor is { } cursor)
+                    {
+                        Cursors[cursor.Path] = cursor;
+                    }
+
+                    break;
+            }
         }
     }
 }

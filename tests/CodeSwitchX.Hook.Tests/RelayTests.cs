@@ -92,4 +92,21 @@ public class RelayTests : IDisposable
 
         (await Relay.RunAsync(["Stop"], Stdin("{}"), _dir)).ShouldBe(0);
     }
+
+    [Fact]
+    public void Envelope_trims_oversized_fields_so_the_event_still_fits_the_api_body_limit()
+    {
+        var payload = $$"""{"session_id":"s1","hook_event_name":"PostToolUse","tool_name":"Read","prompt":"{{new string('ä', 10_000)}}","tool_input":{"file_path":"{{new string('x', 20_000)}}"},"tool_response":"{{new string('y', 3_000_000)}}"}""";
+
+        var json = Relay.BuildEnvelope("PostToolUse", payload, DateTimeOffset.UtcNow, 1, []);
+
+        json.Length.ShouldBeLessThan(64 * 1024);
+        using var doc = JsonDocument.Parse(json);
+        var trimmed = doc.RootElement.GetProperty("payload");
+        trimmed.GetProperty("session_id").GetString().ShouldBe("s1");
+        trimmed.GetProperty("tool_name").GetString().ShouldBe("Read");
+        trimmed.GetProperty("prompt").GetString()!.Length.ShouldBeLessThanOrEqualTo(Relay.MaxStringChars);
+        trimmed.GetProperty("tool_response").GetString()!.Length.ShouldBeLessThanOrEqualTo(Relay.MaxStringChars);
+        trimmed.TryGetProperty("tool_input", out _).ShouldBeFalse("nested values above the size cap are dropped");
+    }
 }

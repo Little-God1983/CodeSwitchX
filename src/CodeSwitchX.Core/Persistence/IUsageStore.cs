@@ -7,4 +7,7 @@ public interface IUsageStore
     Task<IReadOnlyList<UsageBucket>> GetBucketsAsync(DateTimeOffset fromUtc, DateTimeOffset toUtc, CancellationToken ct = default);
     Task<IReadOnlyList<TranscriptCursor>> GetCursorsAsync(CancellationToken ct = default);
     Task UpsertCursorsAsync(IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default);
+
+    /// <summary>Writes usage deltas and transcript cursors in one transaction, so a cursor never advances past usage that was not saved.</summary>
+    Task CommitAsync(IReadOnlyCollection<UsageBucket> deltas, IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default);
 }

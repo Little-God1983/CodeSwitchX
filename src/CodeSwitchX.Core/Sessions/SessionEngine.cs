@@ -4,7 +4,11 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.Sessions;
 
-/// <summary>Reconciles hook events, transcript facts and liveness into one <see cref="SessionSnapshot"/> per chat.</summary>
+/// <summary>
+/// Reconciles hook events, transcript facts and liveness into one <see cref="SessionSnapshot"/> per chat.
+/// Every change is stamped with a monotonic <see cref="SessionSnapshot.Version"/> and published while the engine
+/// lock is held, so subscribers always receive the snapshots of a session in the order they were produced.
+/// </summary>
 public sealed class SessionEngine : IDisposable
 {
     private static readonly HashSet<string> ShellNames = new(StringComparer.OrdinalIgnoreCase)
@@ -23,6 +27,7 @@ public sealed class SessionEngine : IDisposable
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.Ordinal);
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _sweepTimer;
+    private long _version;
 
     public SessionEngine(IEventBus bus, IWorkspaceResolver resolver, TimeProvider time, ILogger<SessionEngine> logger,
         SessionEngineOptions? options = null)
@@ -55,8 +60,9 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>
     /// Loads persisted snapshots without publishing. Hook evidence does not survive a restart (<see cref="SessionSnapshot.HookSeen"/>
-    /// resets), and a session that was Working/Waiting but has been quiet longer than the inferred idle window is
-    /// downgraded to Idle, because its Stop or SessionEnd hook most likely fired while the app was down.
+    /// resets). A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
+    /// hook most likely fired while the app was down. Waiting sessions are left alone: a permission prompt is quiet by
+    /// nature, and the liveness monitor (via the recorded claude PID) decides when such a chat is really gone.
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -66,7 +72,7 @@ public sealed class SessionEngine : IDisposable
             foreach (var snapshot in persisted)
             {
                 var restored = snapshot with { HookSeen = false };
-                if (restored.State is SessionState.Working or SessionState.Waiting && now - restored.LastEventAt > _options.InferredIdleAfter)
+                if (restored.State == SessionState.Working && now - restored.LastEventAt > _options.InferredIdleAfter)
                 {
                     restored = restored with { State = SessionState.Idle, StateSince = now };
                 }
@@ -87,11 +93,9 @@ public sealed class SessionEngine : IDisposable
     public void Apply(HookEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
-        SessionSnapshot? previous;
-        SessionSnapshot current;
         lock (_gate)
         {
-            previous = _sessions.GetValueOrDefault(e.SessionId);
+            var previous = _sessions.GetValueOrDefault(e.SessionId);
             var s = previous ?? NewSession(e.SessionId, e.At);
 
             var state = s.State;
@@ -105,7 +109,13 @@ public sealed class SessionEngine : IDisposable
             }
 
             var cwd = e.Cwd ?? s.Cwd;
-            current = s with
+            var awaitingToolResult = e.EventName switch
+            {
+                "PreToolUse" or "PermissionRequest" => true,
+                "PostToolUse" => false,
+                _ => s.AwaitingToolResult,
+            };
+            Commit(previous, s with
             {
                 State = state,
                 StateSince = state == s.State && previous is not null ? s.StateSince : e.At,
@@ -119,22 +129,18 @@ public sealed class SessionEngine : IDisposable
                 Title = s.Title ?? ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength),
                 Inferred = false,
                 HookSeen = true,
+                AwaitingToolResult = awaitingToolResult,
                 ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
-            };
-            _sessions[e.SessionId] = current;
+            });
         }
-
-        PublishIfChanged(previous, current);
     }
 
     public void Apply(TranscriptUpdate u)
     {
         ArgumentNullException.ThrowIfNull(u);
-        SessionSnapshot? previous;
-        SessionSnapshot current;
         lock (_gate)
         {
-            previous = _sessions.GetValueOrDefault(u.SessionId);
+            var previous = _sessions.GetValueOrDefault(u.SessionId);
             if (previous is null && u.Historical)
             {
                 // Old transcripts feed telemetry only; they must not resurface as chat rows.
@@ -154,7 +160,7 @@ public sealed class SessionEngine : IDisposable
             var cwd = s.Cwd ?? u.Cwd;
             var model = u.Usage.Count > 0 ? u.Usage[^1].Model : u.Model ?? s.Model;
             var lastEvent = u.LastActivityAt is { } activity && activity > s.LastEventAt ? activity : s.LastEventAt;
-            current = s with
+            Commit(previous, s with
             {
                 State = state,
                 StateSince = stateSince,
@@ -165,83 +171,72 @@ public sealed class SessionEngine : IDisposable
                 Model = model,
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
                 LatestContext = u.LatestContext ?? s.LatestContext,
-            };
-            _sessions[u.SessionId] = current;
+                AwaitingToolResult = u.PendingToolUse ?? s.AwaitingToolResult,
+            });
         }
-
-        PublishIfChanged(previous, current);
     }
 
     public void MarkProcessGone(string sessionId) => Signal(sessionId, SessionSignal.ProcessGone);
 
     public void Rename(string sessionId, string title)
     {
-        SessionSnapshot? previous;
-        SessionSnapshot current;
         lock (_gate)
         {
-            if (!_sessions.TryGetValue(sessionId, out previous))
+            if (_sessions.TryGetValue(sessionId, out var previous))
             {
-                return;
+                Commit(previous, previous with { Title = title, TitleLocked = true });
             }
-
-            current = previous with { Title = title, TitleLocked = true };
-            _sessions[sessionId] = current;
         }
-
-        PublishIfChanged(previous, current);
     }
 
+    /// <summary>
+    /// Timer-driven decay. Idle chats go Stale after <see cref="SessionEngineOptions.StaleAfter"/>. Without hook evidence
+    /// "Working" only means "the transcript was written recently", so a quiet inferred Working chat becomes Waiting when
+    /// its last assistant message left a tool call unanswered (the spec's permission-prompt case) and Idle otherwise.
+    /// Waiting never decays on the idle timer; an inferred Waiting chat with no known claude process gives up after the
+    /// stale window, while one with a PID is left to the liveness monitor.
+    /// </summary>
     public void SweepStale()
     {
-        var now = _time.GetUtcNow();
-        List<string> stale;
-        List<string> quiet;
         lock (_gate)
         {
-            stale = _sessions.Values
-                .Where(s => s.State == SessionState.Idle && now - s.LastEventAt >= _options.StaleAfter)
-                .Select(s => s.SessionId)
-                .ToList();
+            var now = _time.GetUtcNow();
+            foreach (var s in _sessions.Values.ToArray())
+            {
+                var quiet = now - s.LastEventAt;
+                SessionSignal? signal = s.State switch
+                {
+                    SessionState.Idle when quiet >= _options.StaleAfter => SessionSignal.StaleTimeout,
+                    SessionState.Working when !s.HookSeen && quiet >= _options.InferredIdleAfter =>
+                        s.AwaitingToolResult ? SessionSignal.Notification : SessionSignal.Stop,
+                    SessionState.Waiting when !s.HookSeen && s.ClaudePid is null && quiet >= _options.StaleAfter => SessionSignal.Stop,
+                    _ => null,
+                };
 
-            // Without hook evidence "Working" only means "the transcript was written recently"; let it decay.
-            quiet = _sessions.Values
-                .Where(s => !s.HookSeen && s.State is SessionState.Working or SessionState.Waiting && now - s.LastEventAt >= _options.InferredIdleAfter)
-                .Select(s => s.SessionId)
-                .ToList();
-        }
-
-        foreach (var id in stale)
-        {
-            Signal(id, SessionSignal.StaleTimeout);
-        }
-
-        foreach (var id in quiet)
-        {
-            Signal(id, SessionSignal.Stop);
+                if (signal is { } decay)
+                {
+                    SignalLocked(s.SessionId, decay);
+                    if (_sessions[s.SessionId].State == SessionState.Idle && quiet >= _options.StaleAfter)
+                    {
+                        SignalLocked(s.SessionId, SessionSignal.StaleTimeout);
+                    }
+                }
+            }
         }
     }
 
     public void ReResolveWorkspaces()
     {
-        var changes = new List<(SessionSnapshot Previous, SessionSnapshot Current)>();
         lock (_gate)
         {
-            foreach (var (id, s) in _sessions.ToArray())
+            foreach (var s in _sessions.Values.ToArray())
             {
                 var resolved = _resolver.Resolve(s.Cwd);
                 if (resolved != s.WorkspaceId)
                 {
-                    var updated = s with { WorkspaceId = resolved };
-                    _sessions[id] = updated;
-                    changes.Add((s, updated));
+                    Commit(s, s with { WorkspaceId = resolved });
                 }
             }
-        }
-
-        foreach (var (previous, current) in changes)
-        {
-            _bus.Publish(new SessionChanged(previous, current));
         }
     }
 
@@ -258,25 +253,33 @@ public sealed class SessionEngine : IDisposable
 
     private void Signal(string sessionId, SessionSignal signal)
     {
-        SessionSnapshot? previous;
-        SessionSnapshot current;
         lock (_gate)
         {
-            if (!_sessions.TryGetValue(sessionId, out previous))
-            {
-                return;
-            }
+            SignalLocked(sessionId, signal);
+        }
+    }
 
-            if (!SessionStateMachine.TryNext(previous.State, signal, out var next))
-            {
-                return;
-            }
-
-            current = previous with { State = next, StateSince = _time.GetUtcNow() };
-            _sessions[sessionId] = current;
+    private void SignalLocked(string sessionId, SessionSignal signal)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var previous) || !SessionStateMachine.TryNext(previous.State, signal, out var next))
+        {
+            return;
         }
 
-        PublishIfChanged(previous, current);
+        Commit(previous, previous with { State = next, StateSince = _time.GetUtcNow() });
+    }
+
+    /// <summary>Stores and publishes a changed snapshot. Must be called under <see cref="_gate"/> so versions and publish order agree.</summary>
+    private void Commit(SessionSnapshot? previous, SessionSnapshot candidate)
+    {
+        if (previous is not null && candidate == previous)
+        {
+            return;
+        }
+
+        var current = candidate with { Version = ++_version };
+        _sessions[current.SessionId] = current;
+        _bus.Publish(new SessionChanged(previous, current));
     }
 
     private static SessionSnapshot NewSession(string sessionId, DateTimeOffset at) => new()
@@ -287,14 +290,6 @@ public sealed class SessionEngine : IDisposable
         LastEventAt = at,
         StateSince = at,
     };
-
-    private void PublishIfChanged(SessionSnapshot? previous, SessionSnapshot current)
-    {
-        if (previous is null || previous != current)
-        {
-            _bus.Publish(new SessionChanged(previous, current));
-        }
-    }
 
     private static int? PickClaudePid(IReadOnlyList<ProcessRef> chain)
     {

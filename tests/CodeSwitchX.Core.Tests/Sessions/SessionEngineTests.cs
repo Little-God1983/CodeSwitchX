@@ -274,12 +274,14 @@ public class SessionEngineTests
     };
 
     [Fact]
-    public void Inferred_working_and_waiting_sessions_decay_to_idle_when_the_transcript_goes_quiet()
+    public void Quiet_inferred_working_sessions_become_waiting_when_a_tool_call_is_pending_and_idle_otherwise()
     {
-        _engine.Apply(Update("w", SessionSignal.ToolUse));
-        _engine.Apply(Update("p", SessionSignal.Notification));
+        _engine.Apply(Update("w", SessionSignal.ToolUse) with { PendingToolUse = false });
+        _engine.Apply(Update("p", SessionSignal.ToolUse) with { PendingToolUse = true });
+        _engine.Apply(Update("n", SessionSignal.Notification) with { PendingToolUse = true });
         _engine.Get("w")!.State.ShouldBe(SessionState.Working);
-        _engine.Get("p")!.State.ShouldBe(SessionState.Waiting);
+        _engine.Get("p")!.State.ShouldBe(SessionState.Working);
+        _engine.Get("n")!.State.ShouldBe(SessionState.Waiting);
 
         _time.Advance(TimeSpan.FromSeconds(4));
         _engine.SweepStale();
@@ -289,7 +291,69 @@ public class SessionEngineTests
         _engine.SweepStale();
 
         _engine.Get("w")!.State.ShouldBe(SessionState.Idle);
-        _engine.Get("p")!.State.ShouldBe(SessionState.Idle);
+        _engine.Get("p")!.State.ShouldBe(SessionState.Waiting, "a pending tool call means Claude is waiting for the user");
+        _engine.Get("n")!.State.ShouldBe(SessionState.Waiting, "waiting never decays on the idle timer");
+    }
+
+    [Fact]
+    public void Inferred_waiting_sessions_without_a_known_process_fall_back_to_idle_after_the_stale_window()
+    {
+        _engine.Apply(Update("n", SessionSignal.Notification));
+
+        _time.Advance(TimeSpan.FromMinutes(29));
+        _engine.SweepStale();
+        _engine.Get("n")!.State.ShouldBe(SessionState.Waiting);
+
+        _time.Advance(TimeSpan.FromMinutes(2));
+        _engine.SweepStale();
+        _engine.Get("n")!.State.ShouldBe(SessionState.Stale, "quiet for the whole stale window: Idle would only last one sweep");
+    }
+
+    [Fact]
+    public void Restore_keeps_waiting_sessions_waiting_until_their_process_dies_or_a_hook_speaks()
+    {
+        var old = _time.GetUtcNow().AddMinutes(-3);
+        _engine.Restore([new SessionSnapshot { SessionId = "prompt", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 77 }]);
+
+        _engine.Get("prompt")!.State.ShouldBe(SessionState.Waiting, "a permission prompt is quiet but still needs the user");
+        _time.Advance(TimeSpan.FromMinutes(45));
+        _engine.SweepStale();
+        _engine.Get("prompt")!.State.ShouldBe(SessionState.Waiting, "the liveness monitor, not the clock, decides when a hook-backed chat is gone");
+
+        _engine.MarkProcessGone("prompt");
+        _engine.Get("prompt")!.State.ShouldBe(SessionState.Errored);
+    }
+
+    [Fact]
+    public void Concurrent_updates_are_published_in_engine_order_with_increasing_versions()
+    {
+        var published = new System.Collections.Concurrent.ConcurrentQueue<long>();
+        _bus.Subscribe<SessionChanged>(m => published.Enqueue(m.Current.Version));
+        var hooks = new Thread(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                _engine.Apply(Hook(i % 2 == 0 ? "Stop" : "PreToolUse", i % 2 == 0 ? SessionSignal.Stop : SessionSignal.ToolUse, tool: "t" + i));
+            }
+        });
+        var transcripts = new Thread(() =>
+        {
+            for (var i = 0; i < 300; i++)
+            {
+                _engine.Apply(Update("s1", null) with { LatestContext = new TokenUsage(i, 1, 0, 0) });
+            }
+        });
+        hooks.Start();
+        transcripts.Start();
+        hooks.Join();
+        transcripts.Join();
+
+        var versions = published.ToArray();
+        versions.Length.ShouldBeGreaterThan(300);
+        for (var i = 1; i < versions.Length; i++)
+        {
+            versions[i].ShouldBeGreaterThan(versions[i - 1], $"snapshot {i} was published out of order");
+        }
     }
 
     [Fact]

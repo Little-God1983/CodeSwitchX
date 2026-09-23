@@ -5,6 +5,7 @@ using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ClearExtensions;
 
 namespace CodeSwitchX.Hosting.Tests;
 
@@ -72,7 +73,7 @@ public class HostManagerTests
         var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
 
         hosted.State.ShouldBe(HostState.Stopped);
-        hosted.Error.ShouldContain("window");
+        hosted.Error.ShouldNotBeNull().ShouldContain("window");
     }
 
     [Fact]
@@ -181,5 +182,40 @@ public class HostManagerTests
         hosted.State.ShouldBe(HostState.Running);
         hosted.Hwnd.ShouldBe((nint)700);
         _launcher.DidNotReceive().Launch(Arg.Any<Workspace>());
+    }
+
+    [Fact]
+    public async Task A_failure_during_discovery_ends_in_Stopped_and_the_workspace_can_be_opened_again()
+    {
+        _windows.TopLevelWindows().Returns(_ => [], _ => throw new InvalidOperationException("EnumWindows failed"));
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1, null));
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Stopped);
+        hosted.Error.ShouldNotBeNull().ShouldContain("EnumWindows failed");
+
+        _windows.ClearSubstitute(ClearOptions.ReturnValues); // NSubstitute would otherwise run the configured throw while re-specifying
+        _windows.ProcessName(30).Returns("Code");
+        WindowAppearsAfterLaunch();
+        (await _manager.OpenAsync(_workspace, CancellationToken.None)).State.ShouldBe(HostState.Running);
+    }
+
+    [Fact]
+    public async Task Forgetting_a_workspace_during_discovery_leaves_the_late_window_uncloaked_and_untracked()
+    {
+        var window = new WindowInfo(500, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code");
+        _windows.TopLevelWindows().Returns(_ => [], _ =>
+        {
+            _manager.Forget(_workspace.Id);
+            return [window];
+        });
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1, null));
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Stopped);
+        _docker.DidNotReceive().Cloak(500);
+        _manager.Get(_workspace.Id).ShouldBeNull();
     }
 }

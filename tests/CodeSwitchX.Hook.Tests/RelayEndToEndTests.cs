@@ -69,4 +69,17 @@ public class RelayEndToEndTests : IAsyncLifetime
         code.ShouldBe(0);
         _received.ShouldBeEmpty("a stale endpoint.json left by a crashed or killed instance must not be trusted");
     }
+
+    [Fact]
+    public async Task Relay_delivers_an_event_whose_raw_payload_exceeds_the_api_body_limit()
+    {
+        var payload = $$"""{"session_id":"big","hook_event_name":"PostToolUse","tool_name":"Read","tool_response":"{{new string('z', 2 * 1024 * 1024)}}"}""";
+
+        var code = await Relay.RunAsync(["PostToolUse"], Stdin(payload), _paths.Root);
+
+        code.ShouldBe(0);
+        var e = _received.ShouldHaveSingleItem();
+        e.SessionId.ShouldBe("big");
+        e.ToolName.ShouldBe("Read");
+    }
 }
