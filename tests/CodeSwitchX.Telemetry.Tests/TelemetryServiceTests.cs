@@ -75,4 +75,21 @@ public class TelemetryServiceTests
         service.Pricing.Find("claude-sonnet-5").InputPerM.ShouldBe(4m);
         service.Current.Today.Cost.ShouldBe(4m);
     }
+
+    [Fact]
+    public async Task Time_windows_roll_forward_on_the_minute_timer_while_nothing_is_indexed()
+    {
+        var service = Service();
+        await service.StartAsync(CancellationToken.None);
+        service.Current.FiveHours.Tokens.Input.ShouldBe(1_000_000);
+        var published = 0;
+        _bus.Subscribe<TelemetryUpdated>(_ => published++);
+
+        _time.Advance(TimeSpan.FromHours(6));
+
+        service.Current.FiveHours.Tokens.Input.ShouldBe(0, "the burst six hours ago has left the 5-hour window");
+        service.Current.RatePerMinute[^1].ShouldBe(0);
+        published.ShouldBeGreaterThan(0);
+        await service.StopAsync(CancellationToken.None);
+    }
 }

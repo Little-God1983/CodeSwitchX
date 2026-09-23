@@ -407,4 +407,28 @@ public class SessionEngineTests
 
         _engine.Get("s1")!.Title.ShouldBe("From history");
     }
+
+    [Fact]
+    public void Hook_backed_working_sessions_go_idle_when_the_transcript_shows_a_user_interrupt()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+
+        _engine.Apply(Update("s1", SessionSignal.Stop) with { Interrupted = true });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "Esc fires no Stop hook; the transcript's interrupt marker is the only evidence");
+        _engine.Get("s1")!.HookSeen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Sessions_left_in_Starting_by_an_unknown_hook_event_decay_to_idle()
+    {
+        _engine.Apply(Hook("SomethingNew", null));
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Starting);
+
+        _time.Advance(TimeSpan.FromSeconds(11));
+        _engine.SweepStale();
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
 }

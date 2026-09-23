@@ -143,4 +143,21 @@ public class ShellViewModelTests
         _h.Docker.Received(1).MoveTo(500, rect);
         _h.Shell.Mode.ShouldBe(ShellMode.Cab);
     }
+
+    [Fact]
+    public async Task Opening_a_tile_while_its_autostart_discovery_is_still_running_docks_it_when_discovery_finishes()
+    {
+        _h.App.AutoStart = true;
+        _h.VsCodeWindowAppears();
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _h.Shell.Cab.LastHostRect = rect;
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Shell.StatusMessage.ShouldBeNull("an in-flight start is not a failure");
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Launcher.Received(1).Launch(_h.App);
+        _h.Docker.Received().MoveTo(500, rect);
+    }
 }

@@ -53,15 +53,15 @@ public sealed class WorkspaceProbe
             throw new DirectoryNotFoundException($"'{input}' does not exist.");
         }
 
-        var normalizedRoot = PathNormalizer.Normalize(root);
+        var canonicalRoot = PathNormalizer.Canonical(root);
         var git = await _git.InspectAsync(root, ct).ConfigureAwait(false);
         var worktrees = git.IsRepository
-            ? ParseWorktreeList(await _git.RunAsync(root, "worktree list --porcelain", ct).ConfigureAwait(false) ?? string.Empty, normalizedRoot)
+            ? ParseWorktreeList(await _git.RunAsync(root, "worktree list --porcelain", ct).ConfigureAwait(false) ?? string.Empty, canonicalRoot)
             : [];
         var solutions = SolutionPatterns.SelectMany(p => Directory.EnumerateFiles(root, p, SearchOption.TopDirectoryOnly)).OrderBy(f => f).ToList();
 
         return new WorkspaceProbeResult(
-            normalizedRoot,
+            canonicalRoot,
             Path.GetFileName(root.TrimEnd('\\', '/')),
             workspaceFile,
             git.IsRepository,
@@ -71,8 +71,10 @@ public sealed class WorkspaceProbe
             worktrees);
     }
 
-    public static IReadOnlyList<WorktreeInfo> ParseWorktreeList(string porcelain, string mainRootNormalized)
+    /// <summary>Worktrees other than the main root, as canonical paths (real casing).</summary>
+    public static IReadOnlyList<WorktreeInfo> ParseWorktreeList(string porcelain, string mainRoot)
     {
+        var mainKey = PathNormalizer.Normalize(mainRoot);
         var result = new List<WorktreeInfo>();
         string? path = null;
         string? branch = null;
@@ -82,10 +84,9 @@ public sealed class WorkspaceProbe
             {
                 if (path is not null)
                 {
-                    var normalized = PathNormalizer.Normalize(path);
-                    if (normalized != mainRootNormalized)
+                    if (PathNormalizer.Normalize(path) != mainKey)
                     {
-                        result.Add(new WorktreeInfo(normalized, branch));
+                        result.Add(new WorktreeInfo(PathNormalizer.Canonical(path), branch));
                     }
                 }
 

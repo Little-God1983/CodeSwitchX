@@ -59,11 +59,12 @@ public class HookEnvelopeParserTests
 
     [Theory]
     [InlineData("permission_prompt", SessionSignal.Notification)]
-    [InlineData("idle_prompt", SessionSignal.Notification)]
     [InlineData("elicitation_dialog", SessionSignal.Notification)]
-    [InlineData("future_type", SessionSignal.Notification)]
+    [InlineData(null, SessionSignal.Notification)]
+    [InlineData("idle_prompt", null)]
     [InlineData("auth_success", null)]
-    public void Informational_notifications_do_not_mean_waiting(string type, SessionSignal? expected)
+    [InlineData("future_type", null)]
+    public void Only_notifications_that_need_the_user_mean_waiting(string? type, SessionSignal? expected)
     {
         HookEnvelopeParser.SignalFor("Notification", type).ShouldBe(expected);
     }

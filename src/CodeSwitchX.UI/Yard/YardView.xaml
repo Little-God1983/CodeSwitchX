@@ -36,8 +36,7 @@
 
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
       <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
-              BorderBrush="{Binding AccentColor, Converter={StaticResource HexBrush}}" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
-              Cursor="Hand">
+              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
         </Border.InputBindings>
@@ -52,6 +51,8 @@
         </Border.ContextMenu>
         <Border.Style>
           <Style TargetType="Border">
+            <!-- A local BorderBrush would outrank the trigger below, so the accent lives in the style. -->
+            <Setter Property="BorderBrush" Value="{Binding AccentColor, Converter={StaticResource HexBrush}}" />
             <Style.Triggers>
               <DataTrigger Binding="{Binding NeedsAttention}" Value="True">
                 <Setter Property="BorderBrush" Value="#F59E0B" />

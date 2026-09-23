@@ -4,9 +4,16 @@ namespace CodeSwitchX.Core.Workspaces;
 
 public sealed record GitInfo(bool IsRepository, string? Branch, int DirtyCount);
 
+/// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
+/// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
+/// <param name="Pid">The started process id, when it started.</param>
+public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid);
+
 /// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
 public sealed class GitInspector
 {
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+
     private readonly Func<string, string, CancellationToken, Task<string?>> _runGit;
 
     public GitInspector(Func<string, string, CancellationToken, Task<string?>>? runGit = null)
@@ -58,31 +65,68 @@ public sealed class GitInspector
 
     public static async Task<string?> RunGitAsync(string workingDirectory, string arguments, CancellationToken ct)
     {
+        var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
+        var result = await RunProcessAsync(info, DefaultTimeout, ct).ConfigureAwait(false);
+        return result.Output;
+    }
+
+    /// <summary>
+    /// Runs a process with stdout and stderr drained concurrently (a full stderr pipe would otherwise block the child),
+    /// and kills the whole process tree when the timeout or the token fires so nothing leaks or keeps repo locks.
+    /// </summary>
+    internal static async Task<ProcessRunResult> RunProcessAsync(ProcessStartInfo info, TimeSpan timeout, CancellationToken ct)
+    {
+        info.RedirectStandardOutput = true;
+        info.RedirectStandardError = true;
+        info.UseShellExecute = false;
+        info.CreateNoWindow = true;
+
+        Process? process = null;
         try
         {
-            var info = new ProcessStartInfo("git", arguments)
-            {
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            using var process = Process.Start(info);
+            process = Process.Start(info);
             if (process is null)
             {
-                return null;
+                return new ProcessRunResult(null, false, null);
             }
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(5));
-            var output = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-            return process.ExitCode == 0 ? output : null;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(timeout);
+            var stdout = process.StandardOutput.ReadToEndAsync(linked.Token);
+            var stderr = process.StandardError.ReadToEndAsync(linked.Token);
+            try
+            {
+                await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKill(process);
+                return new ProcessRunResult(null, TimedOut: !ct.IsCancellationRequested, process.Id);
+            }
+
+            var output = await stdout.ConfigureAwait(false);
+            await stderr.ConfigureAwait(false);
+            return new ProcessRunResult(process.ExitCode == 0 ? output : null, false, process.Id);
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or OperationCanceledException or IOException)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            return null;
+            return new ProcessRunResult(null, false, process?.Id);
+        }
+        finally
+        {
+            process?.Dispose();
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException)
+        {
+            // already gone
         }
     }
 

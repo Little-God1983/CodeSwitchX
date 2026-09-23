@@ -218,4 +218,32 @@ public class HostManagerTests
         _docker.DidNotReceive().Cloak(500);
         _manager.Get(_workspace.Id).ShouldBeNull();
     }
+
+    [Fact]
+    public async Task Concurrent_open_calls_share_one_discovery_and_both_end_running()
+    {
+        WindowAppearsAfterLaunch();
+
+        var first = _manager.OpenAsync(_workspace, CancellationToken.None);
+        var second = _manager.OpenAsync(_workspace, CancellationToken.None);
+        second.IsCompleted.ShouldBeFalse("the second caller must wait for the discovery in flight instead of getting the Starting record back");
+        var results = await Task.WhenAll(first, second);
+
+        results[0].State.ShouldBe(HostState.Running);
+        results[1].State.ShouldBe(HostState.Running, "a second caller must wait for the discovery in flight, not be told it failed");
+        _launcher.Received(1).Launch(_workspace);
+    }
+
+    [Fact]
+    public async Task Unregistering_a_workspace_uncloaks_and_forgets_its_window()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        _docker.ClearReceivedCalls();
+
+        _bus.Publish(new WorkspaceUnregistered(_workspace.Id));
+
+        _docker.Received(1).Uncloak(500);
+        _manager.Get(_workspace.Id).ShouldBeNull();
+    }
 }

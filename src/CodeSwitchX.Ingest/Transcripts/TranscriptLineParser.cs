@@ -6,6 +6,9 @@ namespace CodeSwitchX.Ingest.Transcripts;
 
 public static class TranscriptLineParser
 {
+    /// <summary>Claude Code writes this user line when the turn is interrupted with Esc ("... by user" or "... by user for tool use").</summary>
+    private const string InterruptPrefix = "[Request interrupted by user";
+
     private static readonly string[] MetaPrefixes = ["<command-name>", "<local-command-stdout>", "<local-command-stderr>", "<system-reminder>", "<command-message>"];
 
     public static TranscriptLine? TryParse(string line)
@@ -57,12 +60,13 @@ public static class TranscriptLineParser
                 {
                     var isMeta = root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True;
                     var (text, isToolResult) = ExtractUserText(message);
-                    if (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal)))
+                    var isInterrupt = text is not null && text.StartsWith(InterruptPrefix, StringComparison.Ordinal);
+                    if (isInterrupt || (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal))))
                     {
                         isMeta = true;
                     }
 
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta);
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
                 }
 
                 case "summary":

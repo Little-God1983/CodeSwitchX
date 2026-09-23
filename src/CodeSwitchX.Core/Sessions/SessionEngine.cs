@@ -156,6 +156,12 @@ public sealed class SessionEngine : IDisposable
                 state = next;
                 stateSince = u.LastActivityAt ?? u.ObservedAt;
             }
+            else if (u.Interrupted && state is SessionState.Working or SessionState.Waiting)
+            {
+                // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is.
+                state = SessionState.Idle;
+                stateSince = u.LastActivityAt ?? u.ObservedAt;
+            }
 
             var cwd = s.Cwd ?? u.Cwd;
             var model = u.Usage.Count > 0 ? u.Usage[^1].Model : u.Model ?? s.Model;
@@ -171,7 +177,7 @@ public sealed class SessionEngine : IDisposable
                 Model = model,
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
                 LatestContext = u.LatestContext ?? s.LatestContext,
-                AwaitingToolResult = u.PendingToolUse ?? s.AwaitingToolResult,
+                AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
             });
         }
     }
@@ -207,6 +213,8 @@ public sealed class SessionEngine : IDisposable
                 SessionSignal? signal = s.State switch
                 {
                     SessionState.Idle when quiet >= _options.StaleAfter => SessionSignal.StaleTimeout,
+                    // Only an unknown hook event leaves a session in Starting; nothing else would ever move it.
+                    SessionState.Starting when quiet >= _options.InferredIdleAfter => SessionSignal.Stop,
                     SessionState.Working when !s.HookSeen && quiet >= _options.InferredIdleAfter =>
                         s.AwaitingToolResult ? SessionSignal.Notification : SessionSignal.Stop,
                     SessionState.Waiting when !s.HookSeen && s.ClaudePid is null && quiet >= _options.StaleAfter => SessionSignal.Stop,

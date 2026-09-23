@@ -41,7 +41,7 @@ public class AddWorkspaceViewModelTests : IDisposable
 
         _vm.IsProbed.ShouldBeTrue();
         _vm.Name.ShouldBe("Shop");
-        _vm.RootPath.ShouldBe(PathNormalizer.Normalize(_root));
+        _vm.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
         _vm.IsGitRepository.ShouldBeTrue();
         _vm.Branch.ShouldBe("main");
         _vm.SolutionSummary.ShouldBe("Shop.slnx");
@@ -77,7 +77,7 @@ public class AddWorkspaceViewModelTests : IDisposable
         await _vm.SaveCommand.ExecuteAsync(null);
 
         await _store.Received(1).AddTrackAsync("Clients", Arg.Any<CancellationToken>());
-        await _store.Received(1).AddAsync(Arg.Is<Workspace>(w => w.Name == "Shop" && w.AccentColor == "#FF8800" && w.AutoStart && w.RootPath == PathNormalizer.Normalize(_root)), Arg.Any<CancellationToken>());
+        await _store.Received(1).AddAsync(Arg.Is<Workspace>(w => w.Name == "Shop" && w.AccentColor == "#FF8800" && w.AutoStart && w.RootPath == PathNormalizer.Canonical(_root)), Arg.Any<CancellationToken>());
         saved.ShouldNotBeNull();
         saved.TrackId.ShouldNotBe(_general.Id);
     }

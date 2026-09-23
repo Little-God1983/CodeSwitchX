@@ -249,4 +249,34 @@ public class TranscriptIndexerTests : IDisposable
 
         _updates.ShouldHaveSingleItem().SessionId.ShouldBe("s1");
     }
+
+    private static string Interrupt(string session, string ts = "2026-09-23T10:00:07.000Z") =>
+        $$$"""{"type":"user","sessionId":"{{{session}}}","timestamp":"{{{ts}}}","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}""";
+
+    [Fact]
+    public async Task An_interrupted_turn_is_reported_unless_the_user_already_moved_on()
+    {
+        File.WriteAllLines(Transcript("esc"), [User("esc", "go"), Assistant("esc", "m", ToolBlock), Interrupt("esc")]);
+        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Interrupt("resumed"), User("resumed", "try again", "2026-09-23T10:00:09.000Z")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var esc = _updates.Single(u => u.SessionId == "esc");
+        esc.Interrupted.ShouldBeTrue();
+        esc.PendingToolUse.ShouldBe(false, "an interrupted tool call is not waiting for anything");
+        esc.Title.ShouldBe("go");
+        _updates.Single(u => u.SessionId == "resumed").Interrupted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Assistant_messages_replayed_into_a_second_transcript_file_are_not_counted_twice()
+    {
+        File.WriteAllLines(Transcript("original"), [User("original", "go"), Assistant("original", "msg_shared", TextBlock)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Assistant("resumed", "msg_shared", TextBlock), Assistant("resumed", "msg_new", TextBlock, ts: "2026-09-23T10:00:09.000Z")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.SelectMany(u => u.Usage).Count().ShouldBe(2, "claude --resume copies earlier messages, with their usage, into a new file");
+    }
 }

@@ -9,10 +9,11 @@ GetAncestor
 GetWindowRect
 SetWindowPos
 ShowWindow
+ShowWindowAsync
+IsIconic
 SetForegroundWindow
 SetWinEventHook
 UnhookWinEvent
-DwmSetWindowAttribute
 DwmRegisterThumbnail
 DwmUnregisterThumbnail
 DwmUpdateThumbnailProperties

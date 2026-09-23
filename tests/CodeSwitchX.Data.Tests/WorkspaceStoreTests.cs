@@ -94,4 +94,16 @@ public class WorkspaceStoreTests : IAsyncLifetime
 
         (await _store.GetTracksAsync(TestContext.Current.CancellationToken)).Select(t => t.Name).ShouldBe(["General", "Clients"]);
     }
+
+    [Fact]
+    public async Task Roots_that_differ_only_by_case_or_a_trailing_separator_are_the_same_workspace()
+    {
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        await _store.AddAsync(new Workspace { Name = "A", RootPath = @"C:\Repo\App", TrackId = track.Id }, TestContext.Current.CancellationToken);
+
+        await Should.ThrowAsync<DuplicateWorkspaceException>(
+            () => _store.AddAsync(new Workspace { Name = "B", RootPath = @"c:\repo\app\", TrackId = track.Id }, TestContext.Current.CancellationToken));
+        (await _store.FindByRootAsync(@"c:\repo\app", TestContext.Current.CancellationToken)).ShouldNotBeNull().Name.ShouldBe("A");
+        (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().RootPath.ShouldBe(@"C:\Repo\App", "the stored path keeps its casing");
+    }
 }

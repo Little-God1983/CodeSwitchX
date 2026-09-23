@@ -12,5 +12,6 @@ public sealed class TranscriptIndexerOptions
 
     /// <summary>Upper bound of transcript bytes read per file per pass; larger files continue on the next tick.</summary>
     public int MaxBytesPerPass { get; set; } = TranscriptTailer.DefaultMaxBytes;
-    public int MessageIdMemory { get; set; } = 512;
+    /// <summary>Assistant message ids remembered across all transcripts, so a resumed conversation's replayed messages are not counted twice.</summary>
+    public int MessageIdMemory { get; set; } = 20_000;
 }

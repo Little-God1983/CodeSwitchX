@@ -6,8 +6,8 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Hosting;
 
-/// <summary>Launches VS Code per workspace, tracks its window and keeps it docked over the Cab or cloaked.</summary>
-public sealed class HostManager
+/// <summary>Launches VS Code per workspace, tracks its window and keeps it docked over the Cab or hidden.</summary>
+public sealed class HostManager : IDisposable
 {
     private readonly IWindowEnumerator _windows;
     private readonly IWindowDocker _docker;
@@ -18,6 +18,8 @@ public sealed class HostManager
     private readonly HostManagerOptions _options;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, HostedWorkspace> _hosted = [];
+    private readonly Dictionary<Guid, Task<HostedWorkspace>> _inflight = [];
+    private readonly IDisposable _unregistered;
 
     public HostManager(IWindowEnumerator windows, IWindowDocker docker, IVsCodeLauncher launcher, IEventBus bus, TimeProvider time,
         ILogger<HostManager> logger, HostManagerOptions? options = null)
@@ -29,6 +31,8 @@ public sealed class HostManager
         _time = time;
         _logger = logger;
         _options = options ?? new HostManagerOptions();
+        // An unregistered workspace must hand its window back to the desktop instead of staying hidden and tracked.
+        _unregistered = _bus.Subscribe<WorkspaceUnregistered>(m => Forget(m.WorkspaceId));
     }
 
     public IReadOnlyList<HostedWorkspace> All
@@ -51,13 +55,16 @@ public sealed class HostManager
     }
 
     /// <summary>
-    /// Starts (or adopts) VS Code for the workspace and waits for its window. Whatever goes wrong during discovery,
-    /// the record never stays in <see cref="HostState.Starting"/>: it ends Running or Stopped with the reason, so the tile
-    /// can always be opened again.
+    /// Starts (or adopts) VS Code for the workspace and waits for its window. Concurrent callers (AutoStart plus a
+    /// tile click, a double-click, a repeated hotkey) share the discovery in flight and all see its outcome. Whatever
+    /// goes wrong, the record never stays in <see cref="HostState.Starting"/>: it ends Running or Stopped with the
+    /// reason, so the tile can always be opened again.
     /// </summary>
     public async Task<HostedWorkspace> OpenAsync(Workspace workspace, CancellationToken ct)
     {
         HostedWorkspace hosted;
+        Task<HostedWorkspace>? pending = null;
+        TaskCompletionSource<HostedWorkspace>? completion = null;
         lock (_gate)
         {
             if (!_hosted.TryGetValue(workspace.Id, out hosted!))
@@ -71,12 +78,21 @@ public sealed class HostManager
                 return hosted;
             }
 
-            if (hosted.State == HostState.Starting)
+            if (_inflight.TryGetValue(workspace.Id, out var existing))
             {
-                return hosted;
+                pending = existing;
             }
+            else
+            {
+                completion = new TaskCompletionSource<HostedWorkspace>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _inflight[workspace.Id] = completion.Task;
+                Transition(hosted, HostState.Starting, error: null);
+            }
+        }
 
-            Transition(hosted, HostState.Starting, error: null);
+        if (pending is not null)
+        {
+            return await pending.ConfigureAwait(false);
         }
 
         try
@@ -92,6 +108,15 @@ public sealed class HostManager
             _logger.LogError(ex, "Opening {Workspace} failed", workspace.Name);
             Stop(hosted, ex.Message);
         }
+        finally
+        {
+            lock (_gate)
+            {
+                _inflight.Remove(workspace.Id);
+            }
+
+            completion!.SetResult(hosted);
+        }
 
         return hosted;
     }
@@ -106,7 +131,7 @@ public sealed class HostManager
         var existing = VsCodeWindowMatcher.FindExisting(before, displayName, _windows.ProcessName);
         if (existing is not null)
         {
-            if (TryAdopt(hosted, existing, cloak: false))
+            if (TryAdopt(hosted, existing, hide: false))
             {
                 _logger.LogInformation("Adopted existing VS Code window {Hwnd} for {Workspace}", existing.Hwnd, workspace.Name);
             }
@@ -136,7 +161,7 @@ public sealed class HostManager
             if (match is not null)
             {
                 // Keep the fresh window out of sight until the Cab docks it, so it never flashes undocked on the desktop.
-                if (TryAdopt(hosted, match, cloak: true))
+                if (TryAdopt(hosted, match, hide: true))
                 {
                     _logger.LogInformation("VS Code window {Hwnd} found for {Workspace}", match.Hwnd, workspace.Name);
                 }
@@ -148,8 +173,8 @@ public sealed class HostManager
         Stop(hosted, $"No VS Code window titled '{displayName}' appeared within {_options.DiscoveryTimeout.TotalSeconds:0}s");
     }
 
-    /// <summary>Records the window as Running, unless the workspace was forgotten meanwhile: then the window is left alone, uncloaked.</summary>
-    private bool TryAdopt(HostedWorkspace hosted, WindowInfo window, bool cloak)
+    /// <summary>Records the window as Running, unless the workspace was forgotten meanwhile: then the window is left alone and visible.</summary>
+    private bool TryAdopt(HostedWorkspace hosted, WindowInfo window, bool hide)
     {
         lock (_gate)
         {
@@ -164,7 +189,7 @@ public sealed class HostManager
             hosted.StartedAt = DateTimeOffset.UtcNow;
             hosted.Visible = false;
             hosted.TargetRect = null;
-            if (cloak)
+            if (hide)
             {
                 _docker.Cloak(window.Hwnd);
             }
@@ -210,7 +235,7 @@ public sealed class HostManager
     }
 
     /// <summary>
-    /// Uncloaks every hosted window. DWM cloaking outlives this process, so this must run before exit or a
+    /// Shows every hosted window again. Hidden windows outlive this process, so this must run before exit or a
     /// closed CodeSwitchX would leave the user's VS Code windows running but invisible.
     /// </summary>
     public void ReleaseAll()
@@ -257,7 +282,7 @@ public sealed class HostManager
         }
     }
 
-    /// <summary>Stops tracking a workspace (e.g. it was unregistered); its window is handed back to the desktop uncloaked.</summary>
+    /// <summary>Stops tracking a workspace (e.g. it was unregistered); its window is handed back to the desktop visible.</summary>
     public void Forget(Guid workspaceId)
     {
         lock (_gate)
@@ -268,6 +293,8 @@ public sealed class HostManager
             }
         }
     }
+
+    public void Dispose() => _unregistered.Dispose();
 
     private bool IsTracked(HostedWorkspace hosted)
     {

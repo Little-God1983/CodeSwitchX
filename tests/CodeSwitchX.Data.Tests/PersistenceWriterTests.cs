@@ -156,4 +156,21 @@ public class PersistenceWriterTests : IAsyncLifetime
             Arg.Any<IReadOnlyCollection<TranscriptCursor>>(),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task Old_hook_events_are_pruned_once_per_hour()
+    {
+        var sessions = Substitute.For<ISessionStore>();
+        using var writer = new PersistenceWriter(_bus, sessions, Substitute.For<IUsageStore>(), _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        writer.Subscribe();
+
+        await writer.FlushAsync(CancellationToken.None);
+        await writer.FlushAsync(CancellationToken.None);
+        await sessions.Received(1).PruneEventsAsync(_time.GetUtcNow() - PersistenceWriterOptions.DefaultEventRetention, Arg.Any<CancellationToken>());
+
+        _time.Advance(TimeSpan.FromMinutes(61));
+        await writer.FlushAsync(CancellationToken.None);
+
+        await sessions.Received(2).PruneEventsAsync(Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
 }

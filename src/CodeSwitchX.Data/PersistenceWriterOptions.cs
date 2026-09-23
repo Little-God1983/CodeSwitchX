@@ -7,4 +7,10 @@ public sealed class PersistenceWriterOptions
 
     /// <summary>Opt-in: store raw hook payload JSON (contains prompts and file paths).</summary>
     public bool StorePayloads { get; set; }
+
+    public static readonly TimeSpan DefaultEventRetention = TimeSpan.FromDays(7);
+
+    /// <summary>Hook event rows older than this are deleted; they only serve the recent-activity view.</summary>
+    public TimeSpan EventRetention { get; set; } = DefaultEventRetention;
+    public TimeSpan PruneInterval { get; set; } = TimeSpan.FromHours(1);
 }

@@ -1,3 +1,4 @@
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Workspaces;
 using Microsoft.EntityFrameworkCore;
@@ -19,16 +20,22 @@ public sealed class WorkspaceStore : IWorkspaceStore
         return await db.Workspaces.AsNoTracking().OrderBy(w => w.Name).ToListAsync(ct);
     }
 
-    public async Task<Workspace?> FindByRootAsync(string normalizedRoot, CancellationToken ct = default)
+    /// <summary>Case-insensitive lookup: paths are stored in the user's casing but compared by their normalised key.</summary>
+    public async Task<Workspace?> FindByRootAsync(string root, CancellationToken ct = default)
     {
+        var key = PathNormalizer.Normalize(root);
         await using var db = await _factory.CreateDbContextAsync(ct);
-        return await db.Workspaces.AsNoTracking().FirstOrDefaultAsync(w => w.RootPath == normalizedRoot, ct);
+        var candidates = await db.Workspaces.AsNoTracking().ToListAsync(ct);
+        return candidates.FirstOrDefault(w => PathNormalizer.Normalize(w.RootPath) == key);
     }
 
     public async Task AddAsync(Workspace workspace, CancellationToken ct = default)
     {
+        workspace.RootPath = PathNormalizer.Canonical(workspace.RootPath);
+        var key = PathNormalizer.Normalize(workspace.RootPath);
         await using var db = await _factory.CreateDbContextAsync(ct);
-        if (await db.Workspaces.AnyAsync(w => w.RootPath == workspace.RootPath, ct))
+        var roots = await db.Workspaces.Select(w => w.RootPath).ToListAsync(ct);
+        if (roots.Any(r => PathNormalizer.Normalize(r) == key))
         {
             throw new DuplicateWorkspaceException(workspace.RootPath);
         }

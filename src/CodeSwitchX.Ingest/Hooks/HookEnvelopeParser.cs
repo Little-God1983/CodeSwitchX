@@ -9,9 +9,15 @@ namespace CodeSwitchX.Ingest.Hooks;
 /// </summary>
 public static class HookEnvelopeParser
 {
-    private static readonly HashSet<string> InformationalNotifications = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// Notification types that mean Claude is blocked on the user. Everything else (auth_success, idle_prompt, which
+    /// fires 60 s after a finished turn, and unknown future types) is informational: treating it as Waiting would turn
+    /// every finished chat amber a minute later. A missing type (older Claude Code) still counts as Waiting.
+    /// </summary>
+    private static readonly HashSet<string> NeedsUserNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
-        "auth_success",
+        "permission_prompt",
+        "elicitation_dialog",
     };
 
     public static HookEvent? Parse(string json, DateTimeOffset receivedAt)
@@ -113,7 +119,7 @@ public static class HookEnvelopeParser
         "UserPromptSubmit" => SessionSignal.PromptSubmit,
         "PreToolUse" or "PostToolUse" => SessionSignal.ToolUse,
         "PermissionRequest" => SessionSignal.Notification,
-        "Notification" when notificationType is null || !InformationalNotifications.Contains(notificationType) => SessionSignal.Notification,
+        "Notification" when notificationType is null || NeedsUserNotifications.Contains(notificationType) => SessionSignal.Notification,
         "Stop" => SessionSignal.Stop,
         "SessionEnd" => SessionSignal.SessionEnd,
         _ => null,

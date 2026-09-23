@@ -46,7 +46,8 @@ public sealed class EventApiService : IHostedService
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { ApplicationName = "CodeSwitchX.Ingest" });
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(_loggerFactory);
-        builder.WebHost.UseNamedPipes();
+        // Only the current user may connect to the pipe; the relay verifies the server's owner the same way.
+        builder.WebHost.UseNamedPipes(pipes => pipes.CurrentUserOnly = true);
         builder.WebHost.ConfigureKestrel(kestrel =>
         {
             kestrel.Limits.MaxRequestBodySize = _options.MaxBodyBytes;

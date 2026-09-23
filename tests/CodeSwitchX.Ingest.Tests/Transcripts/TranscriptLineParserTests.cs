@@ -87,4 +87,16 @@ public class TranscriptLineParserTests
     {
         TranscriptLineParser.TryParse(line).ShouldBeNull();
     }
+
+    [Theory]
+    [InlineData("[Request interrupted by user]")]
+    [InlineData("[Request interrupted by user for tool use]")]
+    public void User_interrupt_markers_are_flagged_and_never_become_titles(string marker)
+    {
+        var parsed = TranscriptLineParser.TryParse($$$"""{"type":"user","message":{"role":"user","content":[{"type":"text","text":"{{{marker}}}"}]}}""")
+            .ShouldBeOfType<UserLine>();
+
+        parsed.IsInterrupt.ShouldBeTrue();
+        parsed.IsMeta.ShouldBeTrue();
+    }
 }

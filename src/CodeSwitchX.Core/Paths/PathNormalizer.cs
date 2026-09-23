@@ -1,14 +1,20 @@
 namespace CodeSwitchX.Core.Paths;
 
-/// <summary>Canonical form used for every path comparison: full path, backslashes, no trailing separator, lower-case.</summary>
+/// <summary>Path forms: <see cref="Canonical"/> for storing, showing and launching; <see cref="Normalize"/> (lower-cased) for every comparison.</summary>
 public static class PathNormalizer
 {
-    public static string Normalize(string path)
+    /// <summary>Comparison key: the canonical path lower-cased.</summary>
+    public static string Normalize(string path) => Canonical(path).ToLowerInvariant();
+
+    /// <summary>
+    /// Full path with backslashes and no trailing separator (kept on a drive root, where "c:" alone would be
+    /// drive-relative and resolve to the current directory), in the casing the user gave.
+    /// </summary>
+    public static string Canonical(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var full = Path.GetFullPath(path.Trim()).Replace('/', '\\');
-        full = full.TrimEnd('\\');
-        return full.ToLowerInvariant();
+        return Path.TrimEndingDirectorySeparator(full);
     }
 
     /// <summary>True when <paramref name="candidate"/> equals <paramref name="root"/> or lies below it. Both must already be normalised.</summary>
@@ -19,8 +25,12 @@ public static class PathNormalizer
             return string.Equals(candidate, root, StringComparison.Ordinal);
         }
 
-        return candidate.Length > root.Length
-            && candidate.StartsWith(root, StringComparison.Ordinal)
-            && candidate[root.Length] == '\\';
+        if (candidate.Length < root.Length || !candidate.StartsWith(root, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // A drive root already ends with its separator; every other root needs one right after it.
+        return root.EndsWith('\\') || candidate[root.Length] == '\\';
     }
 }

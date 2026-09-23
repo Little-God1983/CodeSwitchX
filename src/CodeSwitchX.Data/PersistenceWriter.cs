@@ -31,6 +31,7 @@ public sealed class PersistenceWriter : BackgroundService
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _flushTimer;
     private Batch? _carry;
+    private DateTimeOffset? _lastPrune;
     private int _pending;
 
     public PersistenceWriter(IEventBus bus, ISessionStore sessions, IUsageStore usage, TimeProvider time,
@@ -93,6 +94,7 @@ public sealed class PersistenceWriter : BackgroundService
 
     internal async Task FlushAsync(CancellationToken ct)
     {
+        await PruneIfDueAsync(ct).ConfigureAwait(false);
         var batch = _carry ?? new Batch();
         _carry = null;
         var taken = 0;
@@ -135,6 +137,30 @@ public sealed class PersistenceWriter : BackgroundService
         finally
         {
             Interlocked.Add(ref _pending, -taken);
+        }
+    }
+
+    /// <summary>Hook events are append-only and only serve the recent-activity view; without pruning the database grows without bound.</summary>
+    private async Task PruneIfDueAsync(CancellationToken ct)
+    {
+        var now = _time.GetUtcNow();
+        if (_lastPrune is { } last && now - last < _options.PruneInterval)
+        {
+            return;
+        }
+
+        _lastPrune = now;
+        try
+        {
+            var removed = await _sessions.PruneEventsAsync(now - _options.EventRetention, ct).ConfigureAwait(false);
+            if (removed > 0)
+            {
+                _logger.LogInformation("Pruned {Count} hook events older than {Retention}", removed, _options.EventRetention);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Pruning hook events failed; retrying in {Interval}", _options.PruneInterval);
         }
     }
 

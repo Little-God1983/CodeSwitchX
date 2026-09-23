@@ -23,15 +23,15 @@ public class WorkspaceRegistryTests
     }
 
     [Fact]
-    public async Task Register_normalises_paths_saves_and_reloads_the_resolver()
+    public async Task Register_canonicalises_paths_without_lowercasing_saves_and_reloads_the_resolver()
     {
         var workspace = new Workspace { Name = "App", RootPath = @"C:\Repo\App\", Worktrees = { new Worktree { Path = @"C:/Repo/App-wt" } } };
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
 
         await _registry.RegisterAsync(workspace, CancellationToken.None);
 
-        workspace.RootPath.ShouldBe(@"c:\repo\app");
-        workspace.Worktrees[0].Path.ShouldBe(@"c:\repo\app-wt");
+        workspace.RootPath.ShouldBe(@"C:\Repo\App", "the launch path keeps its casing; only comparisons are case-insensitive");
+        workspace.Worktrees[0].Path.ShouldBe(@"C:\Repo\App-wt");
         workspace.Worktrees[0].WorkspaceId.ShouldBe(workspace.Id);
         await _store.Received(1).AddAsync(workspace, Arg.Any<CancellationToken>());
         _resolver.Resolve(@"C:\Repo\App\src").ShouldBe(workspace.Id);

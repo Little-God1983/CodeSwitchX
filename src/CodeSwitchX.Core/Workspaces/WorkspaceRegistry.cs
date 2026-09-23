@@ -28,11 +28,13 @@ public sealed class WorkspaceRegistry
 
     public async Task RegisterAsync(Workspace workspace, CancellationToken ct)
     {
-        workspace.RootPath = PathNormalizer.Normalize(workspace.RootPath);
+        // Stored in the user's casing: this path is launched, shown and used as a terminal cwd. Claude Code keys its
+        // project state by the exact cwd string, so lower-casing it would split resume history and project memory.
+        workspace.RootPath = PathNormalizer.Canonical(workspace.RootPath);
         foreach (var worktree in workspace.Worktrees)
         {
             worktree.WorkspaceId = workspace.Id;
-            worktree.Path = PathNormalizer.Normalize(worktree.Path);
+            worktree.Path = PathNormalizer.Canonical(worktree.Path);
         }
 
         await _store.AddAsync(workspace, ct).ConfigureAwait(false);

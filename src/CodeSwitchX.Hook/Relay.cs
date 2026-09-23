@@ -258,7 +258,8 @@ internal static class Relay
         {
             ConnectCallback = async (_, cancel) =>
             {
-                var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                // CurrentUserOnly: refuse a server owned by another account, so the token and prompt text never reach a squatted pipe.
+                var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.ConnectAsync(ConnectTimeoutMs, cancel).ConfigureAwait(false);
                 return pipe;
             },

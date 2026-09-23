@@ -27,7 +27,7 @@ public class WorkspaceProbeTests : IDisposable
     {
         var result = await _probe.ProbeAsync(_root, CancellationToken.None);
 
-        result.RootPath.ShouldBe(PathNormalizer.Normalize(_root));
+        result.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
         result.SuggestedName.ShouldBe("MyApp");
         result.WorkspaceFile.ShouldBeNull();
         result.IsGitRepository.ShouldBeTrue();
@@ -36,7 +36,7 @@ public class WorkspaceProbeTests : IDisposable
         result.HasClaudeMd.ShouldBeTrue();
         var worktree = result.Worktrees.ShouldHaveSingleItem();
         worktree.Branch.ShouldBe("feature");
-        worktree.Path.ShouldBe(PathNormalizer.Normalize(Path.Combine(_root, "..", "MyApp-wt")));
+        worktree.Path.ShouldBe(PathNormalizer.Canonical(Path.Combine(_root, "..", "MyApp-wt")));
     }
 
     [Fact]
@@ -44,7 +44,7 @@ public class WorkspaceProbeTests : IDisposable
     {
         var result = await _probe.ProbeAsync(Path.Combine(_root, "MyApp.slnx"), CancellationToken.None);
 
-        result.RootPath.ShouldBe(PathNormalizer.Normalize(_root));
+        result.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
         result.SuggestedName.ShouldBe("MyApp");
         result.WorkspaceFile.ShouldBeNull();
     }
@@ -54,7 +54,7 @@ public class WorkspaceProbeTests : IDisposable
     {
         var result = await _probe.ProbeAsync(Path.Combine(_root, "MyApp.code-workspace"), CancellationToken.None);
 
-        result.RootPath.ShouldBe(PathNormalizer.Normalize(_root));
+        result.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
         result.WorkspaceFile.ShouldBe(Path.Combine(_root, "MyApp.code-workspace"));
     }
 
@@ -72,6 +72,6 @@ public class WorkspaceProbeTests : IDisposable
 
         var list = WorkspaceProbe.ParseWorktreeList(porcelain, @"c:\repo\app");
 
-        list.ShouldBe([new WorktreeInfo(@"c:\repo\app-a", "a"), new WorktreeInfo(@"c:\repo\app-b", null)]);
+        list.ShouldBe([new WorktreeInfo(@"C:\repo\app-a", "a"), new WorktreeInfo(@"C:\repo\app-b", null)], "worktree paths keep gits casing; only the main-root comparison is case-insensitive");
     }
 }

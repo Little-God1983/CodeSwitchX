@@ -22,6 +22,9 @@ public sealed record TranscriptUpdate
     /// <summary>Whether the transcript ends with an assistant tool call that has no result yet; null when unknown (sub-agent files).</summary>
     public bool? PendingToolUse { get; init; }
 
+    /// <summary>The newest lines end with a user interrupt (Esc); Claude Code fires no Stop hook for that, so this overrides hook evidence.</summary>
+    public bool Interrupted { get; init; }
+
     /// <summary>The byte offset this update brings the file to; persisted together with the usage it covers.</summary>
     public Persistence.TranscriptCursor? Cursor { get; init; }
 }

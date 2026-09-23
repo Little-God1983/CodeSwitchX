@@ -11,6 +11,9 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
     public static readonly TimeSpan History = TimeSpan.FromDays(7);
     public const int RateMinutes = 60;
 
+    /// <summary>Windows ("Today", 5 hours, the rate sparkline) roll forward on this cadence even when nothing is indexed.</summary>
+    public static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
+
     private readonly IUsageStore _usage;
     private readonly ISettingsStore _settings;
     private readonly IEventBus _bus;
@@ -19,6 +22,7 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
     private readonly Lock _gate = new();
     private readonly Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket> _buckets = [];
     private IDisposable? _subscription;
+    private ITimer? _refreshTimer;
     private UsageAggregator _aggregator = new(PricingTable.Default);
 
     public TelemetryService(IUsageStore usage, ISettingsStore settings, IEventBus bus, TimeProvider time, ILogger<TelemetryService> logger)
@@ -51,11 +55,14 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
 
         _subscription = _bus.Subscribe<TranscriptUpdated>(OnTranscriptUpdated);
         Recompute(publish: true);
+        _refreshTimer = _time.CreateTimer(_ => Recompute(publish: true), null, RefreshInterval, RefreshInterval);
         _logger.LogInformation("Telemetry loaded {Count} usage buckets", stored.Count);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        _refreshTimer?.Dispose();
+        _refreshTimer = null;
         _subscription?.Dispose();
         _subscription = null;
         return Task.CompletedTask;
@@ -127,5 +134,9 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
         }
     }
 
-    public void Dispose() => _subscription?.Dispose();
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        _subscription?.Dispose();
+    }
 }

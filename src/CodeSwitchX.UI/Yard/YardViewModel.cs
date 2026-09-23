@@ -72,18 +72,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             Tracks.Add(group);
         }
 
+        // Subscribe first, then read the current snapshots: a change published in between would otherwise be lost
+        // (applying a snapshot twice is harmless).
+        _subscriptions.Add(_bus.Subscribe<SessionChanged>(m => _ui.Post(() => Apply(m.Current))));
+        _subscriptions.Add(_bus.Subscribe<WorkspaceRegistered>(m => _ui.Post(() => AddTile(m.Workspace))));
+        _subscriptions.Add(_bus.Subscribe<WorkspaceUnregistered>(m => _ui.Post(() => RemoveTile(m.WorkspaceId))));
+        _subscriptions.Add(_bus.Subscribe<HostStateChanged>(m => _ui.Post(() => Apply(m))));
         foreach (var snapshot in _engine.Snapshots)
         {
             Apply(snapshot);
         }
 
-        _subscriptions.Add(_bus.Subscribe<SessionChanged>(m => _ui.Post(() => Apply(m.Current))));
-        _subscriptions.Add(_bus.Subscribe<WorkspaceRegistered>(m => _ui.Post(() => AddTile(m.Workspace))));
-        _subscriptions.Add(_bus.Subscribe<WorkspaceUnregistered>(m => _ui.Post(() => RemoveTile(m.WorkspaceId))));
-        _subscriptions.Add(_bus.Subscribe<HostStateChanged>(m => _ui.Post(() => Apply(m))));
-
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
-        _gitTimer = _time.CreateTimer(_ => _ = RefreshGitAsync(CancellationToken.None), null, TimeSpan.Zero, GitRefreshInterval);
+        // Posted to the UI thread so the tile collections are only ever enumerated there.
+        _gitTimer = _time.CreateTimer(_ => _ui.Post(() => _ = RefreshGitAsync(CancellationToken.None)), null, TimeSpan.Zero, GitRefreshInterval);
     }
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);

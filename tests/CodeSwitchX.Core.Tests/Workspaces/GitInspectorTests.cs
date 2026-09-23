@@ -69,4 +69,33 @@ public class GitInspectorTests : IDisposable
         (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", 0));
         (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, 0));
     }
+
+    [Fact]
+    public async Task A_hanging_process_is_killed_on_timeout_instead_of_leaking()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 > nul") { WorkingDirectory = _root };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        sw.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
+        result.TimedOut.ShouldBeTrue();
+        result.Output.ShouldBeNull();
+        var pid = result.Pid.ShouldNotBeNull();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        Should.Throw<ArgumentException>(() => System.Diagnostics.Process.GetProcessById(pid), "the whole process tree must be gone");
+    }
+
+    [Fact]
+    public async Task Large_stderr_output_does_not_stall_the_run()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"for /L %i in (1,1,3000) do @echo warning: line %i of a long complaint that fills the pipe 1>&2\"") { WorkingDirectory = _root };
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromSeconds(20), CancellationToken.None);
+
+        sw.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(15));
+        result.TimedOut.ShouldBeFalse();
+        result.Output.ShouldNotBeNull();
+    }
 }

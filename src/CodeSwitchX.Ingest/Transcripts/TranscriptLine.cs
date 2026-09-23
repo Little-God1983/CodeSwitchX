@@ -8,7 +8,7 @@ public sealed record AssistantLine(string Type, DateTimeOffset? Timestamp, strin
     string? MessageId, string? Model, TokenUsage? Usage, bool HasToolUse) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 
 public sealed record UserLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd,
-    string? Text, bool IsToolResult, bool IsMeta) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
+    string? Text, bool IsToolResult, bool IsMeta, bool IsInterrupt = false) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 
 public sealed record SummaryLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, string Title)
     : TranscriptLine(Type, Timestamp, SessionId, Cwd);
