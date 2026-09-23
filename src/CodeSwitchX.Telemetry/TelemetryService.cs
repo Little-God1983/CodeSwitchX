@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Telemetry;
 
 /// <summary>Keeps the last seven days of usage buckets in memory and publishes a fresh snapshot after every transcript update.</summary>
-public sealed class TelemetryService : IHostedService, IDisposable
+public sealed class TelemetryService : IHostedService, IDisposable, IPricingProvider
 {
     public static readonly TimeSpan History = TimeSpan.FromDays(7);
     public const int RateMinutes = 60;
