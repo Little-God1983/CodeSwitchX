@@ -8,4 +8,7 @@
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeSwitchX.Data.Tests" />
+  </ItemGroup>
 </Project>

@@ -24,6 +24,9 @@ public static class DataServiceCollectionExtensions
         services.AddSingleton<ISessionStore, SessionStore>();
         services.AddSingleton<IUsageStore, UsageStore>();
         services.AddSingleton<ISettingsStore, SettingsStore>();
+        services.AddSingleton<PersistenceWriterOptions>();
+        services.AddSingleton<PersistenceWriter>();
+        services.AddHostedService(sp => sp.GetRequiredService<PersistenceWriter>());
         return services;
     }
 }
