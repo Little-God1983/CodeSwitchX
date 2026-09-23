@@ -1,4 +1,5 @@
 using CodeSwitchX.Ingest.Api;
+using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Ingest.Transcripts;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,6 +18,7 @@ public static class IngestServiceCollectionExtensions
         services.AddSingleton<TranscriptIndexerOptions>();
         services.AddSingleton<TranscriptIndexer>();
         services.AddHostedService(sp => sp.GetRequiredService<TranscriptIndexer>());
+        services.AddSingleton<ClaudeHookInstaller>();
         return services;
     }
 }
