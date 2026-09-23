@@ -13,6 +13,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 {
     public static readonly TimeSpan EndedRowLifetime = TimeSpan.FromMinutes(10);
 
+    /// <summary>Stale chats fall off the tile after this long; they come back as soon as the session shows activity again.</summary>
+    public static readonly TimeSpan StaleRowLifetime = TimeSpan.FromMinutes(30);
+
     private readonly YardViewModel _owner;
 
     [ObservableProperty] private string? _branch;
@@ -62,7 +65,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     public void Tick(DateTimeOffset now)
     {
-        foreach (var row in Chats.Where(c => !c.IsLive && now - c.StateSince >= EndedRowLifetime).ToList())
+        foreach (var row in Chats.Where(c => (!c.IsLive && now - c.StateSince >= EndedRowLifetime)
+                                          || (c.State == SessionState.Stale && now - c.StateSince >= StaleRowLifetime)).ToList())
         {
             Chats.Remove(row);
         }

@@ -74,7 +74,24 @@ public sealed class HostManager
             Transition(hosted, HostState.Starting, error: null);
         }
 
+        var displayName = VsCodeLauncher.DisplayNameForMatching(workspace);
         var before = _windows.TopLevelWindows();
+
+        // VS Code is single-instance: asking it to open a folder that is already open only focuses the existing
+        // window, so adopt that window instead of waiting for one that will never appear.
+        var existing = VsCodeWindowMatcher.FindExisting(before, displayName, _windows.ProcessName);
+        if (existing is not null)
+        {
+            lock (_gate)
+            {
+                Adopt(hosted, existing);
+                Transition(hosted, HostState.Running, error: null);
+            }
+
+            _logger.LogInformation("Adopted existing VS Code window {Hwnd} for {Workspace}", existing.Hwnd, workspace.Name);
+            return hosted;
+        }
+
         var launch = _launcher.Launch(workspace);
         if (!launch.Started)
         {
@@ -87,7 +104,6 @@ public sealed class HostManager
             return hosted;
         }
 
-        var displayName = VsCodeLauncher.DisplayNameForMatching(workspace);
         var deadline = _time.GetUtcNow() + _options.DiscoveryTimeout;
         while (_time.GetUtcNow() < deadline)
         {
@@ -97,10 +113,9 @@ public sealed class HostManager
             {
                 lock (_gate)
                 {
-                    hosted.Hwnd = match.Hwnd;
-                    hosted.ProcessId = match.ProcessId;
-                    hosted.StartedAt = _time.GetUtcNow();
-                    hosted.Visible = false;
+                    Adopt(hosted, match);
+                    // Keep the fresh window out of sight until the Cab docks it, so it never flashes undocked on the desktop.
+                    _docker.Cloak(match.Hwnd);
                     Transition(hosted, HostState.Running, error: null);
                 }
 
@@ -152,6 +167,23 @@ public sealed class HostManager
         }
     }
 
+    /// <summary>
+    /// Uncloaks every hosted window. DWM cloaking outlives this process, so this must run before exit or a
+    /// closed CodeSwitchX would leave the user's VS Code windows running but invisible.
+    /// </summary>
+    public void ReleaseAll()
+    {
+        lock (_gate)
+        {
+            foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)))
+            {
+                _docker.Uncloak(hosted.Hwnd);
+                hosted.Visible = true;
+                hosted.TargetRect = null;
+            }
+        }
+    }
+
     /// <summary>Called from the WinEvent watcher: put a docked window back if the user dragged it.</summary>
     public void SnapBack(nint hwnd)
     {
@@ -183,12 +215,25 @@ public sealed class HostManager
         }
     }
 
+    /// <summary>Stops tracking a workspace (e.g. it was unregistered); its window is handed back to the desktop uncloaked.</summary>
     public void Forget(Guid workspaceId)
     {
         lock (_gate)
         {
-            _hosted.Remove(workspaceId);
+            if (_hosted.Remove(workspaceId, out var hosted) && hosted.State == HostState.Running && _docker.IsAlive(hosted.Hwnd))
+            {
+                _docker.Uncloak(hosted.Hwnd);
+            }
         }
+    }
+
+    private static void Adopt(HostedWorkspace hosted, WindowInfo window)
+    {
+        hosted.Hwnd = window.Hwnd;
+        hosted.ProcessId = window.ProcessId;
+        hosted.StartedAt = DateTimeOffset.UtcNow;
+        hosted.Visible = false;
+        hosted.TargetRect = null;
     }
 
     private void Transition(HostedWorkspace hosted, HostState state, string? error)

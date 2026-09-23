@@ -57,4 +57,16 @@ public class RelayEndToEndTests : IAsyncLifetime
         code.ShouldBe(0);
         _received.ShouldHaveSingleItem().SessionId.ShouldBe("s2");
     }
+
+    [Fact]
+    public async Task Relay_treats_an_endpoint_whose_owner_process_is_gone_as_absent()
+    {
+        var descriptor = EndpointDescriptor.TryRead(_paths.EndpointFile)!;
+        (descriptor with { Pid = int.MaxValue - 7 }).Write(_paths.EndpointFile);
+
+        var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"stale","hook_event_name":"Stop"}"""), _paths.Root);
+
+        code.ShouldBe(0);
+        _received.ShouldBeEmpty("a stale endpoint.json left by a crashed or killed instance must not be trusted");
+    }
 }

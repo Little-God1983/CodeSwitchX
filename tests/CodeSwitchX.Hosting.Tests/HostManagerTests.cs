@@ -84,6 +84,7 @@ public class HostManagerTests
         _windows.TopLevelWindows().Returns([], [new WindowInfo(600, 30, "Chrome_WidgetWin_1", "other - Visual Studio Code")]);
         _launcher.Launch(other).Returns(new LaunchResult(true, 2, null));
         await _manager.OpenAsync(other, CancellationToken.None);
+        _docker.ClearReceivedCalls();
         var rect = ScreenRect.FromSize(0, 28, 1600, 900);
 
         _manager.ShowInCab(other.Id, rect);
@@ -130,5 +131,55 @@ public class HostManagerTests
 
         _manager.Get(_workspace.Id)!.State.ShouldBe(HostState.Stopped);
         _changes[^1].State.ShouldBe(HostState.Stopped);
+    }
+
+    [Fact]
+    public async Task Open_cloaks_the_discovered_window_until_it_is_shown_in_the_cab()
+    {
+        WindowAppearsAfterLaunch();
+
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        _docker.Received(1).Cloak(500);
+        _docker.DidNotReceive().Uncloak(500);
+    }
+
+    [Fact]
+    public async Task ReleaseAll_and_Forget_uncloak_every_hosted_window_so_nothing_stays_invisible_after_exit()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var other = new Workspace { Name = "Other", RootPath = @"c:\repo\other" };
+        _windows.TopLevelWindows().Returns([], [new WindowInfo(600, 30, "Chrome_WidgetWin_1", "other - Visual Studio Code")]);
+        _launcher.Launch(other).Returns(new LaunchResult(true, 2, null));
+        await _manager.OpenAsync(other, CancellationToken.None);
+        _manager.ShowInCab(_workspace.Id, ScreenRect.FromSize(0, 0, 100, 100));
+        _manager.HideAll();
+        _docker.ClearReceivedCalls();
+
+        _manager.ReleaseAll();
+
+        _docker.Received(1).Uncloak(500);
+        _docker.Received(1).Uncloak(600);
+        _manager.All.ShouldAllBe(h => h.Visible);
+
+        _docker.ClearReceivedCalls();
+        _manager.HideAll();
+        _manager.Forget(other.Id);
+
+        _docker.Received(1).Uncloak(600);
+        _manager.Get(other.Id).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Open_adopts_a_vscode_window_that_already_shows_the_workspace_instead_of_launching()
+    {
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")]);
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Running);
+        hosted.Hwnd.ShouldBe((nint)700);
+        _launcher.DidNotReceive().Launch(Arg.Any<Workspace>());
     }
 }

@@ -187,4 +187,43 @@ public class TranscriptIndexerTests : IDisposable
         _updates.Single(u => u.SessionId == "pending").InferredSignal.ShouldBe(SessionSignal.Notification);
         _updates.Single(u => u.SessionId == "old").InferredSignal.ShouldBe(SessionSignal.Stop);
     }
+
+    [Fact]
+    public async Task Transcripts_untouched_for_longer_than_the_history_window_are_flagged_historical()
+    {
+        File.WriteAllLines(Transcript("old"), [User("old", "long ago"), Assistant("old", "m", TextBlock)]);
+        File.SetLastWriteTimeUtc(Transcript("old"), _time.GetUtcNow().AddDays(-3).UtcDateTime);
+        File.WriteAllLines(Transcript("new"), [User("new", "today")]);
+        File.SetLastWriteTimeUtc(Transcript("new"), _time.GetUtcNow().AddMinutes(-5).UtcDateTime);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.Single(u => u.SessionId == "old").Historical.ShouldBeTrue();
+        _updates.Single(u => u.SessionId == "old").Usage.Count.ShouldBe(1, "usage still feeds the 7-day telemetry window");
+        _updates.Single(u => u.SessionId == "new").Historical.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Subagent_transcripts_contribute_usage_to_the_parent_but_never_its_title_state_or_context()
+    {
+        File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-abc.jsonl"),
+        [
+            User("parent", "Explore the codebase"),
+            Assistant("parent", "m2", ToolBlock, ts: _time.GetUtcNow().AddSeconds(-1).ToString("O"), input: 9, output: 9, cacheWrite: 9, cacheRead: 9),
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var parent = _updates.Single(u => u.TranscriptPath == Transcript("parent"));
+        parent.Title.ShouldBe("Main task");
+        var subagent = _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl"));
+        subagent.SessionId.ShouldBe("parent");
+        subagent.Title.ShouldBeNull();
+        subagent.InferredSignal.ShouldBeNull();
+        subagent.LatestContext.ShouldBeNull();
+        subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
+    }
 }

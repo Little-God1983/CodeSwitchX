@@ -8,11 +8,20 @@ public static class VsCodeWindowMatcher
     public const string ProcessName = "Code";
     private const string TitleSuffix = "Visual Studio Code";
 
+    /// <summary>A VS Code window created after <paramref name="before"/> was captured that names the workspace.</summary>
     public static WindowInfo? FindNew(IReadOnlyList<WindowInfo> before, IReadOnlyList<WindowInfo> after, string displayName, Func<uint, string?> processName)
     {
         var known = before.Select(w => w.Hwnd).ToHashSet();
-        var candidates = after
-            .Where(w => !known.Contains(w.Hwnd))
+        return Pick(after.Where(w => !known.Contains(w.Hwnd)), displayName, processName);
+    }
+
+    /// <summary>A VS Code window that already shows the workspace (VS Code is single-instance and focuses it instead of opening a new one).</summary>
+    public static WindowInfo? FindExisting(IReadOnlyList<WindowInfo> windows, string displayName, Func<uint, string?> processName) =>
+        Pick(windows, displayName, processName);
+
+    private static WindowInfo? Pick(IEnumerable<WindowInfo> windows, string displayName, Func<uint, string?> processName)
+    {
+        var candidates = windows
             .Where(w => string.Equals(w.ClassName, ElectronClass, StringComparison.Ordinal))
             .Where(w => TitleNamesWorkspace(w.Title, displayName))
             .Where(w => string.Equals(processName(w.ProcessId), ProcessName, StringComparison.OrdinalIgnoreCase))

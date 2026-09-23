@@ -53,13 +53,25 @@ public sealed class SessionEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Loads persisted snapshots without publishing. Hook evidence does not survive a restart (<see cref="SessionSnapshot.HookSeen"/>
+    /// resets), and a session that was Working/Waiting but has been quiet longer than the inferred idle window is
+    /// downgraded to Idle, because its Stop or SessionEnd hook most likely fired while the app was down.
+    /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
+        var now = _time.GetUtcNow();
         lock (_gate)
         {
             foreach (var snapshot in persisted)
             {
-                _sessions[snapshot.SessionId] = snapshot;
+                var restored = snapshot with { HookSeen = false };
+                if (restored.State is SessionState.Working or SessionState.Waiting && now - restored.LastEventAt > _options.InferredIdleAfter)
+                {
+                    restored = restored with { State = SessionState.Idle, StateSince = now };
+                }
+
+                _sessions[restored.SessionId] = restored;
             }
         }
     }
@@ -106,6 +118,7 @@ public sealed class SessionEngine : IDisposable
                 LastNotification = e.Signal == SessionSignal.Notification ? e.Message ?? e.NotificationType : s.LastNotification,
                 Title = s.Title ?? ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength),
                 Inferred = false,
+                HookSeen = true,
                 ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
             };
             _sessions[e.SessionId] = current;
@@ -122,11 +135,17 @@ public sealed class SessionEngine : IDisposable
         lock (_gate)
         {
             previous = _sessions.GetValueOrDefault(u.SessionId);
+            if (previous is null && u.Historical)
+            {
+                // Old transcripts feed telemetry only; they must not resurface as chat rows.
+                return;
+            }
+
             var s = previous ?? (NewSession(u.SessionId, u.LastActivityAt ?? u.ObservedAt) with { Inferred = true });
 
             var state = s.State;
             var stateSince = s.StateSince;
-            if (s.Inferred && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
+            if (!s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
             {
                 state = next;
                 stateSince = u.LastActivityAt ?? u.ObservedAt;
@@ -177,10 +196,17 @@ public sealed class SessionEngine : IDisposable
     {
         var now = _time.GetUtcNow();
         List<string> stale;
+        List<string> quiet;
         lock (_gate)
         {
             stale = _sessions.Values
                 .Where(s => s.State == SessionState.Idle && now - s.LastEventAt >= _options.StaleAfter)
+                .Select(s => s.SessionId)
+                .ToList();
+
+            // Without hook evidence "Working" only means "the transcript was written recently"; let it decay.
+            quiet = _sessions.Values
+                .Where(s => !s.HookSeen && s.State is SessionState.Working or SessionState.Waiting && now - s.LastEventAt >= _options.InferredIdleAfter)
                 .Select(s => s.SessionId)
                 .ToList();
         }
@@ -188,6 +214,11 @@ public sealed class SessionEngine : IDisposable
         foreach (var id in stale)
         {
             Signal(id, SessionSignal.StaleTimeout);
+        }
+
+        foreach (var id in quiet)
+        {
+            Signal(id, SessionSignal.Stop);
         }
     }
 

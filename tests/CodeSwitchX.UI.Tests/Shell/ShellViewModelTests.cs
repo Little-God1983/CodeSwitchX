@@ -47,6 +47,7 @@ public class ShellViewModelTests
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 0, 100, 100);
         await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Docker.ClearReceivedCalls(); // discovery cloaks once; only the Back cloak counts below
 
         _h.Shell.BackToYard();
         _h.Shell.Mode.ShouldBe(ShellMode.Yard);
@@ -93,10 +94,30 @@ public class ShellViewModelTests
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 0, 100, 100);
         await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Docker.ClearReceivedCalls(); // discovery cloaks once; only the Settings cloak counts below
 
         _h.Shell.OpenSettings();
 
         _h.Shell.Mode.ShouldBe(ShellMode.Settings);
         _h.Docker.Received(1).Cloak(500);
+    }
+
+    [Fact]
+    public async Task Workspaces_marked_AutoStart_are_launched_and_kept_hidden_at_startup()
+    {
+        _h.App.AutoStart = true;
+        _h.VsCodeWindowAppears();
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        for (var i = 0; i < 100 && _h.Host.Get(_h.App.Id)?.State != HostState.Running; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _h.Launcher.Received(1).Launch(_h.App);
+        _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Running);
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Docker.Received().Cloak(500);
+        _h.Docker.DidNotReceive().Uncloak(500);
     }
 }

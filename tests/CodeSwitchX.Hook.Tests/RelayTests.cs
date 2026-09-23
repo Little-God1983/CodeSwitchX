@@ -75,7 +75,7 @@ public class RelayTests : IDisposable
         listener.Start();
         var deadPort = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
-        File.WriteAllText(Path.Combine(_dir, "endpoint.json"), $$"""{"pipeName":"csx-nonexistent-{{Guid.NewGuid():N}}","port":{{deadPort}},"pid":1,"startedAtUtc":"2026-09-23T10:00:00Z"}""");
+        File.WriteAllText(Path.Combine(_dir, "endpoint.json"), $$"""{"pipeName":"csx-nonexistent-{{Guid.NewGuid():N}}","port":{{deadPort}},"pid":{{Environment.ProcessId}},"startedAtUtc":"2026-09-23T10:00:00Z"}""");
         File.WriteAllText(Path.Combine(_dir, "token"), new string('a', 64));
         var sw = Stopwatch.StartNew();
 

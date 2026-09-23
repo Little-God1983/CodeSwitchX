@@ -15,4 +15,7 @@ public sealed record TranscriptUpdate
 
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
+
+    /// <summary>True when the transcript was last written longer ago than the history window; such updates never create sessions.</summary>
+    public bool Historical { get; init; }
 }

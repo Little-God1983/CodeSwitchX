@@ -25,8 +25,9 @@ internal static class Relay
         {
             var eventName = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) ? args[0] : "Unknown";
             var endpoint = ReadEndpoint(Path.Combine(dataDirectory, "endpoint.json"));
-            if (endpoint is null)
+            if (endpoint is null || !OwnerIsAlive(endpoint.Pid))
             {
+                // A stale endpoint.json (crash, kill, missed shutdown) must not cost every hook a connect timeout.
                 return 0;
             }
 
@@ -65,6 +66,28 @@ internal static class Relay
         catch
         {
             return null;
+        }
+    }
+
+    internal static bool OwnerIsAlive(int pid)
+    {
+        if (pid <= 0)
+        {
+            return true; // unknown owner (hand-written endpoint file): trust it
+        }
+
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 

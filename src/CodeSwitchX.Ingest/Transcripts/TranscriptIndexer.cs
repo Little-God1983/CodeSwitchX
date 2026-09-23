@@ -37,6 +37,19 @@ public sealed class TranscriptIndexer : BackgroundService
         _options = options;
     }
 
+    /// <summary>Claude Code writes sub-agent transcripts as <c>agent-*.jsonl</c> (in newer versions under a <c>subagents</c> folder).</summary>
+    internal static bool IsSubagentTranscript(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name.StartsWith("agent-", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var directory = Path.GetDirectoryName(path) ?? string.Empty;
+        return directory.Split('\\', '/').Any(segment => string.Equals(segment, "subagents", StringComparison.OrdinalIgnoreCase));
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         StartWatcher();
@@ -160,7 +173,7 @@ public sealed class TranscriptIndexer : BackgroundService
         TailResult tail;
         try
         {
-            tail = TranscriptTailer.ReadNewLines(path, state.Offset);
+            tail = TranscriptTailer.ReadNewLines(path, state.Offset, _options.MaxBytesPerPass);
         }
         catch (IOException ex)
         {
@@ -174,14 +187,21 @@ public sealed class TranscriptIndexer : BackgroundService
             state.Reset();
         }
 
+        if (tail.HasMore)
+        {
+            _dirty = true;
+        }
+
         if (tail.Lines.Count == 0 && tail.NewOffset == state.Offset)
         {
             return null;
         }
 
-        var update = BuildUpdate(path, state, tail.Lines);
+        var lastWriteUtc = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+        var historical = _time.GetUtcNow() - lastWriteUtc > _options.HistoryWindow;
+        var update = BuildUpdate(path, state, tail.Lines, historical, IsSubagentTranscript(path));
         state.Offset = tail.NewOffset;
-        state.LastWriteUtc = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+        state.LastWriteUtc = lastWriteUtc;
         if (update is not null)
         {
             _bus.Publish(new TranscriptUpdated(update));
@@ -193,7 +213,7 @@ public sealed class TranscriptIndexer : BackgroundService
         };
     }
 
-    private TranscriptUpdate? BuildUpdate(string path, FileState state, IReadOnlyList<string> lines)
+    private TranscriptUpdate? BuildUpdate(string path, FileState state, IReadOnlyList<string> lines, bool historical, bool subagent)
     {
         var usage = new List<UsageDelta>();
         string? newTitle = null;
@@ -277,8 +297,23 @@ public sealed class TranscriptIndexer : BackgroundService
 
         var sessionId = state.SessionId ?? Path.GetFileNameWithoutExtension(path);
         state.SessionId = sessionId;
-
         var now = _time.GetUtcNow();
+
+        if (subagent)
+        {
+            // A sub-agent's prompts, tool calls and context window belong to the sub-agent, not the parent chat;
+            // only its token usage counts towards the parent session.
+            return new TranscriptUpdate
+            {
+                SessionId = sessionId,
+                TranscriptPath = path,
+                ObservedAt = now,
+                Model = model,
+                Usage = usage,
+                Historical = historical,
+            };
+        }
+
         var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
         var inferred = !recentlyWritten ? SessionSignal.Stop
             : pendingToolUse ? SessionSignal.Notification
@@ -296,6 +331,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Usage = usage,
             LatestContext = latestContext,
             InferredSignal = inferred,
+            Historical = historical,
         };
     }
 

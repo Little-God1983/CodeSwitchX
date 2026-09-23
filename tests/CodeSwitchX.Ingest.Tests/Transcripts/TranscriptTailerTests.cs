@@ -61,4 +61,20 @@ public class TranscriptTailerTests : IDisposable
 
         TranscriptTailer.ReadNewLines(_file, 0).Lines.ShouldBe(["{\"a\":1}"]);
     }
+
+    [Fact]
+    public void Reads_at_most_the_byte_cap_per_pass_and_continues_on_the_next()
+    {
+        File.WriteAllText(_file, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n", Utf8);
+
+        var first = TranscriptTailer.ReadNewLines(_file, 0, maxBytes: 20);
+        first.Lines.ShouldBe(["{\"a\":1}", "{\"b\":2}"]);
+        first.NewOffset.ShouldBe(16);
+        first.HasMore.ShouldBeTrue();
+
+        var second = TranscriptTailer.ReadNewLines(_file, first.NewOffset, maxBytes: 20);
+        second.Lines.ShouldBe(["{\"c\":3}"]);
+        second.NewOffset.ShouldBe(24);
+        second.HasMore.ShouldBeFalse();
+    }
 }

@@ -18,6 +18,9 @@ public sealed record SessionSnapshot
 
     /// <summary>True while every fact came from transcript inference and no hook event was ever seen.</summary>
     public bool Inferred { get; init; }
+
+    /// <summary>True once a hook event arrived in this process; not persisted, so restored sessions follow inference until hooks speak again.</summary>
+    public bool HookSeen { get; init; }
     public int? ClaudePid { get; init; }
     public TokenUsage LatestContext { get; init; }
 }

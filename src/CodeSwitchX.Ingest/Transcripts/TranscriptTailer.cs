@@ -2,12 +2,21 @@ using System.Text;
 
 namespace CodeSwitchX.Ingest.Transcripts;
 
-public readonly record struct TailResult(IReadOnlyList<string> Lines, long NewOffset, bool Truncated);
+/// <param name="Lines">Complete lines read in this pass.</param>
+/// <param name="NewOffset">Byte offset to resume from.</param>
+/// <param name="Truncated">The file shrank below the requested offset; reading restarted at zero.</param>
+/// <param name="HasMore">The pass stopped at the byte cap and unread bytes remain.</param>
+public readonly record struct TailResult(IReadOnlyList<string> Lines, long NewOffset, bool Truncated, bool HasMore = false);
 
-/// <summary>Reads whole lines appended after a byte offset; a trailing line without a newline is left for the next call.</summary>
+/// <summary>
+/// Reads whole lines appended after a byte offset, at most <c>maxBytes</c> per pass so a multi-hundred-megabyte
+/// transcript never lands in memory at once; a trailing line without a newline is left for the next call.
+/// </summary>
 public static class TranscriptTailer
 {
-    public static TailResult ReadNewLines(string path, long fromOffset)
+    public const int DefaultMaxBytes = 8 * 1024 * 1024;
+
+    public static TailResult ReadNewLines(string path, long fromOffset, int maxBytes = DefaultMaxBytes)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan);
         var truncated = false;
@@ -23,7 +32,8 @@ public static class TranscriptTailer
         }
 
         stream.Position = fromOffset;
-        var buffer = new byte[stream.Length - fromOffset];
+        var remaining = stream.Length - fromOffset;
+        var buffer = new byte[Math.Min(remaining, maxBytes)];
         var read = 0;
         while (read < buffer.Length)
         {
@@ -36,10 +46,14 @@ public static class TranscriptTailer
             read += n;
         }
 
-        var lastNewline = Array.LastIndexOf(buffer, (byte)'\n', read - 1);
+        var capped = read < remaining;
+        var lastNewline = read == 0 ? -1 : Array.LastIndexOf(buffer, (byte)'\n', read - 1);
         if (lastNewline < 0)
         {
-            return new TailResult([], fromOffset, truncated);
+            // Either a partial trailing line (wait for more) or a single line longer than the cap (skip it).
+            return capped
+                ? new TailResult([], fromOffset + read, truncated, HasMore: true)
+                : new TailResult([], fromOffset, truncated);
         }
 
         // Skip a UTF-8 byte-order mark at the start of the file; offsets stay byte-accurate.
@@ -49,6 +63,7 @@ public static class TranscriptTailer
             .Select(l => l.TrimEnd('\r'))
             .Where(l => l.Length > 0)
             .ToList();
-        return new TailResult(lines, fromOffset + lastNewline + 1, truncated);
+        var newOffset = fromOffset + lastNewline + 1;
+        return new TailResult(lines, newOffset, truncated, HasMore: newOffset < stream.Length && capped);
     }
 }

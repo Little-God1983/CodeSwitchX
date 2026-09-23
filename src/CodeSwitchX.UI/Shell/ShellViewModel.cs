@@ -51,6 +51,23 @@ public sealed partial class ShellViewModel : ObservableObject
         await Settings.LoadAsync(ct);
         Settings.BudgetChanged += PerformanceBar.SetBudget;
         Settings.CloseRequested += CloseSettings;
+        _ = AutoStartAsync();
+    }
+
+    /// <summary>"Start with CodeSwitchX": launch those workspaces now; their windows stay cloaked until a tile is opened.</summary>
+    private async Task AutoStartAsync()
+    {
+        foreach (var tile in Yard.Tiles.Where(t => t.Workspace.AutoStart).ToList())
+        {
+            try
+            {
+                await _host.OpenAsync(tile.Workspace, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Auto-start of {Workspace} failed", tile.Name);
+            }
+        }
     }
 
     [RelayCommand]

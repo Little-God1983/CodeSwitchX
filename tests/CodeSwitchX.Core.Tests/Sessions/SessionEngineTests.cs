@@ -261,4 +261,86 @@ public class SessionEngineTests
         snapshot.LastEventAt.ShouldBe(later);
         snapshot.Model.ShouldBe("claude-sonnet-5");
     }
+
+    private TranscriptUpdate Update(string session, SessionSignal? inferred, DateTimeOffset? activity = null, bool historical = false) => new()
+    {
+        SessionId = session,
+        TranscriptPath = "p",
+        ObservedAt = _time.GetUtcNow(),
+        LastActivityAt = activity ?? _time.GetUtcNow(),
+        Cwd = @"C:\Repo\App",
+        InferredSignal = inferred,
+        Historical = historical,
+    };
+
+    [Fact]
+    public void Inferred_working_and_waiting_sessions_decay_to_idle_when_the_transcript_goes_quiet()
+    {
+        _engine.Apply(Update("w", SessionSignal.ToolUse));
+        _engine.Apply(Update("p", SessionSignal.Notification));
+        _engine.Get("w")!.State.ShouldBe(SessionState.Working);
+        _engine.Get("p")!.State.ShouldBe(SessionState.Waiting);
+
+        _time.Advance(TimeSpan.FromSeconds(4));
+        _engine.SweepStale();
+        _engine.Get("w")!.State.ShouldBe(SessionState.Working, "still inside the inferred idle window");
+
+        _time.Advance(TimeSpan.FromSeconds(7));
+        _engine.SweepStale();
+
+        _engine.Get("w")!.State.ShouldBe(SessionState.Idle);
+        _engine.Get("p")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void Hook_backed_working_sessions_do_not_decay_on_the_inferred_timer()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        _engine.SweepStale();
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void Restore_downgrades_working_sessions_that_went_quiet_while_the_app_was_down()
+    {
+        var old = _time.GetUtcNow().AddMinutes(-3);
+        _engine.Restore(
+        [
+            new SessionSnapshot { SessionId = "quiet", State = SessionState.Working, StartedAt = old, LastEventAt = old, StateSince = old },
+            new SessionSnapshot { SessionId = "fresh", State = SessionState.Working, StartedAt = old, LastEventAt = _time.GetUtcNow(), StateSince = _time.GetUtcNow() },
+        ]);
+
+        _engine.Get("quiet")!.State.ShouldBe(SessionState.Idle);
+        _engine.Get("fresh")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void Restored_sessions_follow_transcript_inference_until_a_live_hook_event_arrives()
+    {
+        _engine.Restore([new SessionSnapshot { SessionId = "r", State = SessionState.Idle, StartedAt = _time.GetUtcNow(), LastEventAt = _time.GetUtcNow(), StateSince = _time.GetUtcNow() }]);
+
+        _engine.Apply(Update("r", SessionSignal.ToolUse));
+        _engine.Get("r")!.State.ShouldBe(SessionState.Working);
+        _engine.Get("r")!.Inferred.ShouldBeFalse("a restored hook-backed session keeps its marker");
+
+        _engine.Apply(Hook("Stop", SessionSignal.Stop, session: "r"));
+        _engine.Apply(Update("r", SessionSignal.ToolUse));
+
+        _engine.Get("r")!.State.ShouldBe(SessionState.Idle, "once a live hook spoke, inference is ignored again");
+    }
+
+    [Fact]
+    public void Historical_transcript_updates_never_create_sessions_but_still_update_existing_ones()
+    {
+        _engine.Apply(Update("ancient", SessionSignal.Stop, historical: true));
+        _engine.Get("ancient").ShouldBeNull();
+
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Apply(Update("s1", null, historical: true) with { Title = "From history" });
+
+        _engine.Get("s1")!.Title.ShouldBe("From history");
+    }
 }

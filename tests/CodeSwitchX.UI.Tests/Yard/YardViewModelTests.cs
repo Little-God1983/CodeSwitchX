@@ -130,4 +130,22 @@ public class YardViewModelTests
 
         _yard.FindTile(_app.Id)!.Chats.ShouldHaveSingleItem().SessionId.ShouldBe("old");
     }
+
+    [Fact]
+    public async Task Stale_chats_leave_the_tile_after_the_stale_row_lifetime_and_return_on_new_activity()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Stale)));
+
+        _time.Advance(TimeSpan.FromMinutes(29));
+        _yard.Tick(_time.GetUtcNow());
+        _yard.FindTile(_app.Id)!.Chats.Count.ShouldBe(1);
+
+        _time.Advance(TimeSpan.FromMinutes(2));
+        _yard.Tick(_time.GetUtcNow());
+        _yard.FindTile(_app.Id)!.Chats.ShouldBeEmpty();
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Working)));
+        _yard.FindTile(_app.Id)!.Chats.ShouldHaveSingleItem().State.ShouldBe(SessionState.Working);
+    }
 }
