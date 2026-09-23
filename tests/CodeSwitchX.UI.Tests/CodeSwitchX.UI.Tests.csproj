@@ -6,4 +6,9 @@
     <ProjectReference Include="..\..\src\CodeSwitchX.UI\CodeSwitchX.UI.csproj" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- WPF's implicit usings leave out System.IO because System.Windows.Shapes.Path would clash. -->
+    <Using Include="System.IO" />
+    <Using Include="System.IO.Path" Alias="Path" />
+  </ItemGroup>
 </Project>

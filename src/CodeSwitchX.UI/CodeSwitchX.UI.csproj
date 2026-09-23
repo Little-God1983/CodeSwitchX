@@ -13,6 +13,7 @@
     <ProjectReference Include="..\CodeSwitchX.Ingest\CodeSwitchX.Ingest.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Telemetry\CodeSwitchX.Telemetry.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Hosting\CodeSwitchX.Hosting.csproj" />
+    <ProjectReference Include="..\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" ReferenceOutputAssembly="false" Private="false" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="H.NotifyIcon.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
@@ -24,4 +25,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
   </ItemGroup>
+  <Target Name="CopyRelay" AfterTargets="Build">
+    <ItemGroup>
+      <RelayFiles Include="..\CodeSwitchX.Hook\bin\$(Configuration)\$(TargetFramework)\csx-hook.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(RelayFiles)" DestinationFolder="$(OutDir)relay" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
