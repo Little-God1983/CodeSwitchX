@@ -1,4 +1,5 @@
 using CodeSwitchX.Ingest.Api;
+using CodeSwitchX.Ingest.Transcripts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CodeSwitchX.Ingest;
@@ -13,6 +14,9 @@ public static class IngestServiceCollectionExtensions
         services.AddSingleton<AccessTokenStore>();
         services.AddSingleton<EventApiService>();
         services.AddHostedService(sp => sp.GetRequiredService<EventApiService>());
+        services.AddSingleton<TranscriptIndexerOptions>();
+        services.AddSingleton<TranscriptIndexer>();
+        services.AddHostedService(sp => sp.GetRequiredService<TranscriptIndexer>());
         return services;
     }
 }

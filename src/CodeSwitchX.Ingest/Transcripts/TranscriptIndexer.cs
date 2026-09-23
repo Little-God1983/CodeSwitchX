@@ -1,0 +1,376 @@
+using CodeSwitchX.Core;
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Paths;
+using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Core.Sessions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace CodeSwitchX.Ingest.Transcripts;
+
+/// <summary>
+/// Tails every <c>*.jsonl</c> under <c>~/.claude/projects</c> from its stored byte offset and publishes
+/// <see cref="TranscriptUpdated"/> with titles, usage deltas and an inferred state signal.
+/// </summary>
+public sealed class TranscriptIndexer : BackgroundService
+{
+    private readonly ClaudeCodePaths _claude;
+    private readonly IUsageStore _cursorStore;
+    private readonly IEventBus _bus;
+    private readonly TimeProvider _time;
+    private readonly ILogger<TranscriptIndexer> _logger;
+    private readonly TranscriptIndexerOptions _options;
+    private readonly SemaphoreSlim _scanGate = new(1, 1);
+    private readonly Dictionary<string, FileState> _files = new(StringComparer.Ordinal);
+    private bool _cursorsLoaded;
+    private FileSystemWatcher? _watcher;
+    private volatile bool _dirty = true;
+
+    public TranscriptIndexer(ClaudeCodePaths claude, IUsageStore cursorStore, IEventBus bus, TimeProvider time,
+        ILogger<TranscriptIndexer> logger, TranscriptIndexerOptions options)
+    {
+        _claude = claude;
+        _cursorStore = cursorStore;
+        _bus = bus;
+        _time = time;
+        _logger = logger;
+        _options = options;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        StartWatcher();
+        using var timer = new PeriodicTimer(_options.ScanInterval, _time);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            {
+                if (_dirty || _watcher is null)
+                {
+                    _dirty = false;
+                    await ScanAsync(stoppingToken).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    internal async Task ScanAsync(CancellationToken ct)
+    {
+        await _scanGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await EnsureCursorsLoadedAsync(ct).ConfigureAwait(false);
+            if (!Directory.Exists(_claude.ProjectsDirectory))
+            {
+                return;
+            }
+
+            var changed = new List<TranscriptCursor>();
+            foreach (var path in Directory.EnumerateFiles(_claude.ProjectsDirectory, "*.jsonl", SearchOption.AllDirectories))
+            {
+                ct.ThrowIfCancellationRequested();
+                var cursor = ProcessFileCore(path);
+                if (cursor is not null)
+                {
+                    changed.Add(cursor);
+                }
+            }
+
+            if (changed.Count > 0)
+            {
+                await _cursorStore.UpsertCursorsAsync(changed, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _scanGate.Release();
+        }
+    }
+
+    internal async Task ProcessFileAsync(string path, CancellationToken ct)
+    {
+        await _scanGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await EnsureCursorsLoadedAsync(ct).ConfigureAwait(false);
+            var cursor = ProcessFileCore(path);
+            if (cursor is not null)
+            {
+                await _cursorStore.UpsertCursorsAsync([cursor], ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _scanGate.Release();
+        }
+    }
+
+    private async Task EnsureCursorsLoadedAsync(CancellationToken ct)
+    {
+        if (_cursorsLoaded)
+        {
+            return;
+        }
+
+        foreach (var cursor in await _cursorStore.GetCursorsAsync(ct).ConfigureAwait(false))
+        {
+            _files[cursor.Path] = new FileState(_options.MessageIdMemory)
+            {
+                Offset = cursor.ByteOffset,
+                LastWriteUtc = cursor.LastWriteUtc,
+                SessionId = cursor.SessionId,
+                TitleReported = true,
+            };
+        }
+
+        _cursorsLoaded = true;
+    }
+
+    private TranscriptCursor? ProcessFileCore(string path)
+    {
+        var key = PathNormalizer.Normalize(path);
+        FileInfo info;
+        try
+        {
+            info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                return null;
+            }
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        if (!_files.TryGetValue(key, out var state))
+        {
+            state = new FileState(_options.MessageIdMemory);
+            _files[key] = state;
+        }
+
+        if (info.Length == state.Offset && state.Offset > 0)
+        {
+            return null;
+        }
+
+        TailResult tail;
+        try
+        {
+            tail = TranscriptTailer.ReadNewLines(path, state.Offset);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogDebug(ex, "Transcript {Path} is not readable right now", path);
+            return null;
+        }
+
+        if (tail.Truncated)
+        {
+            _logger.LogInformation("Transcript {Path} shrank below the stored offset; re-reading from the start", path);
+            state.Reset();
+        }
+
+        if (tail.Lines.Count == 0 && tail.NewOffset == state.Offset)
+        {
+            return null;
+        }
+
+        var update = BuildUpdate(path, state, tail.Lines);
+        state.Offset = tail.NewOffset;
+        state.LastWriteUtc = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
+        if (update is not null)
+        {
+            _bus.Publish(new TranscriptUpdated(update));
+        }
+
+        return new TranscriptCursor
+        {
+            Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
+        };
+    }
+
+    private TranscriptUpdate? BuildUpdate(string path, FileState state, IReadOnlyList<string> lines)
+    {
+        var usage = new List<UsageDelta>();
+        string? newTitle = null;
+        var summaryTitle = false;
+        string? cwd = null;
+        string? model = null;
+        DateTimeOffset? lastActivity = null;
+        TokenUsage? latestContext = null;
+        var pendingToolUse = state.PendingToolUse;
+
+        foreach (var raw in lines)
+        {
+            var line = TranscriptLineParser.TryParse(raw);
+            if (line is null)
+            {
+                _logger.LogDebug("Skipping unparsable line in {Path}", path);
+                continue;
+            }
+
+            state.SessionId ??= line.SessionId;
+            cwd ??= line.Cwd;
+            if (line.Timestamp is { } ts && (lastActivity is null || ts > lastActivity))
+            {
+                lastActivity = ts;
+            }
+
+            switch (line)
+            {
+                case AssistantLine assistant:
+                    model = assistant.Model ?? model;
+                    if (assistant.HasToolUse)
+                    {
+                        pendingToolUse = true;
+                    }
+
+                    if (assistant.Usage is { } tokens && assistant.MessageId is { } id && state.RememberMessage(id))
+                    {
+                        usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
+                        latestContext = tokens;
+                    }
+                    else if (assistant.Usage is { } sameMessage)
+                    {
+                        latestContext = sameMessage;
+                    }
+
+                    break;
+
+                case UserLine user:
+                    if (user.IsToolResult)
+                    {
+                        pendingToolUse = false;
+                    }
+                    else if (!user.IsMeta && user.Text is not null)
+                    {
+                        pendingToolUse = false;
+                        if (!state.TitleReported && !summaryTitle && newTitle is null)
+                        {
+                            newTitle = ChatTitle.FromPrompt(user.Text);
+                        }
+                    }
+
+                    break;
+
+                case SummaryLine summary:
+                    if (!state.HasSummary)
+                    {
+                        newTitle = ChatTitle.FromPrompt(summary.Title);
+                        summaryTitle = true;
+                        state.HasSummary = true;
+                    }
+
+                    break;
+            }
+        }
+
+        state.PendingToolUse = pendingToolUse;
+        if (newTitle is not null)
+        {
+            state.TitleReported = true;
+        }
+
+        var sessionId = state.SessionId ?? Path.GetFileNameWithoutExtension(path);
+        state.SessionId = sessionId;
+
+        var now = _time.GetUtcNow();
+        var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
+        var inferred = !recentlyWritten ? SessionSignal.Stop
+            : pendingToolUse ? SessionSignal.Notification
+            : SessionSignal.ToolUse;
+
+        return new TranscriptUpdate
+        {
+            SessionId = sessionId,
+            TranscriptPath = path,
+            ObservedAt = now,
+            Title = newTitle,
+            Cwd = cwd,
+            Model = model,
+            LastActivityAt = lastActivity,
+            Usage = usage,
+            LatestContext = latestContext,
+            InferredSignal = inferred,
+        };
+    }
+
+    private void StartWatcher()
+    {
+        try
+        {
+            Directory.CreateDirectory(_claude.ProjectsDirectory);
+            _watcher = new FileSystemWatcher(_claude.ProjectsDirectory, "*.jsonl")
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName,
+                InternalBufferSize = 64 * 1024,
+            };
+            _watcher.Changed += (_, _) => _dirty = true;
+            _watcher.Created += (_, _) => _dirty = true;
+            _watcher.Renamed += (_, _) => _dirty = true;
+            _watcher.Error += (_, e) =>
+            {
+                _logger.LogWarning(e.GetException(), "Transcript watcher error; falling back to periodic scans");
+                _dirty = true;
+            };
+            _watcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _logger.LogWarning(ex, "Cannot watch {Dir}; using periodic scans only", _claude.ProjectsDirectory);
+            _watcher = null;
+        }
+    }
+
+    public override void Dispose()
+    {
+        _watcher?.Dispose();
+        _scanGate.Dispose();
+        base.Dispose();
+    }
+
+    private sealed class FileState(int memory)
+    {
+        private readonly Queue<string> _recent = new();
+        private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+
+        public long Offset { get; set; }
+        public DateTimeOffset LastWriteUtc { get; set; }
+        public string? SessionId { get; set; }
+        public bool TitleReported { get; set; }
+        public bool HasSummary { get; set; }
+        public bool PendingToolUse { get; set; }
+
+        /// <returns>True when the id was not seen before.</returns>
+        public bool RememberMessage(string id)
+        {
+            if (!_seen.Add(id))
+            {
+                return false;
+            }
+
+            _recent.Enqueue(id);
+            while (_recent.Count > memory)
+            {
+                _seen.Remove(_recent.Dequeue());
+            }
+
+            return true;
+        }
+
+        public void Reset()
+        {
+            Offset = 0;
+            _recent.Clear();
+            _seen.Clear();
+            TitleReported = false;
+            HasSummary = false;
+            PendingToolUse = false;
+        }
+    }
+}
