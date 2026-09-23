@@ -104,7 +104,7 @@ public sealed class SessionEngine : IDisposable
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
                 LastNotification = e.Signal == SessionSignal.Notification ? e.Message ?? e.NotificationType : s.LastNotification,
-                Title = s.Title ?? TitleFromPrompt(e.Prompt),
+                Title = s.Title ?? ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength),
                 Inferred = false,
                 ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
             };
@@ -263,19 +263,6 @@ public sealed class SessionEngine : IDisposable
         {
             _bus.Publish(new SessionChanged(previous, current));
         }
-    }
-
-    private string? TitleFromPrompt(string? prompt)
-    {
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            return null;
-        }
-
-        var singleLine = string.Join(' ', prompt.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return singleLine.Length <= _options.TitleMaxLength
-            ? singleLine
-            : string.Concat(singleLine.AsSpan(0, _options.TitleMaxLength - 1), "…");
     }
 
     private static int? PickClaudePid(IReadOnlyList<ProcessRef> chain)
