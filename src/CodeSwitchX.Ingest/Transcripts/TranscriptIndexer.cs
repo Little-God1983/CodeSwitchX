@@ -30,6 +30,9 @@ public sealed class TranscriptIndexer : BackgroundService
     private FileSystemWatcher? _watcher;
     private volatile bool _dirty = true;
 
+    /// <summary>Claude Code records API errors as assistant lines with this model and zero usage; they carry no model, context or tokens.</summary>
+    internal const string SyntheticModel = "<synthetic>";
+
     public TranscriptIndexer(ClaudeCodePaths claude, IUsageStore cursorStore, IEventBus bus, TimeProvider time,
         ILogger<TranscriptIndexer> logger, TranscriptIndexerOptions options)
     {
@@ -149,14 +152,22 @@ public sealed class TranscriptIndexer : BackgroundService
         }
 
         IReadOnlyList<TranscriptCursor> cursors;
+        IReadOnlyList<string> seenMessages;
         try
         {
             cursors = await _cursorStore.GetCursorsAsync(ct).ConfigureAwait(false);
+            seenMessages = await _cursorStore.GetSeenMessageIdsAsync(_options.MessageIdMemory, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Transcript cursors could not be loaded; retrying on the next scan");
             return false;
+        }
+
+        // Oldest first, so the memory evicts in the same order it would have without the restart.
+        foreach (var id in seenMessages)
+        {
+            _messages.Remember(id);
         }
 
         foreach (var cursor in cursors)
@@ -251,6 +262,7 @@ public sealed class TranscriptIndexer : BackgroundService
         TokenUsage? latestContext = null;
         var pendingToolUse = state.PendingToolUse;
         var interrupted = false;
+        var newMessageIds = new List<string>();
 
         foreach (var raw in lines)
         {
@@ -271,6 +283,11 @@ public sealed class TranscriptIndexer : BackgroundService
             switch (line)
             {
                 case AssistantLine assistant:
+                    if (string.Equals(assistant.Model, SyntheticModel, StringComparison.Ordinal))
+                    {
+                        break; // an API error, not a reply: it must not become the model or zero the context
+                    }
+
                     interrupted = false;
                     model = assistant.Model ?? model;
                     if (assistant.HasToolUse)
@@ -278,12 +295,13 @@ public sealed class TranscriptIndexer : BackgroundService
                         pendingToolUse = true;
                     }
 
-                    // Dedup across every file: `claude --resume` replays earlier assistant messages, with their
-                    // usage, into a new transcript.
+                    // Dedup across every file and across restarts (the ids are saved with the usage): `claude --resume`
+                    // replays earlier assistant messages, with their usage, into a new transcript.
                     if (assistant.Usage is { } tokens && assistant.MessageId is { } id && _messages.Remember(id))
                     {
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
                         latestContext = tokens;
+                        newMessageIds.Add(id);
                     }
                     else if (assistant.Usage is { } sameMessage)
                     {
@@ -339,15 +357,15 @@ public sealed class TranscriptIndexer : BackgroundService
 
         if (subagent)
         {
-            // A sub-agent's prompts, tool calls and context window belong to the sub-agent, not the parent chat;
+            // A sub-agent's prompts, tool calls, model and context window belong to the sub-agent, not the parent chat;
             // only its token usage counts towards the parent session.
             return new TranscriptUpdate
             {
                 SessionId = sessionId,
                 TranscriptPath = path,
                 ObservedAt = now,
-                Model = model,
                 Usage = usage,
+                MessageIds = newMessageIds,
                 Historical = historical,
             };
         }
@@ -369,6 +387,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Model = model,
             LastActivityAt = lastActivity,
             Usage = usage,
+            MessageIds = newMessageIds,
             LatestContext = latestContext,
             InferredSignal = inferred,
             PendingToolUse = pendingToolUse,

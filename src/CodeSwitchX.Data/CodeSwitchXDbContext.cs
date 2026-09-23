@@ -18,6 +18,7 @@ public sealed class CodeSwitchXDbContext : DbContext
     public DbSet<SessionEventRecord> SessionEvents => Set<SessionEventRecord>();
     public DbSet<UsageBucket> UsageBuckets => Set<UsageBucket>();
     public DbSet<TranscriptCursor> TranscriptCursors => Set<TranscriptCursor>();
+    public DbSet<SeenMessage> SeenMessages => Set<SeenMessage>();
     public DbSet<PricingRule> PricingRules => Set<PricingRule>();
     public DbSet<Setting> Settings => Set<Setting>();
 
@@ -87,6 +88,14 @@ public sealed class CodeSwitchXDbContext : DbContext
         {
             e.HasKey(c => c.Path);
             e.Property(c => c.Path).HasMaxLength(1024);
+        });
+
+        modelBuilder.Entity<SeenMessage>(e =>
+        {
+            e.HasKey(m => m.Seq);
+            e.Property(m => m.Seq).ValueGeneratedNever();
+            e.Property(m => m.MessageId).IsRequired().HasMaxLength(128);
+            e.HasIndex(m => m.MessageId).IsUnique();
         });
 
         modelBuilder.Entity<PricingRule>(e =>

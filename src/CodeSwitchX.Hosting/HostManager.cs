@@ -127,8 +127,10 @@ public sealed class HostManager : IDisposable
         var before = _windows.TopLevelWindows();
 
         // VS Code is single-instance: asking it to open a folder that is already open only focuses the existing
-        // window, so adopt that window instead of waiting for one that will never appear.
-        var existing = VsCodeWindowMatcher.FindExisting(before, displayName, _windows.ProcessName);
+        // window, so adopt that window instead of waiting for one that will never appear. A window another
+        // workspace already hosts is never a candidate, however alike the folder names are.
+        var candidates = before.Where(w => !IsHostedElsewhere(hosted, w.Hwnd)).ToList();
+        var existing = VsCodeWindowMatcher.FindExisting(candidates, displayName, _windows.ProcessName);
         if (existing is not null)
         {
             if (TryAdopt(hosted, existing, hide: false))
@@ -199,7 +201,24 @@ public sealed class HostManager : IDisposable
         }
     }
 
+    /// <summary>Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it.</summary>
     public void ShowInCab(Guid workspaceId, ScreenRect rect)
+    {
+        lock (_gate)
+        {
+            if (_hosted.TryGetValue(workspaceId, out var target) && target.State == HostState.Running)
+            {
+                ShowInCabLocked(target, rect);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Follows the Cab area while the window is already showing: a move only, no z-order change, so resizing or
+    /// dragging the shell never pulls VS Code over other windows or steals focus. A window that is not visible yet is
+    /// shown as by <see cref="ShowInCab"/>.
+    /// </summary>
+    public void Dock(Guid workspaceId, ScreenRect rect)
     {
         lock (_gate)
         {
@@ -208,18 +227,30 @@ public sealed class HostManager : IDisposable
                 return;
             }
 
-            foreach (var other in _hosted.Values.Where(h => h != target && h.State == HostState.Running && h.Visible))
+            if (!target.Visible)
             {
-                _docker.Cloak(other.Hwnd);
-                other.Visible = false;
+                ShowInCabLocked(target, rect);
+                return;
             }
 
             target.TargetRect = rect;
-            _docker.Uncloak(target.Hwnd);
             _docker.MoveTo(target.Hwnd, rect);
-            _docker.BringToFront(target.Hwnd);
-            target.Visible = true;
         }
+    }
+
+    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect)
+    {
+        foreach (var other in _hosted.Values.Where(h => h != target && h.State == HostState.Running && h.Visible))
+        {
+            _docker.Cloak(other.Hwnd);
+            other.Visible = false;
+        }
+
+        target.TargetRect = rect;
+        _docker.Uncloak(target.Hwnd);
+        _docker.MoveTo(target.Hwnd, rect);
+        _docker.BringToFront(target.Hwnd);
+        target.Visible = true;
     }
 
     public void HideAll()
@@ -306,6 +337,14 @@ public sealed class HostManager : IDisposable
 
     private bool IsTrackedLocked(HostedWorkspace hosted) =>
         _hosted.TryGetValue(hosted.WorkspaceId, out var tracked) && ReferenceEquals(tracked, hosted);
+
+    private bool IsHostedElsewhere(HostedWorkspace self, nint hwnd)
+    {
+        lock (_gate)
+        {
+            return _hosted.Values.Any(h => !ReferenceEquals(h, self) && h.State == HostState.Running && h.Hwnd == hwnd);
+        }
+    }
 
     private void Stop(HostedWorkspace hosted, string error)
     {

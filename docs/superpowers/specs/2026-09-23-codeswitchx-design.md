@@ -21,6 +21,7 @@ follows the original document; deviations are listed first so they are easy to r
 | Event API transport | HTTP and named pipe | Kestrel listens on both a named pipe (preferred) and 127.0.0.1 on a random port; one token guards both | Kestrel supports named pipes natively since .NET 8 |
 | Jump hotkeys | Ctrl+Alt+1..9 | Ctrl+Shift+Alt+1..9 (Ctrl+Alt+Y unchanged) | AltGr is reported as Ctrl+Alt, so Ctrl+Alt+digit would swallow AltGr+2/3/7/8/9/0 (² ³ { [ ] }) system-wide on German and other European layouts |
 | Chat title | first user prompt, 60 chars | Claude Code's own `summary` line when present, else first user prompt trimmed to 60 chars | The transcript already carries a generated title |
+| SessionStart hook | SessionStart → Idle | `source: compact` leaves the state alone; startup, resume and clear → Idle | Claude Code fires SessionStart for auto-compaction in the middle of a turn |
 
 ## Overview
 

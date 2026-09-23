@@ -178,7 +178,16 @@ public sealed partial class ShellViewModel : ObservableObject
         }
     }
 
-    /// <summary>Called by the Cab view whenever the host area's screen rectangle changes.</summary>
+    /// <summary>Activating the shell puts it above the docked VS Code window; this puts VS Code back on top while in Cab mode.</summary>
+    public void RaiseHostedWindow()
+    {
+        if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
+        {
+            _host.ShowInCab(id, rect);
+        }
+    }
+
+    /// <summary>Called by the Cab view whenever the host area's screen rectangle changes: a move only, never a raise.</summary>
     public void UpdateCabRect(ScreenRect rect)
     {
         if (_shellMinimized)
@@ -189,7 +198,7 @@ public sealed partial class ShellViewModel : ObservableObject
         Cab.LastHostRect = rect;
         if (Mode == ShellMode.Cab && ActiveWorkspaceId is { } id)
         {
-            _host.ShowInCab(id, rect);
+            _host.Dock(id, rect);
         }
     }
 }

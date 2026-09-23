@@ -246,4 +246,55 @@ public class HostManagerTests
         _docker.Received(1).Uncloak(500);
         _manager.Get(_workspace.Id).ShouldBeNull();
     }
+
+    [Fact]
+    public async Task A_window_hosted_by_another_workspace_is_never_adopted_even_when_the_folders_share_a_name()
+    {
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var twin = new Workspace { Name = "App (fork)", RootPath = @"c:\forks\app" };
+        var before = new List<WindowInfo> { new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code") };
+        var after = new List<WindowInfo> { before[0], new(800, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code") };
+        _windows.TopLevelWindows().Returns(before, after);
+        _launcher.Launch(twin).Returns(new LaunchResult(true, 2, null));
+
+        var hosted = await _manager.OpenAsync(twin, CancellationToken.None);
+
+        _launcher.Received(1).Launch(twin);
+        hosted.Hwnd.ShouldBe((nint)800);
+        _manager.Get(_workspace.Id)!.Hwnd.ShouldBe((nint)700);
+    }
+
+    [Fact]
+    public async Task Dock_repositions_a_visible_window_without_raising_it_again()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var first = ScreenRect.FromSize(0, 28, 1600, 900);
+        var second = ScreenRect.FromSize(0, 28, 1200, 700);
+        _manager.ShowInCab(_workspace.Id, first);
+        _docker.ClearReceivedCalls();
+
+        _manager.Dock(_workspace.Id, second);
+
+        _docker.Received(1).MoveTo(500, second);
+        _docker.DidNotReceive().BringToFront(Arg.Any<nint>());
+        _docker.DidNotReceive().Uncloak(Arg.Any<nint>());
+        _manager.Get(_workspace.Id)!.TargetRect.ShouldBe(second);
+    }
+
+    [Fact]
+    public async Task Dock_shows_a_hidden_window_the_same_way_ShowInCab_does()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _docker.ClearReceivedCalls();
+
+        _manager.Dock(_workspace.Id, rect);
+
+        _docker.Received(1).Uncloak(500);
+        _docker.Received(1).BringToFront(500);
+        _manager.Get(_workspace.Id)!.Visible.ShouldBeTrue();
+    }
 }

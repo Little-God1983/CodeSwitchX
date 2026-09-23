@@ -17,6 +17,9 @@ public sealed class PersistenceWriter : BackgroundService
     /// <summary>Upper bound on retained records after repeated failures; beyond it the retained batch is dropped with an error.</summary>
     internal const int MaxCarriedItems = 5000;
 
+    /// <summary>How long the shutdown flush may take to drain the queue before the rest is given up.</summary>
+    internal static readonly TimeSpan ShutdownGrace = TimeSpan.FromSeconds(2);
+
     private readonly IEventBus _bus;
     private readonly ISessionStore _sessions;
     private readonly IUsageStore _usage;
@@ -85,11 +88,23 @@ public sealed class PersistenceWriter : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            // shutting down: flush what is left with a short grace period
+            // shutting down: drain everything still queued, one batch at a time, within a short grace period
         }
 
-        using var grace = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        await FlushAsync(grace.Token).ConfigureAwait(false);
+        // Pending, not the channel's Count: a single-reader channel does not support counting.
+        using var grace = new CancellationTokenSource(ShutdownGrace);
+        try
+        {
+            do
+            {
+                await FlushAsync(grace.Token).ConfigureAwait(false);
+            }
+            while (Pending > 0);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("The shutdown flush ran out of time; {Count} records were not saved", Pending + (_carry?.Count ?? 0));
+        }
     }
 
     internal async Task FlushAsync(CancellationToken ct)
@@ -118,11 +133,18 @@ public sealed class PersistenceWriter : BackgroundService
             batch.Sessions.Clear();
             await _sessions.AppendEventsAsync(batch.Events.ToArray(), ct).ConfigureAwait(false);
             batch.Events.Clear();
-            await _usage.CommitAsync(batch.Buckets.Values.ToArray(), batch.Cursors.Values.ToArray(), ct).ConfigureAwait(false);
+            await _usage.CommitAsync(batch.Buckets.Values.ToArray(), batch.Cursors.Values.ToArray(), batch.MessageIds.ToArray(), ct).ConfigureAwait(false);
             batch.Buckets.Clear();
             batch.Cursors.Clear();
+            batch.MessageIds.Clear();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            // A cancelled tick (shutdown, mostly) must not lose what was already taken from the queue: the shutdown flush retries it.
+            _carry = batch;
+            throw;
+        }
+        catch (Exception ex)
         {
             if (batch.Count > MaxCarriedItems)
             {
@@ -157,6 +179,12 @@ public sealed class PersistenceWriter : BackgroundService
             {
                 _logger.LogInformation("Pruned {Count} hook events older than {Retention}", removed, _options.EventRetention);
             }
+
+            var forgotten = await _usage.PruneSeenMessagesAsync(_options.SeenMessageIdsKept, ct).ConfigureAwait(false);
+            if (forgotten > 0)
+            {
+                _logger.LogInformation("Pruned {Count} remembered message ids beyond the newest {Kept}", forgotten, _options.SeenMessageIdsKept);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -185,15 +213,19 @@ public sealed class PersistenceWriter : BackgroundService
         }
     }
 
-    /// <summary>Records collapsed for one write: latest snapshot per session, every hook event, usage per minute bucket, latest cursor per file.</summary>
+    /// <summary>
+    /// Records collapsed for one write: latest snapshot per session, every hook event, usage per minute bucket,
+    /// latest cursor per file, and the message ids the usage came from.
+    /// </summary>
     private sealed class Batch
     {
         public Dictionary<string, SessionRecord> Sessions { get; } = new(StringComparer.Ordinal);
         public List<SessionEventRecord> Events { get; } = [];
         public Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket> Buckets { get; } = [];
         public Dictionary<string, TranscriptCursor> Cursors { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> MessageIds { get; } = new(StringComparer.Ordinal);
 
-        public int Count => Sessions.Count + Events.Count + Buckets.Count + Cursors.Count;
+        public int Count => Sessions.Count + Events.Count + Buckets.Count + Cursors.Count + MessageIds.Count;
         public bool IsEmpty => Count == 0;
 
         public void Add(object item, bool storePayloads)
@@ -235,6 +267,7 @@ public sealed class PersistenceWriter : BackgroundService
                         Cursors[cursor.Path] = cursor;
                     }
 
+                    MessageIds.UnionWith(update.MessageIds);
                     break;
             }
         }

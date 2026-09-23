@@ -97,4 +97,18 @@ public class AddWorkspaceViewModelTests : IDisposable
         _vm.ErrorMessage.ShouldNotBeNull().ShouldContain("already registered");
         closed.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task Editing_the_path_after_a_probe_requires_probing_again_before_saving()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _vm.SaveCommand.CanExecute(null).ShouldBeTrue();
+
+        _vm.InputPath = _root + "-other";
+
+        _vm.IsProbed.ShouldBeFalse();
+        _vm.SaveCommand.CanExecute(null).ShouldBeFalse("Add would register the folder that was probed, not the one now in the box");
+    }
 }

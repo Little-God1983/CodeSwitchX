@@ -100,6 +100,9 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
 
     private bool CanProbe() => !IsBusy;
 
+    /// <summary>The detected fields describe the probed folder; a changed path must be detected again before Add registers anything.</summary>
+    partial void OnInputPathChanged(string value) => IsProbed = false;
+
     [RelayCommand(CanExecute = nameof(CanSave))]
     private async Task SaveAsync()
     {

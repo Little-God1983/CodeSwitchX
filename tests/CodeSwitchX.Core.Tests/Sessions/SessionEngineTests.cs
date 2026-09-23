@@ -252,6 +252,7 @@ public class SessionEngineTests
             TranscriptPath = "p",
             ObservedAt = later,
             LastActivityAt = later,
+            Model = "claude-sonnet-5",
             Usage = [new UsageDelta("claude-sonnet-5", later, new TokenUsage(10, 20, 30, 40))],
             LatestContext = new TokenUsage(10, 20, 30, 40),
         });
@@ -429,6 +430,68 @@ public class SessionEngineTests
         _time.Advance(TimeSpan.FromSeconds(11));
         _engine.SweepStale();
 
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void Subagent_usage_does_not_replace_the_parent_chats_model()
+    {
+        _engine.Apply(Update("s1", SessionSignal.ToolUse) with { Model = "claude-opus-5" });
+
+        _engine.Apply(Update("s1", null) with
+        {
+            Usage = [new UsageDelta("claude-haiku-4-5", _time.GetUtcNow(), new TokenUsage(9, 9, 9, 9))],
+        });
+
+        _engine.Get("s1")!.Model.ShouldBe("claude-opus-5", "a sub-agent's usage names the sub-agent's model; the context bar is measured against the parent's");
+    }
+
+    private sealed class DeadPidProbe(params int[] dead) : IProcessProbe
+    {
+        public bool IsAlive(int pid) => !dead.Contains(pid);
+    }
+
+    [Fact]
+    public void Restore_checks_saved_claude_pids_and_drops_sessions_whose_process_is_gone_to_idle()
+    {
+        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new DeadPidProbe(77));
+        var old = _time.GetUtcNow().AddMinutes(-3);
+        engine.Restore(
+        [
+            new SessionSnapshot { SessionId = "gone", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 77 },
+            new SessionSnapshot { SessionId = "alive", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 88 },
+        ]);
+
+        engine.Get("gone")!.State.ShouldBe(SessionState.Idle, "the turn ended while the app was down; a red Errored row would blame the wrong thing");
+        engine.Get("gone")!.ClaudePid.ShouldBeNull("a dead PID must not be matched against whatever process reuses it");
+        engine.Get("alive")!.State.ShouldBe(SessionState.Waiting);
+        engine.Get("alive")!.ClaudePid.ShouldBe(88);
+    }
+
+    [Fact]
+    public void Repeated_transcript_writes_do_not_restart_the_working_timer_without_hooks()
+    {
+        var started = _time.GetUtcNow();
+        _engine.Apply(Update("s1", SessionSignal.ToolUse));
+        _engine.Get("s1")!.StateSince.ShouldBe(started);
+
+        _time.Advance(TimeSpan.FromSeconds(3));
+        _engine.Apply(Update("s1", SessionSignal.ToolUse));
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+        _engine.Get("s1")!.StateSince.ShouldBe(started, "the elapsed timer measures the turn, not the last transcript write");
+    }
+
+    [Fact]
+    public void An_interrupt_marker_older_than_the_current_hook_state_is_ignored()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        var promptAt = _time.GetUtcNow();
+
+        _engine.Apply(Update("s1", SessionSignal.Stop, activity: promptAt.AddSeconds(-5)) with { Interrupted = true });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "that Esc belonged to the previous turn");
+
+        _engine.Apply(Update("s1", SessionSignal.Stop, activity: promptAt.AddSeconds(1)) with { Interrupted = true });
         _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
     }
 }

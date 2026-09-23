@@ -126,4 +126,24 @@ public class HookEnvelopeParserTests
     {
         HookEnvelopeParser.Parse(json, Received).ShouldBeNull();
     }
+
+    [Theory]
+    [InlineData("startup", SessionSignal.SessionStart)]
+    [InlineData("resume", SessionSignal.SessionStart)]
+    [InlineData("clear", SessionSignal.SessionStart)]
+    [InlineData(null, SessionSignal.SessionStart)]
+    [InlineData("compact", null)]
+    public void A_session_start_caused_by_compaction_keeps_the_current_state(string? source, SessionSignal? expected)
+    {
+        HookEnvelopeParser.SignalFor("SessionStart", null, source).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void Parse_feeds_the_session_start_source_into_the_signal()
+    {
+        var compact = HookEnvelopeParser.Parse(Envelope("SessionStart", """{"session_id":"abc","hook_event_name":"SessionStart","source":"compact"}"""), Received)!;
+
+        compact.Signal.ShouldBeNull("auto-compaction happens mid-turn; Idle would be wrong");
+        compact.Source.ShouldBe("compact");
+    }
 }

@@ -12,17 +12,19 @@ public sealed class UsageStore : IUsageStore
         _factory = factory;
     }
 
-    public Task AddUsageAsync(IReadOnlyCollection<UsageBucket> deltas, CancellationToken ct = default) => CommitAsync(deltas, [], ct);
+    public Task AddUsageAsync(IReadOnlyCollection<UsageBucket> deltas, CancellationToken ct = default) => CommitAsync(deltas, [], [], ct);
 
-    public Task UpsertCursorsAsync(IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default) => CommitAsync([], cursors, ct);
+    public Task UpsertCursorsAsync(IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default) => CommitAsync([], cursors, [], ct);
 
     /// <summary>
     /// One DbContext, one SaveChanges: EF Core wraps it in a single SQLite transaction, so a transcript cursor never
-    /// advances without the usage it covers, and usage is never counted twice because its cursor was lost.
+    /// advances without the usage it covers, usage is never counted twice because its cursor was lost, and a message
+    /// id is never remembered without its usage (or the other way round).
     /// </summary>
-    public async Task CommitAsync(IReadOnlyCollection<UsageBucket> deltas, IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default)
+    public async Task CommitAsync(IReadOnlyCollection<UsageBucket> deltas, IReadOnlyCollection<TranscriptCursor> cursors, IReadOnlyCollection<string> messageIds,
+        CancellationToken ct = default)
     {
-        if (deltas.Count == 0 && cursors.Count == 0)
+        if (deltas.Count == 0 && cursors.Count == 0 && messageIds.Count == 0)
         {
             return;
         }
@@ -30,6 +32,7 @@ public sealed class UsageStore : IUsageStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         await ApplyUsageAsync(db, deltas, ct);
         await ApplyCursorsAsync(db, cursors, ct);
+        await ApplySeenMessagesAsync(db, messageIds, ct);
         await db.SaveChangesAsync(ct);
     }
 
@@ -46,6 +49,27 @@ public sealed class UsageStore : IUsageStore
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         return await db.TranscriptCursors.AsNoTracking().ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<string>> GetSeenMessageIdsAsync(int limit, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var newestFirst = await db.SeenMessages.AsNoTracking()
+            .OrderByDescending(m => m.Seq)
+            .Take(limit)
+            .Select(m => m.MessageId)
+            .ToListAsync(ct);
+        newestFirst.Reverse();
+        return newestFirst;
+    }
+
+    public async Task<int> PruneSeenMessagesAsync(int keep, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var newestToDrop = await db.SeenMessages.OrderByDescending(m => m.Seq).Skip(keep).Select(m => (long?)m.Seq).FirstOrDefaultAsync(ct);
+        return newestToDrop is { } cutoff
+            ? await db.SeenMessages.Where(m => m.Seq <= cutoff).ExecuteDeleteAsync(ct)
+            : 0;
     }
 
     private static async Task ApplyUsageAsync(CodeSwitchXDbContext db, IReadOnlyCollection<UsageBucket> deltas, CancellationToken ct)
@@ -102,6 +126,26 @@ public sealed class UsageStore : IUsageStore
                 };
                 db.TranscriptCursors.Add(added);
                 existing[cursor.Path] = added;
+            }
+        }
+    }
+
+    /// <summary>Ids are numbered explicitly in commit order, so "the newest N" is well defined without relying on autoincrement.</summary>
+    private static async Task ApplySeenMessagesAsync(CodeSwitchXDbContext db, IReadOnlyCollection<string> messageIds, CancellationToken ct)
+    {
+        if (messageIds.Count == 0)
+        {
+            return;
+        }
+
+        var wanted = messageIds.Distinct(StringComparer.Ordinal).ToArray();
+        var known = (await db.SeenMessages.Where(m => wanted.Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+        var next = (await db.SeenMessages.MaxAsync(m => (long?)m.Seq, ct) ?? 0) + 1;
+        foreach (var id in wanted)
+        {
+            if (!known.Contains(id))
+            {
+                db.SeenMessages.Add(new SeenMessage { Seq = next++, MessageId = id });
             }
         }
     }

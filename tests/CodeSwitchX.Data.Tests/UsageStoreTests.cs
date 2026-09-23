@@ -67,10 +67,30 @@ public class UsageStoreTests : IAsyncLifetime
     [Fact]
     public async Task Commit_writes_usage_and_transcript_cursors_in_one_transaction()
     {
-        await _store.CommitAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 10 }], [new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 10, LastWriteUtc = _minute, SessionId = "s1" }], TestContext.Current.CancellationToken);
-        await _store.CommitAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 5 }], [new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute.AddSeconds(5), SessionId = "s1" }], TestContext.Current.CancellationToken);
+        await _store.CommitAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 10 }], [new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 10, LastWriteUtc = _minute, SessionId = "s1" }], [], TestContext.Current.CancellationToken);
+        await _store.CommitAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 5 }], [new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute.AddSeconds(5), SessionId = "s1" }], [], TestContext.Current.CancellationToken);
 
         (await _store.GetBucketsAsync(_minute, _minute.AddMinutes(1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Input.ShouldBe(15);
         (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().ByteOffset.ShouldBe(20);
+    }
+
+    [Fact]
+    public async Task Seen_message_ids_are_committed_with_the_usage_and_come_back_oldest_first()
+    {
+        await _store.CommitAsync([], [], ["msg_a"], TestContext.Current.CancellationToken);
+        await _store.CommitAsync([], [], ["msg_b", "msg_a"], TestContext.Current.CancellationToken);
+
+        (await _store.GetSeenMessageIdsAsync(10, TestContext.Current.CancellationToken)).ShouldBe(["msg_a", "msg_b"]);
+        (await _store.GetSeenMessageIdsAsync(1, TestContext.Current.CancellationToken)).ShouldBe(["msg_b"], "the limit keeps the most recent ids");
+    }
+
+    [Fact]
+    public async Task Pruning_seen_message_ids_keeps_only_the_newest()
+    {
+        await _store.CommitAsync([], [], ["a", "b", "c"], TestContext.Current.CancellationToken);
+
+        await _store.PruneSeenMessagesAsync(2, TestContext.Current.CancellationToken);
+
+        (await _store.GetSeenMessageIdsAsync(10, TestContext.Current.CancellationToken)).ShouldBe(["b", "c"]);
     }
 }

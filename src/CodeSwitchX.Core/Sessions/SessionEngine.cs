@@ -23,6 +23,7 @@ public sealed class SessionEngine : IDisposable
     private readonly TimeProvider _time;
     private readonly ILogger<SessionEngine> _logger;
     private readonly SessionEngineOptions _options;
+    private readonly IProcessProbe? _probe;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.Ordinal);
     private readonly List<IDisposable> _subscriptions = [];
@@ -30,13 +31,14 @@ public sealed class SessionEngine : IDisposable
     private long _version;
 
     public SessionEngine(IEventBus bus, IWorkspaceResolver resolver, TimeProvider time, ILogger<SessionEngine> logger,
-        SessionEngineOptions? options = null)
+        SessionEngineOptions? options = null, IProcessProbe? probe = null)
     {
         _bus = bus;
         _resolver = resolver;
         _time = time;
         _logger = logger;
         _options = options ?? new SessionEngineOptions();
+        _probe = probe;
     }
 
     public IReadOnlyCollection<SessionSnapshot> Snapshots
@@ -60,9 +62,11 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>
     /// Loads persisted snapshots without publishing. Hook evidence does not survive a restart (<see cref="SessionSnapshot.HookSeen"/>
-    /// resets). A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
-    /// hook most likely fired while the app was down. Waiting sessions are left alone: a permission prompt is quiet by
-    /// nature, and the liveness monitor (via the recorded claude PID) decides when such a chat is really gone.
+    /// resets). A saved claude PID is checked once: if that process is gone the chat's turn ended while the app was down,
+    /// so it comes back Idle rather than as a red Errored row, and the PID is forgotten so a reused PID is never judged.
+    /// A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
+    /// hook most likely fired while the app was down. Waiting sessions with a live process are left alone: a permission
+    /// prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -72,6 +76,15 @@ public sealed class SessionEngine : IDisposable
             foreach (var snapshot in persisted)
             {
                 var restored = snapshot with { HookSeen = false };
+                if (restored.ClaudePid is { } pid && !ProcessStillRuns(pid))
+                {
+                    restored = restored with { ClaudePid = null };
+                    if (restored.State is SessionState.Working or SessionState.Waiting or SessionState.Starting)
+                    {
+                        restored = restored with { State = SessionState.Idle, StateSince = now };
+                    }
+                }
+
                 if (restored.State == SessionState.Working && now - restored.LastEventAt > _options.InferredIdleAfter)
                 {
                     restored = restored with { State = SessionState.Idle, StateSince = now };
@@ -151,20 +164,27 @@ public sealed class SessionEngine : IDisposable
 
             var state = s.State;
             var stateSince = s.StateSince;
+            var activityAt = u.LastActivityAt ?? u.ObservedAt;
             if (!s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
             {
+                if (next != state)
+                {
+                    stateSince = activityAt; // every transcript write re-signals Working; only a real change restarts the timer
+                }
+
                 state = next;
-                stateSince = u.LastActivityAt ?? u.ObservedAt;
             }
-            else if (u.Interrupted && state is SessionState.Working or SessionState.Waiting)
+            else if (u.Interrupted && state is SessionState.Working or SessionState.Waiting && activityAt >= s.StateSince)
             {
                 // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is.
+                // An interrupt older than the current state belongs to an earlier turn and must not undo a newer hook.
                 state = SessionState.Idle;
-                stateSince = u.LastActivityAt ?? u.ObservedAt;
+                stateSince = activityAt;
             }
 
             var cwd = s.Cwd ?? u.Cwd;
-            var model = u.Usage.Count > 0 ? u.Usage[^1].Model : u.Model ?? s.Model;
+            // Sub-agent transcripts carry usage for their own model and no Model; the parent's context bar keeps the parent's.
+            var model = u.Model ?? s.Model;
             var lastEvent = u.LastActivityAt is { } activity && activity > s.LastEventAt ? activity : s.LastEventAt;
             Commit(previous, s with
             {
@@ -257,6 +277,24 @@ public sealed class SessionEngine : IDisposable
         }
 
         _subscriptions.Clear();
+    }
+
+    private bool ProcessStillRuns(int pid)
+    {
+        if (_probe is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            return _probe.IsAlive(pid);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cannot query process {Pid} during restore; keeping it", pid);
+            return true;
+        }
     }
 
     private void Signal(string sessionId, SessionSignal signal)

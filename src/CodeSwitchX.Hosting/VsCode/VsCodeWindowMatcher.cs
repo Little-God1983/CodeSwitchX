@@ -8,14 +8,20 @@ public static class VsCodeWindowMatcher
     public const string ProcessName = "Code";
     private const string TitleSuffix = "Visual Studio Code";
 
-    /// <summary>A VS Code window created after <paramref name="before"/> was captured that names the workspace.</summary>
+    /// <summary>
+    /// A VS Code window created after <paramref name="before"/> was captured that names the workspace. Only windows
+    /// VS Code has already shown count: adopting one it is still setting up would race its own ShowWindow.
+    /// </summary>
     public static WindowInfo? FindNew(IReadOnlyList<WindowInfo> before, IReadOnlyList<WindowInfo> after, string displayName, Func<uint, string?> processName)
     {
         var known = before.Select(w => w.Hwnd).ToHashSet();
-        return Pick(after.Where(w => !known.Contains(w.Hwnd)), displayName, processName);
+        return Pick(after.Where(w => w.IsVisible && !known.Contains(w.Hwnd)), displayName, processName);
     }
 
-    /// <summary>A VS Code window that already shows the workspace (VS Code is single-instance and focuses it instead of opening a new one).</summary>
+    /// <summary>
+    /// A VS Code window that already shows the workspace (VS Code is single-instance and focuses it instead of opening
+    /// a new one). Hidden windows count too: that is how a window hidden by a crashed instance gets back to the user.
+    /// </summary>
     public static WindowInfo? FindExisting(IReadOnlyList<WindowInfo> windows, string displayName, Func<uint, string?> processName) =>
         Pick(windows, displayName, processName);
 
@@ -25,6 +31,7 @@ public static class VsCodeWindowMatcher
             .Where(w => string.Equals(w.ClassName, ElectronClass, StringComparison.Ordinal))
             .Where(w => TitleNamesWorkspace(w.Title, displayName))
             .Where(w => string.Equals(processName(w.ProcessId), ProcessName, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(w => w.IsVisible ? 0 : 1)
             .ToList();
 
         return candidates.FirstOrDefault(w => w.Title.Contains(TitleSuffix, StringComparison.OrdinalIgnoreCase))

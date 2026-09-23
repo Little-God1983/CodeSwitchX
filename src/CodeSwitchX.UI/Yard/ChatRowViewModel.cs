@@ -24,8 +24,17 @@ public sealed partial class ChatRowViewModel : ObservableObject
     public bool IsLive => SessionStateMachine.IsLive(State);
     public bool NeedsUser => SessionStateMachine.NeedsUser(State);
 
+    /// <summary>Engine version of the snapshot shown; older snapshots arriving late are ignored.</summary>
+    public long Version { get; private set; }
+
     public void Update(SessionSnapshot snapshot, PricingTable pricing)
     {
+        if (snapshot.Version < Version)
+        {
+            return;
+        }
+
+        Version = snapshot.Version;
         Title = snapshot.Title ?? $"Chat {snapshot.SessionId[..Math.Min(8, snapshot.SessionId.Length)]}";
         State = snapshot.State;
         StateSince = snapshot.StateSince;

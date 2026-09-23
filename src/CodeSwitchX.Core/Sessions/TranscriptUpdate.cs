@@ -27,4 +27,7 @@ public sealed record TranscriptUpdate
 
     /// <summary>The byte offset this update brings the file to; persisted together with the usage it covers.</summary>
     public Persistence.TranscriptCursor? Cursor { get; init; }
+
+    /// <summary>Assistant message ids counted for the first time in this update; persisted with the usage so a restart cannot count them again.</summary>
+    public IReadOnlyList<string> MessageIds { get; init; } = [];
 }

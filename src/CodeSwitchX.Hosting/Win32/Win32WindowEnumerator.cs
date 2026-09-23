@@ -12,7 +12,9 @@ public sealed class Win32WindowEnumerator : IWindowEnumerator
         var result = new List<WindowInfo>();
         PInvoke.EnumWindows((hwnd, _) =>
         {
-            if (!PInvoke.IsWindowVisible(hwnd) || PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER) != hwnd)
+            // Hidden windows are included: a VS Code window hidden by an instance that crashed stays hidden, and
+            // the only way to give it back to the user is to find and adopt it again.
+            if (PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER) != hwnd)
             {
                 return true;
             }
@@ -25,7 +27,7 @@ public sealed class Win32WindowEnumerator : IWindowEnumerator
                 handle = (nint)hwnd.Value;
             }
 
-            result.Add(new WindowInfo(handle, pid, ClassNameOf(hwnd), TitleOf(hwnd)));
+            result.Add(new WindowInfo(handle, pid, ClassNameOf(hwnd), TitleOf(hwnd)) { IsVisible = PInvoke.IsWindowVisible(hwnd) });
             return true;
         }, default);
         return result;

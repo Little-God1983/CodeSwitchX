@@ -91,11 +91,12 @@ public static class HookEnvelopeParser
             }
 
             var notificationType = GetString(payload, "notification_type");
+            var source = GetString(payload, "source") ?? GetString(payload, "reason");
             return new HookEvent
             {
                 SessionId = sessionId,
                 EventName = eventName,
-                Signal = SignalFor(eventName, notificationType),
+                Signal = SignalFor(eventName, notificationType, source),
                 At = receivedAt,
                 Cwd = GetString(payload, "cwd"),
                 TranscriptPath = GetString(payload, "transcript_path"),
@@ -105,7 +106,7 @@ public static class HookEnvelopeParser
                 Message = GetString(payload, "message") ?? GetString(payload, "title"),
                 Prompt = GetString(payload, "prompt"),
                 Model = GetString(payload, "model"),
-                Source = GetString(payload, "source") ?? GetString(payload, "reason"),
+                Source = source,
                 RelayPid = relayPid,
                 ParentChain = chain,
                 RawJson = payload.GetRawText(),
@@ -113,8 +114,10 @@ public static class HookEnvelopeParser
         }
     }
 
-    public static SessionSignal? SignalFor(string eventName, string? notificationType) => eventName switch
+    /// <param name="source">For SessionStart: startup, resume, clear or compact. Compaction happens in the middle of a turn, so it keeps the state.</param>
+    public static SessionSignal? SignalFor(string eventName, string? notificationType, string? source = null) => eventName switch
     {
+        "SessionStart" when string.Equals(source, "compact", StringComparison.OrdinalIgnoreCase) => null,
         "SessionStart" => SessionSignal.SessionStart,
         "UserPromptSubmit" => SessionSignal.PromptSubmit,
         "PreToolUse" or "PostToolUse" => SessionSignal.ToolUse,

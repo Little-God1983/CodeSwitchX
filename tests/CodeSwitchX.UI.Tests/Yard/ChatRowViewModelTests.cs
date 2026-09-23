@@ -49,4 +49,17 @@ public class ChatRowViewModelTests
 
         row.Title.ShouldBe("Chat abcdef12");
     }
+
+    [Fact]
+    public void Update_ignores_snapshots_older_than_the_one_already_shown()
+    {
+        var row = new ChatRowViewModel("s1");
+        var newer = new SessionSnapshot { SessionId = "s1", State = SessionState.Working, StartedAt = Now, LastEventAt = Now, StateSince = Now, Version = 7 };
+        var older = newer with { State = SessionState.Idle, Version = 6 };
+        row.Update(newer, Pricing);
+
+        row.Update(older, Pricing);
+
+        row.State.ShouldBe(SessionState.Working, "posts can be reordered on the way to the UI thread; the version says which snapshot is current");
+    }
 }

@@ -67,6 +67,22 @@ public class UsageAggregatorTests
     }
 
     [Fact]
+    public void Today_starts_at_local_midnight_even_on_a_dst_changeover_day()
+    {
+        var berlin = TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time");
+        // 2026-03-29: Berlin springs forward at 02:00. Midnight was UTC+1 (23:00Z the evening before); noon is UTC+2 (10:00Z).
+        var noon = new DateTimeOffset(2026, 3, 29, 10, 0, 0, TimeSpan.Zero);
+        var buckets = new[]
+        {
+            Bucket("a", new DateTimeOffset(2026, 3, 28, 22, 30, 0, TimeSpan.Zero), 1), // 23:30 local: yesterday
+            Bucket("a", new DateTimeOffset(2026, 3, 28, 23, 30, 0, TimeSpan.Zero), 2), // 00:30 local: today
+            Bucket("a", noon, 4),
+        };
+
+        _aggregator.Today(buckets, noon, berlin).Tokens.Input.ShouldBe(6);
+    }
+
+    [Fact]
     public void BySession_groups_totals()
     {
         var totals = _aggregator.BySession([Bucket("a", Now, 1), Bucket("b", Now, 2), Bucket("a", Now.AddMinutes(-1), 3)]);

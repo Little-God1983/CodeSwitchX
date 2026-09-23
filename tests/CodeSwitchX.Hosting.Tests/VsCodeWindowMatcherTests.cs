@@ -45,4 +45,13 @@ public class VsCodeWindowMatcherTests
 
         VsCodeWindowMatcher.FindNew([], after, "App", ProcessName)!.Hwnd.ShouldBe((nint)700);
     }
+
+    [Fact]
+    public void A_window_vscode_has_not_shown_yet_is_no_new_match_but_a_hidden_existing_one_is_adopted()
+    {
+        var hidden = new WindowInfo(800, 30, "Chrome_WidgetWin_1", "App - Visual Studio Code") { IsVisible = false };
+
+        VsCodeWindowMatcher.FindNew([], [hidden], "App", ProcessName).ShouldBeNull("adopting it before VS Code shows it would race its own ShowWindow and flash it undocked");
+        VsCodeWindowMatcher.FindExisting([hidden], "App", ProcessName)!.Hwnd.ShouldBe((nint)800);
+    }
 }

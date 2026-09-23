@@ -160,4 +160,25 @@ public class ShellViewModelTests
         _h.Launcher.Received(1).Launch(_h.App);
         _h.Docker.Received().MoveTo(500, rect);
     }
+
+    [Fact]
+    public async Task Resizing_the_cab_repositions_vscode_without_raising_it_and_activation_raises_it()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _h.Shell.Cab.LastHostRect = rect;
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Docker.ClearReceivedCalls();
+        var resized = ScreenRect.FromSize(0, 28, 1200, 700);
+
+        _h.Shell.UpdateCabRect(resized);
+
+        _h.Docker.Received(1).MoveTo(500, resized);
+        _h.Docker.DidNotReceive().BringToFront(Arg.Any<nint>());
+
+        _h.Shell.RaiseHostedWindow();
+
+        _h.Docker.Received(1).BringToFront(500);
+    }
 }

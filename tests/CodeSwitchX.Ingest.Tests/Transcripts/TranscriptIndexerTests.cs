@@ -28,6 +28,7 @@ public class TranscriptIndexerTests : IDisposable
         _projectDir = Path.Combine(_claude.ProjectsDirectory, "C--Repo-App");
         Directory.CreateDirectory(_projectDir);
         _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>([]));
+        _cursors.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
         _bus.Subscribe<TranscriptUpdated>(m => _updates.Add(m.Update));
         _indexer = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
     }
@@ -229,6 +230,7 @@ public class TranscriptIndexerTests : IDisposable
         var subagent = _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl"));
         subagent.SessionId.ShouldBe("parent");
         subagent.Title.ShouldBeNull();
+        subagent.Model.ShouldBeNull("a sub-agent may run a different model; the parent's context bar must keep the parent's");
         subagent.InferredSignal.ShouldBeNull();
         subagent.LatestContext.ShouldBeNull();
         subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
@@ -278,5 +280,34 @@ public class TranscriptIndexerTests : IDisposable
         await _indexer.ScanAsync(CancellationToken.None);
 
         _updates.SelectMany(u => u.Usage).Count().ShouldBe(2, "claude --resume copies earlier messages, with their usage, into a new file");
+    }
+
+    [Fact]
+    public async Task Message_ids_remembered_by_the_store_are_not_counted_again_after_a_restart()
+    {
+        _cursors.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["msg_shared"]));
+        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Assistant("resumed", "msg_shared", TextBlock), Assistant("resumed", "msg_new", TextBlock, ts: "2026-09-23T10:00:09.000Z")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(100, 20, 500, 3000));
+        update.MessageIds.ShouldBe(["msg_new"], "only ids first seen in this pass travel to the store, in the transaction that saves their usage");
+    }
+
+    private static string Synthetic(string session, string ts = "2026-09-23T10:00:07.000Z") =>
+        $$$"""{"type":"assistant","sessionId":"{{{session}}}","timestamp":"{{{ts}}}","message":{"id":"msg_err","model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: 529 overloaded"}],"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0} } }""";
+
+    [Fact]
+    public async Task Synthetic_error_lines_do_not_replace_the_model_or_the_context()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_1", TextBlock), Synthetic("s1")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Model.ShouldBe("claude-sonnet-5");
+        update.LatestContext.ShouldBe(new TokenUsage(100, 20, 500, 3000));
+        update.Usage.ShouldHaveSingleItem();
     }
 }

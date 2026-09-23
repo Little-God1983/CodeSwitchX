@@ -70,11 +70,8 @@ public partial class MainWindow : Window
     /// <summary>Activating the shell raises it above the docked VS Code window; put VS Code back on top while in Cab mode.</summary>
     private void OnActivated(object? sender, EventArgs e)
     {
-        if (_shell.Mode == ShellMode.Cab && _shell.Cab.LastHostRect is { } rect)
-        {
-            // Let the click that activated us finish first (e.g. a pip button), then re-dock.
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => _shell.UpdateCabRect(rect));
-        }
+        // Let the click that activated us finish first (e.g. a pip button), then put VS Code back on top.
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, _shell.RaiseHostedWindow);
     }
 
     protected override void OnClosed(EventArgs e)
