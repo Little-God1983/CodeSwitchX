@@ -1,0 +1,18 @@
+using CodeSwitchX.Ingest.Api;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace CodeSwitchX.Ingest;
+
+public static class IngestServiceCollectionExtensions
+{
+    public static IServiceCollection AddCodeSwitchXIngest(this IServiceCollection services, Action<EventApiOptions>? configure = null)
+    {
+        var options = new EventApiOptions();
+        configure?.Invoke(options);
+        services.AddSingleton(options);
+        services.AddSingleton<AccessTokenStore>();
+        services.AddSingleton<EventApiService>();
+        services.AddHostedService(sp => sp.GetRequiredService<EventApiService>());
+        return services;
+    }
+}
