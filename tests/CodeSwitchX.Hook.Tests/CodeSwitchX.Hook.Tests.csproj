@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" />
+  </ItemGroup>
+</Project>
