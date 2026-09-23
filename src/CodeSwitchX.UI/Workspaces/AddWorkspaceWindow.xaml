@@ -16,7 +16,7 @@
       <TextBox Text="{Binding InputPath, UpdateSourceTrigger=PropertyChanged}" />
     </DockPanel>
 
-    <Border Padding="10" CornerRadius="6" Background="#11000000" Visibility="{Binding IsProbed, Converter={StaticResource BoolVisible}}" Margin="0,0,0,8">
+    <Border Padding="10" CornerRadius="6" Background="{DynamicResource LayerFillColorDefaultBrush}" Visibility="{Binding IsProbed, Converter={StaticResource BoolVisible}}" Margin="0,0,0,8">
       <StackPanel>
         <TextBlock><Run Text="Root: " FontWeight="SemiBold" /><Run Text="{Binding RootPath, Mode=OneWay}" /></TextBlock>
         <TextBlock><Run Text="Git: " FontWeight="SemiBold" /><Run Text="{Binding Branch, Mode=OneWay, TargetNullValue=not a repository}" /></TextBlock>

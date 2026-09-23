@@ -59,7 +59,7 @@ public class AddWorkspaceViewModelTests : IDisposable
         await _vm.ProbeCommand.ExecuteAsync(null);
 
         _vm.IsProbed.ShouldBeFalse();
-        _vm.ErrorMessage.ShouldContain("does not exist");
+        _vm.ErrorMessage.ShouldNotBeNull().ShouldContain("does not exist");
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public class AddWorkspaceViewModelTests : IDisposable
 
         await _vm.SaveCommand.ExecuteAsync(null);
 
-        _vm.ErrorMessage.ShouldContain("already registered");
+        _vm.ErrorMessage.ShouldNotBeNull().ShouldContain("already registered");
         closed.ShouldBeFalse();
     }
 }

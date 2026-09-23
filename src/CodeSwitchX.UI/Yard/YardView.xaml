@@ -30,13 +30,13 @@
         </StackPanel>
         <ProgressBar Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="4,0,0,0" Height="3" Minimum="0" Maximum="1"
                      Value="{Binding ContextFill, Mode=OneWay}" Foreground="{Binding Pressure, Converter={StaticResource PressureBrush}}"
-                     BorderThickness="0" Background="#22000000" ToolTip="Context window fill" />
+                     BorderThickness="0" Background="#22FFFFFF" ToolTip="Context window fill" />
       </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
       <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
-              BorderBrush="{Binding AccentColor, Converter={StaticResource HexBrush}}" Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}"
+              BorderBrush="{Binding AccentColor, Converter={StaticResource HexBrush}}" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
               Cursor="Hand">
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
@@ -100,7 +100,7 @@
   </UserControl.Resources>
 
   <DockPanel>
-    <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="#22000000">
+    <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
           <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />

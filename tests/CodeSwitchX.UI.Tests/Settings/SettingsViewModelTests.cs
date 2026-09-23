@@ -67,7 +67,7 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.StorePayloads = false;
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
 
         _writerOptions.StorePayloads.ShouldBeFalse();
         await _store.Received().SetAsync(SettingKeys.StorePayloads, false, Arg.Any<CancellationToken>());
@@ -82,7 +82,7 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.InstallHooksCommand.Execute(null);
 
-        _vm.LastMessage.ShouldContain("not valid JSON");
+        _vm.LastMessage.ShouldNotBeNull().ShouldContain("not valid JSON");
         File.ReadAllText(_claude.SettingsFile).ShouldBe("{ broken");
     }
 }

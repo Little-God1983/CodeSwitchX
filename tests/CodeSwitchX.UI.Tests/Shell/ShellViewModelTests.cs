@@ -53,7 +53,7 @@ public class ShellViewModelTests
         _h.Docker.Received(1).Cloak(500);
 
         _h.Shell.ToggleMode();
-        await Task.Delay(50);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         _h.Shell.Mode.ShouldBe(ShellMode.Cab);
     }
 

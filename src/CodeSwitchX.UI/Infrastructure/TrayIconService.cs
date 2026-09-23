@@ -22,10 +22,12 @@ public sealed class TrayIconService
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("Exit", () => Application.Current.Shutdown()));
 
+        // H.NotifyIcon's IconSource only accepts URI-backed bitmaps; the app icon is a vector DrawingImage, so build the GDI icon ourselves.
+        var appIcon = (ImageSource)Application.Current.FindResource("AppIcon");
         _icon = new TaskbarIcon
         {
             ToolTipText = "CodeSwitchX",
-            IconSource = (ImageSource)Application.Current.FindResource("AppIcon"),
+            Icon = IconRenderer.ToIcon(appIcon, 32),
             ContextMenu = menu,
         };
         _icon.TrayLeftMouseDown += (_, _) => Show(window);
