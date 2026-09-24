@@ -69,8 +69,10 @@ public static class TranscriptLineParser
                     return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
                 }
 
+                // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
                 case "summary":
-                    return GetString(root, "summary") is { Length: > 0 } title
+                case "ai-title":
+                    return GetString(root, type == "summary" ? "summary" : "aiTitle") is { Length: > 0 } title
                         ? new SummaryLine(type, timestamp, sessionId, cwd, title)
                         : new OtherLine(type, timestamp, sessionId, cwd);
 
@@ -103,7 +105,7 @@ public static class TranscriptLineParser
 
         if (content.ValueKind == JsonValueKind.String)
         {
-            return (content.GetString(), false);
+            return (ReadString(content), false);
         }
 
         if (content.ValueKind != JsonValueKind.Array)
@@ -128,9 +130,28 @@ public static class TranscriptLineParser
     }
 
     private static string? GetString(JsonElement element, string name) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? ReadString(value) : null;
+
+    /// <summary>
+    /// Null for anything but a string, and for text .NET cannot hold: JSON.stringify writes half of a surrogate pair (a string
+    /// cut inside an emoji) as an escape, which is valid JSON, and <see cref="JsonElement.GetString"/> throws on it.
+    /// </summary>
+    private static string? ReadString(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private static long GetLong(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var l) ? l : 0;

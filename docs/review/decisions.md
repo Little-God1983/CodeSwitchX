@@ -12,7 +12,8 @@ The deviations table at the top of `docs/superpowers/specs/2026-09-23-codeswitch
 is settled: WPF instead of WinUI 3, project and file names, `csx-hook.exe`, the
 `%LOCALAPPDATA%\CodeSwitchX` data folder, H.NotifyIcon.Wpf, hook entries recognised by the
 `csx-hook` marker in the command, named pipe plus 127.0.0.1 transport behind one token,
-Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionStart` with
+Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles (current Claude Code writes
+its generated title as `ai-title` lines instead, which count the same, L5 #8), and `SessionStart` with
 `source: compact` leaving the state alone.
 
 ### Rulings from the PR #1 review rounds
@@ -34,6 +35,9 @@ Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionSt
 | Persistence | Hook payload JSON is not stored unless `StorePayloads` is on | Transcripts and payloads contain source code and prompts (spec, Security) |
 | Persistence | Migrations run only when one is pending; an up-to-date database gets EF Core's pending-model-changes check on its own. Before an upgrade, an EF Core migration lock row that is still there after 10 s is deleted as left over from a start that did not finish (L3 #6) | EF Core waits for that row without a timeout, so a leftover row hung every later start. A second instance that is upgrading holds the row only while its migration runs, well inside the 10 s |
 | Persistence | `SessionStore.UpsertAsync` keeps a stored rename when the incoming record is not locked (L3 #6) | Nothing unlocks a title (`SessionEngine.Rename` only locks), so an unlocked record for a renamed chat is a fresh snapshot. A feature that resets a title to automatic has to change this merge as well |
+| Ingest | A transcript pass moves the chat's inferred state only when it has lines with a timestamp and reaches the end of the file; an interrupt in a pass cut short is reported with the pass that reaches the end. A sub-agent's recent writes count as its parent chat's activity (Working); a quiet sub-agent moves nothing (L5 #8) | Claude Code writes its metadata lines (`ai-title`, `last-prompt`, ...) without a timestamp, some of them mid-turn. A pass cut short by the 8 MiB cap stops mid-file. The parent waits on the Task call while its sub-agent works |
+| Ingest | A transcript whose stored offset no longer follows a line end, or that shrank below it, was rewritten: it is read again from the start without sending its title again, and usage stamped at or before the newest usage already counted from it is not counted again. After a restart, until the file counts new usage, the bound is the last write indexed before it (L5 #8) | Claude Code cuts a retracted message out of the file and writes back what followed. The message id memory keeps only the newest 20,000 ids, so after a long history it no longer knows which of a chat's earlier messages were counted. Assistant lines are stamped when their message starts, so they can be older than the line above them but are in order among themselves; the file's write time would cover lines not read yet |
+| Ingest | The transcript watcher is replaced by a fresh one every minute, followed by a full scan; after a watcher error the indexer polls every 2 s until then (L5 #8) | A watcher can stop without an error: renaming its folder away takes the watcher with it, and a new folder created in its place is never seen |
 | Telemetry | The shipped prices stay in code (`DefaultPricing`); the `PricingRules` table holds only the user's own rules, each overriding the default for its model. The `RemoveSeededPricing` migration deletes the copies earlier versions stored (L4 #7) | A stored copy of a default would override its later correction, so a fixed price would never reach an existing install. Every stored row was such a copy, because nothing writes a rule of the user's own yet |
 
 ## Deferred from PR #1
@@ -48,7 +52,7 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | `SubagentStop` mapping | L6 #9 |
 | Pruning of `settings.json` backups made by the hook installer | L6 #9 |
 | SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open. Every read of a table the writer uses happens once at startup (session restore, the indexer's cursors and seen message ids, the telemetry history), so at worst one startup read waits for one flush (parked on #3) |
-| Full rescans on every transcript change | L5 #8 |
+| Full rescans on every transcript change | L5 #8: still there, but Low: the results are correct, and the cost is mostly a second read of each file's size and time (about 145 ms per scan for 2565 transcripts, while a chat writes) (parked on #3) |
 | Snap-back oscillation guard | L7 #10 |
 | Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
 | Single-instance enforcement | L8 #11 |
@@ -73,3 +77,4 @@ behaviour rather than a defect in that layer. Not a finding in later reviews.
 |---|---|---|
 | Git worktrees added after a workspace was registered are not detected | #14 | L1 #4 |
 | Cache writes to the 1-hour cache are priced at the 5-minute rate (1.25x input instead of 2x); whether Claude Code writes to that cache is checked there | #18 | L4 #7 |
+| A chat name set with `/rename` in Claude Code (`custom-title` lines) is not shown | #20 | L5 #8 |

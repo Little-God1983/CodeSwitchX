@@ -4,6 +4,12 @@ public sealed class TranscriptIndexerOptions
 {
     public TimeSpan ScanInterval { get; set; } = TimeSpan.FromSeconds(2);
 
+    /// <summary>
+    /// How often the folder watcher is replaced by a fresh one, followed by a full scan. A watcher can stop without an error,
+    /// for example when its folder is renamed away and a new one is created in its place.
+    /// </summary>
+    public TimeSpan WatcherRefreshInterval { get; set; } = TimeSpan.FromMinutes(1);
+
     /// <summary>A transcript written within this window counts as Working when hooks are absent.</summary>
     public TimeSpan WorkingWindow { get; set; } = TimeSpan.FromSeconds(5);
 
