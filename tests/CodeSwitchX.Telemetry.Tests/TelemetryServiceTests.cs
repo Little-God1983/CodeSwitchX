@@ -40,7 +40,7 @@ public class TelemetryServiceTests
     }
 
     [Fact]
-    public async Task Start_leaves_the_shipped_prices_in_code_so_a_corrected_default_reaches_an_existing_install()
+    public async Task Start_does_not_copy_the_shipped_prices_into_the_database()
     {
         await Service().StartAsync(CancellationToken.None);
 

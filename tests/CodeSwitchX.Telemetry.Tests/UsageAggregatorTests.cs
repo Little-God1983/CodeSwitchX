@@ -99,6 +99,22 @@ public class UsageAggregatorTests
     }
 
     [Fact]
+    public void Today_starts_at_the_jump_when_the_clocks_spring_forward_over_midnight()
+    {
+        var azores = TimeZoneInfo.FindSystemTimeZoneById("Azores Standard Time");
+        // 2026-03-29: the Azores spring forward from 00:00 (UTC-1) to 01:00 (UTC+0), so there is no midnight and the day starts at 01:00Z.
+        var noon = new DateTimeOffset(2026, 3, 29, 12, 0, 0, TimeSpan.Zero);
+        var buckets = new[]
+        {
+            Bucket("a", new DateTimeOffset(2026, 3, 29, 0, 30, 0, TimeSpan.Zero), 1), // 23:30 local: yesterday
+            Bucket("a", new DateTimeOffset(2026, 3, 29, 1, 30, 0, TimeSpan.Zero), 2), // 01:30 local: today
+            Bucket("a", noon, 4),
+        };
+
+        _aggregator.Today(buckets, noon, azores).Tokens.Input.ShouldBe(6);
+    }
+
+    [Fact]
     public void BySession_groups_totals()
     {
         var totals = _aggregator.BySession([Bucket("a", Now, 1), Bucket("b", Now, 2), Bucket("a", Now.AddMinutes(-1), 3)]);
