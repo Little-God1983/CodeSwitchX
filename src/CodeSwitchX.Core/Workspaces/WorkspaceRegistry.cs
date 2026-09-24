@@ -38,8 +38,11 @@ public sealed class WorkspaceRegistry
         }
 
         await _store.AddAsync(workspace, ct).ConfigureAwait(false);
-        await LoadAsync(ct).ConfigureAwait(false);
+
+        // Announced before the roots change: the engine re-maps chats into the new workspace as soon as they do,
+        // and the Yard can only move a chat onto a tile that already exists.
         _bus.Publish(new WorkspaceRegistered(workspace));
+        await LoadAsync(ct).ConfigureAwait(false);
     }
 
     public async Task UnregisterAsync(Guid workspaceId, CancellationToken ct)

@@ -71,6 +71,29 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
+    public async Task Inspect_does_its_file_and_process_work_off_the_calling_thread()
+    {
+        // The Yard starts refreshes on the UI thread; a folder on an offline network share blocks Directory.Exists for
+        // about 20 s, so nothing may run synchronously before the first await.
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        using var onCallingThread = new ThreadLocal<bool>();
+        bool? ranOnCallingThread = null;
+        var inspector = new GitInspector((_, _, _) =>
+        {
+            ranOnCallingThread ??= onCallingThread.Value;
+            return Task.FromResult<string?>(string.Empty);
+        });
+
+        onCallingThread.Value = true;
+        var inspect = inspector.InspectAsync(_root, CancellationToken.None);
+        onCallingThread.Value = false;
+        await inspect;
+
+        ranOnCallingThread.ShouldBe(false);
+    }
+
+    [Fact]
     public void Git_runs_without_optional_locks_so_a_killed_status_never_leaves_index_lock_behind()
     {
         GitInspector.GitStartInfo(_root, "status").Environment["GIT_OPTIONAL_LOCKS"].ShouldBe("0");

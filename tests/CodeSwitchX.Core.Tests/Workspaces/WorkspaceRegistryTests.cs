@@ -41,6 +41,19 @@ public class WorkspaceRegistryTests
     }
 
     [Fact]
+    public async Task Register_announces_the_workspace_before_the_roots_change_so_its_tile_exists_when_chats_move_into_it()
+    {
+        // WorkspaceRootsChanged makes the engine re-map chats at once. If the new workspace's tile did not exist yet,
+        // the Yard would drop that move and later copy the chat onto the new tile, leaving it on the old one as well.
+        var workspace = new Workspace { Name = "App feature", RootPath = @"C:\Code\App-feature" };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
+
+        await _registry.RegisterAsync(workspace, CancellationToken.None);
+
+        _messages.Select(m => m.GetType()).ShouldBe([typeof(WorkspaceRegistered), typeof(WorkspaceRootsChanged)]);
+    }
+
+    [Fact]
     public async Task Unregister_removes_and_reloads()
     {
         var id = Guid.NewGuid();

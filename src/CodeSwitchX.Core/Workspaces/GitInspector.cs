@@ -51,6 +51,9 @@ public sealed class GitInspector
 
     public async Task<GitInfo> InspectAsync(string root, CancellationToken ct)
     {
+        // Off the caller's thread before touching the disk: callers start on the UI thread, and a folder on an offline
+        // network share blocks Directory.Exists for about 20 s. Task.Yield would come back to the UI thread.
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         if (ResolveGitDir(root) is null)
         {
             return new GitInfo(false, null, null);

@@ -47,3 +47,12 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Snap-back oscillation guard | L7 #10 |
 | Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
 | Single-instance enforcement | L8 #11 |
+
+## Tracked elsewhere
+
+Found in a layer review, confirmed, and moved to its own issue because fixing it is new
+behaviour rather than a defect in that layer. Not a finding in later reviews.
+
+| Item | Issue | Found in |
+|---|---|---|
+| Git worktrees added after a workspace was registered are not detected | #14 | L1 #4 |
