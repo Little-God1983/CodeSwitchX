@@ -44,7 +44,7 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Telemetry time windows only recompute when new usage arrives (midnight and rolling windows go stale while idle) | L4 #7 |
 | `SubagentStop` mapping | L6 #9 |
 | Pruning of `settings.json` backups made by the hook installer | L6 #9 |
-| SQLite `Cache=Shared` together with WAL | L3 #6 |
+| SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open, and no runtime reader shares one with it today (parked on #3) |
 | Full rescans on every transcript change | L5 #8 |
 | Snap-back oscillation guard | L7 #10 |
 | Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
@@ -57,7 +57,8 @@ Assessed in that layer's review like the items above.
 
 | Item | Layer | Found in |
 |---|---|---|
-| A chat not restored at startup (quiet for longer than the 24 h restore window) that becomes active again gets a fresh snapshot, and `SessionStore.UpsertAsync` overwrites the stored row with it: a renamed title, `TitleLocked` and `StartedAt` are lost | L3 #6 | L2 #5 |
+| A chat not restored at startup (quiet for longer than the 24 h restore window) that becomes active again gets a fresh snapshot, and `SessionStore.UpsertAsync` overwrites the stored row with it: a renamed title, `TitleLocked` and `StartedAt` are lost | L3 #6: fixed, the upsert keeps the earlier start, a stored rename and a stored title the snapshot lacks | L2 #5 |
+| Such a chat still shows the fresh snapshot's title (or none) instead of its stored rename until the next restart restores the row; the restore window is decided in `StartupCoordinator` | L8 #11 | L3 #6 |
 
 ## Tracked elsewhere
 

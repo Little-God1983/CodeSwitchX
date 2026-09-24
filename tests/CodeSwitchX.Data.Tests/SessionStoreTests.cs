@@ -43,6 +43,61 @@ public class SessionStoreTests : IAsyncLifetime
         record.ToSnapshot().LatestContext.ShouldBe(new TokenUsage(1, 2, 3, 4));
     }
 
+    /// <summary>A chat quiet for longer than the restore window is not restored, so when it becomes active again the engine starts it over.</summary>
+    private SessionSnapshot FreshStart(string id, string? title) => new()
+    {
+        SessionId = id,
+        State = SessionState.Working,
+        StartedAt = _now,
+        LastEventAt = _now,
+        StateSince = _now,
+        Title = title,
+    };
+
+    [Fact]
+    public async Task Upsert_keeps_a_renamed_title_and_the_first_start_when_the_chat_comes_back_as_a_fresh_snapshot()
+    {
+        var renamed = Snapshot("s1", SessionState.Idle, _now.AddDays(-2)) with { Title = "Auth refactor", TitleLocked = true };
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(renamed)], TestContext.Current.CancellationToken);
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", "fix the login bug"))], TestContext.Current.CancellationToken);
+
+        var record = (await _store.GetActiveSinceAsync(_now.AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        record.Title.ShouldBe("Auth refactor");
+        record.TitleLocked.ShouldBeTrue();
+        record.StartedAt.ShouldBe(renamed.StartedAt);
+        record.State.ShouldBe(SessionState.Working, "the rest of the row still follows the live chat");
+        record.LastEventAt.ShouldBe(_now);
+    }
+
+    [Fact]
+    public async Task Upsert_keeps_the_stored_title_when_a_fresh_snapshot_has_none_yet()
+    {
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now.AddDays(-2)))], TestContext.Current.CancellationToken);
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null))], TestContext.Current.CancellationToken);
+
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Title.ShouldBe("Title s1");
+    }
+
+    [Fact]
+    public async Task Upsert_takes_a_newer_title_unless_only_the_stored_one_is_a_rename()
+    {
+        await _store.UpsertAsync([
+            SessionRecord.FromSnapshot(Snapshot("auto", SessionState.Idle, _now)),
+            SessionRecord.FromSnapshot(Snapshot("renamed", SessionState.Idle, _now) with { Title = "Old name", TitleLocked = true }),
+        ], TestContext.Current.CancellationToken);
+
+        await _store.UpsertAsync([
+            SessionRecord.FromSnapshot(Snapshot("auto", SessionState.Idle, _now) with { Title = "Newer summary" }),
+            SessionRecord.FromSnapshot(Snapshot("renamed", SessionState.Idle, _now) with { Title = "New name", TitleLocked = true }),
+        ], TestContext.Current.CancellationToken);
+
+        var titles = (await _store.GetActiveSinceAsync(_now.AddHours(-1), TestContext.Current.CancellationToken)).ToDictionary(r => r.Id, r => r.Title);
+        titles["auto"].ShouldBe("Newer summary");
+        titles["renamed"].ShouldBe("New name");
+    }
+
     [Fact]
     public async Task GetActiveSince_filters_on_last_event_time()
     {

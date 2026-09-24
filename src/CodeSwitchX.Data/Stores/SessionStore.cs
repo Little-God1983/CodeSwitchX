@@ -21,6 +21,11 @@ public sealed class SessionStore : ISessionStore
             .ToListAsync(ct);
     }
 
+    /// <summary>
+    /// Inserts new chats and updates known ones. A chat that was not restored at startup comes back as a fresh snapshot
+    /// with a new start and no title, so an update keeps the earlier start, a stored rename the record does not carry, and
+    /// the stored title when the record has none.
+    /// </summary>
     public async Task UpsertAsync(IReadOnlyCollection<SessionRecord> records, CancellationToken ct = default)
     {
         if (records.Count == 0)
@@ -35,7 +40,22 @@ public sealed class SessionStore : ISessionStore
         {
             if (existing.TryGetValue(record.Id, out var row))
             {
+                var stored = (row.Title, row.TitleLocked, row.StartedAt);
                 db.Entry(row).CurrentValues.SetValues(record);
+                if (stored.TitleLocked && !record.TitleLocked)
+                {
+                    row.Title = stored.Title;
+                    row.TitleLocked = true;
+                }
+                else if (record.Title is null)
+                {
+                    row.Title = stored.Title;
+                }
+
+                if (stored.StartedAt < record.StartedAt)
+                {
+                    row.StartedAt = stored.StartedAt;
+                }
             }
             else
             {
