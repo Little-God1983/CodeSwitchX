@@ -103,6 +103,27 @@ public class ProcessLivenessMonitorTests
     }
 
     [Fact]
+    public void Tick_keeps_a_session_whose_process_started_before_the_chat_was_seen()
+    {
+        var time = new FakeTimeProvider();
+        var claudeStartedAt = time.GetUtcNow();
+        time.Advance(TimeSpan.FromSeconds(1));
+        var bus = new EventBus(NullLogger<EventBus>.Instance);
+        var engine = new SessionEngine(bus, new WorkspaceResolver(), time, NullLogger<SessionEngine>.Instance);
+        engine.Apply(new HookEvent
+        {
+            SessionId = "own", EventName = "PreToolUse", Signal = SessionSignal.ToolUse, At = time.GetUtcNow(),
+            ParentChain = [new ProcessRef(30, "claude.exe")],
+        });
+        time.Advance(TimeSpan.FromHours(1));
+        var monitor = new ProcessLivenessMonitor(engine, new FakeProcessProbe().Run(30, claudeStartedAt), time, NullLogger<ProcessLivenessMonitor>.Instance);
+
+        monitor.Tick();
+
+        engine.Get("own")!.State.ShouldBe(SessionState.Working, "the chat's own claude started before it sent the hook");
+    }
+
+    [Fact]
     public void SystemProcessProbe_does_not_take_a_process_that_started_after_the_chat_was_seen_for_the_chats_process()
     {
         using var current = Process.GetCurrentProcess();

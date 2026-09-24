@@ -61,7 +61,8 @@ public class HookEnvelopeParserTests
     [InlineData("permission_prompt", SessionSignal.Notification)]
     [InlineData("elicitation_dialog", SessionSignal.Notification)]
     [InlineData(null, SessionSignal.Notification)]
-    [InlineData("idle_prompt", null)]
+    [InlineData("idle_prompt", SessionSignal.IdlePrompt)]
+    [InlineData("Idle_Prompt", SessionSignal.IdlePrompt)]
     [InlineData("auth_success", null)]
     [InlineData("future_type", null)]
     public void Only_notifications_that_need_the_user_mean_waiting(string? type, SessionSignal? expected)

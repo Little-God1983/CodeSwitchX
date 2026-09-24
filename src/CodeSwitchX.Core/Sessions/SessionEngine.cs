@@ -113,15 +113,12 @@ public sealed class SessionEngine : IDisposable
             var s = previous ?? NewSession(e.SessionId, e.At);
 
             var state = s.State;
-            if (e.Signal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
+            // idle_prompt reports a quiet minute. Activity within the quiet window means it raced the next prompt (each relay
+            // may take up to a second to land) and describes the turn before, which has already ended.
+            var staleIdlePrompt = e.Signal == SessionSignal.IdlePrompt && e.At - s.LastEventAt < _options.InferredIdleAfter;
+            if (e.Signal is { } signal && !staleIdlePrompt && SessionStateMachine.TryNext(state, signal, out var next))
             {
                 state = next;
-            }
-            else if (state == SessionState.Working && e.EventName == "Notification" && e.NotificationType == "idle_prompt")
-            {
-                // idle_prompt only fires once a turn has finished, so a Working chat missed its Stop (lost to the relay's
-                // timeout, or the turn ended on an API error). Nothing else would take the chat out of Working.
-                state = SessionState.Idle;
             }
             else if (e.Signal is null)
             {

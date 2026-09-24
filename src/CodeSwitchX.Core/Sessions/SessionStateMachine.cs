@@ -19,6 +19,8 @@ public static class SessionStateMachine
             SessionSignal.SessionEnd => SessionState.Ended,
             SessionSignal.ProcessGone when current is not (SessionState.Ended or SessionState.Errored) => SessionState.Errored,
             SessionSignal.StaleTimeout when current == SessionState.Idle => SessionState.Stale,
+            // No turn runs while claude reports an idle input prompt, so a turn whose Stop never arrived ends here.
+            SessionSignal.IdlePrompt when current is SessionState.Working or SessionState.Waiting or SessionState.Starting => SessionState.Idle,
             _ => null,
         };
 

@@ -29,6 +29,10 @@ public class SessionStateMachineTests
     [InlineData(SessionState.Idle, SessionSignal.ProcessGone, SessionState.Errored)]
     [InlineData(SessionState.Waiting, SessionSignal.ProcessGone, SessionState.Errored)]
     [InlineData(SessionState.Working, SessionSignal.SessionStart, SessionState.Idle)]
+    // idle_prompt fires only after a turn has finished, so it ends a turn whose Stop never arrived
+    [InlineData(SessionState.Working, SessionSignal.IdlePrompt, SessionState.Idle)]
+    [InlineData(SessionState.Waiting, SessionSignal.IdlePrompt, SessionState.Idle)]
+    [InlineData(SessionState.Starting, SessionSignal.IdlePrompt, SessionState.Idle)]
     public void Defined_transitions(SessionState from, SessionSignal signal, SessionState expected)
     {
         SessionStateMachine.TryNext(from, signal, out var next).ShouldBeTrue();
@@ -44,6 +48,10 @@ public class SessionStateMachineTests
     [InlineData(SessionState.Ended, SessionSignal.Stop)]
     [InlineData(SessionState.Errored, SessionSignal.ProcessGone)]
     [InlineData(SessionState.Stale, SessionSignal.StaleTimeout)]
+    [InlineData(SessionState.Idle, SessionSignal.IdlePrompt)]
+    [InlineData(SessionState.Stale, SessionSignal.IdlePrompt)]
+    [InlineData(SessionState.Ended, SessionSignal.IdlePrompt)]
+    [InlineData(SessionState.Errored, SessionSignal.IdlePrompt)]
     public void Undefined_transitions_keep_the_state(SessionState from, SessionSignal signal)
     {
         SessionStateMachine.TryNext(from, signal, out var next).ShouldBeFalse();

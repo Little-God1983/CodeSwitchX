@@ -11,4 +11,7 @@ public enum SessionSignal
     SessionEnd,
     ProcessGone,
     StaleTimeout,
+
+    /// <summary>Claude's idle_prompt notification, sent about 60 s after a turn has finished while the input waits.</summary>
+    IdlePrompt,
 }

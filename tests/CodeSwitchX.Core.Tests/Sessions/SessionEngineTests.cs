@@ -483,12 +483,39 @@ public class SessionEngineTests
         _time.Advance(TimeSpan.FromMinutes(3));
 
         // The turn ended without a Stop (lost to the relay timeout, or an API error); claude reports its idle prompt 60 s later.
-        _engine.Apply(Hook("Notification", null) with { NotificationType = "idle_prompt" });
+        _engine.Apply(IdlePrompt());
 
         var snapshot = _engine.Get("s1")!;
         snapshot.State.ShouldBe(SessionState.Idle, "idle_prompt only fires once a turn has finished");
         snapshot.StateSince.ShouldBe(_time.GetUtcNow());
     }
+
+    [Fact]
+    public void An_idle_prompt_notification_also_ends_a_permission_prompt_whose_turn_finished_without_a_stop()
+    {
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "permission_prompt" });
+        _time.Advance(TimeSpan.FromMinutes(3));
+
+        _engine.Apply(IdlePrompt());
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "no permission prompt is open while claude reports an idle input prompt");
+    }
+
+    [Fact]
+    public void An_idle_prompt_that_lands_just_after_the_next_prompt_does_not_end_that_new_turn()
+    {
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        _time.Advance(TimeSpan.FromSeconds(60));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "one more thing"));
+
+        // Fired at the 60 s mark, but its relay landed after the prompt's.
+        _time.Advance(TimeSpan.FromMilliseconds(500));
+        _engine.Apply(IdlePrompt());
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the notice describes the quiet before the new prompt");
+    }
+
+    private HookEvent IdlePrompt() => Hook("Notification", SessionSignal.IdlePrompt) with { NotificationType = "idle_prompt" };
 
     [Fact]
     public void Repeated_transcript_writes_do_not_restart_the_working_timer_without_hooks()
