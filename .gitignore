@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+*.received.*
+artifacts/
+node_modules/
+design-time.db*

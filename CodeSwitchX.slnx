@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CodeSwitchX.Core/CodeSwitchX.Core.csproj" />
+    <Project Path="src/CodeSwitchX.Data/CodeSwitchX.Data.csproj" />
+    <Project Path="src/CodeSwitchX.Hook/CodeSwitchX.Hook.csproj" />
+    <Project Path="src/CodeSwitchX.Hosting/CodeSwitchX.Hosting.csproj" />
+    <Project Path="src/CodeSwitchX.Ingest/CodeSwitchX.Ingest.csproj" />
+    <Project Path="src/CodeSwitchX.Telemetry/CodeSwitchX.Telemetry.csproj" />
+    <Project Path="src/CodeSwitchX.UI/CodeSwitchX.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CodeSwitchX.Core.Tests/CodeSwitchX.Core.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.Data.Tests/CodeSwitchX.Data.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.Hook.Tests/CodeSwitchX.Hook.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.Hosting.Tests/CodeSwitchX.Hosting.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.Ingest.Tests/CodeSwitchX.Ingest.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.Telemetry.Tests/CodeSwitchX.Telemetry.Tests.csproj" />
+    <Project Path="tests/CodeSwitchX.UI.Tests/CodeSwitchX.UI.Tests.csproj" />
+  </Folder>
+</Solution>

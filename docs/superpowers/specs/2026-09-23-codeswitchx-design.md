@@ -19,7 +19,9 @@ follows the original document; deviations are listed first so they are easy to r
 | Toasts | App SDK notifications | Microsoft.Toolkit.Uwp.Notifications (works for unpackaged WPF) | WPF-compatible; needs the `net10.0-windows10.0.19041.0` TFM when enabled (M2) |
 | Hook entry tagging | "tags its entries" | Entries are recognised by the `csx-hook` marker inside the command string | Claude Code rejects unknown fields in hook entries, so no extra JSON keys |
 | Event API transport | HTTP and named pipe | Kestrel listens on both a named pipe (preferred) and 127.0.0.1 on a random port; one token guards both | Kestrel supports named pipes natively since .NET 8 |
+| Jump hotkeys | Ctrl+Alt+1..9 | Ctrl+Shift+Alt+1..9 (Ctrl+Alt+Y unchanged) | AltGr is reported as Ctrl+Alt, so Ctrl+Alt+digit would swallow AltGr+2/3/7/8/9/0 (² ³ { [ ] }) system-wide on German and other European layouts |
 | Chat title | first user prompt, 60 chars | Claude Code's own `summary` line when present, else first user prompt trimmed to 60 chars | The transcript already carries a generated title |
+| SessionStart hook | SessionStart → Idle | `source: compact` leaves the state alone; startup, resume and clear → Idle | Claude Code fires SessionStart for auto-compaction in the middle of a turn |
 
 ## Overview
 
@@ -74,7 +76,7 @@ full-window), toggled by a global hotkey, Ctrl+Alt+Y by default.
 
 - Clicking a tile brings that VS Code to full size inside the CodeSwitchX shell (see VS Code hosting strategy)
 - A 28 px strip across the top keeps the other tiles as small status pips, so a waiting agent elsewhere stays visible
-- The hotkey, the strip's back arrow or a mouse-back button returns to the Yard; Ctrl+Alt+1..9 jumps straight to a workspace
+- The hotkey, the strip's back arrow or a mouse-back button returns to the Yard; Ctrl+Shift+Alt+1..9 jumps straight to a workspace
 
 ### Performance bar
 

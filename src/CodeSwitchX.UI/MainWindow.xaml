@@ -1,0 +1,30 @@
+<Window x:Class="CodeSwitchX.UI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:shell="clr-namespace:CodeSwitchX.UI.Shell"
+        xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard"
+        xmlns:cab="clr-namespace:CodeSwitchX.UI.Cab"
+        xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+        xmlns:telemetry="clr-namespace:CodeSwitchX.UI.Telemetry"
+        mc:Ignorable="d"
+        d:DataContext="{d:DesignInstance shell:ShellViewModel}"
+        Title="CodeSwitchX" Width="1400" Height="900" MinWidth="900" MinHeight="600"
+        Icon="{StaticResource AppIcon}">
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <yard:YardView Grid.Row="0" DataContext="{Binding Yard}"
+                   Visibility="{Binding DataContext.Mode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumVisible}, ConverterParameter=Yard}" />
+    <cab:CabView x:Name="CabView" Grid.Row="0" DataContext="{Binding Cab}"
+                 Visibility="{Binding DataContext.Mode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumVisible}, ConverterParameter=Cab}" />
+    <settings:SettingsView Grid.Row="0" DataContext="{Binding Settings}"
+                           Visibility="{Binding DataContext.Mode, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumVisible}, ConverterParameter=Settings}" />
+
+    <telemetry:PerformanceBarView Grid.Row="1" DataContext="{Binding PerformanceBar}" />
+  </Grid>
+</Window>

@@ -1,0 +1,135 @@
+<UserControl x:Class="CodeSwitchX.UI.Yard.YardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard">
+  <UserControl.Resources>
+    <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
+      <Grid Margin="0,2">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="14" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="3" />
+        </Grid.RowDefinitions>
+        <Ellipse Grid.Column="0" Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding State, Converter={StaticResource StateBrush}}"
+                 ToolTip="{Binding State}" />
+        <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0">
+          <TextBlock.ToolTip>
+            <TextBlock>
+              <Run Text="{Binding State, Mode=OneWay}" /> · last tool: <Run Text="{Binding LastToolName, Mode=OneWay}" />
+            </TextBlock>
+          </TextBlock.ToolTip>
+        </TextBlock>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="inferred" FontSize="10" Opacity="0.6" Margin="0,0,6,0"
+                     Visibility="{Binding Inferred, Converter={StaticResource BoolVisible}}" ToolTip="Hooks not installed: state guessed from the transcript" />
+          <TextBlock Text="{Binding ElapsedText}" FontSize="11" Opacity="0.7" MinWidth="34" TextAlignment="Right" />
+        </StackPanel>
+        <ProgressBar Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="4,0,0,0" Height="3" Minimum="0" Maximum="1"
+                     Value="{Binding ContextFill, Mode=OneWay}" Foreground="{Binding Pressure, Converter={StaticResource PressureBrush}}"
+                     BorderThickness="0" Background="#22FFFFFF" ToolTip="Context window fill" />
+      </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
+      <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
+              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
+        <Border.InputBindings>
+          <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
+        </Border.InputBindings>
+        <Border.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Open" Command="{Binding OpenCommand}" />
+            <MenuItem Header="Reveal in Explorer" Command="{Binding RevealInExplorerCommand}" />
+            <MenuItem Header="Open terminal here" Command="{Binding OpenTerminalCommand}" />
+            <Separator />
+            <MenuItem Header="Unregister" Command="{Binding UnregisterCommand}" />
+          </ContextMenu>
+        </Border.ContextMenu>
+        <Border.Style>
+          <Style TargetType="Border">
+            <!-- A local BorderBrush would outrank the trigger below, so the accent lives in the style. -->
+            <Setter Property="BorderBrush" Value="{Binding AccentColor, Converter={StaticResource HexBrush}}" />
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding NeedsAttention}" Value="True">
+                <Setter Property="BorderBrush" Value="#F59E0B" />
+                <DataTrigger.EnterActions>
+                  <BeginStoryboard x:Name="Pulse">
+                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                      <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.55" Duration="0:0:0.7" />
+                    </Storyboard>
+                  </BeginStoryboard>
+                </DataTrigger.EnterActions>
+                <DataTrigger.ExitActions>
+                  <StopStoryboard BeginStoryboardName="Pulse" />
+                </DataTrigger.ExitActions>
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </Border.Style>
+        <StackPanel>
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Right" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
+                       Text="{Binding HostState, Converter={StaticResource HostStateText}}" />
+            <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+          </DockPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,4,0,8" Opacity="0.75">
+            <TextBlock Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding Branch, TargetNullValue=no git}" />
+            <TextBlock Text=" · " />
+            <TextBlock><Run Text="{Binding DirtyCount, Mode=OneWay}" /> dirty</TextBlock>
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Chats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
+          <TextBlock Text="No Claude Code chats yet" FontStyle="Italic" Opacity="0.5" Margin="0,6,0,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Chats.Count}" Value="0">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
+          <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
+          <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+        </StackPanel>
+        <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
+                   Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
+      </DockPanel>
+    </Border>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <ItemsControl ItemsSource="{Binding Tracks}" Margin="8">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="{x:Type yard:TrackGroupViewModel}">
+            <StackPanel Margin="0,0,0,16">
+              <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" Opacity="0.7" Margin="8,0,0,0" />
+              <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <WrapPanel />
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+              </ItemsControl>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>

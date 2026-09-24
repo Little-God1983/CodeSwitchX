@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" />
+    <ProjectReference Include="..\..\src\CodeSwitchX.Ingest\CodeSwitchX.Ingest.csproj" />
+    <ProjectReference Include="..\..\src\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+</Project>
