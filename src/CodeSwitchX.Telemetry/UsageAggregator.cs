@@ -34,9 +34,11 @@ public sealed class UsageAggregator
 
     public UsageTotals Today(IEnumerable<UsageBucket> buckets, DateTimeOffset now, TimeZoneInfo zone)
     {
-        // Midnight's own offset, not the current one: on a DST changeover day they differ by an hour.
+        // Midnight's own offset, not the current one: on a DST changeover day they differ by an hour. When the clocks fall
+        // back to midnight it comes twice, and the day starts at the first one, which has the larger offset.
         var localDate = TimeZoneInfo.ConvertTime(now, zone).Date;
-        var startUtc = new DateTimeOffset(localDate, zone.GetUtcOffset(localDate)).ToUniversalTime();
+        var offset = zone.IsAmbiguousTime(localDate) ? zone.GetAmbiguousTimeOffsets(localDate).Max() : zone.GetUtcOffset(localDate);
+        var startUtc = new DateTimeOffset(localDate, offset).ToUniversalTime();
         return Sum(buckets.Where(b => b.MinuteUtc >= startUtc && b.MinuteUtc <= now));
     }
 
