@@ -28,6 +28,7 @@ public sealed class TranscriptIndexer : BackgroundService
     private readonly MessageMemory _messages;
     private bool _cursorsLoaded;
     private FileSystemWatcher? _watcher;
+    private volatile bool _watching;
     private volatile bool _dirty = true;
 
     /// <summary>Claude Code records API errors as assistant lines with this model and zero usage; they carry no model, context or tokens.</summary>
@@ -58,6 +59,17 @@ public sealed class TranscriptIndexer : BackgroundService
         return directory.Split('\\', '/').Any(segment => string.Equals(segment, "subagents", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// The session folder that holds a <c>subagents</c> folder (<c>&lt;project&gt;/&lt;session&gt;/subagents/...</c>), for a file
+    /// under it whose lines name no session, such as a workflow's <c>journal.jsonl</c>.
+    /// </summary>
+    private static string? SessionFolder(string path)
+    {
+        var segments = (Path.GetDirectoryName(path) ?? string.Empty).Split('\\', '/');
+        var index = Array.FindLastIndex(segments, segment => string.Equals(segment, "subagents", StringComparison.OrdinalIgnoreCase));
+        return index > 0 ? segments[index - 1] : null;
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         StartWatcher();
@@ -66,9 +78,8 @@ public sealed class TranscriptIndexer : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                // Without a running watcher, poll: one stops for good after an error such as its folder being deleted
-                // (only a buffer overflow leaves it running).
-                if (!_dirty && _watcher is { EnableRaisingEvents: true })
+                // Without a running watcher, poll.
+                if (!_dirty && _watching)
                 {
                     continue;
                 }
@@ -229,7 +240,7 @@ public sealed class TranscriptIndexer : BackgroundService
 
         if (tail.Truncated)
         {
-            _logger.LogInformation("Transcript {Path} shrank below the stored offset; re-reading from the start", path);
+            _logger.LogInformation("Transcript {Path} was rewritten; re-reading it from the start", path);
             state.Reset();
         }
 
@@ -298,8 +309,10 @@ public sealed class TranscriptIndexer : BackgroundService
                     }
 
                     // Dedup across every file and across restarts (the ids are saved with the usage): `claude --resume`
-                    // replays earlier assistant messages, with their usage, into a new transcript.
-                    if (assistant.Usage is { } tokens && assistant.MessageId is { } id && _messages.Remember(id))
+                    // replays earlier assistant messages, with their usage, into a new transcript. After a rewrite the file
+                    // is read again, and what it held before was counted then (see FileState.Reset).
+                    var countedBefore = assistant.Timestamp <= state.CountedUntil;
+                    if (assistant.Usage is { } tokens && assistant.MessageId is { } id && !countedBefore && _messages.Remember(id))
                     {
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
                         latestContext = tokens;
@@ -358,7 +371,7 @@ public sealed class TranscriptIndexer : BackgroundService
         var title = newTitle ?? (historical ? null : state.UndeliveredTitle);
         state.UndeliveredTitle = historical ? title ?? state.UndeliveredTitle : null;
 
-        var sessionId = state.SessionId ?? Path.GetFileNameWithoutExtension(path);
+        var sessionId = state.SessionId ?? (subagent ? SessionFolder(path) : null) ?? Path.GetFileNameWithoutExtension(path);
         state.SessionId = sessionId;
         var now = _time.GetUtcNow();
         var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
@@ -425,14 +438,28 @@ public sealed class TranscriptIndexer : BackgroundService
             _watcher.Renamed += (_, _) => _dirty = true;
             _watcher.Error += (_, e) =>
             {
-                _logger.LogWarning(e.GetException(), "Transcript watcher error; falling back to periodic scans");
+                var error = e.GetException();
+                if (error is InternalBufferOverflowException)
+                {
+                    _logger.LogWarning(error, "Transcript watcher missed events; scanning everything");
+                }
+                else
+                {
+                    // After any other error, such as its folder being deleted, a watcher may raise nothing more, even while
+                    // EnableRaisingEvents still says true.
+                    _watching = false;
+                    _logger.LogWarning(error, "Transcript watcher error; falling back to periodic scans");
+                }
+
                 _dirty = true;
             };
+            _watching = true;
             _watcher.EnableRaisingEvents = true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             _logger.LogWarning(ex, "Cannot watch {Dir}; using periodic scans only", _claude.ProjectsDirectory);
+            _watching = false;
             _watcher = null;
         }
     }
@@ -456,7 +483,13 @@ public sealed class TranscriptIndexer : BackgroundService
         /// <summary>The title found while the transcript was historical, until a live update carries it.</summary>
         public string? UndeliveredTitle { get; set; }
 
-        /// <summary>The file shrank: read it again from the start. Message ids stay remembered so replayed usage is not counted twice.</summary>
+        /// <summary>After a rewrite: usage stamped at or before this was counted before it.</summary>
+        public DateTimeOffset? CountedUntil { get; set; }
+
+        /// <summary>
+        /// The file was rewritten: read it again from the start. Usage it held was counted up to the last write indexed, and is
+        /// not counted again even when the message id memory no longer holds its ids (it keeps only the newest).
+        /// </summary>
         public void Reset()
         {
             Offset = 0;
@@ -464,6 +497,7 @@ public sealed class TranscriptIndexer : BackgroundService
             HasSummary = false;
             PendingToolUse = false;
             UndeliveredTitle = null;
+            CountedUntil = LastWriteUtc;
         }
     }
 

@@ -412,6 +412,63 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rewrite_that_removes_an_indexed_line_does_not_count_the_earlier_usage_again()
+    {
+        // Two remembered message ids stand in for a long history, after whose first index a chat's early ids are forgotten.
+        using var indexer = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance,
+            new TranscriptIndexerOptions { MessageIdMemory = 2 });
+        var path = Transcript("s1");
+        string[] lines =
+        [
+            Assistant("s1", "m1", TextBlock, ts: "2026-09-23T10:00:01.000Z"),
+            Assistant("s1", "m2", TextBlock, ts: "2026-09-23T10:00:02.000Z"),
+            Assistant("s1", "m3", TextBlock, ts: "2026-09-23T10:00:03.000Z"),
+        ];
+        File.WriteAllText(path, string.Join('\n', lines) + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 4, DateTimeKind.Utc));
+        await indexer.ScanAsync(CancellationToken.None);
+
+        // Claude Code retracts a streamed message by cutting the file at its line and writing back what followed.
+        File.WriteAllText(path, lines[0] + "\n" + lines[1] + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 6, DateTimeKind.Utc));
+        await indexer.ScanAsync(CancellationToken.None);
+
+        _updates.SelectMany(u => u.Usage).Count().ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_rewrite_followed_by_new_lines_is_read_again_from_the_start()
+    {
+        var path = Transcript("s1");
+        string[] lines = [User("s1", "go"), Assistant("s1", "m1", TextBlock, ts: "2026-09-23T10:00:01.000Z"), Assistant("s1", "m2", TextBlock, ts: "2026-09-23T10:00:02.000Z")];
+        File.WriteAllText(path, string.Join('\n', lines) + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 3, DateTimeKind.Utc));
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        // m2 is retracted and its longer retry is written before the next scan, so the file is longer than the offset.
+        var retry = Assistant("s1", "m2-retry", ToolBlock, ts: "2026-09-23T10:00:08.000Z");
+        File.WriteAllText(path, lines[0] + "\n" + lines[1] + "\n" + retry + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 9, DateTimeKind.Utc));
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.SelectMany(u => u.Usage).ShouldHaveSingleItem().At.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 8, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task A_workflow_journal_belongs_to_the_session_that_holds_it_not_to_a_chat_of_its_own()
+    {
+        // Claude Code keeps a workflow's journal under the session's subagents folder; its lines carry no sessionId.
+        var runDir = Path.Combine(_projectDir, "parent", "subagents", "workflows", "run1");
+        Directory.CreateDirectory(runDir);
+        File.WriteAllLines(Path.Combine(runDir, "journal.jsonl"), ["""{"type":"started","key":"k1","agentId":"a1"}"""]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().SessionId.ShouldBe("parent");
+    }
+
+    [Fact]
     public async Task Indexing_goes_on_after_the_transcript_folder_is_deleted_and_created_again()
     {
         var ct = TestContext.Current.CancellationToken;

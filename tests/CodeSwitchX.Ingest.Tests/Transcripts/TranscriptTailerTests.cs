@@ -77,4 +77,30 @@ public class TranscriptTailerTests : IDisposable
         second.NewOffset.ShouldBe(24);
         second.HasMore.ShouldBeFalse();
     }
+
+    [Fact]
+    public void An_offset_that_no_longer_follows_a_line_end_restarts_from_zero_and_reports_it()
+    {
+        // Claude Code rewrote the file (it cuts out a retracted message), so offset 12 now lies inside a line.
+        File.WriteAllText(_file, "{\"a\":1}\n{\"b\":22222}\n", Utf8);
+
+        var result = TranscriptTailer.ReadNewLines(_file, 12);
+
+        result.Truncated.ShouldBeTrue();
+        result.Lines.ShouldBe(["{\"a\":1}", "{\"b\":22222}"]);
+    }
+
+    [Fact]
+    public void A_line_longer_than_the_cap_is_skipped_whole()
+    {
+        var big = "{\"big\":\"" + new string('x', 100) + "\"}\n";
+        File.WriteAllText(_file, big + "{\"a\":1}\n", Utf8);
+
+        var first = TranscriptTailer.ReadNewLines(_file, 0, maxBytes: 20);
+
+        first.Lines.ShouldBeEmpty();
+        first.NewOffset.ShouldBe(Utf8.GetByteCount(big), "the next pass starts at a line end, so it is not taken for a rewrite");
+        first.HasMore.ShouldBeTrue();
+        TranscriptTailer.ReadNewLines(_file, first.NewOffset, maxBytes: 20).Lines.ShouldBe(["{\"a\":1}"]);
+    }
 }
