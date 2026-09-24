@@ -105,8 +105,10 @@ public sealed class PersistenceWriter : BackgroundService
             return;
         }
 
-        // Pending, not the channel's Count: a single-reader channel does not support counting.
-        using var grace = new CancellationTokenSource(ShutdownGrace);
+        // Bounded by the host's stop budget as well as the grace period. Pending, not the channel's Count: a
+        // single-reader channel does not support counting.
+        using var grace = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        grace.CancelAfter(ShutdownGrace);
         try
         {
             do
@@ -117,7 +119,14 @@ public sealed class PersistenceWriter : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("The shutdown flush ran out of time; {Count} records were not saved", Pending + (_carry?.Count ?? 0));
+            // out of time; what is left is reported below
+        }
+
+        // A failed flush keeps its batch for the next flush, but at shutdown there is none.
+        var unsaved = Pending + (_carry?.Count ?? 0);
+        if (unsaved > 0)
+        {
+            _logger.LogWarning("The shutdown flush ended with {Count} records not saved", unsaved);
         }
     }
 

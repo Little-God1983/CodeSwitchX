@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
 
@@ -19,15 +20,24 @@ public sealed class GitInspector
     private const string ReftablePlaceholderBranch = ".invalid";
 
     private readonly Func<string, string, CancellationToken, Task<string?>> _runGit;
+    private readonly string _profileDirectory;
 
-    public GitInspector(Func<string, string, CancellationToken, Task<string?>>? runGit = null)
+    /// <param name="profileDirectory">
+    /// The user profile (the default). A repository found at or above it while walking up from a workspace, such as a
+    /// dotfiles repository, is not that workspace's repository.
+    /// </param>
+    public GitInspector(Func<string, string, CancellationToken, Task<string?>>? runGit = null, string? profileDirectory = null)
     {
         _runGit = runGit ?? RunGitAsync;
+        _profileDirectory = profileDirectory ?? DefaultProfileDirectory;
     }
 
-    public static string? ReadBranch(string root)
+    private static string DefaultProfileDirectory => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+    public static string? ReadBranch(string root) => ReadHead(ResolveGitDir(root, DefaultProfileDirectory));
+
+    private static string? ReadHead(string? gitDir)
     {
-        var gitDir = ResolveGitDir(root);
         if (gitDir is null)
         {
             return null;
@@ -54,12 +64,13 @@ public sealed class GitInspector
         // Off the caller's thread before touching the disk: callers start on the UI thread, and a folder on an offline
         // network share blocks Directory.Exists for about 20 s. Task.Yield would come back to the UI thread.
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-        if (ResolveGitDir(root) is null)
+        var gitDir = ResolveGitDir(root, _profileDirectory);
+        if (gitDir is null)
         {
             return new GitInfo(false, null, null);
         }
 
-        var branch = ReadBranch(root);
+        var branch = ReadHead(gitDir);
         if (branch == ReftablePlaceholderBranch)
         {
             branch = await ReadBranchFromGitAsync(root, ct).ConfigureAwait(false);
@@ -164,16 +175,25 @@ public sealed class GitInspector
         }
     }
 
-    private static string? ResolveGitDir(string root)
+    private static string? ResolveGitDir(string root, string profileDirectory)
     {
         if (!Directory.Exists(root))
         {
             return null;
         }
 
-        // Walk up like git does: a workspace registered on a subfolder (a solution below the repository root) is still in the repository.
-        for (var dir = new DirectoryInfo(Path.GetFullPath(root)); dir is not null; dir = dir.Parent)
+        // Walk up like git does: a workspace registered on a subfolder (a solution below the repository root) is still in
+        // the repository. The walk stops before the user profile or any folder above it, where only a dotfiles
+        // repository would be found.
+        var start = new DirectoryInfo(Path.GetFullPath(root));
+        var profile = string.IsNullOrWhiteSpace(profileDirectory) ? null : PathNormalizer.Normalize(profileDirectory);
+        for (var dir = start; dir is not null; dir = dir.Parent)
         {
+            if (dir != start && profile is not null && PathNormalizer.IsWithin(profile, PathNormalizer.Normalize(dir.FullName)))
+            {
+                return null;
+            }
+
             var dotGit = Path.Combine(dir.FullName, ".git");
             if (Directory.Exists(dotGit))
             {

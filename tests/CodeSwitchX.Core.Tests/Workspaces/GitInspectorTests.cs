@@ -125,6 +125,22 @@ public class GitInspectorTests : IDisposable
         info.Branch.ShouldBe("main");
     }
 
+    [Fact]
+    public async Task A_repository_at_the_profile_folder_does_not_claim_the_folders_below_it()
+    {
+        // A dotfiles repository in the user profile would otherwise make every folder under the profile a repository,
+        // showing its branch and running git status over the whole profile on every refresh.
+        var profile = Path.Combine(_root, "home");
+        Directory.CreateDirectory(Path.Combine(profile, ".git"));
+        File.WriteAllText(Path.Combine(profile, ".git", "HEAD"), "ref: refs/heads/dotfiles\n");
+        var app = Path.Combine(profile, "code", "app");
+        Directory.CreateDirectory(app);
+        var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(string.Empty), profileDirectory: profile);
+
+        (await inspector.InspectAsync(app, CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
+        (await inspector.InspectAsync(profile, CancellationToken.None)).Branch.ShouldBe("dotfiles", "the profile folder itself is still that repository");
+    }
+
     [Theory]
     [InlineData("master\n", "master")]
     [InlineData("\n", "abc1234")]
