@@ -32,6 +32,7 @@ Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionSt
 | Persistence | A failed batch is retried on the next flush; once more than 5000 items are retained they are dropped with an error log | Bounded memory when the database stays unavailable |
 | Persistence | The newest 20,000 seen message ids are kept, pruned on the hourly cycle | `--resume` dedup across restarts at bounded size |
 | Persistence | Hook payload JSON is not stored unless `StorePayloads` is on | Transcripts and payloads contain source code and prompts (spec, Security) |
+| Persistence | Migrations run only when one is pending, and an EF Core migration lock row found before an upgrade is deleted as left over from a start that did not finish (L3 #6) | EF Core waits for that row without a timeout, so a leftover row hung every later start. Two instances upgrading at the same moment are not guarded against here; single-instance enforcement is L8 #11 |
 
 ## Deferred from PR #1
 
@@ -44,7 +45,7 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Telemetry time windows only recompute when new usage arrives (midnight and rolling windows go stale while idle) | L4 #7 |
 | `SubagentStop` mapping | L6 #9 |
 | Pruning of `settings.json` backups made by the hook installer | L6 #9 |
-| SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open, and no runtime reader shares one with it today (parked on #3) |
+| SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open. Every read of a table the writer uses happens once at startup (session restore, the indexer's cursors and seen message ids, the telemetry history), so at worst one startup read waits for one flush (parked on #3) |
 | Full rescans on every transcript change | L5 #8 |
 | Snap-back oscillation guard | L7 #10 |
 | Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
