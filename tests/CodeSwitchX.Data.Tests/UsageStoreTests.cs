@@ -85,6 +85,21 @@ public class UsageStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_commit_can_remember_more_message_ids_than_SQLite_allows_parameters_in_one_statement()
+    {
+        // SQLite allows at most 32,766 parameters per statement, and the first start over a large history remembers the
+        // ids of up to 500 whole transcripts in one commit.
+        var ids = Enumerable.Range(0, 40_000).Select(i => "msg_" + i).ToArray();
+
+        await _store.CommitAsync([], [], ids, TestContext.Current.CancellationToken);
+        await _store.CommitAsync([], [], [.. ids, "msg_new"], TestContext.Current.CancellationToken);
+
+        var seen = await _store.GetSeenMessageIdsAsync(50_000, TestContext.Current.CancellationToken);
+        seen.Count.ShouldBe(40_001, "the second commit only adds the id it had not seen");
+        seen[^1].ShouldBe("msg_new");
+    }
+
+    [Fact]
     public async Task Pruning_seen_message_ids_keeps_only_the_newest()
     {
         await _store.CommitAsync([], [], ["a", "b", "c"], TestContext.Current.CancellationToken);

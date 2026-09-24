@@ -139,7 +139,10 @@ public sealed class UsageStore : IUsageStore
         }
 
         var wanted = messageIds.Distinct(StringComparer.Ordinal).ToArray();
-        var known = (await db.SeenMessages.Where(m => wanted.Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+        // One JSON parameter: EF Core 10 sends a plain Contains list as one parameter per id, and a first start over a
+        // large history can pass more ids than SQLite's 32,766-parameter limit.
+        var known = (await db.SeenMessages.Where(m => EF.Parameter(wanted).Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct))
+            .ToHashSet(StringComparer.Ordinal);
         var next = (await db.SeenMessages.MaxAsync(m => (long?)m.Seq, ct) ?? 0) + 1;
         foreach (var id in wanted)
         {
