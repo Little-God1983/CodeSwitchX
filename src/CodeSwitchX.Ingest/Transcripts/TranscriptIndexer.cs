@@ -47,21 +47,12 @@ public sealed class TranscriptIndexer : BackgroundService
     }
 
     /// <summary>Claude Code writes sub-agent transcripts as <c>agent-*.jsonl</c> (in newer versions under a <c>subagents</c> folder).</summary>
-    internal static bool IsSubagentTranscript(string path)
-    {
-        var name = Path.GetFileName(path);
-        if (name.StartsWith("agent-", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        var directory = Path.GetDirectoryName(path) ?? string.Empty;
-        return directory.Split('\\', '/').Any(segment => string.Equals(segment, "subagents", StringComparison.OrdinalIgnoreCase));
-    }
+    internal static bool IsSubagentTranscript(string path) =>
+        Path.GetFileName(path).StartsWith("agent-", StringComparison.OrdinalIgnoreCase) || SessionFolder(path) is not null;
 
     /// <summary>
-    /// The session folder that holds a <c>subagents</c> folder (<c>&lt;project&gt;/&lt;session&gt;/subagents/...</c>), for a file
-    /// under it whose lines name no session, such as a workflow's <c>journal.jsonl</c>.
+    /// The session folder that holds a <c>subagents</c> folder (<c>&lt;project&gt;/&lt;session&gt;/subagents/...</c>), or null
+    /// when the path is not under one. It names the session of a file whose lines do not, such as a workflow's <c>journal.jsonl</c>.
     /// </summary>
     private static string? SessionFolder(string path)
     {
@@ -73,11 +64,23 @@ public sealed class TranscriptIndexer : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         StartWatcher();
+        var watcherStartedAt = _time.GetUtcNow();
         using var timer = new PeriodicTimer(_options.ScanInterval, _time);
         try
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
+                // A watcher can stop without an error (its folder renamed away and a new one created in its place), and after
+                // an error the loop polls: either way a fresh watcher and a full scan put it right.
+                if (_time.GetUtcNow() - watcherStartedAt >= _options.WatcherRefreshInterval)
+                {
+                    var stale = _watcher;
+                    StartWatcher();
+                    stale?.Dispose();
+                    watcherStartedAt = _time.GetUtcNow();
+                    _dirty = true;
+                }
+
                 // Without a running watcher, poll.
                 if (!_dirty && _watching)
                 {
@@ -191,6 +194,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 LastWriteUtc = cursor.LastWriteUtc,
                 SessionId = cursor.SessionId,
                 TitleFound = true,
+                LastCountedAt = cursor.LastWriteUtc,
             };
         }
 
@@ -274,7 +278,7 @@ public sealed class TranscriptIndexer : BackgroundService
         DateTimeOffset? lastActivity = null;
         TokenUsage? latestContext = null;
         var pendingToolUse = state.PendingToolUse;
-        var interrupted = false;
+        var interrupted = state.CarriedInterrupt;
         var newMessageIds = new List<string>();
 
         foreach (var raw in lines)
@@ -317,6 +321,10 @@ public sealed class TranscriptIndexer : BackgroundService
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
                         latestContext = tokens;
                         newMessageIds.Add(id);
+                        if (assistant.Timestamp is { } at && (state.LastCountedAt is null || at > state.LastCountedAt))
+                        {
+                            state.LastCountedAt = at;
+                        }
                     }
                     else if (assistant.Usage is { } sameMessage)
                     {
@@ -361,6 +369,7 @@ public sealed class TranscriptIndexer : BackgroundService
         }
 
         state.PendingToolUse = pendingToolUse;
+        state.CarriedInterrupt = partial && interrupted;
         if (newTitle is not null)
         {
             state.TitleFound = true;
@@ -368,8 +377,17 @@ public sealed class TranscriptIndexer : BackgroundService
 
         // The chat engine drops a historical update of a chat it does not show, title and all, so a title found while the
         // transcript was historical goes out again with its first live update.
-        var title = newTitle ?? (historical ? null : state.UndeliveredTitle);
-        state.UndeliveredTitle = historical ? title ?? state.UndeliveredTitle : null;
+        string? title;
+        if (historical)
+        {
+            state.UndeliveredTitle = newTitle ?? state.UndeliveredTitle;
+            title = newTitle;
+        }
+        else
+        {
+            title = newTitle ?? state.UndeliveredTitle;
+            state.UndeliveredTitle = null;
+        }
 
         var sessionId = state.SessionId ?? (subagent ? SessionFolder(path) : null) ?? Path.GetFileNameWithoutExtension(path);
         state.SessionId = sessionId;
@@ -436,8 +454,13 @@ public sealed class TranscriptIndexer : BackgroundService
             _watcher.Changed += (_, _) => _dirty = true;
             _watcher.Created += (_, _) => _dirty = true;
             _watcher.Renamed += (_, _) => _dirty = true;
-            _watcher.Error += (_, e) =>
+            _watcher.Error += (sender, e) =>
             {
+                if (!ReferenceEquals(sender, _watcher))
+                {
+                    return; // a watcher already replaced by a fresh one
+                }
+
                 var error = e.GetException();
                 if (error is InternalBufferOverflowException)
                 {
@@ -480,24 +503,31 @@ public sealed class TranscriptIndexer : BackgroundService
         public bool HasSummary { get; set; }
         public bool PendingToolUse { get; set; }
 
+        /// <summary>An interrupt that ended a pass cut short by the byte cap, reported with the pass that reaches the end.</summary>
+        public bool CarriedInterrupt { get; set; }
+
         /// <summary>The title found while the transcript was historical, until a live update carries it.</summary>
         public string? UndeliveredTitle { get; set; }
+
+        /// <summary>
+        /// The newest timestamp of usage counted from this file. After a restart, until the next count, the last write indexed
+        /// before it. Claude Code stamps an assistant message when it starts, so assistant lines are in stamp order.
+        /// </summary>
+        public DateTimeOffset? LastCountedAt { get; set; }
 
         /// <summary>After a rewrite: usage stamped at or before this was counted before it.</summary>
         public DateTimeOffset? CountedUntil { get; set; }
 
         /// <summary>
-        /// The file was rewritten: read it again from the start. Usage it held was counted up to the last write indexed, and is
-        /// not counted again even when the message id memory no longer holds its ids (it keeps only the newest).
+        /// The file was rewritten: read it again from the start. The usage it held is not counted again, even when the message
+        /// id memory no longer holds its ids (it keeps only the newest). Its title was already found and is not sent again.
         /// </summary>
         public void Reset()
         {
             Offset = 0;
-            TitleFound = false;
-            HasSummary = false;
             PendingToolUse = false;
-            UndeliveredTitle = null;
-            CountedUntil = LastWriteUtc;
+            CarriedInterrupt = false;
+            CountedUntil = LastCountedAt;
         }
     }
 

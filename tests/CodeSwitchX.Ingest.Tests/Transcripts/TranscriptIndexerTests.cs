@@ -138,19 +138,24 @@ public class TranscriptIndexerTests : IDisposable
         _updates.ShouldHaveSingleItem().Usage.Count.ShouldBe(1);
     }
 
+    private static string AiTitle(string session, string title) => $$$"""{"type":"ai-title","aiTitle":"{{{title}}}","sessionId":"{{{session}}}"}""";
+
     [Fact]
-    public async Task Truncated_file_restarts_from_zero_without_throwing()
+    public async Task A_rewritten_file_is_read_again_from_zero_without_sending_its_title_again()
     {
         var path = Transcript("s1");
-        File.WriteAllLines(path, [User("s1", "one"), User("s1", "two"), User("s1", "three")]);
+        File.WriteAllLines(path, [User("s1", "go"), AiTitle("s1", "Generated title"), User("s1", "two"), User("s1", "three")]);
         await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Generated title");
         _updates.Clear();
 
-        File.WriteAllLines(path, [User("s1", "fresh")]);
+        // Shorter than the stored offset, so it is read again from the start. A re-read split by the byte cap would carry
+        // the first prompt alone and rename the chat after it.
+        File.WriteAllLines(path, [User("s1", "go")]);
 
         await Should.NotThrowAsync(() => _indexer.ScanAsync(CancellationToken.None));
 
-        _updates.ShouldHaveSingleItem().Title.ShouldBe("fresh");
+        _updates.ShouldHaveSingleItem().Title.ShouldBeNull("the chat keeps the title it was given");
     }
 
     [Fact]
@@ -456,6 +461,63 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rewrite_counts_usage_stamped_before_the_last_indexed_write_that_was_not_read_yet()
+    {
+        // Claude Code stamps an assistant line when its message starts, which can be seconds before the line above it
+        // was written.
+        var path = Transcript("s1");
+        File.WriteAllText(path, User("s1", "go") + "\n" + Assistant("s1", "m1", TextBlock, ts: "2026-09-23T10:00:01.000Z") + "\n" + LastPrompt("s1") + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 10, DateTimeKind.Utc));
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        // m1 is retracted, and the retry, stamped before the last indexed write, is written.
+        var retry = Assistant("s1", "m2", ToolBlock, ts: "2026-09-23T10:00:05.000Z");
+        File.WriteAllText(path, User("s1", "go") + "\n" + LastPrompt("s1") + "\n" + retry + "\n");
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 9, 23, 10, 0, 12, DateTimeKind.Utc));
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.SelectMany(u => u.Usage).ShouldHaveSingleItem().At.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task After_a_restart_a_rewrite_does_not_count_the_usage_before_the_stored_cursor_again()
+    {
+        var path = Transcript("s1");
+        string[] lines =
+        [
+            Assistant("s1", "m1", TextBlock, ts: "2026-09-23T10:00:01.000Z"),
+            Assistant("s1", "m2", TextBlock, ts: "2026-09-23T10:00:02.000Z"),
+            Assistant("s1", "m3", TextBlock, ts: "2026-09-23T10:00:03.000Z"),
+        ];
+        File.WriteAllText(path, string.Join('\n', lines) + "\n");
+        // The cursor covers the whole file, and the store no longer remembers its message ids.
+        _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
+        [
+            new TranscriptCursor { Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = new DateTimeOffset(2026, 9, 23, 10, 0, 4, TimeSpan.Zero), SessionId = "s1" },
+        ]));
+
+        File.WriteAllText(path, lines[0] + "\n" + lines[1] + "\n");
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.SelectMany(u => u.Usage).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_interrupt_that_ends_the_first_part_of_a_split_catch_up_is_reported_with_the_last()
+    {
+        string[] lines = [User("s1", "go"), Assistant("s1", "m1", ToolBlock), Interrupt("s1"), LastPrompt("s1")];
+        File.WriteAllText(Transcript("s1"), string.Join('\n', lines) + "\n");
+        var options = new TranscriptIndexerOptions { MaxBytesPerPass = Encoding.UTF8.GetByteCount(string.Join('\n', lines[..3]) + "\n") + 1 };
+        using var capped = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, options);
+
+        await capped.ScanAsync(CancellationToken.None);
+        await capped.ScanAsync(CancellationToken.None);
+
+        _updates.Select(u => u.Interrupted).ShouldBe([false, true]);
+    }
+
+    [Fact]
     public async Task A_workflow_journal_belongs_to_the_session_that_holds_it_not_to_a_chat_of_its_own()
     {
         // Claude Code keeps a workflow's journal under the session's subagents folder; its lines carry no sessionId.
@@ -472,6 +534,37 @@ public class TranscriptIndexerTests : IDisposable
     public async Task Indexing_goes_on_after_the_transcript_folder_is_deleted_and_created_again()
     {
         var ct = TestContext.Current.CancellationToken;
+        // No fresh watcher within the test, so only the watcher's error can bring the scans back.
+        using var indexer = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance,
+            new TranscriptIndexerOptions { WatcherRefreshInterval = TimeSpan.FromDays(1) });
+        var seen = new ConcurrentQueue<TranscriptUpdate>();
+        using var subscription = _bus.Subscribe<TranscriptUpdated>(m => seen.Enqueue(m.Update));
+        File.WriteAllLines(Transcript("before"), [User("before", "Fix")]);
+        await indexer.StartAsync(ct);
+        try
+        {
+            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
+            seen.ShouldContain(u => u.SessionId == "before", "the loop and its folder watcher are running");
+
+            // Deleting the folder ends the watcher for good. Its error still triggers one scan, which finds no folder.
+            Directory.Delete(_claude.ProjectsDirectory, recursive: true);
+            await TickAsync(TimeSpan.FromSeconds(1), ct);
+            Directory.CreateDirectory(_projectDir);
+            File.WriteAllLines(Transcript("after"), [User("after", "Fix")]);
+            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
+
+            seen.ShouldContain(u => u.SessionId == "after");
+        }
+        finally
+        {
+            await indexer.StopAsync(ct);
+        }
+    }
+
+    [Fact]
+    public async Task Indexing_goes_on_after_the_transcript_folder_is_renamed_away_and_a_new_one_created()
+    {
+        var ct = TestContext.Current.CancellationToken;
         var seen = new ConcurrentQueue<TranscriptUpdate>();
         using var subscription = _bus.Subscribe<TranscriptUpdated>(m => seen.Enqueue(m.Update));
         File.WriteAllLines(Transcript("before"), [User("before", "Fix")]);
@@ -481,9 +574,8 @@ public class TranscriptIndexerTests : IDisposable
             await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
             seen.ShouldContain(u => u.SessionId == "before", "the loop and its folder watcher are running");
 
-            // Deleting the folder ends the watcher for good. Its error still triggers one scan, which finds no folder.
-            Directory.Delete(_claude.ProjectsDirectory, recursive: true);
-            await TickAsync(TimeSpan.FromSeconds(1), ct);
+            // The watcher moves with the renamed folder and reports no error, so it never sees the new one.
+            Directory.Move(_claude.ProjectsDirectory, _claude.ProjectsDirectory + "-old");
             Directory.CreateDirectory(_projectDir);
             File.WriteAllLines(Transcript("after"), [User("after", "Fix")]);
             await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));

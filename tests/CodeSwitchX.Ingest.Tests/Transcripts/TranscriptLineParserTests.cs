@@ -97,11 +97,15 @@ public class TranscriptLineParserTests
     }
 
     [Fact]
-    public void A_line_holding_half_an_emoji_is_skipped_instead_of_throwing()
+    public void Text_holding_half_an_emoji_is_dropped_and_the_rest_of_the_line_kept()
     {
         // JSON.stringify writes half of a surrogate pair (a string cut inside an emoji) as an escape. That is valid JSON,
         // but .NET cannot read it as a string.
-        TranscriptLineParser.TryParse("""{"type":"user","message":{"role":"user","content":"abc\ud83d"}}""").ShouldBeNull();
+        var parsed = TranscriptLineParser.TryParse("""{"type":"user","sessionId":"s1","message":{"role":"user","content":"abc\ud83d"}}""")
+            .ShouldBeOfType<UserLine>();
+
+        parsed.Text.ShouldBeNull();
+        parsed.SessionId.ShouldBe("s1");
     }
 
     [Theory]

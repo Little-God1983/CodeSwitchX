@@ -30,68 +30,55 @@ public static class TranscriptLineParser
 
         using (document)
         {
-            try
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
             {
-                return Read(document.RootElement);
-            }
-            catch (InvalidOperationException)
-            {
-                // Valid JSON that is not valid text: JSON.stringify writes half of a surrogate pair (a string cut inside an
-                // emoji) as an escape, and JsonElement.GetString throws on it. Skipped like any other corrupt line.
                 return null;
             }
-        }
-    }
 
-    private static TranscriptLine? Read(JsonElement root)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
+            var type = GetString(root, "type") ?? string.Empty;
+            var timestamp = GetString(root, "timestamp") is { } ts && DateTimeOffset.TryParse(ts, null, DateTimeStyles.AssumeUniversal, out var parsed)
+                ? parsed.ToUniversalTime()
+                : (DateTimeOffset?)null;
+            var sessionId = GetString(root, "sessionId");
+            var cwd = GetString(root, "cwd");
+            root.TryGetProperty("message", out var message);
 
-        var type = GetString(root, "type") ?? string.Empty;
-        var timestamp = GetString(root, "timestamp") is { } ts && DateTimeOffset.TryParse(ts, null, DateTimeStyles.AssumeUniversal, out var parsed)
-            ? parsed.ToUniversalTime()
-            : (DateTimeOffset?)null;
-        var sessionId = GetString(root, "sessionId");
-        var cwd = GetString(root, "cwd");
-        root.TryGetProperty("message", out var message);
-
-        switch (type)
-        {
-            case "assistant":
+            switch (type)
             {
-                var usage = ParseUsage(message);
-                var hasToolUse = message.ValueKind == JsonValueKind.Object
-                    && message.TryGetProperty("content", out var content)
-                    && content.ValueKind == JsonValueKind.Array
-                    && content.EnumerateArray().Any(b => GetString(b, "type") == "tool_use");
-                return new AssistantLine(type, timestamp, sessionId, cwd, GetString(message, "id"), GetString(message, "model"), usage, hasToolUse);
-            }
-
-            case "user":
-            {
-                var isMeta = root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True;
-                var (text, isToolResult) = ExtractUserText(message);
-                var isInterrupt = text is not null && text.StartsWith(InterruptPrefix, StringComparison.Ordinal);
-                if (isInterrupt || (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal))))
+                case "assistant":
                 {
-                    isMeta = true;
+                    var usage = ParseUsage(message);
+                    var hasToolUse = message.ValueKind == JsonValueKind.Object
+                        && message.TryGetProperty("content", out var content)
+                        && content.ValueKind == JsonValueKind.Array
+                        && content.EnumerateArray().Any(b => GetString(b, "type") == "tool_use");
+                    return new AssistantLine(type, timestamp, sessionId, cwd, GetString(message, "id"), GetString(message, "model"), usage, hasToolUse);
                 }
 
-                return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
+                case "user":
+                {
+                    var isMeta = root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True;
+                    var (text, isToolResult) = ExtractUserText(message);
+                    var isInterrupt = text is not null && text.StartsWith(InterruptPrefix, StringComparison.Ordinal);
+                    if (isInterrupt || (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal))))
+                    {
+                        isMeta = true;
+                    }
+
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
+                }
+
+                // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
+                case "summary":
+                case "ai-title":
+                    return GetString(root, type == "summary" ? "summary" : "aiTitle") is { Length: > 0 } title
+                        ? new SummaryLine(type, timestamp, sessionId, cwd, title)
+                        : new OtherLine(type, timestamp, sessionId, cwd);
+
+                default:
+                    return new OtherLine(type, timestamp, sessionId, cwd);
             }
-
-            // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
-            case "summary":
-            case "ai-title":
-                return GetString(root, type == "summary" ? "summary" : "aiTitle") is { Length: > 0 } title
-                    ? new SummaryLine(type, timestamp, sessionId, cwd, title)
-                    : new OtherLine(type, timestamp, sessionId, cwd);
-
-            default:
-                return new OtherLine(type, timestamp, sessionId, cwd);
         }
     }
 
@@ -118,7 +105,7 @@ public static class TranscriptLineParser
 
         if (content.ValueKind == JsonValueKind.String)
         {
-            return (content.GetString(), false);
+            return (ReadString(content), false);
         }
 
         if (content.ValueKind != JsonValueKind.Array)
@@ -143,9 +130,28 @@ public static class TranscriptLineParser
     }
 
     private static string? GetString(JsonElement element, string name) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? ReadString(value) : null;
+
+    /// <summary>
+    /// Null for anything but a string, and for text .NET cannot hold: JSON.stringify writes half of a surrogate pair (a string
+    /// cut inside an emoji) as an escape, which is valid JSON, and <see cref="JsonElement.GetString"/> throws on it.
+    /// </summary>
+    private static string? ReadString(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.GetString();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
 
     private static long GetLong(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var l) ? l : 0;
