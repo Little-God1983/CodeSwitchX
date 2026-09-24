@@ -40,7 +40,6 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        await _settings.EnsurePricingDefaultsAsync(DefaultPricing.Rules.ToArray(), cancellationToken).ConfigureAwait(false);
         await ReloadPricingAsync(cancellationToken, publish: false).ConfigureAwait(false);
 
         var now = _time.GetUtcNow();
@@ -72,6 +71,7 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
 
     private async Task ReloadPricingAsync(CancellationToken ct, bool publish)
     {
+        // The database holds only the user's own rules, each overriding the shipped default for its model.
         var rules = await _settings.GetPricingAsync(ct).ConfigureAwait(false);
         Pricing = new PricingTable(DefaultPricing.Rules.Concat(rules));
         _aggregator = new UsageAggregator(Pricing);

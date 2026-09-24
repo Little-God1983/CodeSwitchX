@@ -34,6 +34,7 @@ Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionSt
 | Persistence | Hook payload JSON is not stored unless `StorePayloads` is on | Transcripts and payloads contain source code and prompts (spec, Security) |
 | Persistence | Migrations run only when one is pending; an up-to-date database gets EF Core's pending-model-changes check on its own. Before an upgrade, an EF Core migration lock row that is still there after 10 s is deleted as left over from a start that did not finish (L3 #6) | EF Core waits for that row without a timeout, so a leftover row hung every later start. A second instance that is upgrading holds the row only while its migration runs, well inside the 10 s |
 | Persistence | `SessionStore.UpsertAsync` keeps a stored rename when the incoming record is not locked (L3 #6) | Nothing unlocks a title (`SessionEngine.Rename` only locks), so an unlocked record for a renamed chat is a fresh snapshot. A feature that resets a title to automatic has to change this merge as well |
+| Telemetry | The shipped prices stay in code (`DefaultPricing`); the `PricingRules` table holds only the user's own rules, each overriding the default for its model (L4 #7) | A stored copy of a default would override its later correction, so a fixed price would never reach an existing install |
 
 ## Deferred from PR #1
 
@@ -43,7 +44,7 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Item | Layer |
 |---|---|
 | A reused PID held by an ordinary live process is not detected (needs the process start time stored next to `ClaudePid`) | L2 #5: fixed, the start time is compared with the chat's last event instead |
-| Telemetry time windows only recompute when new usage arrives (midnight and rolling windows go stale while idle) | L4 #7 |
+| Telemetry time windows only recompute when new usage arrives (midnight and rolling windows go stale while idle) | L4 #7: already fixed in PR #1, a one-minute refresh timer (`TelemetryService.RefreshInterval`) rolls the windows forward; covered by `Time_windows_roll_forward_on_the_minute_timer_while_nothing_is_indexed` |
 | `SubagentStop` mapping | L6 #9 |
 | Pruning of `settings.json` backups made by the hook installer | L6 #9 |
 | SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open. Every read of a table the writer uses happens once at startup (session restore, the indexer's cursors and seen message ids, the telemetry history), so at worst one startup read waits for one flush (parked on #3) |
@@ -61,6 +62,7 @@ Assessed in that layer's review like the items above.
 |---|---|---|
 | A chat not restored at startup (quiet for longer than the 24 h restore window) that becomes active again gets a fresh snapshot, and `SessionStore.UpsertAsync` overwrites the stored row with it: a renamed title, `TitleLocked` and `StartedAt` are lost | L3 #6: fixed, the upsert keeps the earlier start, a stored rename and a stored title the snapshot lacks | L2 #5 |
 | Such a chat still shows the fresh snapshot's title (or none) instead of its stored rename until the next restart restores the row; the restore window is decided in `StartupCoordinator` | L8 #11 | L3 #6 |
+| Nothing clears .NET's cached local time zone, so when Windows switches time zone while the app runs, "Today" keeps resetting at the old zone's midnight until the next restart. `TelemetryService` reads the zone on every minute tick; the cache is cleared in `App` | L8 #11 | L4 #7 |
 
 ## Tracked elsewhere
 
@@ -70,3 +72,4 @@ behaviour rather than a defect in that layer. Not a finding in later reviews.
 | Item | Issue | Found in |
 |---|---|---|
 | Git worktrees added after a workspace was registered are not detected | #14 | L1 #4 |
+| Cache writes to the 1-hour cache are priced at the 5-minute rate (1.25x input instead of 2x); whether Claude Code writes to that cache is checked there | #18 | L4 #7 |
