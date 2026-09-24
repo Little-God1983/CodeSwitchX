@@ -117,6 +117,12 @@ public sealed class SessionEngine : IDisposable
             {
                 state = next;
             }
+            else if (state == SessionState.Working && e.EventName == "Notification" && e.NotificationType == "idle_prompt")
+            {
+                // idle_prompt only fires once a turn has finished, so a Working chat missed its Stop (lost to the relay's
+                // timeout, or the turn ended on an API error). Nothing else would take the chat out of Working.
+                state = SessionState.Idle;
+            }
             else if (e.Signal is null)
             {
                 _logger.LogInformation("Unknown hook event {EventName} for session {SessionId}", e.EventName, e.SessionId);

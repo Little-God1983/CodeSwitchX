@@ -477,6 +477,20 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void An_idle_prompt_notification_ends_a_turn_whose_stop_hook_never_arrived()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "fix the build"));
+        _time.Advance(TimeSpan.FromMinutes(3));
+
+        // The turn ended without a Stop (lost to the relay timeout, or an API error); claude reports its idle prompt 60 s later.
+        _engine.Apply(Hook("Notification", null) with { NotificationType = "idle_prompt" });
+
+        var snapshot = _engine.Get("s1")!;
+        snapshot.State.ShouldBe(SessionState.Idle, "idle_prompt only fires once a turn has finished");
+        snapshot.StateSince.ShouldBe(_time.GetUtcNow());
+    }
+
+    [Fact]
     public void Repeated_transcript_writes_do_not_restart_the_working_timer_without_hooks()
     {
         var started = _time.GetUtcNow();
