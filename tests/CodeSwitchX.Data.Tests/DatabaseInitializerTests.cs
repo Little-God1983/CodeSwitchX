@@ -54,6 +54,18 @@ public class DatabaseInitializerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_upgrade_removes_the_default_prices_that_earlier_starts_copied_into_the_database()
+    {
+        await MigrateToAsync("20260923223337_SeenMessages");
+        await ExecuteAsync("""INSERT INTO "PricingRules" ("Model", "InputPerM", "OutputPerM", "CacheWritePerM", "CacheReadPerM", "ContextWindow") VALUES ('claude-sonnet-5', 3, 15, 3.75, 0.3, 200000);""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        // A stored rule overrides the shipped one for its model, and nothing has written a rule of the user's own yet.
+        (await ExecuteAsync("""SELECT COUNT(*) FROM "PricingRules";""")).ShouldBe(0L);
+    }
+
+    [Fact]
     public async Task A_start_fails_when_the_model_has_changes_without_a_migration()
     {
         await _db.InitializeAsync();
@@ -79,10 +91,12 @@ public class DatabaseInitializerTests : IAsyncLifetime
     private async Task<CodeSwitchXDbContext> CreateContextAsync() =>
         await _db.Get<IDbContextFactory<CodeSwitchXDbContext>>().CreateDbContextAsync(TestContext.Current.CancellationToken);
 
-    private async Task MigrateToInitialCreateAsync()
+    private Task MigrateToInitialCreateAsync() => MigrateToAsync("20260923184305_InitialCreate");
+
+    private async Task MigrateToAsync(string migration)
     {
         await using var db = await CreateContextAsync();
-        await db.GetService<IMigrator>().MigrateAsync("20260923184305_InitialCreate", TestContext.Current.CancellationToken);
+        await db.GetService<IMigrator>().MigrateAsync(migration, TestContext.Current.CancellationToken);
     }
 
     /// <summary>The row EF Core's SQLite migration lock holds while it migrates; a start killed in between leaves it behind.</summary>

@@ -27,17 +27,26 @@ public class TelemetryServiceTests
     private TelemetryService Service() => new(_usage, _settings, _bus, _time, NullLogger<TelemetryService>.Instance);
 
     [Fact]
-    public async Task Start_seeds_pricing_defaults_and_loads_recent_buckets()
+    public async Task Start_loads_recent_buckets()
     {
         var service = Service();
 
         await service.StartAsync(CancellationToken.None);
 
-        await _settings.Received(1).EnsurePricingDefaultsAsync(Arg.Is<IReadOnlyCollection<PricingRule>>(r => r.Count == DefaultPricing.Rules.Count), Arg.Any<CancellationToken>());
         await _usage.Received(1).GetBucketsAsync(_time.GetUtcNow().AddDays(-7), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
         service.Current.Today.Tokens.Input.ShouldBe(1_000_000);
         service.Current.Today.Cost.ShouldBe(2m);
         service.Current.FiveHours.Tokens.Input.ShouldBe(1_000_000);
+    }
+
+    [Fact]
+    public async Task Start_does_not_copy_the_shipped_prices_into_the_database()
+    {
+        await Service().StartAsync(CancellationToken.None);
+
+        // A stored rule overrides the default for its model, so a stored copy of a default would outlive its correction.
+        await _settings.DidNotReceive().EnsurePricingDefaultsAsync(Arg.Any<IReadOnlyCollection<PricingRule>>(), Arg.Any<CancellationToken>());
+        await _settings.DidNotReceive().UpsertPricingAsync(Arg.Any<IReadOnlyCollection<PricingRule>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -90,6 +99,21 @@ public class TelemetryServiceTests
         service.Current.FiveHours.Tokens.Input.ShouldBe(0, "the burst six hours ago has left the 5-hour window");
         service.Current.RatePerMinute[^1].ShouldBe(0);
         published.ShouldBeGreaterThan(0);
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Today_follows_a_time_zone_change_on_the_next_minute_tick()
+    {
+        var service = Service();
+        await service.StartAsync(CancellationToken.None);
+        service.Current.Today.Tokens.Input.ShouldBe(1_000_000);
+
+        // 12:30 UTC is already 00:30 tomorrow at UTC+12, so the burst at 11:30 UTC belongs to yesterday there.
+        _time.SetLocalTimeZone(TimeZoneInfo.CreateCustomTimeZone("UTC+12", TimeSpan.FromHours(12), "UTC+12", "UTC+12"));
+        _time.Advance(TelemetryService.RefreshInterval);
+
+        service.Current.Today.Tokens.Input.ShouldBe(0);
         await service.StopAsync(CancellationToken.None);
     }
 }
