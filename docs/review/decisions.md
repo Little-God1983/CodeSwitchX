@@ -25,6 +25,8 @@ Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionSt
 | Sessions | `SystemProcessProbe` treats a process it may not query (`Win32Exception`) as alive | The PID exists; being unable to read it is not proof of death |
 | Sessions | `Restore` demotes only quiet Working sessions; Waiting is kept, and Waiting never decays on the idle timer | A chat blocked on a permission prompt is quiet but still needs the user |
 | Sessions | A restored session whose saved `claude` PID is gone drops to Idle and forgets the PID | A dead PID must never be judged again after it is reused |
+| Sessions | `Restore` changes the snapshots in memory only; the stored row keeps its old state and PID until the chat's next change (L2 #5) | The only reader is the next restore, which judges the same PID against the same last event and reaches the same result |
+| Sessions | A PID counts as the chat's process only if that process started no later than the chat's last event (L2 #5) | Hooks are timestamped on receipt while claude waits for them, so the chat's own process always started earlier; no start time needs storing |
 | Sessions | `SessionEngine` publishes snapshots under its lock with a monotonic `Version`; the bus is synchronous and consumers drop older versions | Keeps delivery in engine order across threads |
 | Persistence | The transcript indexer never writes cursors; `PersistenceWriter` commits usage, cursors and seen message ids in one transaction | Usage and the offset that covers it must not diverge after a crash |
 | Persistence | A failed batch is retried on the next flush; once more than 5000 items are retained they are dropped with an error log | Bounded memory when the database stays unavailable |
@@ -38,7 +40,7 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 
 | Item | Layer |
 |---|---|
-| A reused PID held by an ordinary live process is not detected (needs the process start time stored next to `ClaudePid`) | L2 #5 |
+| A reused PID held by an ordinary live process is not detected (needs the process start time stored next to `ClaudePid`) | L2 #5: fixed, the start time is compared with the chat's last event instead |
 | Telemetry time windows only recompute when new usage arrives (midnight and rolling windows go stale while idle) | L4 #7 |
 | `SubagentStop` mapping | L6 #9 |
 | Pruning of `settings.json` backups made by the hook installer | L6 #9 |
@@ -47,6 +49,15 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Snap-back oscillation guard | L7 #10 |
 | Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
 | Single-instance enforcement | L8 #11 |
+
+## Deferred from layer reviews
+
+Confirmed in one layer's review, but the fix belongs to a layer that has not been reviewed yet.
+Assessed in that layer's review like the items above.
+
+| Item | Layer | Found in |
+|---|---|---|
+| A chat not restored at startup (quiet for longer than the 24 h restore window) that becomes active again gets a fresh snapshot, and `SessionStore.UpsertAsync` overwrites the stored row with it: a renamed title, `TitleLocked` and `StartedAt` are lost | L3 #6 | L2 #5 |
 
 ## Tracked elsewhere
 

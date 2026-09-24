@@ -50,7 +50,8 @@ public sealed class ProcessLivenessMonitor : BackgroundService
             bool alive;
             try
             {
-                alive = _probe.IsAlive(pid);
+                // The chat's claude was running at the chat's last event, so a process that started later on this PID is not it.
+                alive = _probe.IsAlive(pid, snapshot.LastEventAt);
             }
             catch (Exception ex)
             {

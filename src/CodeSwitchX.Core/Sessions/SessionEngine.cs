@@ -63,7 +63,8 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// Loads persisted snapshots without publishing. Hook evidence does not survive a restart (<see cref="SessionSnapshot.HookSeen"/>
     /// resets). A saved claude PID is checked once: if that process is gone the chat's turn ended while the app was down,
-    /// so it comes back Idle rather than as a red Errored row, and the PID is forgotten so a reused PID is never judged.
+    /// so it comes back Idle rather than as a red Errored row, and the PID is forgotten. A process that started after the
+    /// chat's last event holds a reused PID and counts as gone.
     /// A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
     /// hook most likely fired while the app was down. Waiting sessions with a live process are left alone: a permission
     /// prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
@@ -76,7 +77,7 @@ public sealed class SessionEngine : IDisposable
             foreach (var snapshot in persisted)
             {
                 var restored = snapshot with { HookSeen = false };
-                if (restored.ClaudePid is { } pid && !ProcessStillRuns(pid))
+                if (restored.ClaudePid is { } pid && !ProcessStillRuns(pid, restored.LastEventAt))
                 {
                     restored = restored with { ClaudePid = null };
                     if (restored.State is SessionState.Working or SessionState.Waiting or SessionState.Starting)
@@ -279,7 +280,7 @@ public sealed class SessionEngine : IDisposable
         _subscriptions.Clear();
     }
 
-    private bool ProcessStillRuns(int pid)
+    private bool ProcessStillRuns(int pid, DateTimeOffset seenAt)
     {
         if (_probe is null)
         {
@@ -288,7 +289,7 @@ public sealed class SessionEngine : IDisposable
 
         try
         {
-            return _probe.IsAlive(pid);
+            return _probe.IsAlive(pid, seenAt);
         }
         catch (Exception ex)
         {

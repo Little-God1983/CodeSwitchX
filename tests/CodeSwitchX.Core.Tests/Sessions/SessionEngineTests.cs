@@ -446,16 +446,11 @@ public class SessionEngineTests
         _engine.Get("s1")!.Model.ShouldBe("claude-opus-5", "a sub-agent's usage names the sub-agent's model; the context bar is measured against the parent's");
     }
 
-    private sealed class DeadPidProbe(params int[] dead) : IProcessProbe
-    {
-        public bool IsAlive(int pid) => !dead.Contains(pid);
-    }
-
     [Fact]
     public void Restore_checks_saved_claude_pids_and_drops_sessions_whose_process_is_gone_to_idle()
     {
-        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new DeadPidProbe(77));
         var old = _time.GetUtcNow().AddMinutes(-3);
+        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new FakeProcessProbe().Run(88, old.AddHours(-1)));
         engine.Restore(
         [
             new SessionSnapshot { SessionId = "gone", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 77 },
@@ -466,6 +461,19 @@ public class SessionEngineTests
         engine.Get("gone")!.ClaudePid.ShouldBeNull("a dead PID must not be matched against whatever process reuses it");
         engine.Get("alive")!.State.ShouldBe(SessionState.Waiting);
         engine.Get("alive")!.ClaudePid.ShouldBe(88);
+    }
+
+    [Fact]
+    public void Restore_treats_a_saved_pid_that_now_belongs_to_a_newer_process_as_gone()
+    {
+        var lastSeen = _time.GetUtcNow().AddHours(-3);
+        var reusedAt = _time.GetUtcNow().AddMinutes(-1);
+        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new FakeProcessProbe().Run(77, reusedAt));
+
+        engine.Restore([new SessionSnapshot { SessionId = "prompt", State = SessionState.Waiting, StartedAt = lastSeen, LastEventAt = lastSeen, StateSince = lastSeen, ClaudePid = 77 }]);
+
+        engine.Get("prompt")!.State.ShouldBe(SessionState.Idle, "PID 77 now belongs to a process that started after the chat's last event, so its claude is gone");
+        engine.Get("prompt")!.ClaudePid.ShouldBeNull();
     }
 
     [Fact]
