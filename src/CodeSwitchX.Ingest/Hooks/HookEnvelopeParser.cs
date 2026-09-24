@@ -10,9 +10,9 @@ namespace CodeSwitchX.Ingest.Hooks;
 public static class HookEnvelopeParser
 {
     /// <summary>
-    /// Notification types that mean Claude is blocked on the user. Everything else (auth_success, idle_prompt, which
-    /// fires 60 s after a finished turn, and unknown future types) is informational: treating it as Waiting would turn
-    /// every finished chat amber a minute later. A missing type (older Claude Code) still counts as Waiting.
+    /// Notification types that mean Claude is blocked on the user. idle_prompt, which fires 60 s after a finished turn,
+    /// has its own signal; everything else (auth_success, unknown future types) is informational. Treating either as
+    /// Waiting would turn every finished chat amber a minute later. A missing type (older Claude Code) still counts as Waiting.
     /// </summary>
     private static readonly HashSet<string> NeedsUserNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -123,6 +123,7 @@ public static class HookEnvelopeParser
         "PreToolUse" or "PostToolUse" => SessionSignal.ToolUse,
         "PermissionRequest" => SessionSignal.Notification,
         "Notification" when notificationType is null || NeedsUserNotifications.Contains(notificationType) => SessionSignal.Notification,
+        "Notification" when string.Equals(notificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase) => SessionSignal.IdlePrompt,
         "Stop" => SessionSignal.Stop,
         "SessionEnd" => SessionSignal.SessionEnd,
         _ => null,

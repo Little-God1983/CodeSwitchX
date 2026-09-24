@@ -5,12 +5,13 @@ namespace CodeSwitchX.Core.Sessions;
 
 public sealed class SystemProcessProbe : IProcessProbe
 {
-    public bool IsAlive(int pid)
+    public bool IsAlive(int pid, DateTimeOffset seenAt)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
-            return !process.HasExited;
+            // StartTime is local time; ToUniversalTime keeps the DST flag FromFileTime set, so the fall-back hour converts right.
+            return !process.HasExited && process.StartTime.ToUniversalTime() <= seenAt.UtcDateTime;
         }
         catch (ArgumentException)
         {

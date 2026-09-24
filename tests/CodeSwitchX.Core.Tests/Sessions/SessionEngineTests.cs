@@ -446,16 +446,11 @@ public class SessionEngineTests
         _engine.Get("s1")!.Model.ShouldBe("claude-opus-5", "a sub-agent's usage names the sub-agent's model; the context bar is measured against the parent's");
     }
 
-    private sealed class DeadPidProbe(params int[] dead) : IProcessProbe
-    {
-        public bool IsAlive(int pid) => !dead.Contains(pid);
-    }
-
     [Fact]
     public void Restore_checks_saved_claude_pids_and_drops_sessions_whose_process_is_gone_to_idle()
     {
-        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new DeadPidProbe(77));
         var old = _time.GetUtcNow().AddMinutes(-3);
+        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new FakeProcessProbe().Run(88, old.AddHours(-1)));
         engine.Restore(
         [
             new SessionSnapshot { SessionId = "gone", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 77 },
@@ -467,6 +462,60 @@ public class SessionEngineTests
         engine.Get("alive")!.State.ShouldBe(SessionState.Waiting);
         engine.Get("alive")!.ClaudePid.ShouldBe(88);
     }
+
+    [Fact]
+    public void Restore_treats_a_saved_pid_that_now_belongs_to_a_newer_process_as_gone()
+    {
+        var lastSeen = _time.GetUtcNow().AddHours(-3);
+        var reusedAt = _time.GetUtcNow().AddMinutes(-1);
+        using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new FakeProcessProbe().Run(77, reusedAt));
+
+        engine.Restore([new SessionSnapshot { SessionId = "prompt", State = SessionState.Waiting, StartedAt = lastSeen, LastEventAt = lastSeen, StateSince = lastSeen, ClaudePid = 77 }]);
+
+        engine.Get("prompt")!.State.ShouldBe(SessionState.Idle, "PID 77 now belongs to a process that started after the chat's last event, so its claude is gone");
+        engine.Get("prompt")!.ClaudePid.ShouldBeNull();
+    }
+
+    [Fact]
+    public void An_idle_prompt_notification_ends_a_turn_whose_stop_hook_never_arrived()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "fix the build"));
+        _time.Advance(TimeSpan.FromMinutes(3));
+
+        // The turn ended without a Stop (lost to the relay timeout, or an API error); claude reports its idle prompt 60 s later.
+        _engine.Apply(IdlePrompt());
+
+        var snapshot = _engine.Get("s1")!;
+        snapshot.State.ShouldBe(SessionState.Idle, "idle_prompt only fires once a turn has finished");
+        snapshot.StateSince.ShouldBe(_time.GetUtcNow());
+    }
+
+    [Fact]
+    public void An_idle_prompt_notification_also_ends_a_permission_prompt_whose_turn_finished_without_a_stop()
+    {
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "permission_prompt" });
+        _time.Advance(TimeSpan.FromMinutes(3));
+
+        _engine.Apply(IdlePrompt());
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "no permission prompt is open while claude reports an idle input prompt");
+    }
+
+    [Fact]
+    public void An_idle_prompt_that_lands_just_after_the_next_prompt_does_not_end_that_new_turn()
+    {
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        _time.Advance(TimeSpan.FromSeconds(60));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "one more thing"));
+
+        // Fired at the 60 s mark, but its relay landed after the prompt's.
+        _time.Advance(TimeSpan.FromMilliseconds(500));
+        _engine.Apply(IdlePrompt());
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the notice describes the quiet before the new prompt");
+    }
+
+    private HookEvent IdlePrompt() => Hook("Notification", SessionSignal.IdlePrompt) with { NotificationType = "idle_prompt" };
 
     [Fact]
     public void Repeated_transcript_writes_do_not_restart_the_working_timer_without_hooks()
