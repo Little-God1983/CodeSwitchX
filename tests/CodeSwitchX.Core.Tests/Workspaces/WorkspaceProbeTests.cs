@@ -74,4 +74,14 @@ public class WorkspaceProbeTests : IDisposable
 
         list.ShouldBe([new WorktreeInfo(@"C:\repo\app-a", "a"), new WorktreeInfo(@"C:\repo\app-b", null)], "worktree paths keep gits casing; only the main-root comparison is case-insensitive");
     }
+
+    [Fact]
+    public void ParseWorktreeList_finds_no_worktrees_for_a_subfolder_of_the_repository()
+    {
+        // From a subfolder, git lists the repository's top level as the main worktree; registering it as a
+        // child root would claim every chat anywhere in the repository for this workspace.
+        const string porcelain = "worktree C:/mono\nHEAD 111\nbranch refs/heads/main\n\nworktree C:/mono-wt\nHEAD 222\nbranch refs/heads/a\n\n";
+
+        WorkspaceProbe.ParseWorktreeList(porcelain, @"c:\mono\services\api").ShouldBeEmpty();
+    }
 }

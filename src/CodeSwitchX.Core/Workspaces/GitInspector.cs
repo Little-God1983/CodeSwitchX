@@ -2,7 +2,8 @@ using System.Diagnostics;
 
 namespace CodeSwitchX.Core.Workspaces;
 
-public sealed record GitInfo(bool IsRepository, string? Branch, int DirtyCount);
+/// <param name="DirtyCount">Changed and untracked files; null when git could not report them (not a repository, git missing, refused or timed out).</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount);
 
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
@@ -13,6 +14,9 @@ public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid);
 public sealed class GitInspector
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>Repositories using the reftable ref storage keep this placeholder in HEAD; only git can read the real ref.</summary>
+    private const string ReftablePlaceholderBranch = ".invalid";
 
     private readonly Func<string, string, CancellationToken, Task<string?>> _runGit;
 
@@ -49,15 +53,32 @@ public sealed class GitInspector
     {
         if (ResolveGitDir(root) is null)
         {
-            return new GitInfo(false, null, 0);
+            return new GitInfo(false, null, null);
         }
 
         var branch = ReadBranch(root);
+        if (branch == ReftablePlaceholderBranch)
+        {
+            branch = await ReadBranchFromGitAsync(root, ct).ConfigureAwait(false);
+        }
+
         var status = await _runGit(root, "status --porcelain --untracked-files=normal", ct).ConfigureAwait(false);
-        var dirty = status is null
-            ? 0
+        int? dirty = status is null
+            ? null
             : status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Trim('\r').Length > 0);
         return new GitInfo(true, branch, dirty);
+    }
+
+    private async Task<string?> ReadBranchFromGitAsync(string root, CancellationToken ct)
+    {
+        var current = (await _runGit(root, "branch --show-current", ct).ConfigureAwait(false))?.Trim();
+        if (!string.IsNullOrEmpty(current))
+        {
+            return current;
+        }
+
+        var hash = (await _runGit(root, "rev-parse --short HEAD", ct).ConfigureAwait(false))?.Trim();
+        return string.IsNullOrEmpty(hash) ? null : hash;
     }
 
     /// <summary>Runs git through the configured runner (a real process by default, a fake in tests).</summary>
@@ -65,9 +86,19 @@ public sealed class GitInspector
 
     public static async Task<string?> RunGitAsync(string workingDirectory, string arguments, CancellationToken ct)
     {
-        var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
-        var result = await RunProcessAsync(info, DefaultTimeout, ct).ConfigureAwait(false);
+        var result = await RunProcessAsync(GitStartInfo(workingDirectory, arguments), DefaultTimeout, ct).ConfigureAwait(false);
         return result.Output;
+    }
+
+    /// <summary>
+    /// Git without optional locks: a plain <c>git status</c> refreshes the index under <c>.git/index.lock</c>, which collides
+    /// with the user's own git commands and is left behind when the timeout kills the process.
+    /// </summary>
+    internal static ProcessStartInfo GitStartInfo(string workingDirectory, string arguments)
+    {
+        var info = new ProcessStartInfo("git", arguments) { WorkingDirectory = workingDirectory };
+        info.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        return info;
     }
 
     /// <summary>
@@ -137,17 +168,26 @@ public sealed class GitInspector
             return null;
         }
 
-        var dotGit = Path.Combine(root, ".git");
-        if (Directory.Exists(dotGit))
+        // Walk up like git does: a workspace registered on a subfolder (a solution below the repository root) is still in the repository.
+        for (var dir = new DirectoryInfo(Path.GetFullPath(root)); dir is not null; dir = dir.Parent)
         {
-            return dotGit;
+            var dotGit = Path.Combine(dir.FullName, ".git");
+            if (Directory.Exists(dotGit))
+            {
+                return dotGit;
+            }
+
+            if (File.Exists(dotGit))
+            {
+                return FollowGitDirPointer(dir.FullName, dotGit);
+            }
         }
 
-        if (!File.Exists(dotGit))
-        {
-            return null;
-        }
+        return null;
+    }
 
+    private static string? FollowGitDirPointer(string root, string dotGit)
+    {
         var pointer = File.ReadAllText(dotGit).Trim();
         const string prefix = "gitdir:";
         if (!pointer.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

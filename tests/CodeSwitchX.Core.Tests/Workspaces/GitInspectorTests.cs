@@ -60,14 +60,62 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Inspect_without_git_available_still_reports_the_branch()
+    public async Task Inspect_without_git_available_still_reports_the_branch_but_no_dirty_count()
     {
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
         var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
 
-        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", 0));
-        (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, 0));
+        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null), "a failed status must not claim a clean tree");
+        (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
+    }
+
+    [Fact]
+    public void Git_runs_without_optional_locks_so_a_killed_status_never_leaves_index_lock_behind()
+    {
+        GitInspector.GitStartInfo(_root, "status").Environment["GIT_OPTIONAL_LOCKS"].ShouldBe("0");
+    }
+
+    [Fact]
+    public void Branch_is_found_from_a_subfolder_of_the_repository()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(_root, "services", "api");
+        Directory.CreateDirectory(sub);
+
+        GitInspector.ReadBranch(sub).ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task Inspect_treats_a_subfolder_of_a_repository_as_a_repository()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(_root, "src");
+        Directory.CreateDirectory(sub);
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.Contains("status") ? " M a.cs\n" : null));
+
+        var info = await inspector.InspectAsync(sub, CancellationToken.None);
+
+        info.IsRepository.ShouldBeTrue();
+        info.Branch.ShouldBe("main");
+    }
+
+    [Theory]
+    [InlineData("master\n", "master")]
+    [InlineData("\n", "abc1234")]
+    public async Task A_reftable_repository_asks_git_for_the_branch_instead_of_showing_the_placeholder(string showCurrent, string expected)
+    {
+        // Repositories using the reftable ref storage keep a placeholder HEAD; the real ref lives in .git/reftable.
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/.invalid\n");
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(
+            args.StartsWith("branch --show-current", StringComparison.Ordinal) ? showCurrent
+            : args.StartsWith("rev-parse --short", StringComparison.Ordinal) ? "abc1234\n"
+            : string.Empty));
+
+        (await inspector.InspectAsync(_root, CancellationToken.None)).Branch.ShouldBe(expected);
     }
 
     [Fact]

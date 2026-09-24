@@ -71,11 +71,15 @@ public sealed class WorkspaceProbe
             worktrees);
     }
 
-    /// <summary>Worktrees other than the main root, as canonical paths (real casing).</summary>
+    /// <summary>
+    /// Worktrees other than the main root, as canonical paths (real casing). Empty when the main root is not itself
+    /// one of the worktrees, i.e. a subfolder of the repository: its worktrees are whole checkouts, not child roots.
+    /// </summary>
     public static IReadOnlyList<WorktreeInfo> ParseWorktreeList(string porcelain, string mainRoot)
     {
         var mainKey = PathNormalizer.Normalize(mainRoot);
         var result = new List<WorktreeInfo>();
+        var mainRootListed = false;
         string? path = null;
         string? branch = null;
         foreach (var raw in porcelain.Split('\n').Select(l => l.TrimEnd('\r')).Append(string.Empty))
@@ -84,7 +88,11 @@ public sealed class WorkspaceProbe
             {
                 if (path is not null)
                 {
-                    if (PathNormalizer.Normalize(path) != mainKey)
+                    if (PathNormalizer.Normalize(path) == mainKey)
+                    {
+                        mainRootListed = true;
+                    }
+                    else
                     {
                         result.Add(new WorktreeInfo(PathNormalizer.Canonical(path), branch));
                     }
@@ -105,6 +113,6 @@ public sealed class WorkspaceProbe
             }
         }
 
-        return result;
+        return mainRootListed ? result : [];
     }
 }

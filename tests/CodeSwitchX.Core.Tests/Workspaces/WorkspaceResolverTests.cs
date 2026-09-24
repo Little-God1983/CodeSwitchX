@@ -56,6 +56,23 @@ public class WorkspaceResolverTests
     }
 
     [Fact]
+    public void A_workspace_registered_on_another_workspaces_worktree_owns_that_folder()
+    {
+        var feature = Guid.Parse("44444444-4444-4444-4444-444444444444");
+        var app = new Workspace
+        {
+            Id = App, Name = "App", RootPath = @"c:\code\app", TrackId = Guid.NewGuid(),
+            Worktrees = { new Worktree { WorkspaceId = App, Path = @"c:\code\app-feature", Branch = "feature" } },
+        };
+        var appFeature = new Workspace { Id = feature, Name = "App feature", RootPath = @"c:\code\app-feature", TrackId = Guid.NewGuid() };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf([app, appFeature]));
+
+        resolver.Resolve(@"C:\code\app-feature\src").ShouldBe(feature);
+    }
+
+    [Fact]
     public void RootsOf_includes_worktrees_as_child_roots()
     {
         var workspace = new Workspace

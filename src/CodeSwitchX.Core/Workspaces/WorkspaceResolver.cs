@@ -6,6 +6,7 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
 {
     private volatile WorkspaceRoot[] _roots = [];
 
+    /// <summary>Longest root first; the sort is stable, so of two equal paths the one listed first wins.</summary>
     public void SetRoots(IEnumerable<WorkspaceRoot> roots)
     {
         _roots = roots
@@ -14,11 +15,20 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
             .ToArray();
     }
 
+    /// <summary>
+    /// Every workspace root, then every worktree: a folder registered as its own workspace must beat the same
+    /// folder found as another workspace's worktree.
+    /// </summary>
     public static IEnumerable<WorkspaceRoot> RootsOf(IEnumerable<Workspace> workspaces)
     {
-        foreach (var workspace in workspaces)
+        var list = workspaces.ToList();
+        foreach (var workspace in list)
         {
             yield return new WorkspaceRoot(workspace.Id, workspace.RootPath);
+        }
+
+        foreach (var workspace in list)
+        {
             foreach (var worktree in workspace.Worktrees)
             {
                 yield return new WorkspaceRoot(workspace.Id, worktree.Path);
