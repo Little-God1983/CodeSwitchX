@@ -60,14 +60,101 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
-    public async Task Inspect_without_git_available_still_reports_the_branch()
+    public async Task Inspect_without_git_available_still_reports_the_branch_but_no_dirty_count()
     {
         Directory.CreateDirectory(Path.Combine(_root, ".git"));
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
         var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
 
-        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", 0));
-        (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, 0));
+        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null), "a failed status must not claim a clean tree");
+        (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
+    }
+
+    [Fact]
+    public async Task Inspect_does_its_file_and_process_work_off_the_calling_thread()
+    {
+        // The Yard starts refreshes on the UI thread; a folder on an offline network share blocks Directory.Exists for
+        // about 20 s, so nothing may run synchronously before the first await.
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        using var onCallingThread = new ThreadLocal<bool>();
+        bool? ranOnCallingThread = null;
+        var inspector = new GitInspector((_, _, _) =>
+        {
+            ranOnCallingThread ??= onCallingThread.Value;
+            return Task.FromResult<string?>(string.Empty);
+        });
+
+        onCallingThread.Value = true;
+        var inspect = inspector.InspectAsync(_root, CancellationToken.None);
+        onCallingThread.Value = false;
+        await inspect;
+
+        ranOnCallingThread.ShouldBe(false);
+    }
+
+    [Fact]
+    public void Git_runs_without_optional_locks_so_a_killed_status_never_leaves_index_lock_behind()
+    {
+        GitInspector.GitStartInfo(_root, "status").Environment["GIT_OPTIONAL_LOCKS"].ShouldBe("0");
+    }
+
+    [Fact]
+    public void Branch_is_found_from_a_subfolder_of_the_repository()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(_root, "services", "api");
+        Directory.CreateDirectory(sub);
+
+        GitInspector.ReadBranch(sub).ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task Inspect_treats_a_subfolder_of_a_repository_as_a_repository()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(_root, "src");
+        Directory.CreateDirectory(sub);
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(args.Contains("status") ? " M a.cs\n" : null));
+
+        var info = await inspector.InspectAsync(sub, CancellationToken.None);
+
+        info.IsRepository.ShouldBeTrue();
+        info.Branch.ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task A_repository_at_the_profile_folder_does_not_claim_the_folders_below_it()
+    {
+        // A dotfiles repository in the user profile would otherwise make every folder under the profile a repository,
+        // showing its branch and running git status over the whole profile on every refresh.
+        var profile = Path.Combine(_root, "home");
+        Directory.CreateDirectory(Path.Combine(profile, ".git"));
+        File.WriteAllText(Path.Combine(profile, ".git", "HEAD"), "ref: refs/heads/dotfiles\n");
+        var app = Path.Combine(profile, "code", "app");
+        Directory.CreateDirectory(app);
+        var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(string.Empty), profileDirectory: profile);
+
+        (await inspector.InspectAsync(app, CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
+        (await inspector.InspectAsync(profile, CancellationToken.None)).Branch.ShouldBe("dotfiles", "the profile folder itself is still that repository");
+    }
+
+    [Theory]
+    [InlineData("master\n", "master")]
+    [InlineData("\n", "abc1234")]
+    public async Task A_reftable_repository_asks_git_for_the_branch_instead_of_showing_the_placeholder(string showCurrent, string expected)
+    {
+        // Repositories using the reftable ref storage keep a placeholder HEAD; the real ref lives in .git/reftable.
+        Directory.CreateDirectory(Path.Combine(_root, ".git"));
+        File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/.invalid\n");
+        var inspector = new GitInspector((_, args, _) => Task.FromResult<string?>(
+            args.StartsWith("branch --show-current", StringComparison.Ordinal) ? showCurrent
+            : args.StartsWith("rev-parse --short", StringComparison.Ordinal) ? "abc1234\n"
+            : string.Empty));
+
+        (await inspector.InspectAsync(_root, CancellationToken.None)).Branch.ShouldBe(expected);
     }
 
     [Fact]

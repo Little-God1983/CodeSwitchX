@@ -48,4 +48,22 @@ public class AppPathsTests
         claude.SettingsFile.ShouldBe(@"C:\Users\me\.claude\settings.json");
         claude.ProjectsDirectory.ShouldBe(@"C:\Users\me\.claude\projects");
     }
+
+    [Fact]
+    public void CLAUDE_CONFIG_DIR_moves_the_claude_folder_the_way_claude_code_does()
+    {
+        var claude = ClaudeCodePaths.Resolve(@"C:\Users\me", @"D:\claude");
+
+        claude.SettingsFile.ShouldBe(@"D:\claude\settings.json");
+        claude.ProjectsDirectory.ShouldBe(@"D:\claude\projects");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void An_unset_CLAUDE_CONFIG_DIR_keeps_the_home_folder(string? configDirectory)
+    {
+        ClaudeCodePaths.Resolve(@"C:\Users\me", configDirectory).SettingsFile.ShouldBe(@"C:\Users\me\.claude\settings.json");
+    }
 }

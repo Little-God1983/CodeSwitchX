@@ -19,7 +19,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private readonly YardViewModel _owner;
 
     [ObservableProperty] private string? _branch;
-    [ObservableProperty] private int _dirtyCount;
+    [ObservableProperty] private int? _dirtyCount;
     [ObservableProperty] private HostState _hostState = HostState.NotStarted;
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;

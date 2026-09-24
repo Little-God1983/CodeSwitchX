@@ -74,4 +74,56 @@ public class WorkspaceProbeTests : IDisposable
 
         list.ShouldBe([new WorktreeInfo(@"C:\repo\app-a", "a"), new WorktreeInfo(@"C:\repo\app-b", null)], "worktree paths keep gits casing; only the main-root comparison is case-insensitive");
     }
+
+    [Fact]
+    public void ParseWorktreeList_finds_no_worktrees_for_a_subfolder_of_the_repository()
+    {
+        // From a subfolder, git lists the repository's top level as the main worktree; registering it as a
+        // child root would claim every chat anywhere in the repository for this workspace.
+        const string porcelain = "worktree C:/mono\nHEAD 111\nbranch refs/heads/main\n\nworktree C:/mono-wt\nHEAD 222\nbranch refs/heads/a\n\n";
+
+        WorkspaceProbe.ParseWorktreeList(porcelain, @"c:\mono\services\api").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void ParseWorktreeList_finds_no_worktrees_for_a_linked_worktree()
+    {
+        // Git lists the main worktree first. Registered on a linked worktree, the workspace must not claim the main
+        // checkout or its sibling worktrees as child roots.
+        const string porcelain = "worktree C:/repo\nHEAD 111\nbranch refs/heads/main\n\nworktree C:/repo-wt\nHEAD 222\nbranch refs/heads/wt\n\nworktree C:/repo-b\nHEAD 333\nbranch refs/heads/b\n\n";
+
+        WorkspaceProbe.ParseWorktreeList(porcelain, @"c:\repo-wt").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Probing_leaves_the_calling_thread_before_touching_the_disk()
+    {
+        // The Add workspace dialog probes from the UI thread; an offline network path blocks File.Exists for about 20 s.
+        // The missing-folder exception is thrown right after those disk checks, so the thread it is thrown on shows where they ran.
+        var missing = Path.Combine(_root, "missing-" + Guid.NewGuid().ToString("N"));
+        using var onCallingThread = new ThreadLocal<bool>();
+        bool? checkedOnCallingThread = null;
+        void OnException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            if (e.Exception is DirectoryNotFoundException && e.Exception.Message.Contains(missing, StringComparison.Ordinal))
+            {
+                checkedOnCallingThread ??= onCallingThread.Value;
+            }
+        }
+
+        AppDomain.CurrentDomain.FirstChanceException += OnException;
+        try
+        {
+            onCallingThread.Value = true;
+            var probe = _probe.ProbeAsync(missing, CancellationToken.None);
+            onCallingThread.Value = false;
+            await Should.ThrowAsync<DirectoryNotFoundException>(() => probe);
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= OnException;
+        }
+
+        checkedOnCallingThread.ShouldBe(false);
+    }
 }

@@ -79,8 +79,20 @@
           <StackPanel Orientation="Horizontal" Margin="0,4,0,8" Opacity="0.75">
             <TextBlock Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" />
             <TextBlock Text="{Binding Branch, TargetNullValue=no git}" />
-            <TextBlock Text=" · " />
-            <TextBlock><Run Text="{Binding DirtyCount, Mode=OneWay}" /> dirty</TextBlock>
+            <StackPanel Orientation="Horizontal">
+              <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                  <Style.Triggers>
+                    <!-- no count when git could not report one: a made-up 0 would read as a clean tree -->
+                    <DataTrigger Binding="{Binding DirtyCount}" Value="{x:Null}">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </StackPanel.Style>
+              <TextBlock Text=" · " />
+              <TextBlock><Run Text="{Binding DirtyCount, Mode=OneWay}" /> dirty</TextBlock>
+            </StackPanel>
           </StackPanel>
           <ItemsControl ItemsSource="{Binding Chats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
           <TextBlock Text="No Claude Code chats yet" FontStyle="Italic" Opacity="0.5" Margin="0,6,0,0">

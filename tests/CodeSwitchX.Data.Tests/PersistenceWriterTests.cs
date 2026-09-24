@@ -1,6 +1,7 @@
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -193,6 +194,60 @@ public class PersistenceWriterTests : IAsyncLifetime
         await writer.StopAsync(CancellationToken.None);
 
         (await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1), TestContext.Current.CancellationToken)).Count.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task Stopping_before_the_background_loop_has_run_still_persists_every_queued_item()
+    {
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), _db.Get<IUsageStore>(), _time, NullLogger<PersistenceWriter>.Instance,
+            new PersistenceWriterOptions());
+
+        // A start token that is already cancelled makes BackgroundService cancel ExecuteAsync before it ever runs,
+        // which is what a stop does when it beats the thread pool to the loop.
+        await writer.StartAsync(new CancellationToken(canceled: true));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", SessionState.Idle)));
+
+        await writer.StopAsync(CancellationToken.None);
+
+        writer.ExecuteTask.ShouldNotBeNull().IsCanceled.ShouldBeTrue();
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task The_shutdown_drain_stays_inside_the_stop_budget_the_host_gave_it()
+    {
+        var sessions = Substitute.For<ISessionStore>();
+        bool? drainTokenCancelled = null;
+        sessions.UpsertAsync(Arg.Any<IReadOnlyCollection<SessionRecord>>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                drainTokenCancelled ??= call.Arg<CancellationToken>().IsCancellationRequested;
+                return Task.CompletedTask;
+            });
+        using var writer = new PersistenceWriter(_bus, sessions, Substitute.For<IUsageStore>(), _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        await writer.StartAsync(new CancellationToken(canceled: true));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", SessionState.Idle)));
+
+        await writer.StopAsync(new CancellationToken(canceled: true));
+
+        drainTokenCancelled.ShouldBe(true, "the host's stop budget has run out, so the drain must not add its own grace period on top");
+    }
+
+    [Fact]
+    public async Task Records_a_failed_shutdown_flush_leaves_behind_are_reported_as_not_saved()
+    {
+        var sessions = Substitute.For<ISessionStore>();
+        sessions.UpsertAsync(Arg.Any<IReadOnlyCollection<SessionRecord>>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("database is locked"));
+        var logger = new ListLogger<PersistenceWriter>();
+        using var writer = new PersistenceWriter(_bus, sessions, Substitute.For<IUsageStore>(), _time, logger, new PersistenceWriterOptions());
+        await writer.StartAsync(new CancellationToken(canceled: true));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", SessionState.Idle)));
+
+        await writer.StopAsync(CancellationToken.None);
+
+        logger.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("1 records not saved"),
+            "at shutdown there is no next flush, so the retained batch is lost and must be reported as such");
     }
 
     [Fact]

@@ -28,6 +28,10 @@ public sealed class WorkspaceProbe
     public async Task<WorkspaceProbeResult> ProbeAsync(string input, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input);
+
+        // Off the caller's thread before touching the disk: the Add workspace dialog probes from the UI thread, and an
+        // offline network path blocks File.Exists for about 20 s. Task.Yield would come back to the UI thread.
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         string root;
         string? workspaceFile = null;
         if (File.Exists(input))
@@ -71,11 +75,16 @@ public sealed class WorkspaceProbe
             worktrees);
     }
 
-    /// <summary>Worktrees other than the main root, as canonical paths (real casing).</summary>
+    /// <summary>
+    /// The linked worktrees, as canonical paths (real casing), when <paramref name="mainRoot"/> is the repository's main
+    /// worktree, which git lists first. Empty for any other root: a linked worktree or a subfolder of the repository
+    /// must not claim the main checkout or sibling worktrees as child roots.
+    /// </summary>
     public static IReadOnlyList<WorktreeInfo> ParseWorktreeList(string porcelain, string mainRoot)
     {
         var mainKey = PathNormalizer.Normalize(mainRoot);
         var result = new List<WorktreeInfo>();
+        var entries = 0;
         string? path = null;
         string? branch = null;
         foreach (var raw in porcelain.Split('\n').Select(l => l.TrimEnd('\r')).Append(string.Empty))
@@ -84,7 +93,13 @@ public sealed class WorkspaceProbe
             {
                 if (path is not null)
                 {
-                    if (PathNormalizer.Normalize(path) != mainKey)
+                    var isFirst = entries++ == 0;
+                    if (isFirst && PathNormalizer.Normalize(path) != mainKey)
+                    {
+                        return [];
+                    }
+
+                    if (!isFirst)
                     {
                         result.Add(new WorktreeInfo(PathNormalizer.Canonical(path), branch));
                     }
