@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
@@ -212,7 +214,7 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task Subagent_transcripts_contribute_usage_to_the_parent_but_never_its_title_state_or_context()
+    public async Task Subagent_transcripts_contribute_usage_to_the_parent_but_never_its_title_model_or_context()
     {
         File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
         var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
@@ -231,7 +233,6 @@ public class TranscriptIndexerTests : IDisposable
         subagent.SessionId.ShouldBe("parent");
         subagent.Title.ShouldBeNull();
         subagent.Model.ShouldBeNull("a sub-agent may run a different model; the parent's context bar must keep the parent's");
-        subagent.InferredSignal.ShouldBeNull();
         subagent.LatestContext.ShouldBeNull();
         subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
     }
@@ -309,5 +310,143 @@ public class TranscriptIndexerTests : IDisposable
         update.Model.ShouldBe("claude-sonnet-5");
         update.LatestContext.ShouldBe(new TokenUsage(100, 20, 500, 3000));
         update.Usage.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_busy_subagent_keeps_its_parent_chat_working_and_a_quiet_one_moves_nothing()
+    {
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        var busyAt = _time.GetUtcNow().AddSeconds(-1);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-busy.jsonl"), [Assistant("parent", "m1", ToolBlock, ts: busyAt.ToString("O"))]);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-quiet.jsonl"), [Assistant("parent", "m2", ToolBlock)]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        // The parent is waiting on the Task call that runs the sub-agent, so the sub-agent's writes are its activity.
+        var busy = _updates.Single(u => u.TranscriptPath.EndsWith("agent-busy.jsonl"));
+        busy.LastActivityAt.ShouldBe(busyAt);
+        busy.InferredSignal.ShouldBe(SessionSignal.ToolUse);
+        // A quiet sub-agent, even one with a tool call of its own open, says nothing about whether the parent is idle.
+        _updates.Single(u => u.TranscriptPath.EndsWith("agent-quiet.jsonl")).InferredSignal.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_title_found_while_the_chat_was_historical_is_sent_when_the_chat_comes_back()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Original task"), Assistant("s1", "m1", TextBlock)]);
+        File.SetLastWriteTimeUtc(path, _time.GetUtcNow().AddDays(-3).UtcDateTime);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().Historical.ShouldBeTrue();
+        _updates.Clear();
+
+        // The chat engine drops a historical update of a chat it does not show, title and all.
+        File.AppendAllLines(path, [User("s1", "continue please", _time.GetUtcNow().ToString("O"))]);
+        File.SetLastWriteTimeUtc(path, _time.GetUtcNow().UtcDateTime);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Historical.ShouldBeFalse();
+        update.Title.ShouldBe("Original task");
+        _updates.Clear();
+
+        File.AppendAllLines(path, [Assistant("s1", "m2", TextBlock, ts: _time.GetUtcNow().ToString("O"))]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Title.ShouldBeNull("sent once, so it never undoes a later generated title");
+    }
+
+    private static string LastPrompt(string session) => $$$"""{"type":"last-prompt","lastPrompt":"go","sessionId":"{{{session}}}"}""";
+
+    [Fact]
+    public async Task A_pass_of_lines_without_a_timestamp_leaves_the_state_alone()
+    {
+        var recent = _time.GetUtcNow().AddSeconds(-1).ToString("O");
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go", recent), Assistant("s1", "m1", ToolBlock, ts: recent)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        // Claude Code writes its metadata lines (last-prompt, ai-title, mode, ...) without a timestamp, some while it works.
+        File.AppendAllLines(Transcript("s1"), [LastPrompt("s1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().InferredSignal.ShouldBeNull("the line says nothing about whether Claude is working");
+    }
+
+    [Fact]
+    public async Task A_catch_up_split_by_the_byte_cap_moves_the_state_only_with_its_last_part()
+    {
+        // The first part ends with a tool call whose result is in the second.
+        string[] lines = [User("s1", "go"), Assistant("s1", "m1", ToolBlock), ToolResult("s1")];
+        File.WriteAllText(Transcript("s1"), string.Join('\n', lines) + "\n");
+        var options = new TranscriptIndexerOptions { MaxBytesPerPass = Encoding.UTF8.GetByteCount(lines[0] + "\n" + lines[1] + "\n") + 1 };
+        using var capped = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, options);
+
+        await capped.ScanAsync(CancellationToken.None);
+
+        var first = _updates.ShouldHaveSingleItem();
+        first.Usage.ShouldHaveSingleItem();
+        first.InferredSignal.ShouldBeNull("the tool call is only open in the middle of the file");
+        first.PendingToolUse.ShouldBeNull();
+        _updates.Clear();
+
+        await capped.ScanAsync(CancellationToken.None);
+
+        var last = _updates.ShouldHaveSingleItem();
+        last.InferredSignal.ShouldBe(SessionSignal.Stop);
+        last.PendingToolUse.ShouldBe(false);
+    }
+
+    [Fact]
+    public async Task An_interrupt_in_the_first_part_of_a_split_catch_up_is_not_reported()
+    {
+        string[] lines = [User("s1", "go"), Interrupt("s1"), User("s1", "try again", "2026-09-23T10:00:09.000Z")];
+        File.WriteAllText(Transcript("s1"), string.Join('\n', lines) + "\n");
+        var options = new TranscriptIndexerOptions { MaxBytesPerPass = Encoding.UTF8.GetByteCount(lines[0] + "\n" + lines[1] + "\n") + 1 };
+        using var capped = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, options);
+
+        await capped.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Interrupted.ShouldBeFalse("the chat went on after it");
+    }
+
+    [Fact]
+    public async Task Indexing_goes_on_after_the_transcript_folder_is_deleted_and_created_again()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var seen = new ConcurrentQueue<TranscriptUpdate>();
+        using var subscription = _bus.Subscribe<TranscriptUpdated>(m => seen.Enqueue(m.Update));
+        File.WriteAllLines(Transcript("before"), [User("before", "Fix")]);
+        await _indexer.StartAsync(ct);
+        try
+        {
+            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
+            seen.ShouldContain(u => u.SessionId == "before", "the loop and its folder watcher are running");
+
+            // Deleting the folder ends the watcher for good. Its error still triggers one scan, which finds no folder.
+            Directory.Delete(_claude.ProjectsDirectory, recursive: true);
+            await TickAsync(TimeSpan.FromSeconds(1), ct);
+            Directory.CreateDirectory(_projectDir);
+            File.WriteAllLines(Transcript("after"), [User("after", "Fix")]);
+            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
+
+            seen.ShouldContain(u => u.SessionId == "after");
+        }
+        finally
+        {
+            await _indexer.StopAsync(ct);
+        }
+    }
+
+    /// <summary>Moves the indexer's timer on one scan interval at a time, for up to <paramref name="realTime"/>, giving each scan time to run.</summary>
+    private async Task TickAsync(TimeSpan realTime, CancellationToken ct, Func<bool>? until = null)
+    {
+        var deadline = DateTime.UtcNow + realTime;
+        while (DateTime.UtcNow < deadline && until?.Invoke() != true)
+        {
+            _time.Advance(new TranscriptIndexerOptions().ScanInterval);
+            await Task.Delay(50, ct);
+        }
     }
 }

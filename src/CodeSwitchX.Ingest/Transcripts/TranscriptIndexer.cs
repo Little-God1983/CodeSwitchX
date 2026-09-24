@@ -66,7 +66,9 @@ public sealed class TranscriptIndexer : BackgroundService
         {
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
-                if (!_dirty && _watcher is not null)
+                // Without a running watcher, poll: one stops for good after an error such as its folder being deleted
+                // (only a buffer overflow leaves it running).
+                if (!_dirty && _watcher is { EnableRaisingEvents: true })
                 {
                     continue;
                 }
@@ -177,7 +179,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 Offset = cursor.ByteOffset,
                 LastWriteUtc = cursor.LastWriteUtc,
                 SessionId = cursor.SessionId,
-                TitleReported = true,
+                TitleFound = true,
             };
         }
 
@@ -243,7 +245,7 @@ public sealed class TranscriptIndexer : BackgroundService
 
         var lastWriteUtc = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
         var historical = _time.GetUtcNow() - lastWriteUtc > _options.HistoryWindow;
-        var update = BuildUpdate(path, state, tail.Lines, historical, IsSubagentTranscript(path));
+        var update = BuildUpdate(path, state, tail.Lines, historical, IsSubagentTranscript(path), partial: tail.HasMore);
         state.Offset = tail.NewOffset;
         state.LastWriteUtc = lastWriteUtc;
 
@@ -251,7 +253,7 @@ public sealed class TranscriptIndexer : BackgroundService
         _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
 
-    private TranscriptUpdate BuildUpdate(string path, FileState state, IReadOnlyList<string> lines, bool historical, bool subagent)
+    private TranscriptUpdate BuildUpdate(string path, FileState state, IReadOnlyList<string> lines, bool historical, bool subagent, bool partial)
     {
         var usage = new List<UsageDelta>();
         string? newTitle = null;
@@ -325,7 +327,7 @@ public sealed class TranscriptIndexer : BackgroundService
                     {
                         interrupted = false;
                         pendingToolUse = false;
-                        if (!state.TitleReported && !summaryTitle && newTitle is null)
+                        if (!state.TitleFound && !summaryTitle && newTitle is null)
                         {
                             newTitle = ChatTitle.FromPrompt(user.Text);
                         }
@@ -348,32 +350,43 @@ public sealed class TranscriptIndexer : BackgroundService
         state.PendingToolUse = pendingToolUse;
         if (newTitle is not null)
         {
-            state.TitleReported = true;
+            state.TitleFound = true;
         }
+
+        // The chat engine drops a historical update of a chat it does not show, title and all, so a title found while the
+        // transcript was historical goes out again with its first live update.
+        var title = newTitle ?? (historical ? null : state.UndeliveredTitle);
+        state.UndeliveredTitle = historical ? title ?? state.UndeliveredTitle : null;
 
         var sessionId = state.SessionId ?? Path.GetFileNameWithoutExtension(path);
         state.SessionId = sessionId;
         var now = _time.GetUtcNow();
+        var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
 
         if (subagent)
         {
-            // A sub-agent's prompts, tool calls, model and context window belong to the sub-agent, not the parent chat;
-            // only its token usage counts towards the parent session.
+            // A sub-agent's prompts, tool calls, model and context window belong to the sub-agent, not the parent chat.
+            // Its token usage counts towards the parent session, and its writes are the parent's activity: the parent is
+            // waiting on the Task call that runs it. A quiet sub-agent says nothing about whether the parent is idle.
             return new TranscriptUpdate
             {
                 SessionId = sessionId,
                 TranscriptPath = path,
                 ObservedAt = now,
+                LastActivityAt = lastActivity,
                 Usage = usage,
                 MessageIds = newMessageIds,
+                InferredSignal = recentlyWritten ? SessionSignal.ToolUse : null,
                 Historical = historical,
             };
         }
 
         // Spec: a write within the working window means Working; otherwise a trailing assistant tool call
         // without its result means Waiting (best effort, e.g. a permission prompt); otherwise Idle.
-        var recentlyWritten = lastActivity is { } last && now - last <= _options.WorkingWindow;
-        var inferred = recentlyWritten ? SessionSignal.ToolUse
+        // A pass cut short by the byte cap ends mid-file, and a pass of lines without a timestamp (Claude Code's metadata
+        // lines) says nothing about activity: neither moves the state.
+        var inferred = partial || lastActivity is null ? (SessionSignal?)null
+            : recentlyWritten ? SessionSignal.ToolUse
             : pendingToolUse ? SessionSignal.Notification
             : SessionSignal.Stop;
 
@@ -382,7 +395,7 @@ public sealed class TranscriptIndexer : BackgroundService
             SessionId = sessionId,
             TranscriptPath = path,
             ObservedAt = now,
-            Title = newTitle,
+            Title = title,
             Cwd = cwd,
             Model = model,
             LastActivityAt = lastActivity,
@@ -390,8 +403,8 @@ public sealed class TranscriptIndexer : BackgroundService
             MessageIds = newMessageIds,
             LatestContext = latestContext,
             InferredSignal = inferred,
-            PendingToolUse = pendingToolUse,
-            Interrupted = interrupted,
+            PendingToolUse = partial ? null : pendingToolUse,
+            Interrupted = !partial && interrupted,
             Historical = historical,
         };
     }
@@ -436,17 +449,21 @@ public sealed class TranscriptIndexer : BackgroundService
         public long Offset { get; set; }
         public DateTimeOffset LastWriteUtc { get; set; }
         public string? SessionId { get; set; }
-        public bool TitleReported { get; set; }
+        public bool TitleFound { get; set; }
         public bool HasSummary { get; set; }
         public bool PendingToolUse { get; set; }
+
+        /// <summary>The title found while the transcript was historical, until a live update carries it.</summary>
+        public string? UndeliveredTitle { get; set; }
 
         /// <summary>The file shrank: read it again from the start. Message ids stay remembered so replayed usage is not counted twice.</summary>
         public void Reset()
         {
             Offset = 0;
-            TitleReported = false;
+            TitleFound = false;
             HasSummary = false;
             PendingToolUse = false;
+            UndeliveredTitle = null;
         }
     }
 

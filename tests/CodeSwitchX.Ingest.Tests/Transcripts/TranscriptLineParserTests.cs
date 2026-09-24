@@ -70,6 +70,14 @@ public class TranscriptLineParserTests
             .ShouldBeOfType<SummaryLine>().Title.ShouldBe("Fix build errors in App");
     }
 
+    [Fact]
+    public void Ai_title_line_carries_the_title()
+    {
+        // Claude Code writes its generated title this way now; older versions wrote `summary` lines.
+        TranscriptLineParser.TryParse("""{"type":"ai-title","aiTitle":"Fix login redirect loop","sessionId":"s1"}""")
+            .ShouldBeOfType<SummaryLine>().Title.ShouldBe("Fix login redirect loop");
+    }
+
     [Theory]
     [InlineData("""{"type":"system","subtype":"init"}""", "system")]
     [InlineData("""{"type":"progress"}""", "progress")]
@@ -86,6 +94,14 @@ public class TranscriptLineParserTests
     public void Garbage_returns_null(string line)
     {
         TranscriptLineParser.TryParse(line).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_line_holding_half_an_emoji_is_skipped_instead_of_throwing()
+    {
+        // JSON.stringify writes half of a surrogate pair (a string cut inside an emoji) as an escape. That is valid JSON,
+        // but .NET cannot read it as a string.
+        TranscriptLineParser.TryParse("""{"type":"user","message":{"role":"user","content":"abc\ud83d"}}""").ShouldBeNull();
     }
 
     [Theory]

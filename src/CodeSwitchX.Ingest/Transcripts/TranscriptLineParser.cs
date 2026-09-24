@@ -30,53 +30,68 @@ public static class TranscriptLineParser
 
         using (document)
         {
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
+            try
             {
+                return Read(document.RootElement);
+            }
+            catch (InvalidOperationException)
+            {
+                // Valid JSON that is not valid text: JSON.stringify writes half of a surrogate pair (a string cut inside an
+                // emoji) as an escape, and JsonElement.GetString throws on it. Skipped like any other corrupt line.
                 return null;
             }
+        }
+    }
 
-            var type = GetString(root, "type") ?? string.Empty;
-            var timestamp = GetString(root, "timestamp") is { } ts && DateTimeOffset.TryParse(ts, null, DateTimeStyles.AssumeUniversal, out var parsed)
-                ? parsed.ToUniversalTime()
-                : (DateTimeOffset?)null;
-            var sessionId = GetString(root, "sessionId");
-            var cwd = GetString(root, "cwd");
-            root.TryGetProperty("message", out var message);
+    private static TranscriptLine? Read(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
 
-            switch (type)
+        var type = GetString(root, "type") ?? string.Empty;
+        var timestamp = GetString(root, "timestamp") is { } ts && DateTimeOffset.TryParse(ts, null, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed.ToUniversalTime()
+            : (DateTimeOffset?)null;
+        var sessionId = GetString(root, "sessionId");
+        var cwd = GetString(root, "cwd");
+        root.TryGetProperty("message", out var message);
+
+        switch (type)
+        {
+            case "assistant":
             {
-                case "assistant":
-                {
-                    var usage = ParseUsage(message);
-                    var hasToolUse = message.ValueKind == JsonValueKind.Object
-                        && message.TryGetProperty("content", out var content)
-                        && content.ValueKind == JsonValueKind.Array
-                        && content.EnumerateArray().Any(b => GetString(b, "type") == "tool_use");
-                    return new AssistantLine(type, timestamp, sessionId, cwd, GetString(message, "id"), GetString(message, "model"), usage, hasToolUse);
-                }
-
-                case "user":
-                {
-                    var isMeta = root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True;
-                    var (text, isToolResult) = ExtractUserText(message);
-                    var isInterrupt = text is not null && text.StartsWith(InterruptPrefix, StringComparison.Ordinal);
-                    if (isInterrupt || (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal))))
-                    {
-                        isMeta = true;
-                    }
-
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
-                }
-
-                case "summary":
-                    return GetString(root, "summary") is { Length: > 0 } title
-                        ? new SummaryLine(type, timestamp, sessionId, cwd, title)
-                        : new OtherLine(type, timestamp, sessionId, cwd);
-
-                default:
-                    return new OtherLine(type, timestamp, sessionId, cwd);
+                var usage = ParseUsage(message);
+                var hasToolUse = message.ValueKind == JsonValueKind.Object
+                    && message.TryGetProperty("content", out var content)
+                    && content.ValueKind == JsonValueKind.Array
+                    && content.EnumerateArray().Any(b => GetString(b, "type") == "tool_use");
+                return new AssistantLine(type, timestamp, sessionId, cwd, GetString(message, "id"), GetString(message, "model"), usage, hasToolUse);
             }
+
+            case "user":
+            {
+                var isMeta = root.TryGetProperty("isMeta", out var meta) && meta.ValueKind == JsonValueKind.True;
+                var (text, isToolResult) = ExtractUserText(message);
+                var isInterrupt = text is not null && text.StartsWith(InterruptPrefix, StringComparison.Ordinal);
+                if (isInterrupt || (text is not null && MetaPrefixes.Any(p => text.StartsWith(p, StringComparison.Ordinal))))
+                {
+                    isMeta = true;
+                }
+
+                return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
+            }
+
+            // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
+            case "summary":
+            case "ai-title":
+                return GetString(root, type == "summary" ? "summary" : "aiTitle") is { Length: > 0 } title
+                    ? new SummaryLine(type, timestamp, sessionId, cwd, title)
+                    : new OtherLine(type, timestamp, sessionId, cwd);
+
+            default:
+                return new OtherLine(type, timestamp, sessionId, cwd);
         }
     }
 
