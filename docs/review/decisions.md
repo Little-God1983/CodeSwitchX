@@ -32,7 +32,8 @@ Ctrl+Shift+Alt+1..9 jump hotkeys, `summary` lines as chat titles, and `SessionSt
 | Persistence | A failed batch is retried on the next flush; once more than 5000 items are retained they are dropped with an error log | Bounded memory when the database stays unavailable |
 | Persistence | The newest 20,000 seen message ids are kept, pruned on the hourly cycle | `--resume` dedup across restarts at bounded size |
 | Persistence | Hook payload JSON is not stored unless `StorePayloads` is on | Transcripts and payloads contain source code and prompts (spec, Security) |
-| Persistence | Migrations run only when one is pending, and an EF Core migration lock row found before an upgrade is deleted as left over from a start that did not finish (L3 #6) | EF Core waits for that row without a timeout, so a leftover row hung every later start. Two instances upgrading at the same moment are not guarded against here; single-instance enforcement is L8 #11 |
+| Persistence | Migrations run only when one is pending; an up-to-date database gets EF Core's pending-model-changes check on its own. Before an upgrade, an EF Core migration lock row that is still there after 10 s is deleted as left over from a start that did not finish (L3 #6) | EF Core waits for that row without a timeout, so a leftover row hung every later start. A second instance that is upgrading holds the row only while its migration runs, well inside the 10 s |
+| Persistence | `SessionStore.UpsertAsync` keeps a stored rename when the incoming record is not locked (L3 #6) | Nothing unlocks a title (`SessionEngine.Rename` only locks), so an unlocked record for a renamed chat is a fresh snapshot. A feature that resets a title to automatic has to change this merge as well |
 
 ## Deferred from PR #1
 

@@ -42,6 +42,8 @@ public sealed class SessionStore : ISessionStore
             {
                 var stored = (row.Title, row.TitleLocked, row.StartedAt);
                 db.Entry(row).CurrentValues.SetValues(record);
+                // Nothing unlocks a title (SessionEngine.Rename only locks), so an unlocked record here is a fresh snapshot.
+                // A feature that resets a title to automatic has to change this merge as well.
                 if (stored.TitleLocked && !record.TitleLocked)
                 {
                     row.Title = stored.Title;

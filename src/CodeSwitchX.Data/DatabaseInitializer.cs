@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeSwitchX.Core.Workspaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,11 @@ public sealed class DatabaseInitializer
         _logger = logger;
     }
 
+    /// <summary>How long an upgrade waits for another instance's migration lock before it treats the lock as left over.</summary>
+    internal TimeSpan MigrationLockWait { get; set; } = TimeSpan.FromSeconds(10);
+
+    private static readonly TimeSpan LockPollInterval = TimeSpan.FromMilliseconds(250);
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -27,6 +33,11 @@ public sealed class DatabaseInitializer
             _logger.LogInformation("Applying {Count} database migrations", pending.Count);
             await ReleaseLeftoverMigrationLockAsync(db, ct);
             await db.Database.MigrateAsync(ct);
+        }
+        else if (db.Database.HasPendingModelChanges())
+        {
+            // MigrateAsync would refuse this model, so an up-to-date database needs the same check before the first write fails.
+            throw new InvalidOperationException("The data model has changes that no migration covers; add one with 'dotnet ef migrations add'.");
         }
 
         await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
@@ -42,17 +53,29 @@ public sealed class DatabaseInitializer
     /// <summary>
     /// EF Core's SQLite migration lock is a row in <c>__EFMigrationsLock</c> that it deletes when done, and it waits for
     /// that row without a timeout. A start killed while migrating leaves the row behind, and every later start would hang
-    /// with no window and no error. Only CodeSwitchX migrates this file, and only at startup, so a row found here is left
-    /// over unless a second instance is upgrading at the same moment.
+    /// with no window and no error. A second instance that is upgrading holds the row only while its migration runs, so a
+    /// row still there after <see cref="MigrationLockWait"/> is left over.
     /// </summary>
     private async Task ReleaseLeftoverMigrationLockAsync(CodeSwitchXDbContext db, CancellationToken ct)
     {
-        var lockTableExists = await db.Database
-            .SqlQuery<int>($"SELECT COUNT(*) AS \"Value\" FROM sqlite_master WHERE type = 'table' AND name = '__EFMigrationsLock'")
-            .SingleAsync(ct) > 0;
-        if (lockTableExists && await db.Database.ExecuteSqlRawAsync("DELETE FROM \"__EFMigrationsLock\";", ct) > 0)
+        if (await CountAsync(db, "SELECT COUNT(*) AS \"Value\" FROM sqlite_master WHERE type = 'table' AND name = '__EFMigrationsLock'", ct) == 0)
         {
-            _logger.LogWarning("Removed a database migration lock left behind by an earlier start that did not finish");
+            return;
+        }
+
+        var waited = Stopwatch.StartNew();
+        while (await CountAsync(db, "SELECT COUNT(*) AS \"Value\" FROM \"__EFMigrationsLock\"", ct) > 0)
+        {
+            if (waited.Elapsed >= MigrationLockWait)
+            {
+                await db.Database.ExecuteSqlRawAsync("DELETE FROM \"__EFMigrationsLock\";", ct);
+                _logger.LogWarning("Removed a database migration lock left behind by an earlier start that did not finish");
+                return;
+            }
+
+            await Task.Delay(LockPollInterval, ct);
         }
     }
+
+    private static Task<int> CountAsync(CodeSwitchXDbContext db, string sql, CancellationToken ct) => db.Database.SqlQueryRaw<int>(sql).SingleAsync(ct);
 }
