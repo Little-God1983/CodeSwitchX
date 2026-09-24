@@ -88,7 +88,21 @@ public sealed class PersistenceWriter : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            // shutting down: drain everything still queued, one batch at a time, within a short grace period
+            // shutting down: StopAsync drains what is still queued
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+
+        // The drain lives here, not at the end of ExecuteAsync. Since .NET 10, BackgroundService starts ExecuteAsync
+        // through Task.Run with the stopping token, so a stop that beats the thread pool cancels the loop before it runs.
+        if (ExecuteTask is { IsCompleted: false })
+        {
+            // The host gave up waiting while a flush is still running; draining now would race it for the queue.
+            _logger.LogWarning("The shutdown flush was skipped because the last flush is still running; {Count} records were not saved", Pending + (_carry?.Count ?? 0));
+            return;
         }
 
         // Pending, not the channel's Count: a single-reader channel does not support counting.

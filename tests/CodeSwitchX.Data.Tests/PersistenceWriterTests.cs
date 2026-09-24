@@ -196,6 +196,23 @@ public class PersistenceWriterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Stopping_before_the_background_loop_has_run_still_persists_every_queued_item()
+    {
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), _db.Get<IUsageStore>(), _time, NullLogger<PersistenceWriter>.Instance,
+            new PersistenceWriterOptions());
+
+        // A start token that is already cancelled makes BackgroundService cancel ExecuteAsync before it ever runs,
+        // which is what a stop does when it beats the thread pool to the loop.
+        await writer.StartAsync(new CancellationToken(canceled: true));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", SessionState.Idle)));
+
+        await writer.StopAsync(CancellationToken.None);
+
+        writer.ExecuteTask.ShouldNotBeNull().IsCanceled.ShouldBeTrue();
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(_time.GetUtcNow().AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task A_batch_interrupted_by_cancellation_is_kept_for_the_next_flush()
     {
         var usage = Substitute.For<IUsageStore>();
