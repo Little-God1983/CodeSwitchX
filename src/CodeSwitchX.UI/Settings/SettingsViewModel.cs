@@ -79,6 +79,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             HookInstallState.Installed => $"Installed ({status.InstalledEvents.Count} of {ClaudeHookInstaller.Events.Length} events)",
             HookInstallState.Partial => $"Partial: missing {string.Join(", ", status.MissingEvents)}",
             HookInstallState.Outdated => "Installed, but pointing at a different csx-hook.exe. Reinstall to update the path.",
+            HookInstallState.Unreadable => $"Unknown: {status.Problem}",
             _ => "Not installed. Tile states fall back to transcript inference.",
         };
     }

@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using CodeSwitchX.Ingest.Hooks;
@@ -35,7 +37,7 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
-    public void Install_into_a_missing_file_creates_all_eight_events()
+    public void Install_into_a_missing_file_creates_every_event()
     {
         var result = _installer.Install(Exe);
 
@@ -47,9 +49,69 @@ public class ClaudeHookInstallerTests : IDisposable
         pre.ContainsKey("matcher").ShouldBeFalse();
         var hook = pre["hooks"]!.AsArray().ShouldHaveSingleItem()!.AsObject();
         hook["type"]!.GetValue<string>().ShouldBe("command");
-        hook["command"]!.GetValue<string>().ShouldBe($"\"{Exe}\" PreToolUse");
         hook["timeout"]!.GetValue<int>().ShouldBe(5);
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+    }
+
+    [Fact]
+    public void Entries_use_the_exec_form_so_no_shell_parses_the_path()
+    {
+        // Without Git Bash, Claude Code runs a shell-form command through PowerShell, which cannot run "<path>" Stop
+        // (a quoted path needs its call operator). The exec form is spawned directly, whatever the shell.
+        _installer.Install(Exe);
+
+        var hook = Settings()["hooks"]!["Stop"]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        hook["command"]!.GetValue<string>().ShouldBe(Exe);
+        hook["args"].ShouldNotBeNull().AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["Stop"]);
+    }
+
+    [Fact]
+    public void An_install_from_before_the_exec_form_shows_Partial_and_reinstall_converts_every_entry()
+    {
+        // What an earlier CodeSwitchX wrote: the spec's eight events, each in the shell form, and no StopFailure.
+        string[] earlierEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SubagentStop", "SessionEnd"];
+        var hooks = new JsonObject();
+        foreach (var eventName in earlierEvents)
+        {
+            hooks[eventName] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = $"\"{Exe}\" {eventName}", ["timeout"] = 5 }) });
+        }
+
+        WriteSettings(new JsonObject { ["hooks"] = hooks }.ToJsonString());
+
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Partial);
+        status.MissingEvents.ShouldBe(["StopFailure"]);
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        foreach (var eventName in ClaudeHookInstaller.Events)
+        {
+            var hook = Settings()["hooks"]![eventName]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+            hook["command"]!.GetValue<string>().ShouldBe(Exe);
+            hook["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe([eventName]);
+        }
+    }
+
+    [Fact]
+    public void An_entry_in_the_shell_form_is_Outdated_even_at_the_same_path()
+    {
+        // The state Partial hides for an earlier install: every event present, one still in the shell form.
+        _installer.Install(Exe);
+        var settings = Settings();
+        settings["hooks"]!["Stop"]![0]!["hooks"]![0] = new JsonObject { ["type"] = "command", ["command"] = $"\"{Exe}\" Stop", ["timeout"] = 5 };
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+    }
+
+    [Fact]
+    public void Install_registers_StopFailure_so_a_turn_that_ends_on_an_api_error_is_seen()
+    {
+        // A turn that ends on an API error sends StopFailure and never Stop; without it the chat stays Working.
+        _installer.Install(Exe);
+
+        var entry = Settings()["hooks"]!["StopFailure"].ShouldNotBeNull().AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        entry["command"]!.GetValue<string>().ShouldContain(ClaudeHookInstaller.Marker);
     }
 
     [Fact]
@@ -105,6 +167,48 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
+    public void A_settings_file_that_cannot_be_replaced_is_refused_with_a_message_and_leaves_no_file_behind()
+    {
+        // Settings catches HookInstallException only: any other error showed no message at all. Each failed click also left a
+        // temporary file and a backup (read-only like the original) behind.
+        WriteSettings("{}");
+        File.SetAttributes(_paths.SettingsFile, FileAttributes.ReadOnly);
+        try
+        {
+            Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+
+            File.ReadAllText(_paths.SettingsFile).ShouldBe("{}");
+            Directory.GetFiles(_paths.ClaudeDirectory).Select(Path.GetFileName).ShouldBe(["settings.json"]);
+        }
+        finally
+        {
+            foreach (var file in Directory.GetFiles(_paths.ClaudeDirectory))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void An_empty_relay_path_is_refused_with_a_message(string path)
+    {
+        // Settings shows the message of a HookInstallException only; an ArgumentException showed nothing.
+        Should.Throw<HookInstallException>(() => _installer.Install(path));
+    }
+
+    [Fact]
+    public void A_relay_path_without_the_marker_is_refused_because_its_entries_could_not_be_found_again()
+    {
+        // Entries are recognised by the marker in their command: without it every Install added a second set and
+        // Uninstall removed none.
+        Should.Throw<HookInstallException>(() => _installer.Install(@"C:\Tools\CodeSwitchX\relay.exe"));
+
+        File.Exists(_paths.SettingsFile).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Partial_installs_are_detected()
     {
         _installer.Install(Exe);
@@ -150,6 +254,9 @@ public class ClaudeHookInstallerTests : IDisposable
     [InlineData("   \r\n")]
     [InlineData("{ not json")]
     [InlineData("[1,2,3]")]
+    // Claude Code's JSON.parse takes the last of a repeated key; .NET threw an ArgumentException that stopped CodeSwitchX from starting.
+    [InlineData("""{"hooks":{},"hooks":{}}""")]
+    [InlineData("""{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"a","command":"b"}]}]}}""")]
     public void Malformed_settings_are_refused_and_left_untouched(string content)
     {
         WriteSettings(content);
@@ -158,12 +265,46 @@ public class ClaudeHookInstallerTests : IDisposable
 
         File.ReadAllText(_paths.SettingsFile).ShouldBe(content);
         Directory.GetFiles(_paths.ClaudeDirectory, "settings.json.csx-backup-*").ShouldBeEmpty();
-        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.NotInstalled);
+        // Not NotInstalled: the entries may be there, and Claude Code may be running them.
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Unreadable);
+        status.Problem.ShouldNotBeNullOrWhiteSpace();
     }
 
     [Fact]
-    public void Command_quotes_the_executable_path()
+    public void A_repeated_key_outside_the_hooks_is_kept_as_written()
     {
-        ClaudeHookInstaller.BuildCommand(Exe, "Stop").ShouldBe("\"C:\\Program Files\\CodeSwitchX\\csx-hook.exe\" Stop");
+        // Claude Code keeps the last value of a repeated key and runs the hooks; the installer never reads env, so it must
+        // neither refuse the file nor change that part of it.
+        WriteSettings("""{"env":{"A":"1","A":"2"},"model":"opus"}""");
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        var text = File.ReadAllText(_paths.SettingsFile);
+        text.ShouldContain("\"A\": \"1\"");
+        text.ShouldContain("\"A\": \"2\"");
+        _installer.Uninstall().Changed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void An_unreadable_settings_file_is_refused_with_a_message_not_an_exception()
+    {
+        WriteSettings("{}");
+        var file = new FileInfo(_paths.SettingsFile);
+        var security = file.GetAccessControl();
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.ReadData, AccessControlType.Deny);
+        security.AddAccessRule(deny);
+        file.SetAccessControl(security);
+        try
+        {
+            Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+            _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Unreadable);
+        }
+        finally
+        {
+            security.RemoveAccessRule(deny);
+            file.SetAccessControl(security);
+        }
     }
 }
