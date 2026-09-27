@@ -70,6 +70,7 @@ public class HookEnvelopeParserTests
     [Theory]
     [InlineData("permission_prompt", SessionSignal.Notification)]
     [InlineData("elicitation_dialog", SessionSignal.Notification)]
+    [InlineData("elicitation_url_dialog", SessionSignal.Notification)] // an MCP server waits for the user to open a link
     [InlineData(null, SessionSignal.Notification)]
     [InlineData("idle_prompt", SessionSignal.IdlePrompt)]
     [InlineData("Idle_Prompt", SessionSignal.IdlePrompt)]

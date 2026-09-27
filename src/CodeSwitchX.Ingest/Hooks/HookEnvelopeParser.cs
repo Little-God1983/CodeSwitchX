@@ -18,6 +18,7 @@ public static class HookEnvelopeParser
     {
         "permission_prompt",
         "elicitation_dialog",
+        "elicitation_url_dialog", // the same MCP elicitation, waiting for the user to open a link
     };
 
     public static HookEvent? Parse(string json, DateTimeOffset receivedAt)

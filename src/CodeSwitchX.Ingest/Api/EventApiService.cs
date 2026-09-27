@@ -44,6 +44,10 @@ public sealed class EventApiService : IHostedService
         var token = _tokens.GetOrCreate();
 
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { ApplicationName = "CodeSwitchX.Ingest" });
+        // No configuration at all: Kestrel binds every Kestrel:Endpoints entry it finds next to the code's listeners, and the
+        // defaults read appsettings.json from the current directory (an ASP.NET Core project, when started from its terminal)
+        // and the environment.
+        builder.Configuration.Sources.Clear();
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(_loggerFactory);
         // Only the current user may connect to the pipe; the relay verifies the server's owner the same way.
