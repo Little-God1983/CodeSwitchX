@@ -42,10 +42,20 @@ public class HookEnvelopeParserTests
     [InlineData("Notification", SessionSignal.Notification)]
     [InlineData("PermissionRequest", SessionSignal.Notification)]
     [InlineData("Stop", SessionSignal.Stop)]
+    [InlineData("StopFailure", SessionSignal.Stop)]
     [InlineData("SessionEnd", SessionSignal.SessionEnd)]
     public void Known_events_map_to_signals(string eventName, SessionSignal expected)
     {
         HookEnvelopeParser.SignalFor(eventName, null).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void A_turn_that_ends_on_an_api_error_ends_like_a_stop()
+    {
+        // Claude Code sends StopFailure instead of Stop when a turn ends on an API error (usage limit, overload, prompt too long).
+        var e = HookEnvelopeParser.Parse(Envelope("StopFailure", """{"session_id":"abc","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"API Error"}"""), Received)!;
+
+        e.Signal.ShouldBe(SessionSignal.Stop);
     }
 
     [Theory]

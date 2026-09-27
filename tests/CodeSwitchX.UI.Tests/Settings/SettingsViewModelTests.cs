@@ -54,7 +54,7 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.InstallHooksCommand.Execute(null);
         _vm.HookState.ShouldBe(HookInstallState.Installed);
-        _vm.HookStatusText.ShouldContain("8 of 8");
+        _vm.HookStatusText.ShouldContain($"{ClaudeHookInstaller.Events.Length} of {ClaudeHookInstaller.Events.Length}");
         File.Exists(_claude.SettingsFile).ShouldBeTrue();
 
         _vm.RemoveHooksCommand.Execute(null);

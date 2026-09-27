@@ -1,3 +1,5 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using CodeSwitchX.Ingest.Hooks;
@@ -35,7 +37,7 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
-    public void Install_into_a_missing_file_creates_all_eight_events()
+    public void Install_into_a_missing_file_creates_every_event()
     {
         var result = _installer.Install(Exe);
 
@@ -47,9 +49,50 @@ public class ClaudeHookInstallerTests : IDisposable
         pre.ContainsKey("matcher").ShouldBeFalse();
         var hook = pre["hooks"]!.AsArray().ShouldHaveSingleItem()!.AsObject();
         hook["type"]!.GetValue<string>().ShouldBe("command");
-        hook["command"]!.GetValue<string>().ShouldBe($"\"{Exe}\" PreToolUse");
         hook["timeout"]!.GetValue<int>().ShouldBe(5);
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+    }
+
+    [Fact]
+    public void Entries_use_the_exec_form_so_no_shell_parses_the_path()
+    {
+        // Without Git Bash, Claude Code runs a shell-form command through PowerShell, which cannot run "<path>" Stop
+        // (a quoted path needs its call operator). The exec form is spawned directly, whatever the shell.
+        _installer.Install(Exe);
+
+        var hook = Settings()["hooks"]!["Stop"]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        hook["command"]!.GetValue<string>().ShouldBe(Exe);
+        hook["args"].ShouldNotBeNull().AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["Stop"]);
+    }
+
+    [Fact]
+    public void A_shell_form_entry_from_an_earlier_install_reports_Outdated_and_reinstall_converts_it()
+    {
+        var hooks = new JsonObject();
+        foreach (var eventName in ClaudeHookInstaller.Events)
+        {
+            hooks[eventName] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = $"\"{Exe}\" {eventName}", ["timeout"] = 5 }) });
+        }
+
+        WriteSettings(new JsonObject { ["hooks"] = hooks }.ToJsonString());
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        var hook = Settings()["hooks"]!["Stop"]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        hook["command"]!.GetValue<string>().ShouldBe(Exe);
+        hook["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["Stop"]);
+    }
+
+    [Fact]
+    public void Install_registers_StopFailure_so_a_turn_that_ends_on_an_api_error_is_seen()
+    {
+        // A turn that ends on an API error sends StopFailure and never Stop; without it the chat stays Working.
+        _installer.Install(Exe);
+
+        var entry = Settings()["hooks"]!["StopFailure"].ShouldNotBeNull().AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        entry["command"]!.GetValue<string>().ShouldContain(ClaudeHookInstaller.Marker);
     }
 
     [Fact]
@@ -105,6 +148,38 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
+    public void A_settings_file_that_cannot_be_replaced_is_refused_with_a_message_and_no_temporary_file_is_left()
+    {
+        // Settings catches HookInstallException only: any other error showed no message at all.
+        WriteSettings("{}");
+        File.SetAttributes(_paths.SettingsFile, FileAttributes.ReadOnly);
+        try
+        {
+            Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+
+            File.ReadAllText(_paths.SettingsFile).ShouldBe("{}");
+            File.Exists(_paths.SettingsFile + ".csx-tmp").ShouldBeFalse();
+        }
+        finally
+        {
+            foreach (var file in Directory.GetFiles(_paths.ClaudeDirectory))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+        }
+    }
+
+    [Fact]
+    public void A_relay_path_without_the_marker_is_refused_because_its_entries_could_not_be_found_again()
+    {
+        // Entries are recognised by the marker in their command: without it every Install added a second set and
+        // Uninstall removed none.
+        Should.Throw<HookInstallException>(() => _installer.Install(@"C:\Tools\CodeSwitchX\relay.exe"));
+
+        File.Exists(_paths.SettingsFile).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Partial_installs_are_detected()
     {
         _installer.Install(Exe);
@@ -150,6 +225,9 @@ public class ClaudeHookInstallerTests : IDisposable
     [InlineData("   \r\n")]
     [InlineData("{ not json")]
     [InlineData("[1,2,3]")]
+    // Claude Code's JSON.parse takes the last of a repeated key; .NET threw an ArgumentException that stopped CodeSwitchX from starting.
+    [InlineData("""{"hooks":{},"hooks":{}}""")]
+    [InlineData("""{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"a","command":"b"}]}]}}""")]
     public void Malformed_settings_are_refused_and_left_untouched(string content)
     {
         WriteSettings(content);
@@ -162,8 +240,23 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
-    public void Command_quotes_the_executable_path()
+    public void An_unreadable_settings_file_is_refused_with_a_message_not_an_exception()
     {
-        ClaudeHookInstaller.BuildCommand(Exe, "Stop").ShouldBe("\"C:\\Program Files\\CodeSwitchX\\csx-hook.exe\" Stop");
+        WriteSettings("{}");
+        var file = new FileInfo(_paths.SettingsFile);
+        var security = file.GetAccessControl();
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.ReadData, AccessControlType.Deny);
+        security.AddAccessRule(deny);
+        file.SetAccessControl(security);
+        try
+        {
+            Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+            _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.NotInstalled);
+        }
+        finally
+        {
+            security.RemoveAccessRule(deny);
+            file.SetAccessControl(security);
+        }
     }
 }

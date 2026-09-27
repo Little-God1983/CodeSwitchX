@@ -124,7 +124,8 @@ public static class HookEnvelopeParser
         "PermissionRequest" => SessionSignal.Notification,
         "Notification" when notificationType is null || NeedsUserNotifications.Contains(notificationType) => SessionSignal.Notification,
         "Notification" when string.Equals(notificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase) => SessionSignal.IdlePrompt,
-        "Stop" => SessionSignal.Stop,
+        // A turn that ends on an API error (usage limit, overload, prompt too long) sends StopFailure instead of Stop.
+        "Stop" or "StopFailure" => SessionSignal.Stop,
         "SessionEnd" => SessionSignal.SessionEnd,
         _ => null,
     };
