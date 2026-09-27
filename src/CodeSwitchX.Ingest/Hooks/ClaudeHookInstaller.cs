@@ -42,9 +42,9 @@ public sealed class ClaudeHookInstaller
         {
             settings = Load();
         }
-        catch (HookInstallException)
+        catch (HookInstallException ex)
         {
-            return new HookInstallStatus(HookInstallState.NotInstalled, [], Events, _paths.SettingsFile);
+            return new HookInstallStatus(HookInstallState.Unreadable, [], Events, _paths.SettingsFile, ex.Message);
         }
 
         var installed = new List<string>();
@@ -74,11 +74,10 @@ public sealed class ClaudeHookInstaller
 
     public HookInstallResult Install(string relayExecutable)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(relayExecutable);
-        if (!relayExecutable.Contains(Marker, StringComparison.OrdinalIgnoreCase))
+        // Our entries are found by the marker alone: without it each install would add another set and none could be removed.
+        if (string.IsNullOrWhiteSpace(relayExecutable) || !relayExecutable.Contains(Marker, StringComparison.OrdinalIgnoreCase))
         {
-            // Our entries are found by the marker alone: without it each install would add another set and none could be removed.
-            throw new HookInstallException($"The relay path must contain \"{Marker}\" (the relay is {Marker}.exe): {relayExecutable}");
+            throw new HookInstallException($"The relay path must lead to {Marker}.exe: \"{relayExecutable}\"");
         }
 
         var settings = Load();
@@ -196,6 +195,7 @@ public sealed class ClaudeHookInstaller
     /// <summary>
     /// Exec form: Claude Code spawns <c>command</c> with <c>args</c> directly. A shell-form command ("path" Event) only runs
     /// in bash; without Git Bash Claude Code hands it to PowerShell, which cannot run a quoted path without its call operator.
+    /// The exec form needs Claude Code 2.1.139 or later (StopFailure exists since 2.1.78).
     /// </summary>
     private static bool IsCurrent(JsonObject hook, string relayExecutable, string eventName) =>
         hook["command"] is JsonValue command
@@ -233,16 +233,51 @@ public sealed class ClaudeHookInstaller
             throw new HookInstallException($"{_paths.SettingsFile} is empty; refusing to overwrite it. Fix or delete the file and retry.");
         }
 
+        JsonObject settings;
         try
         {
-            // A repeated key is refused while parsing; JsonObject would otherwise throw an ArgumentException on first access.
-            var options = new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true, AllowDuplicateProperties = false };
-            return JsonNode.Parse(text, documentOptions: options) as JsonObject
+            settings = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject
                 ?? throw new HookInstallException($"{_paths.SettingsFile} does not contain a JSON object.");
         }
         catch (JsonException ex)
         {
             throw new HookInstallException($"{_paths.SettingsFile} is not valid JSON: {ex.Message}", ex);
+        }
+
+        try
+        {
+            ReadHookEntries(settings);
+        }
+        catch (ArgumentException ex)
+        {
+            // Claude Code keeps the last of a repeated key. Only the parts the installer reads must not repeat one; the rest
+            // is never read and is written back as it was.
+            throw new HookInstallException($"{_paths.SettingsFile} repeats a key where CodeSwitchX edits it: {ex.Message}", ex);
+        }
+
+        return settings;
+    }
+
+    /// <summary>
+    /// Reads the root and every hook entry, which is all the installer touches. JsonObject reads its keys on first use and
+    /// throws on a repeated one, so this makes that happen here rather than halfway through an install.
+    /// </summary>
+    private static void ReadHookEntries(JsonObject settings)
+    {
+        if (settings["hooks"] is not JsonObject hooks)
+        {
+            return;
+        }
+
+        foreach (var (_, groups) in hooks)
+        {
+            foreach (var group in (groups as JsonArray ?? []).OfType<JsonObject>())
+            {
+                foreach (var entry in (group["hooks"] as JsonArray ?? []).OfType<JsonObject>())
+                {
+                    _ = entry.Count;
+                }
+            }
         }
     }
 
@@ -270,8 +305,14 @@ public sealed class ClaudeHookInstaller
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Read-only, locked by an editor or by Claude Code writing it: settings.json itself is unchanged.
+            // Read-only, locked by an editor or by Claude Code writing it: settings.json itself is unchanged, so neither the
+            // temporary file nor the backup of it is kept.
             TryDelete(tmp);
+            if (backup is not null)
+            {
+                TryDelete(backup);
+            }
+
             throw new HookInstallException($"Cannot write {_paths.SettingsFile}: {ex.Message}", ex);
         }
 
@@ -283,7 +324,11 @@ public sealed class ClaudeHookInstaller
     {
         try
         {
-            File.Delete(file);
+            if (File.Exists(file))
+            {
+                File.SetAttributes(file, FileAttributes.Normal); // a backup copies the read-only flag of settings.json
+                File.Delete(file);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

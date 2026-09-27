@@ -46,6 +46,33 @@ public class EventApiBindingTests
         }
     }
 
+    [Fact]
+    public async Task A_malformed_appsettings_json_in_the_current_directory_does_not_stop_the_start()
+    {
+        // The web builder's defaults parse the current directory's appsettings.json while it is created; a half-edited one
+        // in the folder CodeSwitchX was started from failed the start.
+        var root = Path.Combine(Path.GetTempPath(), "csx-bind-" + Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "data"));
+        var project = Directory.CreateDirectory(Path.Combine(root, "project")).FullName;
+        File.WriteAllText(Path.Combine(project, "appsettings.json"), """{ "Logging": {""");
+        var api = new EventApiService(paths, new EventBus(NullLogger<EventBus>.Instance), new AccessTokenStore(paths), TimeProvider.System,
+            NullLoggerFactory.Instance, new EventApiOptions { PipeName = "csx-bind-" + Guid.NewGuid().ToString("N") });
+        var previous = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory(project);
+        try
+        {
+            await api.StartAsync(CancellationToken.None);
+
+            api.Endpoint.ShouldNotBeNull().Port.ShouldBeGreaterThan(0);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(previous);
+            await api.StopAsync(CancellationToken.None);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static int FreePort(IPAddress address)
     {
         var listener = new TcpListener(address, 0);

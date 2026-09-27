@@ -43,12 +43,12 @@ public sealed class EventApiService : IHostedService
         _paths.EnsureCreated();
         var token = _tokens.GetOrCreate();
 
-        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { ApplicationName = "CodeSwitchX.Ingest" });
-        // No configuration at all: Kestrel binds every Kestrel:Endpoints entry it finds next to the code's listeners, and the
-        // defaults read appsettings.json from the current directory (an ASP.NET Core project, when started from its terminal)
-        // and the environment.
-        builder.Configuration.Sources.Clear();
-        builder.Logging.ClearProviders();
+        // An empty builder reads no configuration. The defaults parse appsettings.json in the current directory (an ASP.NET
+        // Core project, when started from its terminal) and the environment: a malformed file failed the start, and Kestrel
+        // bound every Kestrel:Endpoints entry they held next to the code's listeners.
+        var builder = WebApplication.CreateEmptyBuilder(new WebApplicationOptions { ApplicationName = "CodeSwitchX.Ingest" });
+        builder.WebHost.UseKestrelCore();
+        builder.Services.AddRoutingCore();
         builder.Services.AddSingleton(_loggerFactory);
         // Only the current user may connect to the pipe; the relay verifies the server's owner the same way.
         builder.WebHost.UseNamedPipes(pipes => pipes.CurrentUserOnly = true);

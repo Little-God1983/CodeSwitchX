@@ -74,6 +74,18 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_settings_json_that_cannot_be_read_says_why_from_the_start_instead_of_not_installed()
+    {
+        Directory.CreateDirectory(_claude.ClaudeDirectory);
+        File.WriteAllText(_claude.SettingsFile, "{ broken");
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.HookState.ShouldBe(HookInstallState.Unreadable);
+        _vm.HookStatusText.ShouldContain("not valid JSON");
+    }
+
+    [Fact]
     public async Task Malformed_settings_json_surfaces_as_a_message_not_a_crash()
     {
         Directory.CreateDirectory(_claude.ClaudeDirectory);

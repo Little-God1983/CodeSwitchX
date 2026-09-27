@@ -66,23 +66,42 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
-    public void A_shell_form_entry_from_an_earlier_install_reports_Outdated_and_reinstall_converts_it()
+    public void An_install_from_before_the_exec_form_shows_Partial_and_reinstall_converts_every_entry()
     {
+        // What an earlier CodeSwitchX wrote: the spec's eight events, each in the shell form, and no StopFailure.
+        string[] earlierEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SubagentStop", "SessionEnd"];
         var hooks = new JsonObject();
-        foreach (var eventName in ClaudeHookInstaller.Events)
+        foreach (var eventName in earlierEvents)
         {
             hooks[eventName] = new JsonArray(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = $"\"{Exe}\" {eventName}", ["timeout"] = 5 }) });
         }
 
         WriteSettings(new JsonObject { ["hooks"] = hooks }.ToJsonString());
 
-        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Partial);
+        status.MissingEvents.ShouldBe(["StopFailure"]);
 
         _installer.Install(Exe).Changed.ShouldBeTrue();
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
-        var hook = Settings()["hooks"]!["Stop"]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
-        hook["command"]!.GetValue<string>().ShouldBe(Exe);
-        hook["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["Stop"]);
+        foreach (var eventName in ClaudeHookInstaller.Events)
+        {
+            var hook = Settings()["hooks"]![eventName]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+            hook["command"]!.GetValue<string>().ShouldBe(Exe);
+            hook["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe([eventName]);
+        }
+    }
+
+    [Fact]
+    public void An_entry_in_the_shell_form_is_Outdated_even_at_the_same_path()
+    {
+        // The state Partial hides for an earlier install: every event present, one still in the shell form.
+        _installer.Install(Exe);
+        var settings = Settings();
+        settings["hooks"]!["Stop"]![0]!["hooks"]![0] = new JsonObject { ["type"] = "command", ["command"] = $"\"{Exe}\" Stop", ["timeout"] = 5 };
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
     }
 
     [Fact]
@@ -148,9 +167,10 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
-    public void A_settings_file_that_cannot_be_replaced_is_refused_with_a_message_and_no_temporary_file_is_left()
+    public void A_settings_file_that_cannot_be_replaced_is_refused_with_a_message_and_leaves_no_file_behind()
     {
-        // Settings catches HookInstallException only: any other error showed no message at all.
+        // Settings catches HookInstallException only: any other error showed no message at all. Each failed click also left a
+        // temporary file and a backup (read-only like the original) behind.
         WriteSettings("{}");
         File.SetAttributes(_paths.SettingsFile, FileAttributes.ReadOnly);
         try
@@ -158,7 +178,7 @@ public class ClaudeHookInstallerTests : IDisposable
             Should.Throw<HookInstallException>(() => _installer.Install(Exe));
 
             File.ReadAllText(_paths.SettingsFile).ShouldBe("{}");
-            File.Exists(_paths.SettingsFile + ".csx-tmp").ShouldBeFalse();
+            Directory.GetFiles(_paths.ClaudeDirectory).Select(Path.GetFileName).ShouldBe(["settings.json"]);
         }
         finally
         {
@@ -167,6 +187,15 @@ public class ClaudeHookInstallerTests : IDisposable
                 File.SetAttributes(file, FileAttributes.Normal);
             }
         }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void An_empty_relay_path_is_refused_with_a_message(string path)
+    {
+        // Settings shows the message of a HookInstallException only; an ArgumentException showed nothing.
+        Should.Throw<HookInstallException>(() => _installer.Install(path));
     }
 
     [Fact]
@@ -236,7 +265,26 @@ public class ClaudeHookInstallerTests : IDisposable
 
         File.ReadAllText(_paths.SettingsFile).ShouldBe(content);
         Directory.GetFiles(_paths.ClaudeDirectory, "settings.json.csx-backup-*").ShouldBeEmpty();
-        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.NotInstalled);
+        // Not NotInstalled: the entries may be there, and Claude Code may be running them.
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Unreadable);
+        status.Problem.ShouldNotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void A_repeated_key_outside_the_hooks_is_kept_as_written()
+    {
+        // Claude Code keeps the last value of a repeated key and runs the hooks; the installer never reads env, so it must
+        // neither refuse the file nor change that part of it.
+        WriteSettings("""{"env":{"A":"1","A":"2"},"model":"opus"}""");
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        var text = File.ReadAllText(_paths.SettingsFile);
+        text.ShouldContain("\"A\": \"1\"");
+        text.ShouldContain("\"A\": \"2\"");
+        _installer.Uninstall().Changed.ShouldBeTrue();
     }
 
     [Fact]
@@ -251,7 +299,7 @@ public class ClaudeHookInstallerTests : IDisposable
         try
         {
             Should.Throw<HookInstallException>(() => _installer.Install(Exe));
-            _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.NotInstalled);
+            _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Unreadable);
         }
         finally
         {
