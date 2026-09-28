@@ -28,9 +28,12 @@ public class TrayIconServiceTests
         }
         finally
         {
-            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
+            // Put back only what was changed: efficiency mode lowers the priority and throttles the process.
+            if (CurrentPriority() != before && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 16299))
             {
-                H.NotifyIcon.EfficiencyMode.EfficiencyModeUtilities.SetEfficiencyMode(false); // in case it was switched on, for the rest of this test run
+                H.NotifyIcon.EfficiencyMode.EfficiencyModeUtilities.SetEfficiencyMode(false);
+                using var process = Process.GetCurrentProcess();
+                process.PriorityClass = before;
             }
         }
     }

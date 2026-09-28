@@ -32,13 +32,19 @@ public partial class App : Application
     {
         base.OnStartup(e);
         // Before the log, the database or the pipe is opened: a second instance brings the running one forward and ends.
-        _instance = SingleInstance.TryClaim(SingleInstance.DefaultName);
-        if (_instance is null)
+        var claim = SingleInstance.Claim(SingleInstance.DefaultName, SingleInstance.AnswerTimeout);
+        if (claim.Result is not (ClaimResult.Claimed or ClaimResult.Unavailable))
         {
+            if (AnotherInstanceMessage(claim.Result) is { } message)
+            {
+                MessageBox.Show(message, "CodeSwitchX", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+
             Shutdown();
             return;
         }
 
+        _instance = claim.Instance;
         var paths = AppPaths.Default();
         paths.EnsureCreated();
 
@@ -51,6 +57,10 @@ public partial class App : Application
             .CreateLogger();
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        if (claim.Problem is { } problem)
+        {
+            Log.Warning(problem, "Could not check whether CodeSwitchX is already running; starting without that check");
+        }
 
         try
         {
@@ -71,7 +81,7 @@ public partial class App : Application
             var window = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = window;
             window.Show();
-            _instance.OnActivationRequested(() => Dispatcher.InvokeAsync(() => WindowActivation.BringUp(window)));
+            _instance?.OnActivationRequested(() => BringForward(window));
         }
         catch (Exception ex)
         {
@@ -79,6 +89,26 @@ public partial class App : Application
             MessageBox.Show($"CodeSwitchX failed to start:\n\n{ex.Message}\n\nSee {paths.LogsDirectory}", "CodeSwitchX", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
+    }
+
+    private static string? AnotherInstanceMessage(ClaimResult result) => result switch
+    {
+        ClaimResult.NoAnswer => "CodeSwitchX is already running, but its window did not come forward. It may still be starting "
+            + "or closing. If it does not appear, end CodeSwitchX.exe in Task Manager and start it again.",
+        ClaimResult.InAnotherSession => "CodeSwitchX is already running in another Windows session of this account. Close it there first.",
+        _ => null,
+    };
+
+    /// <summary>For a later start: true once the window has come forward on the UI thread, which a hung shell never does.</summary>
+    private bool BringForward(Window window)
+    {
+        var done = false;
+        Dispatcher.Invoke(() =>
+        {
+            WindowActivation.BringUp(window);
+            done = true;
+        }, DispatcherPriority.Normal, CancellationToken.None, SingleInstance.AnswerTimeout);
+        return done;
     }
 
     /// <summary>

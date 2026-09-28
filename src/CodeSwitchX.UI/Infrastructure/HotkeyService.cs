@@ -90,14 +90,18 @@ public sealed class HotkeyService
         var id = wParam.ToInt32();
         if (id == ToggleId)
         {
-            BringUpShell();
+            // ToggleMode's own rule: out of the Cab, or back into the workspace shown last.
+            var acts = _shell.Mode == ShellMode.Cab || _shell.ActiveWorkspaceId is not null;
             _shell.ToggleMode();
+            BringUpShellIf(acts);
             handled = true;
         }
         else if (id > JumpBaseId && id <= JumpBaseId + 9)
         {
-            BringUpShell();
-            _ = _shell.JumpToAsync(id - JumpBaseId);
+            var index = id - JumpBaseId;
+            var acts = index <= _shell.Yard.Tiles.Count();
+            _ = _shell.JumpToAsync(index);
+            BringUpShellIf(acts);
             handled = true;
         }
 
@@ -105,12 +109,14 @@ public sealed class HotkeyService
     }
 
     /// <summary>
-    /// A global hotkey is pressed from anywhere, so the shell comes up first. A minimised shell would otherwise switch
-    /// modes out of sight: the Cab showed VS Code on its own where the shell had been, and the Yard showed nothing.
+    /// A global hotkey is pressed from anywhere, so a hotkey that switches something brings the shell up: a minimised
+    /// shell switched modes out of sight, the Cab showing VS Code on its own and the Yard nothing. It comes up after the
+    /// switch, because a restored shell docks the workspace the Cab shows, which must already be the one the hotkey
+    /// chose. A hotkey with nothing to do leaves the user's application in front.
     /// </summary>
-    private void BringUpShell()
+    private void BringUpShellIf(bool acts)
     {
-        if (_source?.RootVisual is Window window)
+        if (acts && _source?.RootVisual is Window window)
         {
             WindowActivation.BringUp(window);
         }

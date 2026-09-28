@@ -2,7 +2,9 @@ using System.Windows;
 using System.Windows.Interop;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Shell;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Infrastructure;
 
@@ -32,15 +34,42 @@ public class HotkeyServiceTests
     }
 
     [Theory]
-    [InlineData("Ctrl+Alt+Y")]
-    [InlineData("Ctrl+Shift+Alt+9")]
-    public async Task A_hotkey_brings_a_minimised_shell_back(string label)
+    [InlineData("Ctrl+Alt+Y")] // no workspace was opened yet, so there is nothing to toggle to
+    [InlineData("Ctrl+Shift+Alt+9")] // the Yard has one tile
+    public async Task A_hotkey_with_nothing_to_do_leaves_a_minimised_shell_where_it_is(string label)
     {
-        // The Yard has one tile and no workspace was active, so neither hotkey switches anything here.
-        var shell = new ShellTestHarness().Shell;
-        var binding = HotkeyService.Bindings.Single(b => b.Label == label);
+        var harness = new ShellTestHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
 
-        await StaThread.RunAsync(() =>
+        await OnMinimisedShellAsync(harness, label, window =>
+            window.WindowState.ShouldBe(WindowState.Minimized, "the user's own application keeps the foreground"));
+    }
+
+    [Fact]
+    public async Task A_hotkey_acts_before_the_shell_comes_back_so_the_restore_does_not_dock_the_workspace_it_leaves()
+    {
+        var harness = new ShellTestHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        harness.VsCodeWindowAppears();
+        harness.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await harness.Shell.EnterCabAsync(harness.App.Id);
+
+        await OnMinimisedShellAsync(harness, "Ctrl+Alt+Y", window =>
+        {
+            window.WindowState.ShouldBe(WindowState.Normal, "a hotkey that acts brings the shell back");
+            harness.Shell.Mode.ShouldBe(ShellMode.Yard);
+            harness.Docker.DidNotReceive().Uncloak(500);
+        });
+    }
+
+    /// <summary>
+    /// Minimises a window wired to the shell the way MainWindow is, presses the hotkey, and checks the result on the
+    /// window's own thread.
+    /// </summary>
+    private static Task OnMinimisedShellAsync(ShellTestHarness harness, string label, Action<Window> check)
+    {
+        var binding = HotkeyService.Bindings.Single(b => b.Label == label);
+        return StaThread.RunAsync(() =>
         {
             var window = new Window
             {
@@ -48,14 +77,17 @@ public class HotkeyServiceTests
                 Left = -20000, Top = -20000, Width = 200, Height = 200,
             };
             window.Show();
+            window.StateChanged += (_, _) => harness.Shell.SetShellMinimized(window.WindowState == WindowState.Minimized);
+            harness.Shell.SetShellMinimized(true);
+            harness.Docker.ClearReceivedCalls();
             var hwnd = new WindowInteropHelper(window).Handle;
             var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance);
-            hotkeys.Attach(hwnd, shell);
+            hotkeys.Attach(hwnd, harness.Shell);
             try
             {
                 StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, binding.Id, 0);
 
-                window.WindowState.ShouldBe(WindowState.Normal, "a global hotkey acts on the shell, so the shell has to be on screen");
+                check(window);
             }
             finally
             {
