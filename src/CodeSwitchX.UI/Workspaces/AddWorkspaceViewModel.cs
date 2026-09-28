@@ -64,14 +64,26 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
         SelectedTrack ??= Tracks.FirstOrDefault();
     }
 
+    /// <summary>
+    /// The path can change while a detect runs: it is typed over, or Folder… and File… start a detect of their own
+    /// (<c>Execute</c> does not check <c>CanExecute</c>), and an offline share takes about 20 s to fail. A detect fills
+    /// the form or reports an error only for the path still in the box.
+    /// </summary>
     [RelayCommand(CanExecute = nameof(CanProbe))]
     private async Task ProbeAsync()
     {
+        var input = InputPath;
+        bool IsCurrent() => InputPath == input;
         ErrorMessage = null;
         IsBusy = true;
         try
         {
-            var result = await _probe.ProbeAsync(InputPath.Trim().Trim('"'), CancellationToken.None);
+            var result = await _probe.ProbeAsync(input.Trim().Trim('"'), CancellationToken.None);
+            if (!IsCurrent())
+            {
+                return;
+            }
+
             Name = result.SuggestedName;
             RootPath = result.RootPath;
             WorkspaceFile = result.WorkspaceFile;
@@ -89,8 +101,11 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            IsProbed = false;
-            ErrorMessage = ex.Message;
+            if (IsCurrent())
+            {
+                IsProbed = false;
+                ErrorMessage = ex.Message;
+            }
         }
         finally
         {
@@ -110,13 +125,16 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
         IsBusy = true;
         try
         {
-            var track = SelectedTrack;
-            if (!string.IsNullOrWhiteSpace(NewTrackName))
+            // Nothing deletes a track, so one stored for a folder that cannot be added would stay on the Yard for good.
+            if (await _store.FindByRootAsync(RootPath, CancellationToken.None) is not null)
             {
-                track = await _store.AddTrackAsync(NewTrackName.Trim(), CancellationToken.None);
+                throw new DuplicateWorkspaceException(RootPath);
             }
 
-            track ??= Tracks.FirstOrDefault() ?? await _store.AddTrackAsync("General", CancellationToken.None);
+            var track = !string.IsNullOrWhiteSpace(NewTrackName) ? await TrackNamedAsync(NewTrackName.Trim())
+                : SelectedTrack ?? Tracks.FirstOrDefault() ?? await TrackNamedAsync("General");
+            SelectedTrack = track;
+            NewTrackName = string.Empty;
 
             var workspace = new Workspace
             {
@@ -151,6 +169,22 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
     }
 
     private bool CanSave() => IsProbed && !IsBusy && !string.IsNullOrWhiteSpace(Name);
+
+    /// <summary>
+    /// The listed track of that name (ignoring case), or a new one. A new track joins the list at once: it is stored
+    /// whether or not the workspace is, so an Add after a failed one must find it rather than create it again.
+    /// </summary>
+    private async Task<Track> TrackNamedAsync(string name)
+    {
+        var track = Tracks.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (track is null)
+        {
+            track = await _store.AddTrackAsync(name, CancellationToken.None);
+            Tracks.Add(track);
+        }
+
+        return track;
+    }
 
     [RelayCommand]
     private void Cancel() => Closed?.Invoke();

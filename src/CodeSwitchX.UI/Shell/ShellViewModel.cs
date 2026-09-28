@@ -81,6 +81,13 @@ public sealed partial class ShellViewModel : ObservableObject
             return;
         }
 
+        if (ActiveWorkspaceId != workspaceId)
+        {
+            // The strip names the new workspace from here on; the VS Code shown so far must not stay in the Cab while
+            // the new one starts, or for good when it does not.
+            _host.HideAll();
+        }
+
         ActiveWorkspaceId = workspaceId;
         Cab.SetActive(tile, Yard.Tiles);
         Mode = ShellMode.Cab;
@@ -91,19 +98,28 @@ public sealed partial class ShellViewModel : ObservableObject
             var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None);
             if (hosted.State != HostState.Running)
             {
-                StatusMessage = hosted.Error ?? "VS Code did not start.";
+                ReportFor(workspaceId, hosted.Error ?? "VS Code did not start.");
                 return;
             }
 
-            if (Cab.LastHostRect is { } rect && Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId)
+            if (ActiveWorkspaceId == workspaceId)
             {
-                _host.ShowInCab(workspaceId, rect);
+                RaiseHostedWindow();
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Opening workspace {Workspace} failed", tile.Name);
-            StatusMessage = ex.Message;
+            ReportFor(workspaceId, ex.Message);
+        }
+    }
+
+    /// <summary>The status strip belongs to the active workspace: an open the user has moved on from does not report there.</summary>
+    private void ReportFor(Guid workspaceId, string message)
+    {
+        if (ActiveWorkspaceId == workspaceId)
+        {
+            StatusMessage = message;
         }
     }
 
@@ -172,13 +188,17 @@ public sealed partial class ShellViewModel : ObservableObject
         {
             _host.HideAll();
         }
-        else if (ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
+        else
         {
-            _host.ShowInCab(id, rect);
+            RaiseHostedWindow();
         }
     }
 
-    /// <summary>Activating the shell puts it above the docked VS Code window; this puts VS Code back on top while in Cab mode.</summary>
+    /// <summary>
+    /// Shows the active workspace's VS Code in the Cab and raises it, when the shell can show it: in Cab mode, not
+    /// minimised, with a known Cab rectangle. The one place for that rule: an open that finishes, a restore, and an
+    /// activation of the shell (which puts the shell above the docked VS Code) all come here.
+    /// </summary>
     public void RaiseHostedWindow()
     {
         if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)

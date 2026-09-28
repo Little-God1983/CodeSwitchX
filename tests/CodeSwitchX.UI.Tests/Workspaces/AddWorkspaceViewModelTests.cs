@@ -111,4 +111,147 @@ public class AddWorkspaceViewModelTests : IDisposable
         _vm.IsProbed.ShouldBeFalse();
         _vm.SaveCommand.CanExecute(null).ShouldBeFalse("Add would register the folder that was probed, not the one now in the box");
     }
+
+    [Fact]
+    public async Task A_detect_that_ends_after_the_path_was_changed_does_not_fill_the_form()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_root)!, "Other");
+        Directory.CreateDirectory(other);
+        var gitMayAnswer = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new AddWorkspaceViewModel(new WorkspaceProbe(new GitInspector((_, _, _) => gitMayAnswer.Task)), _store,
+            new WorkspaceRegistry(_store, new WorkspaceResolver(), new EventBus(NullLogger<EventBus>.Instance)), NullLogger<AddWorkspaceViewModel>.Instance);
+        await vm.LoadAsync(CancellationToken.None);
+        vm.InputPath = _root;
+        var detect = vm.ProbeCommand.ExecuteAsync(null);
+
+        vm.InputPath = other; // typed, or picked with Folder…, while git is still answering for Shop
+        gitMayAnswer.SetResult(null);
+        await detect;
+
+        vm.IsProbed.ShouldBeFalse();
+        vm.Name.ShouldNotBe("Shop");
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse("Add would register Shop while the box shows Other");
+    }
+
+    [Fact]
+    public async Task A_detect_that_fails_after_the_path_was_changed_leaves_the_form_of_the_path_now_in_the_box()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_root)!, "Other");
+        Directory.CreateDirectory(other);
+        var shopGitFails = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new AddWorkspaceViewModel(new WorkspaceProbe(new GitInspector((root, _, _) => root.EndsWith("Shop") ? shopGitFails.Task : Task.FromResult<string?>(null))), _store,
+            new WorkspaceRegistry(_store, new WorkspaceResolver(), new EventBus(NullLogger<EventBus>.Instance)), NullLogger<AddWorkspaceViewModel>.Instance);
+        await vm.LoadAsync(CancellationToken.None);
+        vm.InputPath = _root;
+        var slowDetect = vm.ProbeCommand.ExecuteAsync(null);
+
+        vm.InputPath = other; // Folder… starts its own detect while the first one still runs
+        await vm.ProbeCommand.ExecuteAsync(null);
+        vm.Name.ShouldBe("Other");
+        shopGitFails.SetException(new IOException("The network path was not found."));
+        await slowDetect;
+
+        vm.IsProbed.ShouldBeTrue();
+        vm.ErrorMessage.ShouldBeNull("the error names a path no longer in the box");
+        vm.SaveCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    /// <summary>Holds without code of ours: the toolkit's command stays disabled while its newest run is going.</summary>
+    [Fact]
+    public async Task A_detect_that_ends_while_a_later_one_still_runs_leaves_detect_disabled()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_root)!, "Other");
+        Directory.CreateDirectory(Path.Combine(other, ".git")); // a repository, so its detect waits for git too
+        File.WriteAllText(Path.Combine(other, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var shopGit = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var otherGit = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new AddWorkspaceViewModel(new WorkspaceProbe(new GitInspector((root, _, _) => root.EndsWith("Shop") ? shopGit.Task : otherGit.Task)), _store,
+            new WorkspaceRegistry(_store, new WorkspaceResolver(), new EventBus(NullLogger<EventBus>.Instance)), NullLogger<AddWorkspaceViewModel>.Instance);
+        await vm.LoadAsync(CancellationToken.None);
+        vm.InputPath = _root;
+        var shopDetect = vm.ProbeCommand.ExecuteAsync(null);
+        vm.InputPath = other;
+        var otherDetect = vm.ProbeCommand.ExecuteAsync(null); // what Folder… does while the first detect runs
+
+        shopGit.SetResult(null);
+        await shopDetect;
+
+        vm.ProbeCommand.CanExecute(null).ShouldBeFalse("the detect of the path in the box is still running");
+        otherGit.SetResult(null);
+        await otherDetect;
+        vm.ProbeCommand.CanExecute(null).ShouldBeTrue();
+        vm.Name.ShouldBe("Other");
+    }
+
+    [Fact]
+    public async Task A_folder_that_is_registered_already_is_refused_before_its_new_track_is_stored()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _store.FindByRootAsync(_vm.RootPath, Arg.Any<CancellationToken>()).Returns(Task.FromResult<Workspace?>(new Workspace { Name = "Shop", RootPath = _vm.RootPath }));
+        _vm.NewTrackName = "Clients";
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        _vm.ErrorMessage.ShouldNotBeNull().ShouldContain("already registered");
+        await _store.DidNotReceive().AddTrackAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Add_again_after_a_failed_add_uses_the_general_track_it_already_created()
+    {
+        _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Track>>([]));
+        _store.AddTrackAsync("General", Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(new Track { Name = "General" }));
+        var adds = 0;
+        _store.AddAsync(Arg.Any<Workspace>(), Arg.Any<CancellationToken>()).Returns(_ => ++adds == 1 ? throw new IOException("disk full") : Task.CompletedTask);
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+        _vm.ErrorMessage.ShouldNotBeNull();
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        await _store.Received(1).AddTrackAsync("General", Arg.Any<CancellationToken>());
+        _vm.Tracks.ShouldHaveSingleItem().ShouldBe(_vm.SelectedTrack);
+    }
+
+    [Fact]
+    public async Task A_new_track_name_that_names_an_existing_track_adds_to_that_track()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _vm.NewTrackName = " general ";
+        Workspace? saved = null;
+        _vm.Saved += w => saved = w;
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        await _store.DidNotReceive().AddTrackAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        saved.ShouldNotBeNull().TrackId.ShouldBe(_general.Id);
+    }
+
+    [Fact]
+    public async Task Add_again_after_a_failed_add_uses_the_new_track_it_already_created()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _vm.NewTrackName = "Clients";
+        var adds = 0;
+        _store.AddAsync(Arg.Any<Workspace>(), Arg.Any<CancellationToken>()).Returns(_ => ++adds == 1 ? throw new DuplicateWorkspaceException(_vm.RootPath) : Task.CompletedTask);
+        Workspace? saved = null;
+        _vm.Saved += w => saved = w;
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+        _vm.ErrorMessage.ShouldNotBeNull();
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        await _store.Received(1).AddTrackAsync("Clients", Arg.Any<CancellationToken>());
+        saved.ShouldNotBeNull().TrackId.ShouldBe(_vm.SelectedTrack.ShouldNotBeNull().Id);
+        _vm.SelectedTrack.Name.ShouldBe("Clients");
+        _vm.Tracks.ShouldContain(_vm.SelectedTrack, "the Track box can only show a track that is in its list");
+    }
 }
