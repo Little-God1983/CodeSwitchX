@@ -28,12 +28,21 @@ public class ChatTitleTests
         ChatTitle.FromPrompt(prompt).ShouldBeNull();
     }
 
-    [Fact]
-    public void A_cut_never_leaves_half_an_emoji_before_the_ellipsis()
+    [Theory]
+    [InlineData(58, "😀")] // one surrogate pair across the cut
+    [InlineData(56, "🇩🇪")] // a flag: two pairs, the cut between them
+    [InlineData(52, "👨‍👩‍👧")] // a family: three emoji joined with ZWJ
+    public void A_cut_never_leaves_part_of_an_emoji_before_the_ellipsis(int letters, string emoji)
     {
-        // 58 letters, then a two-char emoji across the cut: keeping 59 chars would keep the emoji's first half alone.
-        var title = ChatTitle.FromPrompt(new string('a', 58) + "😀 and more", 60)!;
+        // The emoji reaches past the cut at 59 chars; keeping what fits would keep its first part alone.
+        var title = ChatTitle.FromPrompt(new string('a', letters) + emoji + " and more", 60)!;
 
-        title.ShouldBe(new string('a', 58) + "…");
+        title.ShouldBe(new string('a', letters) + "…");
+    }
+
+    [Fact]
+    public void A_limit_of_one_gives_just_the_ellipsis()
+    {
+        ChatTitle.FromPrompt("ab", 1).ShouldBe("…");
     }
 }

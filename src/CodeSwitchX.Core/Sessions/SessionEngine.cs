@@ -67,8 +67,9 @@ public sealed class SessionEngine : IDisposable
     /// chat's turn ended while the app was down, so it comes back Idle rather than as a red Errored row, and the PID is
     /// forgotten. A process that started after the chat's last event holds a reused PID and counts as gone.
     /// A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
-    /// hook most likely fired while the app was down. Waiting sessions with a live process are left alone: a permission
-    /// prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
+    /// hook most likely fired while the app was down, and an Idle one quiet for the stale window comes back Stale, as the
+    /// first sweep would make it 5 s on (until then its row would sit on the tile). Waiting sessions with a live process
+    /// are left alone: a permission prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -93,6 +94,11 @@ public sealed class SessionEngine : IDisposable
                 if (corrected.State == SessionState.Working && now - corrected.LastEventAt > _options.InferredIdleAfter)
                 {
                     corrected = corrected with { State = SessionState.Idle, StateSince = now };
+                }
+
+                if (corrected.State == SessionState.Idle && now - corrected.LastEventAt >= _options.StaleAfter)
+                {
+                    corrected = corrected with { State = SessionState.Stale, StateSince = StaleSince(corrected) };
                 }
 
                 Commit(restored, corrected);
@@ -173,15 +179,16 @@ public sealed class SessionEngine : IDisposable
             var state = s.State;
             var stateSince = s.StateSince;
             var activityAt = u.LastActivityAt ?? u.ObservedAt;
-            if (u.Interrupted && state is SessionState.Working or SessionState.Waiting && activityAt >= s.StateSince)
+            // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is, and the
+            // newest: Interrupted means the file ends with it, so the same lines infer nothing newer (their recent writes
+            // would say Working). For a hook-backed chat an interrupt older than the current state belongs to an earlier
+            // turn and must not undo a newer hook; without hooks the state came from this transcript or a sweep of it.
+            if (u.Interrupted && state is SessionState.Working or SessionState.Waiting or SessionState.Starting && (!s.HookSeen || activityAt >= s.StateSince))
             {
-                // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is, and
-                // it is the newest fact in the lines that also infer Working from their recent writes. An interrupt older
-                // than the current state belongs to an earlier turn and must not undo a newer hook.
                 state = SessionState.Idle;
                 stateSince = activityAt;
             }
-            else if (!s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
+            else if (!u.Interrupted && !s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
             {
                 if (next != state)
                 {
@@ -212,17 +219,21 @@ public sealed class SessionEngine : IDisposable
     }
 
     /// <summary>
-    /// Errored, when <paramref name="pid"/> is still the chat's claude. A chat that a new claude resumed between the
-    /// liveness tick's probe and this call is left alone: its process was never probed.
+    /// Errored, when the chat's claude is still <paramref name="pid"/> as of the event the probe was made for
+    /// (<paramref name="seenAt"/>, its <see cref="SessionSnapshot.LastEventAt"/> then). A chat that moved on while it
+    /// was probed is left alone: a "claude --resume" that got the same PID back was never probed. Returns whether it applied.
     /// </summary>
-    public void MarkProcessGone(string sessionId, int pid)
+    public bool MarkProcessGone(string sessionId, int pid, DateTimeOffset seenAt)
     {
         lock (_gate)
         {
-            if (_sessions.TryGetValue(sessionId, out var s) && s.ClaudePid == pid)
+            if (_sessions.TryGetValue(sessionId, out var s) && s.ClaudePid == pid && s.LastEventAt == seenAt)
             {
                 SignalLocked(sessionId, SessionSignal.ProcessGone);
+                return true;
             }
+
+            return false;
         }
     }
 
@@ -265,10 +276,10 @@ public sealed class SessionEngine : IDisposable
 
                 if (signal is { } decay)
                 {
-                    SignalLocked(s.SessionId, decay);
+                    SignalLocked(s.SessionId, decay, decay == SessionSignal.StaleTimeout ? StaleSince(s) : null);
                     if (_sessions[s.SessionId].State == SessionState.Idle && quiet >= _options.StaleAfter)
                     {
-                        SignalLocked(s.SessionId, SessionSignal.StaleTimeout);
+                        SignalLocked(s.SessionId, SessionSignal.StaleTimeout, StaleSince(s));
                     }
                 }
             }
@@ -319,17 +330,21 @@ public sealed class SessionEngine : IDisposable
         }
     }
 
-    private void SignalLocked(string sessionId, SessionSignal signal)
+    /// <summary>
+    /// When a chat quiet for the whole stale window became Stale: the end of that window, not the sweep or restore that
+    /// noticed. The tile keeps a Stale row 30 min from here, so yesterday's chats must not date from this morning's start.
+    /// </summary>
+    private DateTimeOffset StaleSince(SessionSnapshot s) => s.LastEventAt + _options.StaleAfter;
+
+    /// <param name="since">When the new state began, where the caller knows better than now (a chat found stale).</param>
+    private void SignalLocked(string sessionId, SessionSignal signal, DateTimeOffset? since = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var previous) || !SessionStateMachine.TryNext(previous.State, signal, out var next))
         {
             return;
         }
 
-        // A chat goes Stale once it has been quiet for the whole stale window, so the row dates from the end of that window:
-        // the first sweep after a start finds chats that went stale hours ago, and the tile keeps a Stale row 30 min from here.
-        var since = signal == SessionSignal.StaleTimeout ? previous.LastEventAt + _options.StaleAfter : _time.GetUtcNow();
-        Commit(previous, previous with { State = next, StateSince = since });
+        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow() });
     }
 
     /// <summary>Stores and publishes a changed snapshot. Must be called under <see cref="_gate"/> so versions and publish order agree.</summary>

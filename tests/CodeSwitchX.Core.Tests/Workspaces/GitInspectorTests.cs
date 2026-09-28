@@ -189,9 +189,10 @@ public class GitInspectorTests : IDisposable
     [Fact]
     public async Task A_grandchild_that_keeps_the_output_open_after_the_process_exited_is_killed_on_timeout_instead_of_throwing()
     {
-        // cmd exits at once; the ping it started in the background inherits the output pipe and holds it for 30 s.
-        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c start /b ping -n 30 127.0.0.1") { WorkingDirectory = _root };
-        var pingsBefore = System.Diagnostics.Process.GetProcessesByName("ping").Length;
+        // cmd exits at once; the cmd it started in the background inherits the output pipe and holds it while its ping
+        // writes to a file for 30 s. That file is the grandchildren's trace: it cannot be deleted while either holds it.
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c start /b cmd /c \"ping -n 30 127.0.0.1 > grandchild.txt\"") { WorkingDirectory = _root };
+        var trace = Path.Combine(_root, "grandchild.txt");
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromMilliseconds(300), CancellationToken.None);
@@ -199,7 +200,8 @@ public class GitInspectorTests : IDisposable
         sw.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(5));
         result.TimedOut.ShouldBeTrue();
         result.Output.ShouldBeNull();
+        File.Exists(trace).ShouldBeTrue("the grandchildren did run");
         await Task.Delay(300, TestContext.Current.CancellationToken);
-        System.Diagnostics.Process.GetProcessesByName("ping").Length.ShouldBeLessThanOrEqualTo(pingsBefore, "the grandchild holding the pipe must go with the tree");
+        Should.NotThrow(() => File.Delete(trace), "a grandchild still holding the file survived the kill of the tree");
     }
 }

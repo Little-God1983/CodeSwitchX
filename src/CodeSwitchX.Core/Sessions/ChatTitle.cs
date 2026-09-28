@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace CodeSwitchX.Core.Sessions;
 
 public static class ChatTitle
@@ -18,10 +20,18 @@ public static class ChatTitle
             return singleLine;
         }
 
-        var keep = maxLength - 1;
-        if (char.IsHighSurrogate(singleLine[keep - 1]))
+        // Whole text elements only: an emoji is one or more surrogate pairs, possibly joined (a flag, a family).
+        var limit = maxLength - 1;
+        var keep = 0;
+        while (keep < limit)
         {
-            keep--; // never cut between the two halves of an emoji
+            var next = keep + StringInfo.GetNextTextElementLength(singleLine.AsSpan(keep));
+            if (next > limit)
+            {
+                break;
+            }
+
+            keep = next;
         }
 
         return string.Concat(singleLine.AsSpan(0, keep), "…");
