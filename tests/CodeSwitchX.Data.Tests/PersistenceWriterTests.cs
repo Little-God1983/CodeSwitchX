@@ -275,4 +275,39 @@ public class PersistenceWriterTests : IAsyncLifetime
             Arg.Any<IReadOnlyCollection<string>>(),
             Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public void Hook_events_are_kept_fourteen_days_as_the_data_model_says()
+    {
+        PersistenceWriterOptions.DefaultEventRetention.ShouldBe(TimeSpan.FromDays(14));
+    }
+
+    [Fact]
+    public async Task A_retry_after_the_usage_commit_failed_does_not_append_the_events_again()
+    {
+        var real = _db.Get<IUsageStore>();
+        var usage = Substitute.For<IUsageStore>();
+        usage.CommitAsync(Arg.Any<IReadOnlyCollection<UsageBucket>>(), Arg.Any<IReadOnlyCollection<TranscriptCursor>>(), Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(
+                _ => throw new InvalidOperationException("database is locked"),
+                call => real.CommitAsync(call.Arg<IReadOnlyCollection<UsageBucket>>(), call.Arg<IReadOnlyCollection<TranscriptCursor>>(), call.Arg<IReadOnlyCollection<string>>(), call.Arg<CancellationToken>()));
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), usage, _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        writer.Subscribe();
+        var at = _time.GetUtcNow();
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", SessionState.Working)));
+        _bus.Publish(new HookEventReceived(new HookEvent { SessionId = "s1", EventName = "PreToolUse", Signal = SessionSignal.ToolUse, At = at, ToolName = "Edit" }));
+        _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+        }));
+
+        // The session and the event are saved, the usage commit fails; the retry must only repeat the usage.
+        await writer.FlushAsync(CancellationToken.None);
+        await writer.FlushAsync(CancellationToken.None);
+
+        (await _db.Get<ISessionStore>().GetEventsAsync("s1", 10, TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        (await real.GetBucketsAsync(at.AddMinutes(-1), at.AddMinutes(1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Input.ShouldBe(10);
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(at.AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
 }

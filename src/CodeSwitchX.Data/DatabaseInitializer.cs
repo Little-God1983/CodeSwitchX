@@ -40,8 +40,8 @@ public sealed class DatabaseInitializer
             throw new InvalidOperationException("The data model has changes that no migration covers; add one with 'dotnet ef migrations add'.");
         }
 
+        // Persistent, unlike the per-connection pragmas SqlitePragmaInterceptor sets on every open.
         await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
-        await db.Database.ExecuteSqlRawAsync("PRAGMA synchronous=NORMAL;", ct);
 
         if (!await db.Tracks.AnyAsync(ct))
         {

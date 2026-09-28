@@ -74,30 +74,33 @@ public sealed class UsageStore : IUsageStore
 
     private static async Task ApplyUsageAsync(CodeSwitchXDbContext db, IReadOnlyCollection<UsageBucket> deltas, CancellationToken ct)
     {
+        if (deltas.Count == 0)
+        {
+            return;
+        }
+
+        // One query for the buckets a batch can touch instead of one per delta: a first start over a large history commits
+        // 500 buckets per flush. The sessions and the minute span bound the rows read; the key picks the exact ones.
+        var sessions = deltas.Select(d => d.SessionId).Distinct(StringComparer.Ordinal).ToArray();
+        var from = deltas.Min(d => UsageBucket.FloorToMinute(d.MinuteUtc));
+        var to = deltas.Max(d => UsageBucket.FloorToMinute(d.MinuteUtc));
+        var existing = (await db.UsageBuckets.Where(b => sessions.Contains(b.SessionId) && b.MinuteUtc >= from && b.MinuteUtc <= to).ToListAsync(ct))
+            .ToDictionary(b => (b.SessionId, b.Model, b.MinuteUtc));
         foreach (var delta in deltas)
         {
             var minute = UsageBucket.FloorToMinute(delta.MinuteUtc);
-            var existing = await db.UsageBuckets.FindAsync([delta.SessionId, delta.Model, minute], ct);
-            if (existing is null)
+            var key = (delta.SessionId, delta.Model, minute);
+            if (!existing.TryGetValue(key, out var bucket))
             {
-                db.UsageBuckets.Add(new UsageBucket
-                {
-                    SessionId = delta.SessionId,
-                    Model = delta.Model,
-                    MinuteUtc = minute,
-                    Input = delta.Input,
-                    Output = delta.Output,
-                    CacheWrite = delta.CacheWrite,
-                    CacheRead = delta.CacheRead,
-                });
+                bucket = new UsageBucket { SessionId = delta.SessionId, Model = delta.Model, MinuteUtc = minute };
+                db.UsageBuckets.Add(bucket);
+                existing[key] = bucket;
             }
-            else
-            {
-                existing.Input += delta.Input;
-                existing.Output += delta.Output;
-                existing.CacheWrite += delta.CacheWrite;
-                existing.CacheRead += delta.CacheRead;
-            }
+
+            bucket.Input += delta.Input;
+            bucket.Output += delta.Output;
+            bucket.CacheWrite += delta.CacheWrite;
+            bucket.CacheRead += delta.CacheRead;
         }
     }
 
@@ -139,9 +142,9 @@ public sealed class UsageStore : IUsageStore
         }
 
         var wanted = messageIds.Distinct(StringComparer.Ordinal).ToArray();
-        // One JSON parameter: EF Core 10 sends a plain Contains list as one parameter per id, and a first start over a
-        // large history can pass more ids than SQLite's 32,766-parameter limit.
-        var known = (await db.SeenMessages.Where(m => EF.Parameter(wanted).Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct))
+        // A first start over a large history can pass more ids than SQLite's 32,766-parameter limit; the data
+        // registration sends every collection as one JSON parameter.
+        var known = (await db.SeenMessages.Where(m => wanted.Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct))
             .ToHashSet(StringComparer.Ordinal);
         var next = (await db.SeenMessages.MaxAsync(m => (long?)m.Seq, ct) ?? 0) + 1;
         foreach (var id in wanted)

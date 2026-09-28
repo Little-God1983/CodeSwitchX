@@ -25,17 +25,10 @@ public sealed class SettingsStore : ISettingsStore
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var json = JsonSerializer.Serialize(value, JsonOptions);
-        var setting = await db.Settings.FirstOrDefaultAsync(s => s.Key == key, ct);
-        if (setting is null)
-        {
-            db.Settings.Add(new Setting { Key = key, ValueJson = json });
-        }
-        else
-        {
-            setting.ValueJson = json;
-        }
-
-        await db.SaveChangesAsync(ct);
+        // One statement: a read followed by an insert let two first saves of a key both find no row and both insert, and
+        // the second failed on the key.
+        await db.Database.ExecuteSqlAsync(
+            $"""INSERT INTO "Settings" ("Key", "ValueJson") VALUES ({key}, {json}) ON CONFLICT("Key") DO UPDATE SET "ValueJson" = "excluded"."ValueJson";""", ct);
     }
 
     public async Task<IReadOnlyList<PricingRule>> GetPricingAsync(CancellationToken ct = default)

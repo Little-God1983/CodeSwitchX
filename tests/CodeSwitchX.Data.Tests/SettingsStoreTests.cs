@@ -43,4 +43,20 @@ public class SettingsStoreTests : IAsyncLifetime
         rules["claude-sonnet-5"].InputPerM.ShouldBe(99);
         rules["claude-haiku-4-5"].InputPerM.ShouldBe(1);
     }
+
+    [Fact]
+    public async Task Two_first_saves_of_one_key_at_the_same_time_both_succeed()
+    {
+        // Each setting change used to be saved on a thread of its own, so the first two saves of a key could both find
+        // no row and both insert, and the second failed on the primary key.
+        for (var round = 0; round < 20; round++)
+        {
+            var key = "toggle-" + round;
+            var ct = TestContext.Current.CancellationToken;
+
+            await Task.WhenAll(Task.Run(() => _store.SetAsync(key, true, ct), ct), Task.Run(() => _store.SetAsync(key, false, ct), ct));
+
+            (await _store.GetAsync<bool?>(key, TestContext.Current.CancellationToken)).ShouldNotBeNull();
+        }
+    }
 }

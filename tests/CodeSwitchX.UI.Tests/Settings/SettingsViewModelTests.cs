@@ -74,7 +74,7 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.StorePayloads = false;
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await _vm.Saves;
 
         _writerOptions.StorePayloads.ShouldBeFalse();
         await _store.Received().SetAsync(SettingKeys.StorePayloads, false, Arg.Any<CancellationToken>());
@@ -103,5 +103,33 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.LastMessage.ShouldNotBeNull().ShouldContain("not valid JSON");
         File.ReadAllText(_claude.SettingsFile).ShouldBe("{ broken");
+    }
+
+    [Fact]
+    public async Task Saves_of_one_setting_land_in_the_order_the_value_changed()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        var stored = new List<long?>();
+        _store.SetAsync(SettingKeys.FiveHourBudgetTokens, Arg.Any<long?>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var value = call.ArgAt<long?>(1);
+            await Task.Delay(value == 1 ? 100 : 0); // the first save is the slow one (one SQLite write)
+            lock (stored)
+            {
+                stored.Add(value);
+            }
+        });
+
+        _vm.FiveHourBudgetTokens = 1;
+        _vm.FiveHourBudgetTokens = 2;
+        SpinWait.SpinUntil(() =>
+        {
+            lock (stored)
+            {
+                return stored.Count == 2;
+            }
+        }, TimeSpan.FromSeconds(5)).ShouldBeTrue();
+
+        stored.ShouldBe([1L, 2L], "the value stored last must be the one the view shows");
     }
 }

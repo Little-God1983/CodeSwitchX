@@ -18,6 +18,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly PersistenceWriterOptions _writerOptions;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
+    private Task _saves = Task.CompletedTask;
 
     [ObservableProperty] private string _relayExecutable;
     [ObservableProperty] private HookInstallState _hookState;
@@ -146,6 +147,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         Refresh();
     }
 
+    /// <summary>The saves queued so far. They run one after the other, in the order the values changed, so the value stored last is the one the view shows.</summary>
+    internal Task Saves => _saves;
+
     private void Persist<T>(string key, T value)
     {
         if (_loading)
@@ -153,11 +157,13 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        _ = Task.Run(async () =>
+        var previous = _saves;
+        _saves = Task.Run(async () =>
         {
+            await previous.ConfigureAwait(false);
             try
             {
-                await _settings.SetAsync(key, value, CancellationToken.None);
+                await _settings.SetAsync(key, value, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

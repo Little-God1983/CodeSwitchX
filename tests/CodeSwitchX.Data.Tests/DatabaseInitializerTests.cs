@@ -88,6 +88,40 @@ public class DatabaseInitializerTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task Every_connection_writes_with_synchronous_NORMAL_not_only_the_one_that_ran_the_initializer()
+    {
+        await _db.InitializeAsync();
+        await using var first = await CreateContextAsync();
+        await using var second = await CreateContextAsync();
+        await first.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await second.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+
+        (await SynchronousAsync(first)).ShouldBe(1L);
+        (await SynchronousAsync(second)).ShouldBe(1L, "a fresh pooled connection stayed FULL: an extra WAL fsync per commit");
+    }
+
+    [Fact]
+    public async Task A_database_with_only_the_first_migration_applied_is_upgraded_with_its_rows()
+    {
+        await MigrateToInitialCreateAsync();
+        await ExecuteAsync("""INSERT INTO "Settings" ("Key", "ValueJson") VALUES ('budget', '5');""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        await using var migrated = await CreateContextAsync();
+        (await migrated.Database.GetPendingMigrationsAsync(TestContext.Current.CancellationToken)).ShouldBeEmpty();
+        (await _db.Get<ISettingsStore>().GetAsync<long?>("budget", TestContext.Current.CancellationToken)).ShouldBe(5L);
+    }
+
+    /// <summary>PRAGMA synchronous: 0 OFF, 1 NORMAL, 2 FULL. A pragma cannot sit in a subquery, so not through EF's query pipeline.</summary>
+    private static async Task<long> SynchronousAsync(CodeSwitchXDbContext db)
+    {
+        await using var command = db.Database.GetDbConnection().CreateCommand();
+        command.CommandText = "PRAGMA synchronous;";
+        return (long)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
+    }
+
     private async Task<CodeSwitchXDbContext> CreateContextAsync() =>
         await _db.Get<IDbContextFactory<CodeSwitchXDbContext>>().CreateDbContextAsync(TestContext.Current.CancellationToken);
 

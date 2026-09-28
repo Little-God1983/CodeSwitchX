@@ -108,4 +108,16 @@ public class UsageStoreTests : IAsyncLifetime
 
         (await _store.GetSeenMessageIdsAsync(10, TestContext.Current.CancellationToken)).ShouldBe(["b", "c"]);
     }
+
+    [Fact]
+    public async Task A_commit_can_carry_more_cursors_than_SQLite_allows_parameters_in_one_statement()
+    {
+        // The writer caps a batch at 500 files, so no commit is this big today; the data registration translates every
+        // collection in a query to one JSON parameter, and this proves it for the cursor lookup.
+        var cursors = Enumerable.Range(0, 33_000).Select(i => new TranscriptCursor { Path = $@"c:\t\s{i}.jsonl", ByteOffset = 1, LastWriteUtc = _minute, SessionId = "s" }).ToArray();
+
+        await _store.UpsertCursorsAsync(cursors, TestContext.Current.CancellationToken);
+
+        (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).Count.ShouldBe(33_000);
+    }
 }
