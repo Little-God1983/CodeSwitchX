@@ -1,4 +1,6 @@
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Shell;
 using NSubstitute;
@@ -7,7 +9,18 @@ namespace CodeSwitchX.UI.Tests.Shell;
 
 public class ShellViewModelTests
 {
+    private const nint ShopHwnd = 700;
     private readonly ShellTestHarness _h = new();
+
+    /// <summary>A second workspace whose VS Code window is open already, so opening it adopts that window. App's window never appears: its open ends Stopped.</summary>
+    private Workspace AddShopWithItsWindowOpen()
+    {
+        var shop = new Workspace { Name = "Shop", RootPath = @"c:\repo\shop", TrackId = _h.General.Id };
+        _h.Workspaces.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_h.App, shop]));
+        _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(true, 1, null));
+        return shop;
+    }
 
     [Fact]
     public async Task EnterCab_switches_mode_opens_vscode_and_docks_into_the_known_rect()
@@ -180,5 +193,68 @@ public class ShellViewModelTests
         _h.Shell.RaiseHostedWindow();
 
         _h.Docker.Received(1).BringToFront(500);
+    }
+
+    [Fact]
+    public async Task Switching_inside_the_cab_to_a_workspace_that_still_has_to_start_hides_the_one_shown_so_far()
+    {
+        var shop = AddShopWithItsWindowOpen();
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(shop.Id);
+        _h.Host.Get(shop.Id)!.Visible.ShouldBeTrue();
+        _h.Docker.ClearReceivedCalls(); // discovery cloaks once; only the switch counts below
+
+        var openApp = _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Docker.Received(1).Cloak(ShopHwnd);
+        await openApp;
+        _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Stopped);
+        _h.Host.Get(shop.Id)!.Visible.ShouldBeFalse("the strip names App, so Shop's VS Code must not stay in the Cab under that name");
+    }
+
+    [Fact]
+    public async Task An_open_that_fails_after_the_user_moved_on_leaves_the_status_of_the_workspace_now_shown_alone()
+    {
+        var shop = AddShopWithItsWindowOpen();
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+
+        var openApp = _h.Shell.EnterCabAsync(_h.App.Id);
+        await _h.Shell.EnterCabAsync(shop.Id);
+        await openApp;
+
+        _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Stopped);
+        _h.Shell.ActiveWorkspaceId.ShouldBe(shop.Id);
+        _h.Shell.StatusMessage.ShouldBeNull("App's error does not belong in Shop's strip");
+    }
+
+    [Fact]
+    public async Task An_open_that_finishes_while_the_shell_is_minimised_shows_vscode_only_once_the_shell_is_restored()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _h.Shell.Cab.LastHostRect = rect;
+        _h.VsCodeWindowAppears();
+        using var launchMayEnd = new ManualResetEventSlim();
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(_ =>
+        {
+            launchMayEnd.Wait(TimeSpan.FromSeconds(10));
+            return new LaunchResult(true, 1, null);
+        });
+
+        var open = _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Shell.SetShellMinimized(true);
+        launchMayEnd.Set();
+        await open;
+
+        _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Running);
+        _h.Docker.DidNotReceive().Uncloak(500);
+        _h.Docker.DidNotReceive().BringToFront(500);
+
+        _h.Shell.SetShellMinimized(false);
+
+        _h.Docker.Received(1).Uncloak(500);
+        _h.Docker.Received(1).MoveTo(500, rect);
     }
 }

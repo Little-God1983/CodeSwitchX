@@ -111,4 +111,46 @@ public class AddWorkspaceViewModelTests : IDisposable
         _vm.IsProbed.ShouldBeFalse();
         _vm.SaveCommand.CanExecute(null).ShouldBeFalse("Add would register the folder that was probed, not the one now in the box");
     }
+
+    [Fact]
+    public async Task A_detect_that_ends_after_the_path_was_changed_does_not_fill_the_form()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_root)!, "Other");
+        Directory.CreateDirectory(other);
+        var gitMayAnswer = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new AddWorkspaceViewModel(new WorkspaceProbe(new GitInspector((_, _, _) => gitMayAnswer.Task)), _store,
+            new WorkspaceRegistry(_store, new WorkspaceResolver(), new EventBus(NullLogger<EventBus>.Instance)), NullLogger<AddWorkspaceViewModel>.Instance);
+        await vm.LoadAsync(CancellationToken.None);
+        vm.InputPath = _root;
+        var detect = vm.ProbeCommand.ExecuteAsync(null);
+
+        vm.InputPath = other; // typed, or picked with Folder…, while git is still answering for Shop
+        gitMayAnswer.SetResult(null);
+        await detect;
+
+        vm.IsProbed.ShouldBeFalse();
+        vm.Name.ShouldNotBe("Shop");
+        vm.SaveCommand.CanExecute(null).ShouldBeFalse("Add would register Shop while the box shows Other");
+    }
+
+    [Fact]
+    public async Task Add_again_after_a_failed_add_uses_the_new_track_it_already_created()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _vm.NewTrackName = "Clients";
+        var adds = 0;
+        _store.AddAsync(Arg.Any<Workspace>(), Arg.Any<CancellationToken>()).Returns(_ => ++adds == 1 ? throw new DuplicateWorkspaceException(_vm.RootPath) : Task.CompletedTask);
+        Workspace? saved = null;
+        _vm.Saved += w => saved = w;
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+        _vm.ErrorMessage.ShouldNotBeNull();
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        await _store.Received(1).AddTrackAsync("Clients", Arg.Any<CancellationToken>());
+        saved.ShouldNotBeNull().TrackId.ShouldBe(_vm.SelectedTrack.ShouldNotBeNull().Id);
+        _vm.SelectedTrack.Name.ShouldBe("Clients");
+    }
 }

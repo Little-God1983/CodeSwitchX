@@ -159,6 +159,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         if (snapshot.WorkspaceId is not { } workspaceId)
         {
+            // The chat's cwd left every workspace: no tile shows it any more, or its row would never change again.
+            foreach (var shown in Tiles.Where(t => t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
+            {
+                shown.Remove(snapshot.SessionId);
+            }
+
             return;
         }
 
@@ -197,11 +203,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         var group = Tracks.FirstOrDefault(t => t.Id == workspace.TrackId);
+        var newTrack = group is null;
         if (group is null)
         {
             group = new TrackGroupViewModel(new Track { Id = workspace.TrackId, Name = "Track", SortOrder = int.MaxValue });
             Tracks.Add(group);
-            _ = ReloadTrackNamesAsync();
         }
 
         var tile = new WorkspaceTileViewModel(workspace, this);
@@ -210,6 +216,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id))
         {
             tile.Upsert(snapshot, _pricing.Pricing);
+        }
+
+        if (newTrack)
+        {
+            // Only once the tile is in: the reload replaces the group with one holding its tiles, and the SQLite store
+            // answers synchronously, so on the UI thread that happens before this call returns.
+            _ = ReloadTrackNamesAsync();
         }
 
         _ = RefreshGitAsync(CancellationToken.None);

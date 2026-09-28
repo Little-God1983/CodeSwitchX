@@ -69,9 +69,15 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
     {
         ErrorMessage = null;
         IsBusy = true;
+        var input = InputPath;
         try
         {
-            var result = await _probe.ProbeAsync(InputPath.Trim().Trim('"'), CancellationToken.None);
+            var result = await _probe.ProbeAsync(input.Trim().Trim('"'), CancellationToken.None);
+            if (InputPath != input)
+            {
+                return; // the path changed while git answered: the result describes a folder no longer in the box
+            }
+
             Name = result.SuggestedName;
             RootPath = result.RootPath;
             WorkspaceFile = result.WorkspaceFile;
@@ -114,6 +120,10 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
             if (!string.IsNullOrWhiteSpace(NewTrackName))
             {
                 track = await _store.AddTrackAsync(NewTrackName.Trim(), CancellationToken.None);
+                // Stored now, whether or not the workspace is: an Add after a failed one must pick it, not create it again.
+                Tracks.Add(track);
+                SelectedTrack = track;
+                NewTrackName = string.Empty;
             }
 
             track ??= Tracks.FirstOrDefault() ?? await _store.AddTrackAsync("General", CancellationToken.None);

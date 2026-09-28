@@ -22,6 +22,7 @@ public class YardViewModelTests
     private readonly Track _clients = new() { Name = "Clients", SortOrder = 1 };
     private readonly Workspace _app;
     private readonly Workspace _shop;
+    private readonly WorkspaceRegistry _registry;
     private readonly YardViewModel _yard;
 
     public YardViewModelTests()
@@ -33,14 +34,19 @@ public class YardViewModelTests
         _engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance);
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
-        var registry = new WorkspaceRegistry(_store, _resolver, _bus);
+        _registry = new WorkspaceRegistry(_store, _resolver, _bus);
         var git = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
-        _yard = new YardViewModel(_store, registry, _engine, pricing, git, _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance);
+        _yard = new YardViewModel(_store, _registry, _engine, pricing, git, _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance);
     }
 
     private SessionSnapshot Snapshot(string id, Guid workspaceId, SessionState state) => new()
     {
         SessionId = id, WorkspaceId = workspaceId, State = state, StartedAt = _time.GetUtcNow(), LastEventAt = _time.GetUtcNow(), StateSince = _time.GetUtcNow(), Title = "T " + id,
+    };
+
+    private HookEvent Hook(string sessionId, string eventName, SessionSignal signal, string cwd) => new()
+    {
+        SessionId = sessionId, EventName = eventName, Signal = signal, At = _time.GetUtcNow(), Cwd = cwd,
     };
 
     [Fact]
@@ -147,5 +153,51 @@ public class YardViewModelTests
 
         _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Working)));
         _yard.FindTile(_app.Id)!.Chats.ShouldHaveSingleItem().State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public async Task A_chat_that_moves_out_of_every_workspace_leaves_the_tile_it_was_on()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app"));
+        _yard.FindTile(_app.Id)!.Chats.ShouldHaveSingleItem().State.ShouldBe(SessionState.Working);
+
+        // A cd into a folder outside every workspace (one added with --add-dir): the engine maps the chat to none.
+        _engine.Apply(Hook("s1", "Notification", SessionSignal.Notification, @"c:\notes"));
+
+        _engine.Get("s1")!.WorkspaceId.ShouldBeNull();
+        _yard.FindTile(_app.Id)!.Chats.ShouldBeEmpty("a row left on App never changes again: no pulse when the chat waits, and a Working row is never removed");
+    }
+
+    [Fact]
+    public async Task Registering_a_workspace_inside_another_moves_its_chats_onto_the_new_tile()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        _engine.Start();
+        await _yard.InitializeAsync(CancellationToken.None);
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app\api"));
+        _yard.FindTile(_app.Id)!.Chats.ShouldHaveSingleItem();
+        var api = new Workspace { Name = "Api", RootPath = @"c:\repo\app\api", TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, api]));
+
+        await _registry.RegisterAsync(api, CancellationToken.None);
+
+        _yard.FindTile(api.Id)!.Chats.ShouldHaveSingleItem().SessionId.ShouldBe("s1");
+        _yard.FindTile(_app.Id)!.Chats.ShouldBeEmpty("a chat is shown on one tile only");
+    }
+
+    [Fact]
+    public async Task A_workspace_registered_into_a_new_track_gets_a_group_under_that_tracks_name()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var tools = new Track { Name = "Tools", SortOrder = 2 };
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = tools.Id };
+        _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Track>>([_general, _clients, tools]));
+
+        _bus.Publish(new WorkspaceRegistered(cli));
+
+        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients", "Tools"]);
+        _yard.Tracks[2].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Cli");
     }
 }
