@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Interop;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Shell;
@@ -89,15 +90,35 @@ public sealed class HotkeyService
         var id = wParam.ToInt32();
         if (id == ToggleId)
         {
+            // ToggleMode's own rule: out of the Cab, or back into the workspace shown last.
+            var acts = _shell.Mode == ShellMode.Cab || _shell.ActiveWorkspaceId is not null;
             _shell.ToggleMode();
+            BringUpShellIf(acts);
             handled = true;
         }
         else if (id > JumpBaseId && id <= JumpBaseId + 9)
         {
-            _ = _shell.JumpToAsync(id - JumpBaseId);
+            var index = id - JumpBaseId;
+            var acts = index <= _shell.Yard.Tiles.Count();
+            _ = _shell.JumpToAsync(index);
+            BringUpShellIf(acts);
             handled = true;
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// A global hotkey is pressed from anywhere, so a hotkey that switches something brings the shell up: a minimised
+    /// shell switched modes out of sight, the Cab showing VS Code on its own and the Yard nothing. It comes up after the
+    /// switch, because a restored shell docks the workspace the Cab shows, which must already be the one the hotkey
+    /// chose. A hotkey with nothing to do leaves the user's application in front.
+    /// </summary>
+    private void BringUpShellIf(bool acts)
+    {
+        if (acts && _source?.RootVisual is Window window)
+        {
+            WindowActivation.BringUp(window);
+        }
     }
 }
