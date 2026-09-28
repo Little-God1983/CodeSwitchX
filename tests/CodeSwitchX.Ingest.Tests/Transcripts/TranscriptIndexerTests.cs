@@ -588,6 +588,29 @@ public class TranscriptIndexerTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task A_transcript_that_cannot_be_read_in_one_pass_is_read_in_the_next_without_waiting_for_another_change()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "Fix")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem();
+        _indexer.Dirty = false;
+
+        // Written while held open without sharing: the pass cannot open it, and no further write is due to come.
+        using (var locked = new FileStream(Transcript("s1"), FileMode.Append, FileAccess.Write, FileShare.None))
+        {
+            locked.Write(Encoding.UTF8.GetBytes(Assistant("s1", "msg_1", TextBlock) + "\n"));
+            locked.Flush();
+            await _indexer.ScanAsync(CancellationToken.None);
+        }
+
+        _updates.Count.ShouldBe(1, "the locked file cannot be read in that pass");
+        _indexer.Dirty.ShouldBeTrue("the loop scans only while something is dirty, and nothing else will change this file");
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Count.ShouldBe(2);
+        _updates[1].Usage.ShouldHaveSingleItem();
+    }
+
     /// <summary>Moves the indexer's timer on one scan interval at a time, for up to <paramref name="realTime"/>, giving each scan time to run.</summary>
     private async Task TickAsync(TimeSpan realTime, CancellationToken ct, Func<bool>? until = null)
     {

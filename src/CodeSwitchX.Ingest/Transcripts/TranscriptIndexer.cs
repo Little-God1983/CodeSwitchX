@@ -34,6 +34,13 @@ public sealed class TranscriptIndexer : BackgroundService
     /// <summary>Claude Code records API errors as assistant lines with this model and zero usage; they carry no model, context or tokens.</summary>
     internal const string SyntheticModel = "<synthetic>";
 
+    /// <summary>Whether the next tick scans: set by the folder watcher and by a pass that could not finish a file. Tests read and reset it.</summary>
+    internal bool Dirty
+    {
+        get => _dirty;
+        set => _dirty = value;
+    }
+
     public TranscriptIndexer(ClaudeCodePaths claude, IUsageStore cursorStore, IEventBus bus, TimeProvider time,
         ILogger<TranscriptIndexer> logger, TranscriptIndexerOptions options)
     {
@@ -238,7 +245,9 @@ public sealed class TranscriptIndexer : BackgroundService
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            // A sharing violation on a chat's last write: nothing else may change this file, so the next tick tries again.
             _logger.LogDebug(ex, "Transcript {Path} is not readable right now", path);
+            _dirty = true;
             return;
         }
 

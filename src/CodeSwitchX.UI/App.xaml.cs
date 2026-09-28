@@ -119,7 +119,7 @@ public partial class App : Application
     internal static HostApplicationBuilder CreateHostBuilder() =>
         Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true, ContentRootPath = AppContext.BaseDirectory });
 
-    private static void ConfigureServices(IServiceCollection services, AppPaths paths)
+    internal static void ConfigureServices(IServiceCollection services, AppPaths paths)
     {
         services.AddSingleton(paths);
         services.AddSingleton(ClaudeCodePaths.Default());
@@ -137,9 +137,11 @@ public partial class App : Application
         services.AddSingleton<IProcessProbe, SystemProcessProbe>();
         services.AddHostedService<ProcessLivenessMonitor>();
 
+        // Hosted services start in this order: the writer before the pipe opens, so the first hook events are saved, and
+        // telemetry before the indexer, so the usage of the first scan reaches it (see AppHostTests).
         services.AddCodeSwitchXData(paths.DatabaseFile);
-        services.AddCodeSwitchXIngest();
         services.AddCodeSwitchXTelemetry();
+        services.AddCodeSwitchXIngest();
         services.AddCodeSwitchXHosting();
 
         services.AddSingleton<StartupCoordinator>();
