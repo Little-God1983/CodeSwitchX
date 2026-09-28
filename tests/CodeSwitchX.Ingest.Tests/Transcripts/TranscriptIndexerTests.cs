@@ -543,15 +543,15 @@ public class TranscriptIndexerTests : IDisposable
         await indexer.StartAsync(ct);
         try
         {
-            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
             seen.ShouldContain(u => u.SessionId == "before", "the loop and its folder watcher are running");
 
             // Deleting the folder ends the watcher for good. Its error still triggers one scan, which finds no folder.
             Directory.Delete(_claude.ProjectsDirectory, recursive: true);
-            await TickAsync(TimeSpan.FromSeconds(1), ct);
+            await AdvanceAsync(TimeSpan.FromSeconds(1), ct);
             Directory.CreateDirectory(_projectDir);
             File.WriteAllLines(Transcript("after"), [User("after", "Fix")]);
-            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
 
             seen.ShouldContain(u => u.SessionId == "after");
         }
@@ -571,14 +571,14 @@ public class TranscriptIndexerTests : IDisposable
         await _indexer.StartAsync(ct);
         try
         {
-            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "before"));
             seen.ShouldContain(u => u.SessionId == "before", "the loop and its folder watcher are running");
 
             // The watcher moves with the renamed folder and reports no error, so it never sees the new one.
             Directory.Move(_claude.ProjectsDirectory, _claude.ProjectsDirectory + "-old");
             Directory.CreateDirectory(_projectDir);
             File.WriteAllLines(Transcript("after"), [User("after", "Fix")]);
-            await TickAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => seen.Any(u => u.SessionId == "after"));
 
             seen.ShouldContain(u => u.SessionId == "after");
         }
@@ -588,31 +588,76 @@ public class TranscriptIndexerTests : IDisposable
         }
     }
 
+    private static readonly TimeSpan Interval = new TranscriptIndexerOptions().ScanInterval;
+
+    /// <summary>Holds a transcript open without sharing, with one more line in it: a pass cannot open it, and no further write is due to come.</summary>
+    private FileStream Lock(string sessionId, string line)
+    {
+        var locked = new FileStream(Transcript(sessionId), FileMode.Append, FileAccess.Write, FileShare.None);
+        locked.Write(Encoding.UTF8.GetBytes(line + "\n"));
+        locked.Flush();
+        return locked;
+    }
+
     [Fact]
-    public async Task A_transcript_that_cannot_be_read_in_one_pass_is_read_in_the_next_without_waiting_for_another_change()
+    public async Task A_transcript_that_cannot_be_read_in_one_pass_is_read_again_by_itself_not_by_a_scan_of_everything()
     {
         File.WriteAllLines(Transcript("s1"), [User("s1", "Fix")]);
-        await _indexer.ScanAsync(CancellationToken.None);
-        _updates.ShouldHaveSingleItem();
-        _indexer.Dirty = false;
+        File.WriteAllLines(Transcript("s2"), [User("s2", "Test")]);
+        await _indexer.TickAsync(CancellationToken.None);
+        _updates.Count.ShouldBe(2);
 
-        // Written while held open without sharing: the pass cannot open it, and no further write is due to come.
-        using (var locked = new FileStream(Transcript("s1"), FileMode.Append, FileAccess.Write, FileShare.None))
+        using (Lock("s1", Assistant("s1", "msg_1", TextBlock)))
         {
-            locked.Write(Encoding.UTF8.GetBytes(Assistant("s1", "msg_1", TextBlock) + "\n"));
-            locked.Flush();
-            await _indexer.ScanAsync(CancellationToken.None);
+            await _indexer.TickAsync(CancellationToken.None);
         }
 
-        _updates.Count.ShouldBe(1, "the locked file cannot be read in that pass");
-        _indexer.Dirty.ShouldBeTrue("the loop scans only while something is dirty, and nothing else will change this file");
-        await _indexer.ScanAsync(CancellationToken.None);
-        _updates.Count.ShouldBe(2);
-        _updates[1].Usage.ShouldHaveSingleItem();
+        _updates.Count.ShouldBe(2, "the locked file cannot be read in that pass");
+        _indexer.Dirty.ShouldBeFalse("one unreadable file must not make every tick a scan of everything");
+
+        // With the watcher running, a change it did not report is not seen: the next tick reads only the file the pass could not.
+        File.AppendAllLines(Transcript("s2"), [Assistant("s2", "msg_2", TextBlock)]);
+        _indexer.StartWatcher();
+        _time.Advance(Interval);
+        await _indexer.TickAsync(CancellationToken.None);
+
+        _updates.Count.ShouldBe(3);
+        _updates[2].SessionId.ShouldBe("s1");
+        _updates[2].Usage.ShouldHaveSingleItem();
+        _indexer.NextAttempt(Transcript("s1")).ShouldBeNull("once read, the file is no longer due for another try");
+    }
+
+    [Fact]
+    public async Task A_transcript_that_stays_unreadable_is_tried_less_and_less_often_up_to_the_cap()
+    {
+        using var indexer = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance,
+            new TranscriptIndexerOptions { MaxRetryDelay = TimeSpan.FromSeconds(5) });
+        File.WriteAllLines(Transcript("s1"), [User("s1", "Fix")]);
+        await indexer.TickAsync(CancellationToken.None);
+        using var locked = Lock("s1", Assistant("s1", "msg_1", TextBlock));
+        await indexer.TickAsync(CancellationToken.None);
+        indexer.StartWatcher();
+        var failedAt = _time.GetUtcNow();
+
+        indexer.NextAttempt(Transcript("s1")).ShouldBe(failedAt + Interval, "the first try is the next tick: a sharing violation on a chat's last write clears at once");
+
+        _time.Advance(Interval);
+        await indexer.TickAsync(CancellationToken.None);
+        indexer.NextAttempt(Transcript("s1")).ShouldBe(_time.GetUtcNow() + 2 * Interval, "the second try fails: twice as long");
+
+        _time.Advance(Interval);
+        await indexer.TickAsync(CancellationToken.None);
+        indexer.NextAttempt(Transcript("s1")).ShouldBe(failedAt + 3 * Interval, "not due yet: not tried");
+
+        _time.Advance(Interval);
+        await indexer.TickAsync(CancellationToken.None);
+        indexer.NextAttempt(Transcript("s1")).ShouldBe(_time.GetUtcNow() + TimeSpan.FromSeconds(5), "the third try fails: capped, not four intervals");
+        _updates.ShouldHaveSingleItem("nothing was read");
+        indexer.Dirty.ShouldBeFalse();
     }
 
     /// <summary>Moves the indexer's timer on one scan interval at a time, for up to <paramref name="realTime"/>, giving each scan time to run.</summary>
-    private async Task TickAsync(TimeSpan realTime, CancellationToken ct, Func<bool>? until = null)
+    private async Task AdvanceAsync(TimeSpan realTime, CancellationToken ct, Func<bool>? until = null)
     {
         var deadline = DateTime.UtcNow + realTime;
         while (DateTime.UtcNow < deadline && until?.Invoke() != true)

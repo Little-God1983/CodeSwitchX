@@ -64,15 +64,10 @@ public partial class App : Application
 
         try
         {
-            var builder = CreateHostBuilder();
-            builder.Logging.ClearProviders();
-            builder.Services.AddSerilog(Log.Logger);
-            ConfigureServices(builder.Services, paths);
-            _host = builder.Build();
+            _host = CreateHostBuilder(paths).Build();
             AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseHostedWindows();
 
             await _host.Services.GetRequiredService<DatabaseInitializer>().InitializeAsync(CancellationToken.None);
-            await _host.Services.GetRequiredService<StartupCoordinator>().RunAsync(CancellationToken.None);
             await _host.StartAsync();
 
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
@@ -112,14 +107,21 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// A host that reads no configuration. The defaults take the current directory as the content root and parse the
-    /// appsettings.json there and the environment: started from an ASP.NET Core project's terminal, a malformed file in
-    /// that project failed the start. Nothing in CodeSwitchX reads configuration.
+    /// The app's host, with every service registered, logging through Serilog. It reads no configuration: the defaults
+    /// take the current directory as the content root and parse the appsettings.json there and the environment, and
+    /// started from an ASP.NET Core project's terminal, a malformed file in that project failed the start. Nothing in
+    /// CodeSwitchX reads configuration.
     /// </summary>
-    internal static HostApplicationBuilder CreateHostBuilder() =>
-        Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true, ContentRootPath = AppContext.BaseDirectory });
+    internal static HostApplicationBuilder CreateHostBuilder(AppPaths paths)
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true, ContentRootPath = AppContext.BaseDirectory });
+        builder.Logging.ClearProviders();
+        builder.Services.AddSerilog(Log.Logger);
+        ConfigureServices(builder.Services, paths);
+        return builder;
+    }
 
-    internal static void ConfigureServices(IServiceCollection services, AppPaths paths)
+    private static void ConfigureServices(IServiceCollection services, AppPaths paths)
     {
         services.AddSingleton(paths);
         services.AddSingleton(ClaudeCodePaths.Default());
@@ -135,16 +137,20 @@ public partial class App : Application
         services.AddSingleton<SessionEngineOptions>();
         services.AddSingleton<SessionEngine>();
         services.AddSingleton<IProcessProbe, SystemProcessProbe>();
-        services.AddHostedService<ProcessLivenessMonitor>();
 
-        // Hosted services start in this order: the writer before the pipe opens, so the first hook events are saved, and
-        // telemetry before the indexer, so the usage of the first scan reaches it (see AppHostTests).
+        // Hosted services start in registration order, and the flows depend on it (AppHostTests pins the pairs that
+        // matter): the writer listens before the coordinator starts the engine, so what restore, re-resolve and the first
+        // sweep change is saved; the engine listens before the pipe opens and before the first scan; the pipe opens before
+        // telemetry loads seven days of usage, so a hook fired during the start does not wait for that; and telemetry
+        // listens before the indexer's first scan, so the usage that scan finds reaches it.
         services.AddCodeSwitchXData(paths.DatabaseFile);
+        services.AddHostedService<StartupCoordinator>();
+        services.AddHostedService<ProcessLivenessMonitor>();
+        services.AddCodeSwitchXEventApi();
         services.AddCodeSwitchXTelemetry();
-        services.AddCodeSwitchXIngest();
+        services.AddCodeSwitchXTranscriptIndexer();
         services.AddCodeSwitchXHosting();
 
-        services.AddSingleton<StartupCoordinator>();
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();

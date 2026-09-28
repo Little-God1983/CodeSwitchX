@@ -5,9 +5,15 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace CodeSwitchX.Ingest;
 
+/// <summary>
+/// Two registrations rather than one, because hosted services start in registration order and the two halves belong in
+/// different places: the Event API opens the hook pipe as soon as it starts and must not wait behind a slow start, while
+/// the indexer's first scan publishes usage and must start after every consumer of it.
+/// </summary>
 public static class IngestServiceCollectionExtensions
 {
-    public static IServiceCollection AddCodeSwitchXIngest(this IServiceCollection services, Action<EventApiOptions>? configure = null)
+    /// <summary>The Event API (the hook pipe and its token) and the hook installer.</summary>
+    public static IServiceCollection AddCodeSwitchXEventApi(this IServiceCollection services, Action<EventApiOptions>? configure = null)
     {
         var options = new EventApiOptions();
         configure?.Invoke(options);
@@ -15,10 +21,16 @@ public static class IngestServiceCollectionExtensions
         services.AddSingleton<AccessTokenStore>();
         services.AddSingleton<EventApiService>();
         services.AddHostedService(sp => sp.GetRequiredService<EventApiService>());
+        services.AddSingleton<ClaudeHookInstaller>();
+        return services;
+    }
+
+    /// <summary>The transcript indexer. Register it after every hosted consumer of <c>TranscriptUpdated</c>.</summary>
+    public static IServiceCollection AddCodeSwitchXTranscriptIndexer(this IServiceCollection services)
+    {
         services.AddSingleton<TranscriptIndexerOptions>();
         services.AddSingleton<TranscriptIndexer>();
         services.AddHostedService(sp => sp.GetRequiredService<TranscriptIndexer>());
-        services.AddSingleton<ClaudeHookInstaller>();
         return services;
     }
 }

@@ -19,7 +19,6 @@ public class SettingsViewModelTests : IDisposable
     public SettingsViewModelTests()
     {
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
-        _store.GetAsync<bool?>(SettingKeys.StorePayloads, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(true));
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
@@ -33,13 +32,20 @@ public class SettingsViewModelTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// The stored "store raw hook payloads" choice is read once, by the startup coordinator, into the writer before the first
+    /// hook event; the view shows the writer's flag. A second read here could disagree with what the writer does.
+    /// </summary>
     [Fact]
-    public async Task Load_applies_persisted_values_and_defaults_the_relay_path()
+    public async Task Load_shows_the_writers_payload_choice_and_applies_the_other_persisted_values()
     {
+        _writerOptions.StorePayloads = true;
+
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.StorePayloads.ShouldBeTrue();
         _writerOptions.StorePayloads.ShouldBeTrue();
+        await _store.DidNotReceive().GetAsync<bool?>(SettingKeys.StorePayloads, Arg.Any<CancellationToken>());
         _vm.FiveHourBudgetTokens.ShouldBe(5_000_000);
         _vm.RelayExecutable.ShouldBe(Path.Combine(AppContext.BaseDirectory, "relay", "csx-hook.exe"));
         _vm.DataFolder.ShouldBe(_paths.Root);
@@ -64,6 +70,7 @@ public class SettingsViewModelTests : IDisposable
     [Fact]
     public async Task Toggling_store_payloads_persists_and_updates_the_writer()
     {
+        _writerOptions.StorePayloads = true;
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.StorePayloads = false;

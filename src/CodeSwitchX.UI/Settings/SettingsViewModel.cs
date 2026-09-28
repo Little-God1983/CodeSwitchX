@@ -52,8 +52,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         _loading = true;
         try
         {
-            StorePayloads = await _settings.GetAsync<bool?>(SettingKeys.StorePayloads, ct) ?? false;
-            _writerOptions.StorePayloads = StorePayloads;
+            // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
+            // the writer's flag rather than reading the row again, which could disagree with what the writer does.
+            StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
         }

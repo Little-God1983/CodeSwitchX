@@ -1,7 +1,5 @@
 using CodeSwitchX.Core;
-using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Data;
-using CodeSwitchX.Hosting;
 using CodeSwitchX.Ingest.Api;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
@@ -31,7 +29,7 @@ public class AppHostTests
         Environment.CurrentDirectory = folder;
         try
         {
-            using var host = App.CreateHostBuilder().Build();
+            using var host = App.CreateHostBuilder(TempPaths()).Build();
         }
         finally
         {
@@ -41,52 +39,62 @@ public class AppHostTests
     }
 
     /// <summary>
-    /// The flows depend on the order the hosted services start in, which is only the order of four registration calls:
-    /// the writer must subscribe before Kestrel opens the pipe, or the first hook events are never saved, and
-    /// telemetry must subscribe before the indexer's first scan, or the usage that scan finds before the writer
-    /// flushed it is in neither the database telemetry loaded nor its memory until the next start.
+    /// Hosted services start in registration order, which is spread over the registration calls, and the flows depend on a
+    /// few pairs of it. Only those pairs are pinned, on the builder the app uses, so a hosted service no flow depends on
+    /// can be registered anywhere.
     /// </summary>
     [Fact]
     public void Hosted_services_start_in_the_order_the_flows_depend_on()
     {
-        using var provider = BuildProvider();
+        using var host = Builder().Build();
 
-        var order = provider.GetServices<IHostedService>().Select(s => s.GetType()).ToList();
+        var order = host.Services.GetServices<IHostedService>().Select(s => s.GetType()).ToList();
 
-        order.ShouldBe([typeof(ProcessLivenessMonitor), typeof(PersistenceWriter), typeof(TelemetryService), typeof(EventApiService), typeof(TranscriptIndexer), typeof(HiddenWindowSweep)]);
+        StartsBefore<PersistenceWriter, StartupCoordinator>(order,
+            "the writer must listen before the engine restores, re-resolves and sweeps, or what those change is never saved");
+        StartsBefore<StartupCoordinator, EventApiService>(order,
+            "the engine must listen before the pipe opens, or the first hook events are saved but never applied");
+        StartsBefore<EventApiService, TelemetryService>(order,
+            "telemetry's start loads seven days of usage; a hook fired while the pipe waits for that is lost");
+        StartsBefore<TelemetryService, TranscriptIndexer>(order,
+            "telemetry must listen before the first scan, or the usage that scan finds is in neither the database it loaded nor its memory until the next start");
     }
 
     /// <summary>A constructor parameter without a registration otherwise shows up only as "CodeSwitchX failed to start" at the next manual run.</summary>
     [Fact]
     public void Every_registered_service_can_be_built()
     {
-        var services = new ServiceCollection();
-        App.ConfigureServices(services, TempPaths());
+        var builder = Builder();
         // Every CodeSwitchX service the root resolves; the pooled DbContext is scoped and is only ever made by its factory.
-        var registered = services.Where(d => d.Lifetime != ServiceLifetime.Scoped).Select(d => d.ServiceType).Distinct()
+        var registered = builder.Services.Where(d => d.Lifetime != ServiceLifetime.Scoped).Select(d => d.ServiceType).Distinct()
             .Where(t => t.Namespace?.StartsWith("CodeSwitchX", StringComparison.Ordinal) == true).ToList();
-        using var provider = BuildProvider(services);
+        using var host = builder.Build();
 
         foreach (var type in registered.Where(t => t != typeof(MainWindow)))
         {
-            provider.GetRequiredService(type).ShouldNotBeNull(type.Name);
+            host.Services.GetRequiredService(type).ShouldNotBeNull(type.Name);
         }
 
         registered.ShouldContain(typeof(MainWindow), "the window is the only service left out: it needs WPF's XAML runtime");
     }
 
-    private static ServiceProvider BuildProvider(ServiceCollection? services = null)
+    private static void StartsBefore<TFirst, TSecond>(List<Type> order, string why)
+        where TFirst : IHostedService
+        where TSecond : IHostedService
     {
-        services ??= new ServiceCollection();
-        if (services.Count == 0)
-        {
-            App.ConfigureServices(services, TempPaths());
-        }
+        order.ShouldContain(typeof(TFirst));
+        order.ShouldContain(typeof(TSecond));
+        order.IndexOf(typeof(TFirst)).ShouldBeLessThan(order.IndexOf(typeof(TSecond)), why);
+    }
 
-        services.AddLogging();
+    /// <summary>The app's builder, validated on build, with the one service that needs a running WPF Application replaced.</summary>
+    private static HostApplicationBuilder Builder()
+    {
+        var builder = App.CreateHostBuilder(TempPaths());
         // The WPF dispatcher exists only inside a running Application; the flows are the same with a synchronous one.
-        services.Replace(ServiceDescriptor.Singleton<IUiDispatcher>(new ImmediateDispatcher()));
-        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        builder.Services.Replace(ServiceDescriptor.Singleton<IUiDispatcher>(new ImmediateDispatcher()));
+        builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true }));
+        return builder;
     }
 
     private static AppPaths TempPaths() => new(Path.Combine(Path.GetTempPath(), "csx-host-" + Guid.NewGuid().ToString("N")));
