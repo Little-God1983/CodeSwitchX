@@ -5,7 +5,7 @@ namespace CodeSwitchX.UI.Tests.Infrastructure;
 public class SingleInstanceTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
-    private readonly string _name = @"Local\csx-test-" + Guid.NewGuid().ToString("N");
+    private readonly string _name = @"Global\csx-test-" + Guid.NewGuid().ToString("N");
 
     [Fact]
     public async Task A_start_while_CodeSwitchX_runs_ends_and_brings_the_running_one_forward()

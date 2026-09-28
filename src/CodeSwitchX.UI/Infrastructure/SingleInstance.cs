@@ -4,8 +4,8 @@ using CodeSwitchX.Ingest.Api;
 namespace CodeSwitchX.UI.Infrastructure;
 
 /// <summary>
-/// Keeps CodeSwitchX to one instance per user session. The first instance creates a named event; a later start finds
-/// it, sets it so the running instance comes forward, and ends. A second instance could not bind the Event API's pipe
+/// Keeps CodeSwitchX to one instance per user. The first instance creates a named event; a later start finds it, sets
+/// it so the running instance comes forward, and ends. A second instance could not bind the Event API's pipe
 /// (it showed "failed to start") and would share the database and the log file with the first.
 /// </summary>
 public sealed class SingleInstance : IDisposable
@@ -19,8 +19,11 @@ public sealed class SingleInstance : IDisposable
         _signal = signal;
     }
 
-    /// <summary>Per user and session, like the Event API's pipe.</summary>
-    public static string DefaultName => @"Local\" + EventApiOptions.DefaultPipeName();
+    /// <summary>
+    /// Per user across sessions, like the Event API's pipe and the database: the same account signed in twice (a second
+    /// remote session) must not run a second instance either.
+    /// </summary>
+    public static string DefaultName => @"Global\" + EventApiOptions.DefaultPipeName();
 
     /// <summary>
     /// This process's claim when no other instance runs. Otherwise null, once the running instance has been asked to
