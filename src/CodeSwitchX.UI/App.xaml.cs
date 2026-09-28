@@ -26,10 +26,19 @@ namespace CodeSwitchX.UI;
 public partial class App : Application
 {
     private IHost? _host;
+    private SingleInstance? _instance;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Before the log, the database or the pipe is opened: a second instance brings the running one forward and ends.
+        _instance = SingleInstance.TryClaim(SingleInstance.DefaultName);
+        if (_instance is null)
+        {
+            Shutdown();
+            return;
+        }
+
         var paths = AppPaths.Default();
         paths.EnsureCreated();
 
@@ -45,7 +54,7 @@ public partial class App : Application
 
         try
         {
-            var builder = Host.CreateApplicationBuilder();
+            var builder = CreateHostBuilder();
             builder.Logging.ClearProviders();
             builder.Services.AddSerilog(Log.Logger);
             ConfigureServices(builder.Services, paths);
@@ -62,6 +71,7 @@ public partial class App : Application
             var window = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = window;
             window.Show();
+            _instance.OnActivationRequested(() => Dispatcher.InvokeAsync(() => WindowActivation.BringUp(window)));
         }
         catch (Exception ex)
         {
@@ -70,6 +80,14 @@ public partial class App : Application
             Shutdown(1);
         }
     }
+
+    /// <summary>
+    /// A host that reads no configuration. The defaults take the current directory as the content root and parse the
+    /// appsettings.json there and the environment: started from an ASP.NET Core project's terminal, a malformed file in
+    /// that project failed the start. Nothing in CodeSwitchX reads configuration.
+    /// </summary>
+    internal static HostApplicationBuilder CreateHostBuilder() =>
+        Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true, ContentRootPath = AppContext.BaseDirectory });
 
     private static void ConfigureServices(IServiceCollection services, AppPaths paths)
     {
@@ -134,6 +152,8 @@ public partial class App : Application
         }
 
         Log.CloseAndFlush();
+        // Last: until the host has stopped, this process still holds the pipe and the database.
+        _instance?.Dispose();
         base.OnExit(e);
     }
 

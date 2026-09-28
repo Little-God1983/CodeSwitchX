@@ -13,11 +13,11 @@ public sealed class TrayIconService
     public void Attach(Window window, ShellViewModel shell)
     {
         var menu = new ContextMenu();
-        menu.Items.Add(MenuItem("Show CodeSwitchX", () => Show(window)));
+        menu.Items.Add(MenuItem("Show CodeSwitchX", () => WindowActivation.BringUp(window)));
         menu.Items.Add(MenuItem("Back to Yard", () =>
         {
             shell.BackToYard();
-            Show(window);
+            WindowActivation.BringUp(window);
         }));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("Exit", () => Application.Current.Shutdown()));
@@ -30,7 +30,7 @@ public sealed class TrayIconService
             Icon = IconRenderer.ToIcon(appIcon, 32),
             ContextMenu = menu,
         };
-        _icon.TrayLeftMouseDown += (_, _) => Show(window);
+        _icon.TrayLeftMouseDown += (_, _) => WindowActivation.BringUp(window);
         _icon.ForceCreate();
     }
 
@@ -38,17 +38,6 @@ public sealed class TrayIconService
     {
         _icon?.Dispose();
         _icon = null;
-    }
-
-    private static void Show(Window window)
-    {
-        if (window.WindowState == WindowState.Minimized)
-        {
-            window.WindowState = WindowState.Normal;
-        }
-
-        window.Show();
-        window.Activate();
     }
 
     private static MenuItem MenuItem(string header, Action action)

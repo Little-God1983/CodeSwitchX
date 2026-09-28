@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     {
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
+        HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         _hotkeys.Attach(hwnd, _shell);
         _tray.Attach(this, _shell);
         _locationWatcher = new WindowLocationWatcher();

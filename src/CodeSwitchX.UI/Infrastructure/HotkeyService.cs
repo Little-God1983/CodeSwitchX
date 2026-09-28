@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Interop;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Shell;
@@ -89,15 +90,29 @@ public sealed class HotkeyService
         var id = wParam.ToInt32();
         if (id == ToggleId)
         {
+            BringUpShell();
             _shell.ToggleMode();
             handled = true;
         }
         else if (id > JumpBaseId && id <= JumpBaseId + 9)
         {
+            BringUpShell();
             _ = _shell.JumpToAsync(id - JumpBaseId);
             handled = true;
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// A global hotkey is pressed from anywhere, so the shell comes up first. A minimised shell would otherwise switch
+    /// modes out of sight: the Cab showed VS Code on its own where the shell had been, and the Yard showed nothing.
+    /// </summary>
+    private void BringUpShell()
+    {
+        if (_source?.RootVisual is Window window)
+        {
+            WindowActivation.BringUp(window);
+        }
     }
 }
