@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging;
 
-namespace CodeSwitchX.Data.Tests;
+namespace CodeSwitchX.Tests;
 
-/// <summary>Keeps every formatted log line so tests can assert on what was reported.</summary>
+/// <summary>Keeps every formatted log line with its level so tests can assert on what was reported, and how loudly. Thread-safe.</summary>
 internal sealed class ListLogger<T> : ILogger<T>
 {
     private readonly List<(LogLevel Level, string Message)> _entries = [];

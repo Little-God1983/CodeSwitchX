@@ -6,6 +6,12 @@ public sealed record HookEvent
     public required string SessionId { get; init; }
     public required string EventName { get; init; }
     public SessionSignal? Signal { get; init; }
+
+    /// <summary>
+    /// True for an event the parser knows and leaves the state alone on purpose (SessionStart after compaction, a
+    /// Notification that needs no one, SubagentStop). An event without a signal that is not marked so is logged as unknown.
+    /// </summary>
+    public bool Informational { get; init; }
     public required DateTimeOffset At { get; init; }
     public string? Cwd { get; init; }
     public string? TranscriptPath { get; init; }

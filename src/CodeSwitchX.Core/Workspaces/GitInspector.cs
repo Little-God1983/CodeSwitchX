@@ -142,16 +142,17 @@ public sealed class GitInspector
             try
             {
                 await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+                // The pipes close when the last process holding them exits, which can be a grandchild that outlives the child
+                // (cmd's "start /b"); the timeout covers the reads too, and the kill takes the whole tree with it.
+                var output = await stdout.ConfigureAwait(false);
+                await stderr.ConfigureAwait(false);
+                return new ProcessRunResult(process.ExitCode == 0 ? output : null, false, process.Id);
             }
             catch (OperationCanceledException)
             {
                 TryKill(process);
                 return new ProcessRunResult(null, TimedOut: !ct.IsCancellationRequested, process.Id);
             }
-
-            var output = await stdout.ConfigureAwait(false);
-            await stderr.ConfigureAwait(false);
-            return new ProcessRunResult(process.ExitCode == 0 ? output : null, false, process.Id);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {

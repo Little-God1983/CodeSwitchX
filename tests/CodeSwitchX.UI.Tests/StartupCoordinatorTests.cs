@@ -72,9 +72,9 @@ public class StartupCoordinatorTests
     {
         _writer.Subscribe();
         Restoring(
-            Stored("moved", SessionState.Idle, TimeSpan.FromHours(1)),
+            Stored("moved", SessionState.Idle, TimeSpan.FromMinutes(5)),
             Stored("quiet", SessionState.Working, TimeSpan.FromMinutes(3), resolved: true),
-            Stored("same", SessionState.Idle, TimeSpan.FromHours(1), resolved: true));
+            Stored("same", SessionState.Idle, TimeSpan.FromMinutes(5), resolved: true));
 
         await Coordinator().StartAsync(CancellationToken.None);
 

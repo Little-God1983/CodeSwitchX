@@ -13,8 +13,29 @@ public static class PathNormalizer
     public static string Canonical(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var full = Path.GetFullPath(path.Trim()).Replace('/', '\\');
+        var full = Path.GetFullPath(WithoutDevicePrefix(path.Trim())).Replace('/', '\\');
         return Path.TrimEndingDirectorySeparator(full);
+    }
+
+    /// <summary>
+    /// The <c>\\?\</c> and <c>\\.\</c> prefixes in front of a drive path or a share (<c>UNC\</c>) name the same folder;
+    /// nothing shows or compares them. Anything else behind them (a volume GUID, a drive without a root) is left as it is:
+    /// stripped, it would resolve against the current directory.
+    /// </summary>
+    private static string WithoutDevicePrefix(string path)
+    {
+        if (path.Length < 4 || path[0] != '\\' || path[1] != '\\' || path[2] is not ('?' or '.') || path[3] != '\\')
+        {
+            return path;
+        }
+
+        var rest = path.AsSpan(4);
+        if (rest.StartsWith("UNC\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Concat(@"\\", rest[4..]);
+        }
+
+        return rest.Length >= 3 && char.IsAsciiLetter(rest[0]) && rest[1] == ':' && rest[2] == '\\' ? rest.ToString() : path;
     }
 
     /// <summary>True when <paramref name="candidate"/> equals <paramref name="root"/> or lies below it. Both must already be normalised.</summary>

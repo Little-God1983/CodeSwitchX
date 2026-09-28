@@ -1,6 +1,8 @@
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.Tests;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -109,9 +111,11 @@ public class SessionEngineTests
     {
         _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
 
+        var started = _time.GetUtcNow();
         _time.Advance(TimeSpan.FromMinutes(31));
 
         _engine.Get("s1")!.State.ShouldBe(SessionState.Stale);
+        _engine.Get("s1")!.StateSince.ShouldBe(started + TimeSpan.FromMinutes(30), "stale since the quiet window ended, whenever the sweep ran");
     }
 
     [Fact]
@@ -212,11 +216,11 @@ public class SessionEngineTests
     [Fact]
     public void Process_gone_marks_live_sessions_errored_but_leaves_ended_ones()
     {
-        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
-        _engine.Apply(Hook("SessionEnd", SessionSignal.SessionEnd, session: "s9"));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, chain: [new ProcessRef(10, "claude.exe")]));
+        _engine.Apply(Hook("SessionEnd", SessionSignal.SessionEnd, session: "s9", chain: [new ProcessRef(20, "claude.exe")]));
 
-        _engine.MarkProcessGone("s1");
-        _engine.MarkProcessGone("s9");
+        _engine.MarkProcessGone("s1", 10, _time.GetUtcNow());
+        _engine.MarkProcessGone("s9", 20, _time.GetUtcNow());
 
         _engine.Get("s1")!.State.ShouldBe(SessionState.Errored);
         _engine.Get("s9")!.State.ShouldBe(SessionState.Ended);
@@ -231,8 +235,8 @@ public class SessionEngineTests
             SessionId = "old",
             State = SessionState.Idle,
             StartedAt = _time.GetUtcNow().AddHours(-2),
-            LastEventAt = _time.GetUtcNow().AddHours(-1),
-            StateSince = _time.GetUtcNow().AddHours(-1),
+            LastEventAt = _time.GetUtcNow().AddMinutes(-10),
+            StateSince = _time.GetUtcNow().AddMinutes(-10),
         };
         var quiet = persisted with { SessionId = "quiet", State = SessionState.Working, LastEventAt = _time.GetUtcNow().AddMinutes(-3) };
 
@@ -326,7 +330,7 @@ public class SessionEngineTests
         _engine.SweepStale();
         _engine.Get("prompt")!.State.ShouldBe(SessionState.Waiting, "the liveness monitor, not the clock, decides when a hook-backed chat is gone");
 
-        _engine.MarkProcessGone("prompt");
+        _engine.MarkProcessGone("prompt", 77, old);
         _engine.Get("prompt")!.State.ShouldBe(SessionState.Errored);
     }
 
@@ -472,7 +476,7 @@ public class SessionEngineTests
     [Fact]
     public void Restore_treats_a_saved_pid_that_now_belongs_to_a_newer_process_as_gone()
     {
-        var lastSeen = _time.GetUtcNow().AddHours(-3);
+        var lastSeen = _time.GetUtcNow().AddMinutes(-20);
         var reusedAt = _time.GetUtcNow().AddMinutes(-1);
         using var engine = new SessionEngine(_bus, _resolver, _time, NullLogger<SessionEngine>.Instance, probe: new FakeProcessProbe().Run(77, reusedAt));
 
@@ -548,5 +552,98 @@ public class SessionEngineTests
 
         _engine.Apply(Update("s1", SessionSignal.Stop, activity: promptAt.AddSeconds(1)) with { Interrupted = true });
         _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void Process_gone_is_ignored_when_the_chat_moved_on_since_the_probe()
+    {
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, chain: [new ProcessRef(200, "claude.exe")]));
+        var probedAsOf = _time.GetUtcNow();
+        // The tick probed PID 200 as of that event and found it gone; before it could say so, "claude --resume" started
+        // and Windows handed it PID 200 again.
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(200, "claude.exe")]));
+
+        _engine.MarkProcessGone("s1", 200, probedAsOf).ShouldBeFalse();
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "the chat's claude is the new one, which was never probed");
+        _engine.MarkProcessGone("s1", 200, _time.GetUtcNow()).ShouldBeTrue();
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Errored);
+    }
+
+    [Fact]
+    public void Restore_brings_a_chat_that_went_stale_while_the_app_was_down_back_as_stale_since_then()
+    {
+        var lastEvent = _time.GetUtcNow().AddHours(-12);
+
+        _engine.Restore([new SessionSnapshot { SessionId = "old", State = SessionState.Idle, StartedAt = lastEvent, LastEventAt = lastEvent, StateSince = lastEvent }]);
+
+        var snapshot = _engine.Get("old")!;
+        snapshot.State.ShouldBe(SessionState.Stale, "restored Idle, the row would sit on its tile until the first sweep, 5 s on");
+        snapshot.StateSince.ShouldBe(lastEvent + TimeSpan.FromMinutes(30),
+            "the tile keeps a Stale row for 30 min from StateSince; yesterday's chats must not fill every tile after a morning start");
+        _changes.ShouldHaveSingleItem().Current.ShouldBe(snapshot, "a correction reaches the stored row");
+    }
+
+    [Fact]
+    public void An_interrupt_ends_an_inferred_waiting_chat_instead_of_restarting_it()
+    {
+        _engine.Apply(Update("s1", SessionSignal.Notification) with { PendingToolUse = true });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+        _time.Advance(TimeSpan.FromSeconds(2));
+
+        // Esc on the permission prompt: the transcript gains the interrupt marker, while its recent writes still infer Working.
+        _engine.Apply(Update("s1", SessionSignal.ToolUse) with { Interrupted = true });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "the interrupt is the newest fact; Working would only be undone by the next sweep, 10 s on");
+    }
+
+    [Fact]
+    public void Hook_events_the_parser_ignores_on_purpose_are_not_logged_as_unknown()
+    {
+        var log = new ListLogger<SessionEngine>();
+        using var engine = new SessionEngine(_bus, _resolver, _time, log);
+
+        engine.Apply(Hook("SubagentStop", signal: null) with { Informational = true });
+        engine.Apply(Hook("SomeFutureEvent", signal: null));
+
+        log.Entries.ShouldNotContain(e => e.Level >= LogLevel.Information && e.Message.Contains("SubagentStop"), "a known event that keeps the state is not news");
+        log.Entries.ShouldContain(e => e.Level == LogLevel.Information && e.Message.Contains("SomeFutureEvent"), "an event nobody mapped is worth a line");
+    }
+
+    [Fact]
+    public void An_interrupt_on_an_idle_hook_less_chat_does_not_restart_it()
+    {
+        _engine.Apply(Update("s1", SessionSignal.ToolUse));
+        _time.Advance(TimeSpan.FromSeconds(11));
+        _engine.SweepStale();
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "thought for longer than the inferred window without writing");
+
+        // Esc: the interrupt line is written now, so the same update also infers Working from that write.
+        _engine.Apply(Update("s1", SessionSignal.ToolUse) with { Interrupted = true });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_transcript_first_seen_ending_in_an_interrupt_starts_idle()
+    {
+        _engine.Apply(Update("s1", SessionSignal.ToolUse) with { Interrupted = true });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "the turn it would have been Working for is the one Esc ended");
+    }
+
+    [Fact]
+    public void An_interrupt_written_before_the_sweep_stamped_a_hook_less_chat_waiting_still_ends_it()
+    {
+        _engine.Apply(Update("s1", SessionSignal.ToolUse) with { PendingToolUse = true });
+        _time.Advance(TimeSpan.FromSeconds(11));
+        _engine.SweepStale();
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        // The Esc line was written 5 s before that sweep; the indexer got to it only now.
+        _engine.Apply(Update("s1", SessionSignal.Stop, activity: _time.GetUtcNow().AddSeconds(-5)) with { Interrupted = true });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "without hooks the sweep's stamp is not newer evidence; the transcript ends with the interrupt");
     }
 }

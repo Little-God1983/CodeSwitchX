@@ -158,4 +158,18 @@ public class HookEnvelopeParserTests
         compact.Signal.ShouldBeNull("auto-compaction happens mid-turn; Idle would be wrong");
         compact.Source.ShouldBe("compact");
     }
+
+    [Theory]
+    [InlineData("SubagentStop", """{"session_id":"abc","hook_event_name":"SubagentStop"}""", true)]
+    [InlineData("SessionStart", """{"session_id":"abc","hook_event_name":"SessionStart","source":"compact"}""", true)]
+    [InlineData("Notification", """{"session_id":"abc","hook_event_name":"Notification","notification_type":"auth_success"}""", true)]
+    [InlineData("Notification", """{"session_id":"abc","hook_event_name":"Notification","notification_type":"plan_approval_prompt"}""", false)] // a type nobody mapped may mean Waiting: worth a line
+    [InlineData("SomethingNew", """{"session_id":"abc","hook_event_name":"SomethingNew"}""", false)]
+    public void An_event_left_without_a_signal_on_purpose_is_marked_so_the_engine_does_not_log_it_as_unknown(string eventName, string payload, bool informational)
+    {
+        var e = HookEnvelopeParser.Parse(Envelope(eventName, payload), Received)!;
+
+        e.Signal.ShouldBeNull();
+        e.Informational.ShouldBe(informational);
+    }
 }

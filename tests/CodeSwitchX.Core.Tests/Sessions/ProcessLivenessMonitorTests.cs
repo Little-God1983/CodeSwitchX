@@ -2,6 +2,8 @@ using System.Diagnostics;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.Tests;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -130,5 +132,34 @@ public class ProcessLivenessMonitorTests
         var beforeThisProcessStarted = new DateTimeOffset(current.StartTime.ToUniversalTime()).AddMinutes(-1);
 
         new SystemProcessProbe().IsAlive(Environment.ProcessId, beforeThisProcessStarted).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Tick_does_not_report_a_process_gone_when_the_chat_moved_on_while_it_was_probed()
+    {
+        var time = new FakeTimeProvider();
+        var bus = new EventBus(NullLogger<EventBus>.Instance);
+        var engine = new SessionEngine(bus, new WorkspaceResolver(), time, NullLogger<SessionEngine>.Instance);
+        HookEvent StartedBy(int pid) => new()
+        {
+            SessionId = "resumed", EventName = "SessionStart", Signal = SessionSignal.SessionStart, At = time.GetUtcNow(),
+            ParentChain = [new ProcessRef(pid, "claude.exe")],
+        };
+        engine.Apply(StartedBy(200));
+        var probe = Substitute.For<IProcessProbe>();
+        probe.IsAlive(200, Arg.Any<DateTimeOffset>()).Returns(_ =>
+        {
+            // The old claude exited and "claude --resume" took over, its hook landing while the probe ran.
+            time.Advance(TimeSpan.FromSeconds(1));
+            engine.Apply(StartedBy(300));
+            return false;
+        });
+        var log = new ListLogger<ProcessLivenessMonitor>();
+        var monitor = new ProcessLivenessMonitor(engine, probe, time, log);
+
+        monitor.Tick();
+
+        engine.Get("resumed")!.State.ShouldBe(SessionState.Idle);
+        log.Entries.ShouldNotContain(e => e.Level >= LogLevel.Information, "a line saying the process is gone would mislead whoever reads the log after a later Errored");
     }
 }

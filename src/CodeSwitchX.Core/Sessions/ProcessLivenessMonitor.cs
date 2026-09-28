@@ -62,8 +62,14 @@ public sealed class ProcessLivenessMonitor : BackgroundService
 
             if (!alive)
             {
-                _logger.LogInformation("Process {Pid} for session {SessionId} is gone", pid, snapshot.SessionId);
-                _engine.MarkProcessGone(snapshot.SessionId);
+                if (_engine.MarkProcessGone(snapshot.SessionId, pid, snapshot.LastEventAt))
+                {
+                    _logger.LogInformation("Process {Pid} for session {SessionId} is gone", pid, snapshot.SessionId);
+                }
+                else
+                {
+                    _logger.LogDebug("Process {Pid} for session {SessionId} is gone, but the chat moved on while it was probed", pid, snapshot.SessionId);
+                }
             }
         }
     }

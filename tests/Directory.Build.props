@@ -13,6 +13,10 @@
     <PackageReference Include="NSubstitute" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Test helpers every test project shares (tests\Shared). -->
+    <Compile Include="$(MSBuildThisFileDirectory)Shared\**\*.cs" Link="Shared\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="Shouldly" />
   </ItemGroup>

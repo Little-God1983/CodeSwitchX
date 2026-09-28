@@ -11,8 +11,8 @@ public static class HookEnvelopeParser
 {
     /// <summary>
     /// Notification types that mean Claude is blocked on the user. idle_prompt, which fires 60 s after a finished turn,
-    /// has its own signal; everything else (auth_success, unknown future types) is informational. Treating either as
-    /// Waiting would turn every finished chat amber a minute later. A missing type (older Claude Code) still counts as Waiting.
+    /// has its own signal; treating it as Waiting would turn every finished chat amber a minute later. A missing type
+    /// (older Claude Code) still counts as Waiting.
     /// </summary>
     private static readonly HashSet<string> NeedsUserNotifications = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -20,6 +20,9 @@ public static class HookEnvelopeParser
         "elicitation_dialog",
         "elicitation_url_dialog", // the same MCP elicitation, waiting for the user to open a link
     };
+
+    /// <summary>Notification types that carry no state: the chat is neither working nor waiting because of them.</summary>
+    private static readonly HashSet<string> InformationalNotifications = new(StringComparer.OrdinalIgnoreCase) { "auth_success" };
 
     public static HookEvent? Parse(string json, DateTimeOffset receivedAt)
     {
@@ -93,11 +96,13 @@ public static class HookEnvelopeParser
 
             var notificationType = GetString(payload, "notification_type");
             var source = GetString(payload, "source") ?? GetString(payload, "reason");
+            var (signal, informational) = Classify(eventName, notificationType, source);
             return new HookEvent
             {
                 SessionId = sessionId,
                 EventName = eventName,
-                Signal = SignalFor(eventName, notificationType, source),
+                Signal = signal,
+                Informational = informational,
                 At = receivedAt,
                 Cwd = GetString(payload, "cwd"),
                 TranscriptPath = GetString(payload, "transcript_path"),
@@ -115,20 +120,31 @@ public static class HookEnvelopeParser
         }
     }
 
+    public static SessionSignal? SignalFor(string eventName, string? notificationType, string? source = null) =>
+        Classify(eventName, notificationType, source).Signal;
+
+    /// <summary>
+    /// The signal an event carries, or that it carries none on purpose (<c>Informational</c>): SessionStart after
+    /// compaction, a notification that needs no one, SubagentStop. An event or notification type nobody mapped is
+    /// neither, and the engine logs it: a new type may be a dialog the chat should have gone Waiting for.
+    /// </summary>
     /// <param name="source">For SessionStart: startup, resume, clear or compact. Compaction happens in the middle of a turn, so it keeps the state.</param>
-    public static SessionSignal? SignalFor(string eventName, string? notificationType, string? source = null) => eventName switch
+    internal static (SessionSignal? Signal, bool Informational) Classify(string eventName, string? notificationType, string? source) => eventName switch
     {
-        "SessionStart" when string.Equals(source, "compact", StringComparison.OrdinalIgnoreCase) => null,
-        "SessionStart" => SessionSignal.SessionStart,
-        "UserPromptSubmit" => SessionSignal.PromptSubmit,
-        "PreToolUse" or "PostToolUse" => SessionSignal.ToolUse,
-        "PermissionRequest" => SessionSignal.Notification,
-        "Notification" when notificationType is null || NeedsUserNotifications.Contains(notificationType) => SessionSignal.Notification,
-        "Notification" when string.Equals(notificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase) => SessionSignal.IdlePrompt,
+        "SessionStart" when string.Equals(source, "compact", StringComparison.OrdinalIgnoreCase) => (null, true),
+        "SessionStart" => (SessionSignal.SessionStart, false),
+        "UserPromptSubmit" => (SessionSignal.PromptSubmit, false),
+        "PreToolUse" or "PostToolUse" => (SessionSignal.ToolUse, false),
+        "PermissionRequest" => (SessionSignal.Notification, false),
+        "Notification" when notificationType is null || NeedsUserNotifications.Contains(notificationType) => (SessionSignal.Notification, false),
+        "Notification" when string.Equals(notificationType, "idle_prompt", StringComparison.OrdinalIgnoreCase) => (SessionSignal.IdlePrompt, false),
+        "Notification" when notificationType is not null && InformationalNotifications.Contains(notificationType) => (null, true),
         // A turn that ends on an API error (usage limit, overload, prompt too long) sends StopFailure instead of Stop.
-        "Stop" or "StopFailure" => SessionSignal.Stop,
-        "SessionEnd" => SessionSignal.SessionEnd,
-        _ => null,
+        "Stop" or "StopFailure" => (SessionSignal.Stop, false),
+        "SessionEnd" => (SessionSignal.SessionEnd, false),
+        // Fires while the parent's turn goes on, which the parent's own PostToolUse or Stop ends (decisions.md).
+        "SubagentStop" => (null, true),
+        _ => (null, false),
     };
 
     private static string? GetString(JsonElement element, string name) =>

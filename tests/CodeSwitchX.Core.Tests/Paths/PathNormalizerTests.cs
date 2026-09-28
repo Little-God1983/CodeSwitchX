@@ -11,6 +11,12 @@ public class PathNormalizerTests
     [InlineData(@"  C:\Repo\App  ", @"c:\repo\app")]
     [InlineData(@"C:\", @"c:\")]
     [InlineData(@"c:\", @"c:\")]
+    [InlineData(@"\\?\C:\Repo\App", @"c:\repo\app")]
+    [InlineData(@"\\?\UNC\server\share\app\", @"\\server\share\app")]
+    [InlineData(@"\\.\C:\Repo\App", @"c:\repo\app")]
+    [InlineData(@"\\.\UNC\server\share\app", @"\\server\share\app")]
+    [InlineData(@"\\?\Volume{b75e2c83-0000-0000-0000-602200000000}\Repo", @"\\?\volume{b75e2c83-0000-0000-0000-602200000000}\repo")] // a volume without a drive letter is left as it is
+    [InlineData(@"\\?\C:", @"\\?\c:")] // drive-relative behind the prefix: stripping it would resolve against the current directory
     public void Normalize_produces_a_canonical_form(string input, string expected)
     {
         PathNormalizer.Normalize(input).ShouldBe(expected);
