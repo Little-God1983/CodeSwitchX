@@ -92,10 +92,10 @@ public sealed class HostManager : IDisposable
             }
             else
             {
-                // Two folders with the same name give their windows the same title: while one is still being found,
-                // its window would pass for the other's. Such discoveries run one after the other.
+                // Two folders with the same name, or names like "App" and "App - Copy", can both be named by one title:
+                // while one is still being found, its window would pass for the other's. They are found one by one.
                 sameName = _inflight.Values
-                    .Where(d => string.Equals(d.DisplayName, displayName, StringComparison.OrdinalIgnoreCase))
+                    .Where(d => VsCodeWindowMatcher.NamesOverlap(d.DisplayName, displayName))
                     .Select(d => (Task)d.Task)
                     .ToArray();
                 completion = new TaskCompletionSource<HostedWorkspace>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -114,7 +114,10 @@ public sealed class HostManager : IDisposable
         {
             // These tasks never fault: every discovery ends with SetResult.
             await Task.WhenAll(sameName).WaitAsync(ct).ConfigureAwait(false);
-            await DiscoverAsync(workspace, hosted, ct).ConfigureAwait(false);
+
+            // Off the caller's thread, which is the UI thread: checking a folder on a network share that is offline
+            // takes about 20 s, and the shell must not freeze meanwhile.
+            await Task.Run(() => DiscoverAsync(workspace, hosted, ct), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -147,15 +150,18 @@ public sealed class HostManager : IDisposable
         // window, so adopt that window instead of waiting for one that will never appear. A window another
         // workspace already hosts is never a candidate, however alike the folder names are.
         var existing = VsCodeWindowMatcher.FindAllExisting(NotHostedElsewhere(hosted, before), displayName, _windows.ProcessName);
-        if (existing.Count == 1)
+        var sure = existing.Where(w => VsCodeWindowMatcher.TitleNamesRoot(w.Title, displayName, workspace.VsCodeProfile)).ToList();
+        if (sure.Count == 1)
         {
-            Adopt(workspace, hosted, existing[0], hide: false);
+            Adopt(workspace, hosted, sure[0], hide: false);
             return;
         }
 
-        // More than one names it: the same folder name in two places, or a floating editor window of this workspace.
-        // The titles cannot tell which window shows the folder, but VS Code, asked to open it, brings that one forward.
-        var foregroundBefore = existing.Count > 1 ? _windows.ForegroundWindow() : 0;
+        // Otherwise the titles cannot tell which window, if any, shows the folder: two windows name it where VS Code
+        // writes the folder name (the same folder name in two places, a floating editor window), or a window names it
+        // elsewhere (a longer folder name, a profile, an editor tab). VS Code, asked to open the folder, opens a new
+        // window or brings forward the one that shows it.
+        var foregroundBefore = existing.Count > 0 ? _windows.ForegroundWindow() : 0;
         var launch = _launcher.Launch(workspace);
         if (!launch.Started)
         {
@@ -182,17 +188,41 @@ public sealed class HostManager : IDisposable
                 return;
             }
 
-            if (existing.Count > 1 && _windows.ForegroundWindow() is var foreground && foreground != foregroundBefore
-                && existing.FirstOrDefault(w => w.Hwnd == foreground) is { } broughtForward)
+            if (existing.Count > 0 && _windows.ForegroundWindow() is var foreground
+                && existing.FirstOrDefault(w => w.Hwnd == foreground) is { } broughtForward
+                && (foreground != foregroundBefore || HasAnswered(launch, before)))
             {
                 Adopt(workspace, hosted, broughtForward, hide: false);
                 return;
             }
         }
 
-        Stop(hosted, existing.Count > 1
-            ? $"{existing.Count} VS Code windows are titled '{displayName}', and VS Code did not bring the one for {workspace.RootPath} forward within {_options.DiscoveryTimeout.TotalSeconds:0}s"
-            : $"No VS Code window titled '{displayName}' appeared within {_options.DiscoveryTimeout.TotalSeconds:0}s");
+        var seconds = _options.DiscoveryTimeout.TotalSeconds;
+        Stop(hosted, existing.Count switch
+        {
+            0 => $"No VS Code window titled '{displayName}' appeared within {seconds:0}s",
+            1 => $"A VS Code window has '{displayName}' in its title, but VS Code neither opened {workspace.RootPath} nor brought that window forward within {seconds:0}s",
+            _ => $"{existing.Count} VS Code windows have '{displayName}' in their titles, and VS Code did not bring the one for {workspace.RootPath} forward within {seconds:0}s",
+        });
+    }
+
+    /// <summary>
+    /// True once the Code.exe that was launched has handed the folder to the running VS Code and exited, and VS Code
+    /// opened no new window for it. Then the folder was already open, and VS Code focused its window: when that
+    /// window was in front already (a jump hotkey pressed while typing in it), the foreground did not change.
+    /// </summary>
+    private bool HasAnswered(LaunchResult launch, IReadOnlyList<WindowInfo> before)
+    {
+        if (launch.ProcessId is not { } pid || _windows.ProcessName((uint)pid) is not null)
+        {
+            return false;
+        }
+
+        // VS Code creates the window of a folder it opens before the launched Code.exe exits, even while it is hidden.
+        var known = before.Select(w => w.Hwnd).ToHashSet();
+        return !_windows.TopLevelWindows().Any(w => !known.Contains(w.Hwnd)
+            && string.Equals(w.ClassName, VsCodeWindowMatcher.ElectronClass, StringComparison.Ordinal)
+            && string.Equals(_windows.ProcessName(w.ProcessId), VsCodeWindowMatcher.ProcessName, StringComparison.OrdinalIgnoreCase));
     }
 
     private void Adopt(Workspace workspace, HostedWorkspace hosted, WindowInfo window, bool hide)

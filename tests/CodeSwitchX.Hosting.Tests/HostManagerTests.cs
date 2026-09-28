@@ -358,6 +358,81 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task When_the_window_that_shows_the_folder_already_has_the_foreground_it_is_adopted_once_vs_code_has_answered()
+    {
+        // A jump hotkey pressed while typing in that very window: VS Code focuses it again, so nothing changes. Once
+        // the Code.exe that was launched has handed the folder over and exited, the window in front is the answer.
+        _windows.ForegroundWindow().Returns((nint)700);
+        _windows.TopLevelWindows().Returns([
+            new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"),
+            new WindowInfo(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code"),
+        ]);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+        _windows.ProcessName(1234).Returns((string?)null);
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Running);
+        hosted.Hwnd.ShouldBe((nint)700);
+    }
+
+    [Fact]
+    public async Task A_foreground_that_did_not_change_is_no_answer_while_vs_code_opens_a_new_window()
+    {
+        // The user types in c:\repo\app's window and jumps to c:\forks\app, which is not open: VS Code creates its
+        // window (hidden, untitled at first) before the launched Code.exe exits, and that window is the answer.
+        _windows.ForegroundWindow().Returns((nint)700);
+        WindowInfo[] open = [new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"), new(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code")];
+        _windows.TopLevelWindows().Returns(
+            open,
+            [.. open, new WindowInfo(900, 30, "Chrome_WidgetWin_1", string.Empty) { IsVisible = false }],
+            [.. open, new WindowInfo(900, 30, "Chrome_WidgetWin_1", string.Empty) { IsVisible = false }],
+            [.. open, new WindowInfo(900, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+        _windows.ProcessName(1234).Returns((string?)null);
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.Hwnd.ShouldBe((nint)900);
+    }
+
+    [Fact]
+    public async Task A_window_that_names_the_workspace_only_in_passing_is_not_taken_without_asking_vs_code()
+    {
+        // "App - Copy" (Explorer's name for a copied folder) is open; tile "app" is not. Its title has "app" as a
+        // segment, but not where VS Code writes the folder name, so VS Code is launched and its new window adopted.
+        _windows.TopLevelWindows().Returns(
+            [new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - App - Copy - Visual Studio Code")],
+            [new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - App - Copy - Visual Studio Code"), new WindowInfo(800, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        _launcher.Received(1).Launch(_workspace);
+        hosted.Hwnd.ShouldBe((nint)800);
+    }
+
+    [Fact]
+    public async Task Opening_returns_to_the_caller_before_the_launch_runs()
+    {
+        // OpenAsync is called on the UI thread. Launch checks the folder, and on a network share that is offline that
+        // alone took 21 s: the shell must not freeze meanwhile.
+        using var release = new ManualResetEventSlim();
+        _windows.TopLevelWindows().Returns([]);
+        _launcher.Launch(_workspace).Returns(_ =>
+        {
+            release.Wait(TimeSpan.FromSeconds(5));
+            return new LaunchResult(false, null, @"\\nas\projects\app was not found");
+        });
+
+        var open = _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        open.IsCompleted.ShouldBeFalse();
+        release.Set();
+        (await open).State.ShouldBe(HostState.Stopped);
+    }
+
+    [Fact]
     public async Task A_hosted_window_that_now_shows_another_folder_is_adopted_by_that_folder_and_its_first_tile_stops()
     {
         var window = new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code");
