@@ -95,8 +95,12 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
         {
-            IsProbed = false;
-            ErrorMessage = ex.Message;
+            // An offline share fails only after about 20 s; by then Folder… may have detected the path now in the box.
+            if (InputPath == input)
+            {
+                IsProbed = false;
+                ErrorMessage = ex.Message;
+            }
         }
         finally
         {
@@ -119,9 +123,16 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
             var track = SelectedTrack;
             if (!string.IsNullOrWhiteSpace(NewTrackName))
             {
-                track = await _store.AddTrackAsync(NewTrackName.Trim(), CancellationToken.None);
-                // Stored now, whether or not the workspace is: an Add after a failed one must pick it, not create it again.
-                Tracks.Add(track);
+                // Nothing deletes a track, so a second one of the same name would stay on the Yard for good.
+                var name = NewTrackName.Trim();
+                track = Tracks.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+                if (track is null)
+                {
+                    track = await _store.AddTrackAsync(name, CancellationToken.None);
+                    // Stored now, whether or not the workspace is: an Add after a failed one must pick it, not create it again.
+                    Tracks.Add(track);
+                }
+
                 SelectedTrack = track;
                 NewTrackName = string.Empty;
             }

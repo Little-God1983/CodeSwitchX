@@ -134,6 +134,45 @@ public class AddWorkspaceViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_detect_that_fails_after_the_path_was_changed_leaves_the_form_of_the_path_now_in_the_box()
+    {
+        var other = Path.Combine(Path.GetDirectoryName(_root)!, "Other");
+        Directory.CreateDirectory(other);
+        var shopGitFails = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new AddWorkspaceViewModel(new WorkspaceProbe(new GitInspector((root, _, _) => root.EndsWith("Shop") ? shopGitFails.Task : Task.FromResult<string?>(null))), _store,
+            new WorkspaceRegistry(_store, new WorkspaceResolver(), new EventBus(NullLogger<EventBus>.Instance)), NullLogger<AddWorkspaceViewModel>.Instance);
+        await vm.LoadAsync(CancellationToken.None);
+        vm.InputPath = _root;
+        var slowDetect = vm.ProbeCommand.ExecuteAsync(null);
+
+        vm.InputPath = other; // Folder… starts its own detect while the first one still runs
+        await vm.ProbeCommand.ExecuteAsync(null);
+        vm.Name.ShouldBe("Other");
+        shopGitFails.SetException(new IOException("The network path was not found."));
+        await slowDetect;
+
+        vm.IsProbed.ShouldBeTrue();
+        vm.ErrorMessage.ShouldBeNull("the error names a path no longer in the box");
+        vm.SaveCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_new_track_name_that_names_an_existing_track_adds_to_that_track()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = _root;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _vm.NewTrackName = " general ";
+        Workspace? saved = null;
+        _vm.Saved += w => saved = w;
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        await _store.DidNotReceive().AddTrackAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        saved.ShouldNotBeNull().TrackId.ShouldBe(_general.Id);
+    }
+
+    [Fact]
     public async Task Add_again_after_a_failed_add_uses_the_new_track_it_already_created()
     {
         await _vm.LoadAsync(CancellationToken.None);
@@ -152,5 +191,6 @@ public class AddWorkspaceViewModelTests : IDisposable
         await _store.Received(1).AddTrackAsync("Clients", Arg.Any<CancellationToken>());
         saved.ShouldNotBeNull().TrackId.ShouldBe(_vm.SelectedTrack.ShouldNotBeNull().Id);
         _vm.SelectedTrack.Name.ShouldBe("Clients");
+        _vm.Tracks.ShouldContain(_vm.SelectedTrack, "the Track box can only show a track that is in its list");
     }
 }
