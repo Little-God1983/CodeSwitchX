@@ -10,5 +10,11 @@ public interface IWindowDocker
     void Uncloak(nint hwnd);
     void BringToFront(nint hwnd);
     bool IsAlive(nint hwnd);
+
+    /// <summary>
+    /// True when Windows refuses to move the window: a process that is not elevated may not move, show or hide the
+    /// windows of an elevated one (UIPI).
+    /// </summary>
+    bool IsOutOfReach(nint hwnd);
     ScreenRect? GetRect(nint hwnd);
 }

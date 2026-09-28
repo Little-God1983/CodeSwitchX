@@ -43,6 +43,9 @@ its generated title as `ai-title` lines instead, which count the same, L5 #8), a
 | Hook installer | `StopFailure` is installed next to the spec's eight events and ends a turn like `Stop` (L6 #9) | Claude Code sends it instead of `Stop` when a turn ends on an API error (usage limit, overload, prompt too long); without it the chat stays Working |
 | Hook relay | `SubagentStop` has no signal; like any hook it still counts as the chat's activity (L6 #9) | It carries the parent chat's `session_id` and fires while the parent's turn goes on, which the parent's own `PostToolUse` or `Stop` ends. As `Stop` it would idle a working chat |
 | Telemetry | The shipped prices stay in code (`DefaultPricing`); the `PricingRules` table holds only the user's own rules, each overriding the default for its model. The `RemoveSeededPricing` migration deletes the copies earlier versions stored (L4 #7) | A stored copy of a default would override its later correction, so a fixed price would never reach an existing install. Every stored row was such a copy, because nothing writes a rule of the user's own yet |
+| Hosting | Windows are matched by their title, which names only the folder. When more than one window no other tile hosts names the workspace (the same folder name in two places, or a floating editor window), CodeSwitchX launches VS Code for the folder and adopts the window VS Code brings forward. A single open window named like two registered folders is adopted by whichever tile opens first (L7 #10) | Nothing a VS Code window shows without an extension tells two folders of the same name apart; the spec's Link extension handshake is what will confirm the folder. VS Code can bring a window forward only when Windows lets it take the foreground, so with CodeSwitchX in the background (AutoStart) this can end Stopped, and a click on the tile opens it |
+| Hosting | At startup every hidden VS Code window that shows a folder is shown again, whether a registered workspace owns it or not (L7 #10) | Only CodeSwitchX hides such a window, so one that is hidden at startup was left by a run that ended without releasing it (a crash, End task). Hosting does not know the registered workspaces |
+| Hosting | Snap-back leaves a window alone after 5 snap-backs from one and the same place, each within 2 s of the last, until its next dock or show (L7 #10) | A tiling window manager, or a second CodeSwitchX, puts the window back in its own place after every snap, and the two would move it to and fro for ever. A drag reaches a new place each time and is always followed |
 
 ## Deferred from PR #1
 
@@ -57,8 +60,8 @@ layer it belongs to: fixed there, moved to "By design" above, or parked on #3.
 | Pruning of `settings.json` backups made by the hook installer | L6 #9: still there, but Low: one small file for each install or removal that changes `settings.json`, and none when nothing changes. Claude Code ignores them (parked on #3) |
 | SQLite `Cache=Shared` together with WAL | L3 #6: still there, but Low: a read waits for the writer only on a table the writer has open. Every read of a table the writer uses happens once at startup (session restore, the indexer's cursors and seen message ids, the telemetry history), so at worst one startup read waits for one flush (parked on #3) |
 | Full rescans on every transcript change | L5 #8: still there, but Low: the results are correct, and the cost is mostly a second read of each file's size and time (about 145 ms per scan for 2565 transcripts, while a chat writes) (parked on #3) |
-| Snap-back oscillation guard | L7 #10 |
-| Orphaned hidden VS Code windows are not swept at startup | L7 #10 |
+| Snap-back oscillation guard | L7 #10: fixed, snap-back gives up on a window that keeps being moved to the same place (see "By design") |
+| Orphaned hidden VS Code windows are not swept at startup | L7 #10: fixed, `HiddenWindowSweep` shows them before anything is opened (see "By design") |
 | Single-instance enforcement | L8 #11 |
 
 ## Deferred from layer reviews

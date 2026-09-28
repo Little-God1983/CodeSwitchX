@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.WindowsAndMessaging;
@@ -11,6 +12,8 @@ namespace CodeSwitchX.Hosting.Win32;
 /// </summary>
 public sealed class SnapWindowDocker : IWindowDocker
 {
+    private const int ErrorAccessDenied = 5;
+
     public void MoveTo(nint hwnd, ScreenRect rect)
     {
         var h = new HWND(hwnd);
@@ -29,14 +32,11 @@ public sealed class SnapWindowDocker : IWindowDocker
     /// </summary>
     public void Cloak(nint hwnd) => PInvoke.ShowWindowAsync(new HWND(hwnd), SHOW_WINDOW_CMD.SW_HIDE);
 
-    public void Uncloak(nint hwnd)
-    {
-        var h = new HWND(hwnd);
-        if (!PInvoke.IsWindowVisible(h))
-        {
-            PInvoke.ShowWindowAsync(h, SHOW_WINDOW_CMD.SW_SHOWNA);
-        }
-    }
+    /// <summary>
+    /// Shows the window whether or not it looks visible: a hide posted by <see cref="Cloak"/> that VS Code has not
+    /// processed yet leaves it visible for now, and would land after this. Posted in order, the show comes last.
+    /// </summary>
+    public void Uncloak(nint hwnd) => PInvoke.ShowWindowAsync(new HWND(hwnd), SHOW_WINDOW_CMD.SW_SHOWNA);
 
     public void BringToFront(nint hwnd)
     {
@@ -47,6 +47,19 @@ public sealed class SnapWindowDocker : IWindowDocker
     }
 
     public bool IsAlive(nint hwnd) => PInvoke.IsWindow(new HWND(hwnd));
+
+    /// <summary>A move that changes nothing: Windows checks the right to move the window all the same, and says ERROR_ACCESS_DENIED.</summary>
+    public bool IsOutOfReach(nint hwnd)
+    {
+        if (PInvoke.SetWindowPos(new HWND(hwnd), HWND.Null, 0, 0, 0, 0,
+                SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE
+                | SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING | SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS))
+        {
+            return false;
+        }
+
+        return Marshal.GetLastPInvokeError() == ErrorAccessDenied;
+    }
 
     public ScreenRect? GetRect(nint hwnd)
     {

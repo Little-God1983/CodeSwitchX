@@ -13,6 +13,7 @@ public static class HostingServiceCollectionExtensions
         services.AddSingleton<IVsCodeLauncher>(_ => new VsCodeLauncher());
         services.AddSingleton<HostManagerOptions>();
         services.AddSingleton<HostManager>();
+        services.AddHostedService<HiddenWindowSweep>();
         return services;
     }
 }
