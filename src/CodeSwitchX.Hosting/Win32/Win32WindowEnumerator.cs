@@ -46,6 +46,8 @@ public sealed class Win32WindowEnumerator : IWindowEnumerator
         }
     }
 
+    public unsafe nint ForegroundWindow() => (nint)PInvoke.GetForegroundWindow().Value;
+
     private static string ClassNameOf(HWND hwnd)
     {
         Span<char> buffer = stackalloc char[256];

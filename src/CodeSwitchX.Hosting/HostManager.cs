@@ -9,6 +9,11 @@ namespace CodeSwitchX.Hosting;
 /// <summary>Launches VS Code per workspace, tracks its window and keeps it docked over the Cab or hidden.</summary>
 public sealed class HostManager : IDisposable
 {
+    /// <summary>Snap-backs from one and the same place, each within <see cref="SnapBackRepeatWindow"/> of the last, before snapping stops until the next dock.</summary>
+    public const int SnapBackLimit = 5;
+
+    private static readonly TimeSpan SnapBackRepeatWindow = TimeSpan.FromSeconds(2);
+
     private readonly IWindowEnumerator _windows;
     private readonly IWindowDocker _docker;
     private readonly IVsCodeLauncher _launcher;
@@ -18,8 +23,9 @@ public sealed class HostManager : IDisposable
     private readonly HostManagerOptions _options;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, HostedWorkspace> _hosted = [];
-    private readonly Dictionary<Guid, Task<HostedWorkspace>> _inflight = [];
+    private readonly Dictionary<Guid, Discovery> _inflight = [];
     private readonly IDisposable _unregistered;
+    private bool _released;
 
     public HostManager(IWindowEnumerator windows, IWindowDocker docker, IVsCodeLauncher launcher, IEventBus bus, TimeProvider time,
         ILogger<HostManager> logger, HostManagerOptions? options = null)
@@ -62,9 +68,11 @@ public sealed class HostManager : IDisposable
     /// </summary>
     public async Task<HostedWorkspace> OpenAsync(Workspace workspace, CancellationToken ct)
     {
+        var displayName = VsCodeLauncher.DisplayNameForMatching(workspace);
         HostedWorkspace hosted;
         Task<HostedWorkspace>? pending = null;
         TaskCompletionSource<HostedWorkspace>? completion = null;
+        Task[] sameName = [];
         lock (_gate)
         {
             if (!_hosted.TryGetValue(workspace.Id, out hosted!))
@@ -80,12 +88,20 @@ public sealed class HostManager : IDisposable
 
             if (_inflight.TryGetValue(workspace.Id, out var existing))
             {
-                pending = existing;
+                pending = existing.Task;
             }
             else
             {
+                // Two folders with the same name, or names like "App" and "App - Copy", can both be named by one title:
+                // while one is still being found, its window would pass for the other's. They are found one by one.
+                sameName = _inflight.Values
+                    .Where(d => VsCodeWindowMatcher.NamesOverlap(d.DisplayName, displayName))
+                    .Select(d => (Task)d.Task)
+                    .ToArray();
                 completion = new TaskCompletionSource<HostedWorkspace>(TaskCreationOptions.RunContinuationsAsynchronously);
-                _inflight[workspace.Id] = completion.Task;
+                _inflight[workspace.Id] = new Discovery(completion.Task, displayName);
+                hosted.DisplayName = displayName;
+                hosted.Profile = workspace.VsCodeProfile;
                 Transition(hosted, HostState.Starting, error: null);
             }
         }
@@ -97,7 +113,12 @@ public sealed class HostManager : IDisposable
 
         try
         {
-            await DiscoverAsync(workspace, hosted, ct).ConfigureAwait(false);
+            // These tasks never fault: every discovery ends with SetResult.
+            await Task.WhenAll(sameName).WaitAsync(ct).ConfigureAwait(false);
+
+            // Off the caller's thread, which is the UI thread: checking a folder on a network share that is offline
+            // takes about 20 s, and the shell must not freeze meanwhile.
+            await Task.Run(() => DiscoverAsync(workspace, hosted, ct), ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -123,24 +144,35 @@ public sealed class HostManager : IDisposable
 
     private async Task DiscoverAsync(Workspace workspace, HostedWorkspace hosted, CancellationToken ct)
     {
-        var displayName = VsCodeLauncher.DisplayNameForMatching(workspace);
+        var displayName = hosted.DisplayName;
         var before = _windows.TopLevelWindows();
 
         // VS Code is single-instance: asking it to open a folder that is already open only focuses the existing
         // window, so adopt that window instead of waiting for one that will never appear. A window another
         // workspace already hosts is never a candidate, however alike the folder names are.
-        var candidates = before.Where(w => !IsHostedElsewhere(hosted, w.Hwnd)).ToList();
-        var existing = VsCodeWindowMatcher.FindExisting(candidates, displayName, _windows.ProcessName);
-        if (existing is not null)
-        {
-            if (TryAdopt(hosted, existing, hide: false))
-            {
-                _logger.LogInformation("Adopted existing VS Code window {Hwnd} for {Workspace}", existing.Hwnd, workspace.Name);
-            }
+        var existing = VsCodeWindowMatcher.FindAllExisting(NotHostedElsewhere(hosted, before), displayName, _windows.ProcessName);
 
+        // A floating editor window of a docked tile with the same folder name looks like any window of that folder.
+        List<WindowInfo> sure = HasDockedNamesake(hosted)
+            ? []
+            : existing.Where(w => VsCodeWindowMatcher.TitleNamesRoot(w.Title, displayName, workspace.VsCodeProfile)).ToList();
+        if (sure.Count == 1)
+        {
+            Adopt(workspace, hosted, sure[0], hide: false);
             return;
         }
 
+        // A discovery that waited behind a namesake may find its tile removed, or CodeSwitchX closing, by now.
+        if (ReasonNotToLaunch(hosted) is { } reason)
+        {
+            Stop(hosted, reason);
+            return;
+        }
+
+        // Otherwise the titles cannot tell which window, if any, shows the folder: two windows name it where VS Code
+        // writes the folder name (the same folder name in two places, a floating editor window), or a window names it
+        // elsewhere (a longer folder name, a profile, an editor tab). VS Code, asked to open the folder, opens a new
+        // window or brings forward the one that shows it.
         var launch = _launcher.Launch(workspace);
         if (!launch.Started)
         {
@@ -150,6 +182,7 @@ public sealed class HostManager : IDisposable
         }
 
         var deadline = _time.GetUtcNow() + _options.DiscoveryTimeout;
+        WindowInfo? inFrontBefore = null;
         while (_time.GetUtcNow() < deadline)
         {
             await Task.Delay(_options.PollInterval, _time, ct).ConfigureAwait(false);
@@ -159,23 +192,97 @@ public sealed class HostManager : IDisposable
                 return;
             }
 
-            var match = VsCodeWindowMatcher.FindNew(before, _windows.TopLevelWindows(), displayName, _windows.ProcessName);
+            var windows = _windows.TopLevelWindows();
+            var match = VsCodeWindowMatcher.FindNew(before, NotHostedElsewhere(hosted, windows), displayName, _windows.ProcessName);
             if (match is not null)
             {
                 // Keep the fresh window out of sight until the Cab docks it, so it never flashes undocked on the desktop.
-                if (TryAdopt(hosted, match, hide: true))
-                {
-                    _logger.LogInformation("VS Code window {Hwnd} found for {Workspace}", match.Hwnd, workspace.Name);
-                }
-
+                Adopt(workspace, hosted, match, hide: true);
                 return;
             }
+
+            // The window in front counts only once VS Code has answered, and only when it is in front on two polls in
+            // a row: a window the user switches to meanwhile is no answer.
+            var inFront = existing.Count > 0 && HasAnswered(launch, before, windows) && _windows.ForegroundWindow() is var foreground
+                ? existing.FirstOrDefault(w => w.Hwnd == foreground)
+                : null;
+            if (inFront is not null && inFront.Hwnd == inFrontBefore?.Hwnd)
+            {
+                Adopt(workspace, hosted, inFront, hide: false);
+                return;
+            }
+
+            inFrontBefore = inFront;
         }
 
-        Stop(hosted, $"No VS Code window titled '{displayName}' appeared within {_options.DiscoveryTimeout.TotalSeconds:0}s");
+        var seconds = _options.DiscoveryTimeout.TotalSeconds;
+        Stop(hosted, existing.Count switch
+        {
+            0 => $"No VS Code window titled '{displayName}' appeared within {seconds:0}s",
+            1 => $"A VS Code window has '{displayName}' in its title, but VS Code neither opened {workspace.RootPath} nor brought that window forward within {seconds:0}s",
+            _ => $"{existing.Count} VS Code windows have '{displayName}' in their titles, and VS Code did not bring the one for {workspace.RootPath} forward within {seconds:0}s",
+        });
     }
 
-    /// <summary>Records the window as Running, unless the workspace was forgotten meanwhile: then the window is left alone and visible.</summary>
+    /// <summary>
+    /// True once VS Code has answered: the Code.exe that was launched has handed the folder over and exited, and no new
+    /// VS Code window is still on its way. Then the folder was already open, and VS Code brought its window forward, or
+    /// kept it in front when it was there already (a jump hotkey pressed while typing in it).
+    /// </summary>
+    private bool HasAnswered(LaunchResult launch, IReadOnlyList<WindowInfo> before, IReadOnlyList<WindowInfo> windows)
+    {
+        if (launch.ProcessId is not { } pid || _windows.ProcessName((uint)pid) is not null)
+        {
+            return false;
+        }
+
+        // VS Code creates the window of a folder it opens before the launched Code.exe exits, hidden and untitled at
+        // first. A new window that already shows a folder is not that one, or FindNew would have taken it: another
+        // tile's window, or a floating editor.
+        var known = before.Select(w => w.Hwnd).ToHashSet();
+        return !windows.Any(w => !known.Contains(w.Hwnd) && VsCodeWindowMatcher.IsVsCodeWindow(w, _windows.ProcessName)
+            && !(w.IsVisible && VsCodeWindowMatcher.ShowsAFolder(w, _windows.ProcessName)));
+    }
+
+    private string? ReasonNotToLaunch(HostedWorkspace hosted)
+    {
+        lock (_gate)
+        {
+            return !IsTrackedLocked(hosted) ? "Workspace was removed while VS Code was starting"
+                : _released ? "CodeSwitchX is closing"
+                : null;
+        }
+    }
+
+    private bool HasDockedNamesake(HostedWorkspace self)
+    {
+        lock (_gate)
+        {
+            return _hosted.Values.Any(h => !ReferenceEquals(h, self) && h.State == HostState.Running
+                && string.Equals(h.DisplayName, self.DisplayName, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private void Adopt(Workspace workspace, HostedWorkspace hosted, WindowInfo window, bool hide)
+    {
+        // Windows (UIPI) ignores a process that is not elevated when it moves, shows or hides an elevated one's window:
+        // the tile would say Running while its Cab stayed empty and Back to Yard left VS Code on the desktop.
+        if (_docker.IsOutOfReach(window.Hwnd))
+        {
+            Stop(hosted, "VS Code runs as administrator, so Windows does not let CodeSwitchX move or hide its window. Start VS Code without administrator rights, or CodeSwitchX with them.");
+            return;
+        }
+
+        if (TryAdopt(hosted, window, hide))
+        {
+            _logger.LogInformation("VS Code window {Hwnd} adopted for {Workspace}", window.Hwnd, workspace.Name);
+        }
+    }
+
+    /// <summary>
+    /// Records the window as Running, unless the workspace was forgotten meanwhile or CodeSwitchX is closing: then the
+    /// window is left alone and visible.
+    /// </summary>
     private bool TryAdopt(HostedWorkspace hosted, WindowInfo window, bool hide)
     {
         lock (_gate)
@@ -184,6 +291,21 @@ public sealed class HostManager : IDisposable
             {
                 Transition(hosted, HostState.Stopped, "Workspace was removed while VS Code was starting");
                 return false;
+            }
+
+            // After ReleaseAll nothing may hide a window again: this process is about to exit and would leave it invisible.
+            if (_released)
+            {
+                Transition(hosted, HostState.Stopped, "CodeSwitchX is closing");
+                return false;
+            }
+
+            // A hosted window still names its host, or it would not be a candidate: this one was switched to our
+            // folder (File > Open Recent opens it in the same window), so its old tile no longer shows it.
+            foreach (var previous in _hosted.Values.Where(h => h != hosted && h.State == HostState.Running && h.Hwnd == window.Hwnd).ToList())
+            {
+                previous.Visible = false;
+                Transition(previous, HostState.Stopped, $"Its VS Code window now shows {hosted.DisplayName}");
             }
 
             hosted.Hwnd = window.Hwnd;
@@ -234,6 +356,7 @@ public sealed class HostManager : IDisposable
             }
 
             target.TargetRect = rect;
+            target.ResetSnapBack();
             _docker.MoveTo(target.Hwnd, rect);
         }
     }
@@ -247,6 +370,7 @@ public sealed class HostManager : IDisposable
         }
 
         target.TargetRect = rect;
+        target.ResetSnapBack();
         _docker.Uncloak(target.Hwnd);
         _docker.MoveTo(target.Hwnd, rect);
         _docker.BringToFront(target.Hwnd);
@@ -273,6 +397,7 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
+            _released = true;
             foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && _docker.IsAlive(h.Hwnd)))
             {
                 _docker.Uncloak(hosted.Hwnd);
@@ -282,22 +407,45 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    /// <summary>Called from the WinEvent watcher: put a docked window back if the user dragged it.</summary>
+    /// <summary>
+    /// Called from the WinEvent watcher: put a docked window back if the user dragged it. Something that puts the
+    /// window back in its own place after every snap (a tiling window manager, a second CodeSwitchX) would move it to
+    /// and fro for ever, so after <see cref="SnapBackLimit"/> quick snap-backs from the same place the window is left
+    /// there until the next dock. A drag reaches a new place every time and is always followed.
+    /// </summary>
     public void SnapBack(nint hwnd)
     {
         lock (_gate)
         {
             var hosted = _hosted.Values.FirstOrDefault(h => h.Hwnd == hwnd && h.Visible && h.TargetRect is not null);
-            if (hosted is null)
+            if (hosted is null || hosted.SnapBackSuspended)
             {
                 return;
             }
 
             var current = _docker.GetRect(hwnd);
-            if (current is not null && current != hosted.TargetRect)
+            if (current is null || current == hosted.TargetRect)
             {
-                _docker.MoveTo(hwnd, hosted.TargetRect!.Value);
+                return;
             }
+
+            // While the user holds the mouse button, the move loop puts the window back under the cursor after every
+            // snap, the same place each time: that is a drag, not a fight. It is not counted, and the last snap wins.
+            if (!_docker.IsPrimaryButtonDown())
+            {
+                var now = _time.GetUtcNow();
+                var repeat = current == hosted.SnapBackFrom && now - hosted.LastSnapBackAt < SnapBackRepeatWindow;
+                hosted.SnapBackRepeats = repeat ? hosted.SnapBackRepeats + 1 : 1;
+                hosted.SnapBackFrom = current;
+                hosted.LastSnapBackAt = now;
+                if (hosted.SnapBackSuspended)
+                {
+                    _logger.LogWarning("Stopped snapping VS Code window {Hwnd} back until the next dock: something keeps moving it to {Rect}", hwnd, current);
+                    return;
+                }
+            }
+
+            _docker.MoveTo(hwnd, hosted.TargetRect!.Value);
         }
     }
 
@@ -325,6 +473,24 @@ public sealed class HostManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Shows the VS Code windows an earlier run left hidden. A run that ends without <see cref="ReleaseAll"/> (a crash,
+    /// End task) leaves them running but invisible, and nothing else ever shows them again. Only CodeSwitchX hides a
+    /// VS Code window that shows a folder; windows this run hides itself are left alone.
+    /// </summary>
+    public void ShowOrphanedWindows()
+    {
+        var hidden = _windows.TopLevelWindows().Where(w => !w.IsVisible && VsCodeWindowMatcher.ShowsAFolder(w, _windows.ProcessName)).ToList();
+        lock (_gate)
+        {
+            foreach (var window in hidden.Where(w => !_hosted.Values.Any(h => h.State == HostState.Running && h.Hwnd == w.Hwnd)))
+            {
+                _docker.Uncloak(window.Hwnd);
+                _logger.LogInformation("Showed VS Code window {Hwnd} '{Title}', left hidden by an earlier run", window.Hwnd, window.Title);
+            }
+        }
+    }
+
     public void Dispose() => _unregistered.Dispose();
 
     private bool IsTracked(HostedWorkspace hosted)
@@ -338,11 +504,19 @@ public sealed class HostManager : IDisposable
     private bool IsTrackedLocked(HostedWorkspace hosted) =>
         _hosted.TryGetValue(hosted.WorkspaceId, out var tracked) && ReferenceEquals(tracked, hosted);
 
-    private bool IsHostedElsewhere(HostedWorkspace self, nint hwnd)
+    /// <summary>
+    /// The windows no other workspace hosts. A hosted window counts as its host's only while its title still names
+    /// that host where VS Code writes the folder name: File > Open Recent opens another folder in the same window,
+    /// which then belongs to that folder, even when its name contains the host's ("App - Copy" for "App").
+    /// </summary>
+    private List<WindowInfo> NotHostedElsewhere(HostedWorkspace self, IReadOnlyList<WindowInfo> windows)
     {
         lock (_gate)
         {
-            return _hosted.Values.Any(h => !ReferenceEquals(h, self) && h.State == HostState.Running && h.Hwnd == hwnd);
+            return windows
+                .Where(w => !_hosted.Values.Any(h => !ReferenceEquals(h, self) && h.State == HostState.Running && h.Hwnd == w.Hwnd
+                    && VsCodeWindowMatcher.TitleNamesRoot(w.Title, h.DisplayName, h.Profile)))
+                .ToList();
         }
     }
 
@@ -363,4 +537,6 @@ public sealed class HostManager : IDisposable
         hosted.Error = error;
         _bus.Publish(new HostStateChanged(hosted.WorkspaceId, state, hosted.Hwnd, error));
     }
+
+    private sealed record Discovery(Task<HostedWorkspace> Task, string DisplayName);
 }

@@ -52,6 +52,36 @@ public class VsCodeWindowMatcherTests
         var hidden = new WindowInfo(800, 30, "Chrome_WidgetWin_1", "App - Visual Studio Code") { IsVisible = false };
 
         VsCodeWindowMatcher.FindNew([], [hidden], "App", ProcessName).ShouldBeNull("adopting it before VS Code shows it would race its own ShowWindow and flash it undocked");
-        VsCodeWindowMatcher.FindExisting([hidden], "App", ProcessName)!.Hwnd.ShouldBe((nint)800);
+        VsCodeWindowMatcher.FindAllExisting([hidden], "App", ProcessName).Single().Hwnd.ShouldBe((nint)800);
+    }
+
+    [Fact]
+    public void A_name_that_contains_the_title_separator_matches_its_own_window()
+    {
+        // "app - Copy" is the name Explorer gives a copied folder; VS Code writes it into the title unchanged.
+        var window = new WindowInfo(500, 30, "Chrome_WidgetWin_1", "● Program.cs - Kunde - Portal - Visual Studio Code");
+
+        VsCodeWindowMatcher.FindNew([], [window], "Kunde - Portal", ProcessName)!.Hwnd.ShouldBe((nint)500);
+        VsCodeWindowMatcher.FindAllExisting([window], "kunde - portal", ProcessName).Single().Hwnd.ShouldBe((nint)500);
+        VsCodeWindowMatcher.FindNew([], [window], "Kunde - Portal2", ProcessName).ShouldBeNull();
+        VsCodeWindowMatcher.FindNew([], [window], "Portal - Kunde", ProcessName).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("Program.cs - app - Visual Studio Code", "app", null, true)]
+    [InlineData("● app - Visual Studio Code", "app", null, true)]
+    [InlineData("app - Visual Studio Code [Administrator]", "app", null, true)]
+    [InlineData("Program.cs - App - Copy - Visual Studio Code", "App - Copy", null, true)]
+    [InlineData("Program.cs - app - Dev Kit - Visual Studio Code", "app", "Dev Kit", true)]
+    [InlineData("Program.cs - app - Dev Kit - Visual Studio Code", "app", null, false)]
+    [InlineData("Program.cs - App - Copy - Visual Studio Code", "App", null, false)]
+    [InlineData("Dockerfile - proj - Visual Studio Code", "Dockerfile", null, false)]
+    [InlineData("Program.cs - proj - Python - Visual Studio Code", "Python", null, false)]
+    [InlineData("app", "app", null, false)]
+    public void Only_the_place_where_vs_code_writes_the_folder_name_is_sure_to_be_the_folder(string title, string name, string? profile, bool sure)
+    {
+        // "${activeEditorShort} - ${rootName} - ${profileName} - ${appName}", each part only when there is one. Another
+        // segment can be an editor tab, a profile or part of a longer folder name, so a match there is only a guess.
+        VsCodeWindowMatcher.TitleNamesRoot(title, name, profile).ShouldBe(sure);
     }
 }
