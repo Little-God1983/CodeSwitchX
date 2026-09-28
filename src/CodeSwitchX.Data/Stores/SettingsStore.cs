@@ -63,16 +63,4 @@ public sealed class SettingsStore : ISettingsStore
 
         await db.SaveChangesAsync(ct);
     }
-
-    public async Task EnsurePricingDefaultsAsync(IReadOnlyCollection<PricingRule> defaults, CancellationToken ct = default)
-    {
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        var present = await db.PricingRules.Select(p => p.Model).ToHashSetAsync(ct);
-        foreach (var rule in defaults.Where(r => !present.Contains(r.Model)))
-        {
-            db.PricingRules.Add(rule);
-        }
-
-        await db.SaveChangesAsync(ct);
-    }
 }

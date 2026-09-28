@@ -40,16 +40,6 @@ public class TelemetryServiceTests
     }
 
     [Fact]
-    public async Task Start_does_not_copy_the_shipped_prices_into_the_database()
-    {
-        await Service().StartAsync(CancellationToken.None);
-
-        // A stored rule overrides the default for its model, so a stored copy of a default would outlive its correction.
-        await _settings.DidNotReceive().EnsurePricingDefaultsAsync(Arg.Any<IReadOnlyCollection<PricingRule>>(), Arg.Any<CancellationToken>());
-        await _settings.DidNotReceive().UpsertPricingAsync(Arg.Any<IReadOnlyCollection<PricingRule>>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task Transcript_usage_updates_the_snapshot_and_publishes()
     {
         var service = Service();
@@ -115,5 +105,66 @@ public class TelemetryServiceTests
 
         service.Current.Today.Tokens.Input.ShouldBe(0);
         await service.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>The fake clock, with a hook that runs while the service reads the time zone half-way through a recompute.</summary>
+    private sealed class HookedTime(FakeTimeProvider inner) : TimeProvider
+    {
+        public Action? WhileReadingTheZone { get; set; }
+
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override TimeZoneInfo LocalTimeZone
+        {
+            get
+            {
+                var hook = WhileReadingTheZone;
+                WhileReadingTheZone = null;
+                hook?.Invoke();
+                return inner.LocalTimeZone;
+            }
+        }
+
+        public override long TimestampFrequency => inner.TimestampFrequency;
+
+        public override long GetTimestamp() => inner.GetTimestamp();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(callback, state, dueTime, period);
+    }
+
+    [Fact]
+    public async Task A_minute_tick_that_overlaps_a_transcript_update_does_not_leave_the_older_totals_behind()
+    {
+        var time = new HookedTime(_time);
+        var service = new TelemetryService(_usage, _settings, _bus, time, NullLogger<TelemetryService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+        var published = new List<TelemetrySnapshot>();
+        _bus.Subscribe<TelemetryUpdated>(m =>
+        {
+            lock (published)
+            {
+                published.Add(m.Snapshot);
+            }
+        });
+        Task? update = null;
+        time.WhileReadingTheZone = () =>
+        {
+            // The indexer's thread brings usage while the tick has copied the buckets and is still adding them up.
+            update = Task.Run(() => _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
+            {
+                SessionId = "s1",
+                TranscriptPath = "p",
+                ObservedAt = _time.GetUtcNow(),
+                Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500, 0, 0, 0))],
+            })));
+            update.Wait(TimeSpan.FromMilliseconds(500)); // through, or held back until the tick is
+        };
+
+        _time.Advance(TelemetryService.RefreshInterval);
+        await update.ShouldNotBeNull();
+
+        service.Current.Today.Tokens.Input.ShouldBe(1_000_500);
+        published[^1].Today.Tokens.Input.ShouldBe(1_000_500, "the snapshot published last is the newest");
     }
 }

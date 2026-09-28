@@ -26,7 +26,11 @@ public sealed class PricingTable
 
     public IReadOnlyList<PricingRule> Rules => _rules;
 
-    /// <summary>Longest rule whose model id equals the given id or is a prefix of it ending on a '-' boundary.</summary>
+    /// <summary>
+    /// Longest rule whose model id equals the given id or is a prefix of it that ends where a segment ends: before a "-"
+    /// (a date, "claude-opus-4-5-20251101"), an "@" (Vertex AI, "claude-opus-4-5@20251101") or a "[" (a context option,
+    /// "claude-opus-4-6[1m]"), never inside a number ("claude-opus-55" is not Opus 5).
+    /// </summary>
     public PricingRule Find(string? model)
     {
         if (string.IsNullOrWhiteSpace(model))
@@ -48,5 +52,5 @@ public sealed class PricingTable
     private static bool Matches(string model, string prefix) =>
         model.Length >= prefix.Length
         && model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-        && (model.Length == prefix.Length || model[prefix.Length] == '-');
+        && (model.Length == prefix.Length || !char.IsAsciiLetterOrDigit(model[prefix.Length]));
 }

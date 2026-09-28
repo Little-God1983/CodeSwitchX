@@ -16,14 +16,19 @@ public sealed class UsageAggregator
     {
         var tokens = TokenUsage.Zero;
         var cost = 0m;
+        var unpriced = false;
         foreach (var bucket in buckets)
         {
             var usage = new TokenUsage(bucket.Input, bucket.Output, bucket.CacheWrite, bucket.CacheRead);
+            var rule = _pricing.Find(bucket.Model);
             tokens += usage;
-            cost += CostEstimator.Estimate(usage, _pricing.Find(bucket.Model));
+            cost += CostEstimator.Estimate(usage, rule);
+            // A model newer than the shipped table (or one nobody priced) counts its tokens and adds nothing to the cost;
+            // the estimate has to say so instead of looking complete.
+            unpriced |= ReferenceEquals(rule, PricingTable.Fallback);
         }
 
-        return new UsageTotals(tokens, cost);
+        return new UsageTotals(tokens, cost) { Unpriced = unpriced };
     }
 
     public UsageTotals Window(IEnumerable<UsageBucket> buckets, DateTimeOffset now, TimeSpan span)

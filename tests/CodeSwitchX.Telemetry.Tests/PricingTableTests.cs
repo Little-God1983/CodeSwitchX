@@ -13,6 +13,8 @@ public class PricingTableTests
     [InlineData("claude-opus-5-20260401", "claude-opus-5")]
     [InlineData("claude-sonnet-4-5-20250929", "claude-sonnet-4-5")]
     [InlineData("CLAUDE-HAIKU-4-5-20251001", "claude-haiku-4-5")]
+    [InlineData("claude-opus-4-5@20251101", "claude-opus-4-5")]
+    [InlineData("claude-opus-4-6[1m]", "claude-opus-4-6")]
     public void Find_uses_the_longest_prefix_on_a_segment_boundary(string model, string expectedRule)
     {
         PricingTable.Default.Find(model).Model.ShouldBe(expectedRule);

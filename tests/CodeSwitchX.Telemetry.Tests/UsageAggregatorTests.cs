@@ -122,4 +122,16 @@ public class UsageAggregatorTests
         totals["a"].Tokens.Input.ShouldBe(4);
         totals["b"].Tokens.Input.ShouldBe(2);
     }
+
+    [Fact]
+    public void Sum_says_when_a_total_leaves_out_the_usage_of_a_model_without_a_price()
+    {
+        var priced = _aggregator.Sum([Bucket("a", Now, 1_000_000)]);
+        var withUnknown = _aggregator.Sum([Bucket("a", Now, 1_000_000), new UsageBucket { SessionId = "a", Model = "claude-newer-6", MinuteUtc = Now, Input = 1_000_000 }]);
+
+        priced.Unpriced.ShouldBeFalse();
+        withUnknown.Unpriced.ShouldBeTrue();
+        withUnknown.Cost.ShouldBe(priced.Cost, "the unknown model adds tokens but no cost");
+        withUnknown.Tokens.Input.ShouldBe(2_000_000);
+    }
 }

@@ -73,8 +73,12 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
     {
         // The database holds only the user's own rules, each overriding the shipped default for its model.
         var rules = await _settings.GetPricingAsync(ct).ConfigureAwait(false);
-        Pricing = new PricingTable(DefaultPricing.Rules.Concat(rules));
-        _aggregator = new UsageAggregator(Pricing);
+        lock (_gate)
+        {
+            Pricing = new PricingTable(DefaultPricing.Rules.Concat(rules));
+            _aggregator = new UsageAggregator(Pricing);
+        }
+
         Recompute(publish);
     }
 
@@ -107,30 +111,33 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
         Recompute(publish: true);
     }
 
+    /// <summary>
+    /// From the buckets to the publish under the one lock: the minute timer and a transcript update can run this at the
+    /// same time, and the one with the older copy of the buckets must not assign and publish last, or Today, the 5 h window
+    /// and the sparkline would miss the newest usage until the next update or tick.
+    /// </summary>
     private void Recompute(bool publish)
     {
-        var now = _time.GetUtcNow();
-        UsageBucket[] buckets;
         lock (_gate)
         {
+            var now = _time.GetUtcNow();
             var cutoff = now - History;
             foreach (var stale in _buckets.Where(kv => kv.Key.Minute < cutoff).Select(kv => kv.Key).ToList())
             {
                 _buckets.Remove(stale);
             }
 
-            buckets = _buckets.Values.ToArray();
-        }
+            var buckets = _buckets.Values.ToArray();
+            Current = new TelemetrySnapshot(
+                _aggregator.Today(buckets, now, _time.LocalTimeZone),
+                _aggregator.Window(buckets, now, TimeSpan.FromHours(5)),
+                _aggregator.RateSeries(buckets, now, RateMinutes),
+                now);
 
-        Current = new TelemetrySnapshot(
-            _aggregator.Today(buckets, now, _time.LocalTimeZone),
-            _aggregator.Window(buckets, now, TimeSpan.FromHours(5)),
-            _aggregator.RateSeries(buckets, now, RateMinutes),
-            now);
-
-        if (publish)
-        {
-            _bus.Publish(new TelemetryUpdated(Current));
+            if (publish)
+            {
+                _bus.Publish(new TelemetryUpdated(Current));
+            }
         }
     }
 
