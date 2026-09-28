@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
@@ -22,6 +24,7 @@ public class TranscriptIndexerTests : IDisposable
     private readonly EventBus _bus = new(NullLogger<EventBus>.Instance);
     private readonly IUsageStore _cursors = Substitute.For<IUsageStore>();
     private readonly List<TranscriptUpdate> _updates = [];
+    private readonly List<TranscriptsForgotten> _forgotten = [];
     private readonly TranscriptIndexer _indexer;
 
     public TranscriptIndexerTests()
@@ -32,6 +35,7 @@ public class TranscriptIndexerTests : IDisposable
         _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>([]));
         _cursors.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
         _bus.Subscribe<TranscriptUpdated>(m => _updates.Add(m.Update));
+        _bus.Subscribe<TranscriptsForgotten>(_forgotten.Add);
         _indexer = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
     }
 
@@ -239,6 +243,7 @@ public class TranscriptIndexerTests : IDisposable
         subagent.Title.ShouldBeNull();
         subagent.Model.ShouldBeNull("a sub-agent may run a different model; the parent's context bar must keep the parent's");
         subagent.LatestContext.ShouldBeNull();
+        subagent.Cursor.ShouldNotBeNull().Title.ShouldBeNull("a sub-agent's prompt is no chat title, so the cursor stores none");
         subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
     }
 
@@ -447,7 +452,7 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task Cursors_of_transcripts_that_are_gone_are_removed_from_the_store_once()
+    public async Task Transcripts_that_are_gone_are_forgotten_through_the_writer_once()
     {
         var gone = Path.Combine(_projectDir, "gone.jsonl").ToLowerInvariant();
         _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
@@ -457,29 +462,165 @@ public class TranscriptIndexerTests : IDisposable
 
         // Claude Code's cleanupPeriodDays deleted the first transcript while the app was down, the second while it runs.
         await _indexer.ScanAsync(CancellationToken.None);
-        await _cursors.Received(1).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == gone), Arg.Any<CancellationToken>());
+        _forgotten.ShouldHaveSingleItem().Paths.ShouldBe([gone]);
 
         File.Delete(live);
         await _indexer.ScanAsync(CancellationToken.None);
-        await _cursors.Received(1).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == live.ToLowerInvariant()), Arg.Any<CancellationToken>());
+        _forgotten.Count.ShouldBe(2);
+        _forgotten[1].Paths.ShouldBe([live.ToLowerInvariant()]);
 
         await _indexer.ScanAsync(CancellationToken.None);
-        _cursors.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IUsageStore.RemoveCursorsAsync)).ShouldBe(2, "a cursor is removed once");
+        _forgotten.Count.ShouldBe(2, "a transcript is forgotten once");
+        // The writer removes the rows, in order with the cursors it still holds for the same files.
+        await _cursors.DidNotReceive().RemoveCursorsAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task A_cursor_the_store_could_not_remove_is_removed_on_the_next_scan()
+    public async Task A_folder_the_scan_cannot_look_into_keeps_the_cursors_of_its_transcripts()
     {
-        var gone = Path.Combine(_projectDir, "gone.jsonl").ToLowerInvariant();
+        var locked = Path.Combine(_projectDir, "locked");
+        Directory.CreateDirectory(locked);
+        var path = Path.Combine(locked, "s1.jsonl");
+        File.WriteAllLines(path, [User("s1", "Fix")]);
         _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
-            [new TranscriptCursor { Path = gone, ByteOffset = 10, LastWriteUtc = _time.GetUtcNow().AddDays(-40), SessionId = "gone" }]));
-        _cursors.RemoveCursorsAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException(new IOException("database is locked")), Task.CompletedTask);
+            [new TranscriptCursor { Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = _time.GetUtcNow(), SessionId = "s1" }]));
 
-        await Should.NotThrowAsync(() => _indexer.ScanAsync(CancellationToken.None));
+        // A permission reset, a quarantine or a move can deny the user a folder for a while; the enumeration skips it.
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.ListDirectory | FileSystemRights.ReadAttributes,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Deny);
+        var folder = new DirectoryInfo(locked);
+        var acl = folder.GetAccessControl();
+        acl.AddAccessRule(deny);
+        folder.SetAccessControl(acl);
+        try
+        {
+            await _indexer.ScanAsync(CancellationToken.None);
+        }
+        finally
+        {
+            acl = folder.GetAccessControl();
+            acl.RemoveAccessRule(deny);
+            folder.SetAccessControl(acl);
+        }
+
+        _forgotten.ShouldBeEmpty();
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldBeEmpty("the cursor still covers the file once the folder opens again; nothing is read or counted twice");
+    }
+
+    [Fact]
+    public async Task A_transcript_seen_in_place_outside_the_scan_is_looked_for_again_once_a_minute_not_on_every_scan()
+    {
+        // The Claude directory changed (CLAUDE_CONFIG_DIR): the stored cursors of the old one point at files that still exist.
+        var elsewhere = Path.Combine(_home, "old-projects", "C--Repo-App");
+        Directory.CreateDirectory(elsewhere);
+        var path = Path.Combine(elsewhere, "s1.jsonl");
+        File.WriteAllLines(path, [User("s1", "Fix")]);
+        _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
+            [new TranscriptCursor { Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = _time.GetUtcNow(), SessionId = "s1" }]));
+
+        await _indexer.ScanAsync(CancellationToken.None);
+        _forgotten.ShouldBeEmpty();
+
+        File.Delete(path);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _forgotten.ShouldBeEmpty("a file seen in place is not looked for on every scan, which runs every 2 s while a chat writes");
+
+        _time.Advance(new TranscriptIndexerOptions().WatcherRefreshInterval);
         await _indexer.ScanAsync(CancellationToken.None);
 
-        await _cursors.Received(2).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == gone), Arg.Any<CancellationToken>());
+        _forgotten.ShouldHaveSingleItem().Paths.ShouldBe([path.ToLowerInvariant()]);
+    }
+
+    [Fact]
+    public async Task A_chat_resumed_through_a_handle_still_open_is_read_at_the_minute_refresh_although_the_folder_entry_lags()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Original task")]);
+        File.SetLastWriteTimeUtc(path, _time.GetUtcNow().AddDays(-3).UtcDateTime);
+        var seen = new ConcurrentQueue<TranscriptUpdate>();
+        using var subscription = _bus.Subscribe<TranscriptUpdated>(m => seen.Enqueue(m.Update));
+        await _indexer.StartAsync(ct);
+        try
+        {
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => !seen.IsEmpty);
+            seen.ShouldNotBeEmpty("the loop and its watcher are running");
+            seen.Clear();
+
+            // Claude Code appends through a handle it keeps open. Windows reports the write, to the folder entry the
+            // enumeration reads and to the watcher alike, only once it reaches the disk: the scan sees the old size and the
+            // old write time, and no event brings a scan. The minute refresh asks every file itself.
+            var at = _time.GetUtcNow();
+            await using var appending = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+            appending.Write(Encoding.UTF8.GetBytes(User("s1", "continue please", at.ToString("O")) + "\n"));
+            appending.Flush();
+            _time.Advance(new TranscriptIndexerOptions().WatcherRefreshInterval);
+            await AdvanceAsync(TimeSpan.FromSeconds(5), ct, until: () => !seen.IsEmpty);
+
+            seen.ShouldContain(u => u.LastActivityAt == at);
+        }
+        finally
+        {
+            await _indexer.StopAsync(ct);
+        }
+    }
+
+    [Fact]
+    public async Task A_rewrite_does_not_offer_the_earlier_rename_names_again()
+    {
+        var path = Transcript("s1");
+        string[] lines = [User("s1", "go"), CustomTitle("s1", "First name"), User("s1", "two"), CustomTitle("s1", "Second name"), User("s1", "three")];
+        File.WriteAllText(path, string.Join('\n', lines) + "\n");
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Second name");
+        _updates.Clear();
+
+        // Claude Code cut the last prompt out; the file is read again from the start.
+        File.WriteAllText(path, string.Join('\n', lines[..4]) + "\n");
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Title.ShouldBeNull("the chat keeps the name it has");
+    }
+
+    [Fact]
+    public async Task A_re_read_cut_by_the_byte_cap_between_two_rename_names_does_not_show_the_earlier_one()
+    {
+        var path = Transcript("s1");
+        string[] lines = [User("s1", "go"), CustomTitle("s1", "First name"), User("s1", "two"), CustomTitle("s1", "Second name"), User("s1", "three")];
+        File.WriteAllText(path, string.Join('\n', lines) + "\n");
+        var options = new TranscriptIndexerOptions { MaxBytesPerPass = Encoding.UTF8.GetByteCount(string.Join('\n', lines[..3]) + "\n") + 1 };
+        using var capped = new TranscriptIndexer(_claude, _cursors, _bus, _time, NullLogger<TranscriptIndexer>.Instance, options);
+        await capped.ScanAsync(CancellationToken.None);
+        await capped.ScanAsync(CancellationToken.None);
+        _updates.Select(u => u.Title).ShouldBe(["First name", "Second name"]);
+        _updates.Clear();
+
+        File.WriteAllText(path, string.Join('\n', lines[..4]) + "\n");
+        await capped.ScanAsync(CancellationToken.None);
+        await capped.ScanAsync(CancellationToken.None);
+
+        _updates.Select(u => u.Title).ShouldBe([null, null], "neither pass of the re-read renames the chat");
+    }
+
+    [Fact]
+    public async Task A_chat_renamed_before_the_upgrade_gets_its_name_from_behind_the_stored_offset_without_counting_its_usage_again()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "go"), Assistant("s1", "m1", TextBlock), CustomTitle("s1", "Old name")]);
+        // The migration marks every cursor stored before as having found a prompt title, with no title to show.
+        using var upgraded = RestoredWith(new TranscriptCursor
+        {
+            Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = new DateTimeOffset(2026, 9, 23, 10, 0, 10, TimeSpan.Zero),
+            SessionId = "s1", TitleSource = TitleSource.Prompt,
+        });
+
+        await upgraded.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Title.ShouldBe("Old name");
+        update.Usage.ShouldBeEmpty("counted before the upgrade");
+        update.Cursor.ShouldNotBeNull().ByteOffset.ShouldBe(new FileInfo(path).Length);
     }
 
     private static string LastPrompt(string session) => $$$"""{"type":"last-prompt","lastPrompt":"go","sessionId":"{{{session}}}"}""";

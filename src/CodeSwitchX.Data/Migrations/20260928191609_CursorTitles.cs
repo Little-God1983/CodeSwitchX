@@ -25,7 +25,8 @@ namespace CodeSwitchX.Data.Migrations
 
             // The indexer of the versions before this took the first prompt as the title without storing it (and a stored
             // cursor covers lines, so a prompt at least): a later prompt must not rename the chat, while a generated title
-            // or a /rename name still does.
+            // or a /rename name still does. A prompt source without a title is this mark, and the indexer reads such a
+            // file again from the start once, for the title lines behind the stored offset (a /rename name among them).
             migrationBuilder.Sql("UPDATE \"TranscriptCursors\" SET \"TitleSource\" = 1;");
         }
 
