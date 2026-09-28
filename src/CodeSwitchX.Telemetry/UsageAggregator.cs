@@ -24,8 +24,8 @@ public sealed class UsageAggregator
             tokens += usage;
             cost += CostEstimator.Estimate(usage, rule);
             // A model newer than the shipped table (or one nobody priced) counts its tokens and adds nothing to the cost;
-            // the estimate has to say so instead of looking complete.
-            unpriced |= ReferenceEquals(rule, PricingTable.Fallback);
+            // the estimate has to say so instead of looking complete. A bucket without tokens leaves nothing out.
+            unpriced |= usage.Total > 0 && ReferenceEquals(rule, PricingTable.Fallback);
         }
 
         return new UsageTotals(tokens, cost) { Unpriced = unpriced };

@@ -134,4 +134,12 @@ public class UsageAggregatorTests
         withUnknown.Cost.ShouldBe(priced.Cost, "the unknown model adds tokens but no cost");
         withUnknown.Tokens.Input.ShouldBe(2_000_000);
     }
+
+    [Fact]
+    public void Sum_does_not_call_a_total_unpriced_for_a_bucket_of_an_unknown_model_that_holds_no_tokens()
+    {
+        var totals = _aggregator.Sum([Bucket("a", Now, 1_000_000), new UsageBucket { SessionId = "a", Model = "claude-newer-6", MinuteUtc = Now }]);
+
+        totals.Unpriced.ShouldBeFalse("nothing was left out of the cost");
+    }
 }
