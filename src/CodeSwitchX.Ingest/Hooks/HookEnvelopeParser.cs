@@ -21,6 +21,13 @@ public static class HookEnvelopeParser
         "elicitation_url_dialog", // the same MCP elicitation, waiting for the user to open a link
     };
 
+    /// <summary>The events Claude Code sends that this parser maps. One of these without a signal keeps the state on purpose; any other is unknown.</summary>
+    private static readonly HashSet<string> KnownEvents = new(StringComparer.Ordinal)
+    {
+        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure",
+        "SubagentStop", "SessionEnd",
+    };
+
     public static HookEvent? Parse(string json, DateTimeOffset receivedAt)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -93,11 +100,13 @@ public static class HookEnvelopeParser
 
             var notificationType = GetString(payload, "notification_type");
             var source = GetString(payload, "source") ?? GetString(payload, "reason");
+            var signal = SignalFor(eventName, notificationType, source);
             return new HookEvent
             {
                 SessionId = sessionId,
                 EventName = eventName,
-                Signal = SignalFor(eventName, notificationType, source),
+                Signal = signal,
+                Informational = signal is null && KnownEvents.Contains(eventName),
                 At = receivedAt,
                 Cwd = GetString(payload, "cwd"),
                 TranscriptPath = GetString(payload, "transcript_path"),

@@ -13,8 +13,17 @@ public static class ChatTitle
 
         var singleLine = string.Join(' ',
             prompt.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        return singleLine.Length <= maxLength
-            ? singleLine
-            : string.Concat(singleLine.AsSpan(0, maxLength - 1), "…");
+        if (singleLine.Length <= maxLength)
+        {
+            return singleLine;
+        }
+
+        var keep = maxLength - 1;
+        if (char.IsHighSurrogate(singleLine[keep - 1]))
+        {
+            keep--; // never cut between the two halves of an emoji
+        }
+
+        return string.Concat(singleLine.AsSpan(0, keep), "…");
     }
 }

@@ -11,6 +11,8 @@ public class PathNormalizerTests
     [InlineData(@"  C:\Repo\App  ", @"c:\repo\app")]
     [InlineData(@"C:\", @"c:\")]
     [InlineData(@"c:\", @"c:\")]
+    [InlineData(@"\\?\C:\Repo\App", @"c:\repo\app")]
+    [InlineData(@"\\?\UNC\server\share\app\", @"\\server\share\app")]
     public void Normalize_produces_a_canonical_form(string input, string expected)
     {
         PathNormalizer.Normalize(input).ShouldBe(expected);

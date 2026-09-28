@@ -124,7 +124,7 @@ public sealed class SessionEngine : IDisposable
             {
                 state = next;
             }
-            else if (e.Signal is null)
+            else if (e.Signal is null && !e.Informational)
             {
                 _logger.LogInformation("Unknown hook event {EventName} for session {SessionId}", e.EventName, e.SessionId);
             }
@@ -173,7 +173,15 @@ public sealed class SessionEngine : IDisposable
             var state = s.State;
             var stateSince = s.StateSince;
             var activityAt = u.LastActivityAt ?? u.ObservedAt;
-            if (!s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
+            if (u.Interrupted && state is SessionState.Working or SessionState.Waiting && activityAt >= s.StateSince)
+            {
+                // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is, and
+                // it is the newest fact in the lines that also infer Working from their recent writes. An interrupt older
+                // than the current state belongs to an earlier turn and must not undo a newer hook.
+                state = SessionState.Idle;
+                stateSince = activityAt;
+            }
+            else if (!s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
             {
                 if (next != state)
                 {
@@ -181,13 +189,6 @@ public sealed class SessionEngine : IDisposable
                 }
 
                 state = next;
-            }
-            else if (u.Interrupted && state is SessionState.Working or SessionState.Waiting && activityAt >= s.StateSince)
-            {
-                // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is.
-                // An interrupt older than the current state belongs to an earlier turn and must not undo a newer hook.
-                state = SessionState.Idle;
-                stateSince = activityAt;
             }
 
             var cwd = s.Cwd ?? u.Cwd;
@@ -210,7 +211,20 @@ public sealed class SessionEngine : IDisposable
         }
     }
 
-    public void MarkProcessGone(string sessionId) => Signal(sessionId, SessionSignal.ProcessGone);
+    /// <summary>
+    /// Errored, when <paramref name="pid"/> is still the chat's claude. A chat that a new claude resumed between the
+    /// liveness tick's probe and this call is left alone: its process was never probed.
+    /// </summary>
+    public void MarkProcessGone(string sessionId, int pid)
+    {
+        lock (_gate)
+        {
+            if (_sessions.TryGetValue(sessionId, out var s) && s.ClaudePid == pid)
+            {
+                SignalLocked(sessionId, SessionSignal.ProcessGone);
+            }
+        }
+    }
 
     public void Rename(string sessionId, string title)
     {
@@ -305,14 +319,6 @@ public sealed class SessionEngine : IDisposable
         }
     }
 
-    private void Signal(string sessionId, SessionSignal signal)
-    {
-        lock (_gate)
-        {
-            SignalLocked(sessionId, signal);
-        }
-    }
-
     private void SignalLocked(string sessionId, SessionSignal signal)
     {
         if (!_sessions.TryGetValue(sessionId, out var previous) || !SessionStateMachine.TryNext(previous.State, signal, out var next))
@@ -320,7 +326,10 @@ public sealed class SessionEngine : IDisposable
             return;
         }
 
-        Commit(previous, previous with { State = next, StateSince = _time.GetUtcNow() });
+        // A chat goes Stale once it has been quiet for the whole stale window, so the row dates from the end of that window:
+        // the first sweep after a start finds chats that went stale hours ago, and the tile keeps a Stale row 30 min from here.
+        var since = signal == SessionSignal.StaleTimeout ? previous.LastEventAt + _options.StaleAfter : _time.GetUtcNow();
+        Commit(previous, previous with { State = next, StateSince = since });
     }
 
     /// <summary>Stores and publishes a changed snapshot. Must be called under <see cref="_gate"/> so versions and publish order agree.</summary>

@@ -27,4 +27,13 @@ public class ChatTitleTests
     {
         ChatTitle.FromPrompt(prompt).ShouldBeNull();
     }
+
+    [Fact]
+    public void A_cut_never_leaves_half_an_emoji_before_the_ellipsis()
+    {
+        // 58 letters, then a two-char emoji across the cut: keeping 59 chars would keep the emoji's first half alone.
+        var title = ChatTitle.FromPrompt(new string('a', 58) + "😀 and more", 60)!;
+
+        title.ShouldBe(new string('a', 58) + "…");
+    }
 }

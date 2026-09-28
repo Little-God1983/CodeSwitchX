@@ -13,8 +13,19 @@ public static class PathNormalizer
     public static string Canonical(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var full = Path.GetFullPath(path.Trim()).Replace('/', '\\');
+        var full = Path.GetFullPath(WithoutDevicePrefix(path.Trim())).Replace('/', '\\');
         return Path.TrimEndingDirectorySeparator(full);
+    }
+
+    /// <summary>The <c>\\?\</c> long-path prefix (<c>\\?\UNC\</c> on a share) names the same folder; nothing shows or compares it.</summary>
+    private static string WithoutDevicePrefix(string path)
+    {
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + path[8..];
+        }
+
+        return path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path;
     }
 
     /// <summary>True when <paramref name="candidate"/> equals <paramref name="root"/> or lies below it. Both must already be normalised.</summary>
