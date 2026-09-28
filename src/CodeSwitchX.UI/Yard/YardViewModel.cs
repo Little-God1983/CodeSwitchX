@@ -111,7 +111,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.Tick(now);
         }
 
-        HooksInferredOnly = Tiles.Any(t => t.HasInferredChats) && !Tiles.SelectMany(t => t.Chats).Any(c => !c.Inferred && c.IsLive);
+        // A hook-fed chat proves the hooks work wherever it is shown, including on no tile.
+        HooksInferredOnly = Tiles.Any(t => t.HasInferredChats) && !_engine.Snapshots.Any(s => !s.Inferred && SessionStateMachine.IsLive(s.State));
         if (NeedsMeFirst)
         {
             Resort();
@@ -155,31 +156,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     partial void OnNeedsMeFirstChanged(bool value) => Resort();
 
+    /// <summary>
+    /// A chat is shown on the tile of the workspace the engine maps it to, and on no other: a row left on a tile the
+    /// engine has moved it away from (another workspace, or none when its cwd left every root) would never change again.
+    /// </summary>
     internal void Apply(SessionSnapshot snapshot)
     {
-        if (snapshot.WorkspaceId is not { } workspaceId)
-        {
-            // The chat's cwd left every workspace: no tile shows it any more, or its row would never change again.
-            foreach (var shown in Tiles.Where(t => t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
-            {
-                shown.Remove(snapshot.SessionId);
-            }
-
-            return;
-        }
-
-        var tile = FindTile(workspaceId);
-        if (tile is null)
-        {
-            return;
-        }
-
-        foreach (var other in Tiles.Where(t => t.Id != workspaceId && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
+        var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
+        foreach (var other in Tiles.Where(t => t != tile && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
         {
             other.Remove(snapshot.SessionId);
         }
 
-        tile.Upsert(snapshot, _pricing.Pricing);
+        tile?.Upsert(snapshot, _pricing.Pricing);
         if (NeedsMeFirst)
         {
             Resort();
@@ -203,11 +192,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         var group = Tracks.FirstOrDefault(t => t.Id == workspace.TrackId);
-        var newTrack = group is null;
         if (group is null)
         {
             group = new TrackGroupViewModel(new Track { Id = workspace.TrackId, Name = "Track", SortOrder = int.MaxValue });
             Tracks.Add(group);
+            _ = ReloadTrackNamesAsync();
         }
 
         var tile = new WorkspaceTileViewModel(workspace, this);
@@ -218,33 +207,21 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.Upsert(snapshot, _pricing.Pricing);
         }
 
-        if (newTrack)
-        {
-            // Only once the tile is in: the reload replaces the group with one holding its tiles, and the SQLite store
-            // answers synchronously, so on the UI thread that happens before this call returns.
-            _ = ReloadTrackNamesAsync();
-        }
-
         _ = RefreshGitAsync(CancellationToken.None);
     }
 
+    /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
     private async Task ReloadTrackNamesAsync()
     {
         var tracks = await _store.GetTracksAsync(CancellationToken.None);
         _ui.Post(() =>
         {
             var byId = tracks.ToDictionary(t => t.Id);
-            foreach (var group in Tracks.ToList())
+            foreach (var group in Tracks)
             {
-                if (byId.TryGetValue(group.Id, out var track) && group.Track.Name != track.Name)
+                if (byId.TryGetValue(group.Id, out var track))
                 {
-                    var replacement = new TrackGroupViewModel(track);
-                    foreach (var tile in group.Tiles)
-                    {
-                        replacement.Tiles.Add(tile);
-                    }
-
-                    Tracks[Tracks.IndexOf(group)] = replacement;
+                    group.Track = track;
                 }
             }
         });

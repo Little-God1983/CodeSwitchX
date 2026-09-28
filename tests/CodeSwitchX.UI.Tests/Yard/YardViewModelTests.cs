@@ -171,6 +171,51 @@ public class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_chat_mapped_to_a_workspace_without_a_tile_leaves_the_tile_it_was_on()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Working)));
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", Guid.NewGuid(), SessionState.Waiting)));
+
+        _yard.FindTile(_app.Id)!.Chats.ShouldBeEmpty("a row left on App would never change again");
+    }
+
+    [Fact]
+    public async Task With_needs_me_first_on_a_track_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting);
+        _bus.Publish(new SessionChanged(null, waiting));
+        _yard.NeedsMeFirst = true;
+        _yard.Tracks.Select(t => t.Name).ShouldBe(["Clients", "General"]);
+
+        _bus.Publish(new SessionChanged(waiting, waiting with { WorkspaceId = null }));
+
+        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients"], "the jump keys follow this order, so it must not wait for the next tick");
+    }
+
+    [Fact]
+    public async Task A_hook_fed_chat_that_leaves_every_workspace_still_counts_as_proof_that_hooks_work()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app"));
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s2", TranscriptPath = @"c:\t\s2.jsonl", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), Cwd = @"c:\repo\shop",
+            InferredSignal = SessionSignal.PromptSubmit,
+        }); // a chat started before the hooks were installed
+        _yard.Tick(_time.GetUtcNow());
+        _yard.HooksInferredOnly.ShouldBeFalse();
+
+        _engine.Apply(Hook("s1", "Notification", SessionSignal.Notification, @"c:\notes"));
+        _yard.Tick(_time.GetUtcNow());
+
+        _yard.HooksInferredOnly.ShouldBeFalse("s1 still reports through the hooks; it is only shown on no tile");
+    }
+
+    [Fact]
     public async Task Registering_a_workspace_inside_another_moves_its_chats_onto_the_new_tile()
     {
         _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));

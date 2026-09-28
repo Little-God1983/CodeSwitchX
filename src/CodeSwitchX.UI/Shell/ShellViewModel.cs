@@ -102,10 +102,9 @@ public sealed partial class ShellViewModel : ObservableObject
                 return;
             }
 
-            // A minimised shell docks VS Code when it is restored (SetShellMinimized).
-            if (Cab.LastHostRect is { } rect && Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && !_shellMinimized)
+            if (ActiveWorkspaceId == workspaceId)
             {
-                _host.ShowInCab(workspaceId, rect);
+                RaiseHostedWindow();
             }
         }
         catch (Exception ex)
@@ -189,13 +188,17 @@ public sealed partial class ShellViewModel : ObservableObject
         {
             _host.HideAll();
         }
-        else if (ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
+        else
         {
-            _host.ShowInCab(id, rect);
+            RaiseHostedWindow();
         }
     }
 
-    /// <summary>Activating the shell puts it above the docked VS Code window; this puts VS Code back on top while in Cab mode.</summary>
+    /// <summary>
+    /// Shows the active workspace's VS Code in the Cab and raises it, when the shell can show it: in Cab mode, not
+    /// minimised, with a known Cab rectangle. The one place for that rule: an open that finishes, a restore, and an
+    /// activation of the shell (which puts the shell above the docked VS Code) all come here.
+    /// </summary>
     public void RaiseHostedWindow()
     {
         if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
