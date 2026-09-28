@@ -13,7 +13,7 @@ namespace CodeSwitchX.Ingest.Transcripts;
 /// <see cref="TranscriptUpdated"/> with titles, usage deltas, an inferred state signal and the new cursor.
 /// The cursor is persisted by the <c>PersistenceWriter</c> in the same transaction as the usage, never here.
 /// No failure of a single tick, folder or file ends the loop: indexing must survive Claude Code's cleanup deleting
-/// folders mid-scan, files pending deletion and a locked database.
+/// folders mid-scan, files pending deletion and a locked database. A file that cannot be read is tried again by itself.
 /// </summary>
 public sealed class TranscriptIndexer : BackgroundService
 {
@@ -25,6 +25,9 @@ public sealed class TranscriptIndexer : BackgroundService
     private readonly TranscriptIndexerOptions _options;
     private readonly SemaphoreSlim _scanGate = new(1, 1);
     private readonly Dictionary<string, FileState> _files = new(StringComparer.Ordinal);
+
+    /// <summary>Files a pass could not read, each with its next attempt. Touched only under <see cref="_scanGate"/>.</summary>
+    private readonly Dictionary<string, Retry> _retries = new(StringComparer.Ordinal);
     private readonly MessageMemory _messages;
     private bool _cursorsLoaded;
     private FileSystemWatcher? _watcher;
@@ -33,6 +36,12 @@ public sealed class TranscriptIndexer : BackgroundService
 
     /// <summary>Claude Code records API errors as assistant lines with this model and zero usage; they carry no model, context or tokens.</summary>
     internal const string SyntheticModel = "<synthetic>";
+
+    /// <summary>Whether the next tick scans everything: set by the folder watcher, its refresh, and a pass that could not run at all.</summary>
+    internal bool Dirty => _dirty;
+
+    /// <summary>When a file an earlier pass could not read is tried again, or null once it was read or is gone.</summary>
+    internal DateTimeOffset? NextAttempt(string path) => _retries.GetValueOrDefault(PathNormalizer.Normalize(path))?.DueAt;
 
     public TranscriptIndexer(ClaudeCodePaths claude, IUsageStore cursorStore, IEventBus bus, TimeProvider time,
         ILogger<TranscriptIndexer> logger, TranscriptIndexerOptions options)
@@ -81,31 +90,46 @@ public sealed class TranscriptIndexer : BackgroundService
                     _dirty = true;
                 }
 
-                // Without a running watcher, poll.
-                if (!_dirty && _watching)
-                {
-                    continue;
-                }
-
-                _dirty = false;
-                try
-                {
-                    await ScanAsync(stoppingToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    // A bad tick must never end indexing for the rest of the process lifetime.
-                    _logger.LogError(ex, "Transcript scan failed; retrying on the next tick");
-                    _dirty = true;
-                }
+                await TickAsync(stoppingToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    /// <summary>
+    /// One timer tick: a pass over every transcript when the watcher reported a change, or without a running watcher;
+    /// otherwise only the files an earlier pass could not read, once their next attempt is due.
+    /// </summary>
+    internal async Task TickAsync(CancellationToken ct)
+    {
+        var everything = _dirty || !_watching;
+        if (everything)
+        {
+            _dirty = false;
+        }
+
+        try
+        {
+            if (everything)
+            {
+                await ScanAsync(ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await RetryAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A bad tick must never end indexing for the rest of the process lifetime.
+            _logger.LogError(ex, "Transcript scan failed; retrying on the next tick");
+            _dirty = true;
         }
     }
 
@@ -143,15 +167,26 @@ public sealed class TranscriptIndexer : BackgroundService
             foreach (var path in files)
             {
                 ct.ThrowIfCancellationRequested();
-                try
-                {
-                    ProcessFile(path);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex, "Transcript {Path} could not be indexed in this pass", path);
-                    _dirty = true;
-                }
+                ProcessFile(path);
+            }
+        }
+        finally
+        {
+            _scanGate.Release();
+        }
+    }
+
+    /// <summary>Reads again the files an earlier pass could not, once their next attempt is due. Nothing else is touched.</summary>
+    private async Task RetryAsync(CancellationToken ct)
+    {
+        await _scanGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var now = _time.GetUtcNow();
+            foreach (var retry in _retries.Values.Where(r => r.DueAt <= now).ToList())
+            {
+                ct.ThrowIfCancellationRequested();
+                ProcessFile(retry.Path);
             }
         }
         finally
@@ -202,21 +237,43 @@ public sealed class TranscriptIndexer : BackgroundService
         return true;
     }
 
+    /// <summary>Never throws: a file that cannot be read or indexed now is tried again by itself, later, not by a scan of everything.</summary>
     private void ProcessFile(string path)
     {
         var key = PathNormalizer.Normalize(path);
-        FileInfo info;
         try
         {
-            info = new FileInfo(path);
-            if (!info.Exists)
-            {
-                return;
-            }
+            Index(path, key);
+            _retries.Remove(key);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Transcript {Path} is not accessible right now", path);
+            ScheduleRetry(key, path, ex);
+        }
+    }
+
+    private void ScheduleRetry(string key, string path, Exception ex)
+    {
+        // The next tick first (a sharing violation on a chat's last write clears at once), then twice the wait each time
+        // up to the cap: a file that can never be read costs one failed open now and then, never a scan of everything.
+        var attempts = (_retries.GetValueOrDefault(key)?.Attempts ?? 0) + 1;
+        var delay = TimeSpan.FromTicks(Math.Min(_options.ScanInterval.Ticks << Math.Min(attempts - 1, 20), _options.MaxRetryDelay.Ticks));
+        _retries[key] = new Retry(path, attempts, _time.GetUtcNow() + delay);
+        if (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(ex, "Transcript {Path} is not readable right now; trying again in {Delay}", path, delay);
+        }
+        else
+        {
+            _logger.LogWarning(ex, "Transcript {Path} could not be indexed in this pass; trying again in {Delay}", path, delay);
+        }
+    }
+
+    private void Index(string path, string key)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists)
+        {
             return;
         }
 
@@ -231,17 +288,7 @@ public sealed class TranscriptIndexer : BackgroundService
             return;
         }
 
-        TailResult tail;
-        try
-        {
-            tail = TranscriptTailer.ReadNewLines(path, state.Offset, _options.MaxBytesPerPass);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogDebug(ex, "Transcript {Path} is not readable right now", path);
-            return;
-        }
-
+        var tail = TranscriptTailer.ReadNewLines(path, state.Offset, _options.MaxBytesPerPass);
         if (tail.Truncated)
         {
             _logger.LogInformation("Transcript {Path} was rewritten; re-reading it from the start", path);
@@ -440,7 +487,8 @@ public sealed class TranscriptIndexer : BackgroundService
         };
     }
 
-    private void StartWatcher()
+    /// <summary>Watches the transcript folder; the loop calls this at start and on refresh. Internal so a test can have a watching indexer.</summary>
+    internal void StartWatcher()
     {
         try
         {
@@ -493,6 +541,9 @@ public sealed class TranscriptIndexer : BackgroundService
         _scanGate.Dispose();
         base.Dispose();
     }
+
+    /// <summary>A file a pass could not read: how often it failed and when it is tried again.</summary>
+    private sealed record Retry(string Path, int Attempts, DateTimeOffset DueAt);
 
     private sealed class FileState
     {

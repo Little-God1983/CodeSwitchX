@@ -61,10 +61,11 @@ public sealed class SessionEngine : IDisposable
     }
 
     /// <summary>
-    /// Loads persisted snapshots without publishing. Hook evidence does not survive a restart (<see cref="SessionSnapshot.HookSeen"/>
-    /// resets). A saved claude PID is checked once: if that process is gone the chat's turn ended while the app was down,
-    /// so it comes back Idle rather than as a red Errored row, and the PID is forgotten. A process that started after the
-    /// chat's last event holds a reused PID and counts as gone.
+    /// Loads persisted snapshots. One that comes back as stored is not published (its row is already right); one this
+    /// corrects is committed like any other change, so the stored row follows. Hook evidence does not survive a restart
+    /// (<see cref="SessionSnapshot.HookSeen"/> resets). A saved claude PID is checked once: if that process is gone the
+    /// chat's turn ended while the app was down, so it comes back Idle rather than as a red Errored row, and the PID is
+    /// forgotten. A process that started after the chat's last event holds a reused PID and counts as gone.
     /// A Working session that has been quiet longer than the inferred idle window drops to Idle, because its Stop
     /// hook most likely fired while the app was down. Waiting sessions with a live process are left alone: a permission
     /// prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
@@ -77,21 +78,24 @@ public sealed class SessionEngine : IDisposable
             foreach (var snapshot in persisted)
             {
                 var restored = snapshot with { HookSeen = false };
-                if (restored.ClaudePid is { } pid && !ProcessStillRuns(pid, restored.LastEventAt))
+                _sessions[restored.SessionId] = restored;
+
+                var corrected = restored;
+                if (corrected.ClaudePid is { } pid && !ProcessStillRuns(pid, corrected.LastEventAt))
                 {
-                    restored = restored with { ClaudePid = null };
-                    if (restored.State is SessionState.Working or SessionState.Waiting or SessionState.Starting)
+                    corrected = corrected with { ClaudePid = null };
+                    if (corrected.State is SessionState.Working or SessionState.Waiting or SessionState.Starting)
                     {
-                        restored = restored with { State = SessionState.Idle, StateSince = now };
+                        corrected = corrected with { State = SessionState.Idle, StateSince = now };
                     }
                 }
 
-                if (restored.State == SessionState.Working && now - restored.LastEventAt > _options.InferredIdleAfter)
+                if (corrected.State == SessionState.Working && now - corrected.LastEventAt > _options.InferredIdleAfter)
                 {
-                    restored = restored with { State = SessionState.Idle, StateSince = now };
+                    corrected = corrected with { State = SessionState.Idle, StateSince = now };
                 }
 
-                _sessions[restored.SessionId] = restored;
+                Commit(restored, corrected);
             }
         }
     }

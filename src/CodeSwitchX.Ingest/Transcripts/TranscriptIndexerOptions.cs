@@ -16,6 +16,9 @@ public sealed class TranscriptIndexerOptions
     /// <summary>Transcripts last written longer ago than this are indexed for usage only and never create chat rows.</summary>
     public TimeSpan HistoryWindow { get; set; } = TimeSpan.FromHours(24);
 
+    /// <summary>A transcript a pass could not read is tried again on the next tick, then after twice the wait each time, up to this.</summary>
+    public TimeSpan MaxRetryDelay { get; set; } = TimeSpan.FromMinutes(5);
+
     /// <summary>Upper bound of transcript bytes read per file per pass; larger files continue on the next tick.</summary>
     public int MaxBytesPerPass { get; set; } = TranscriptTailer.DefaultMaxBytes;
     /// <summary>Assistant message ids remembered across all transcripts, so a resumed conversation's replayed messages are not counted twice.</summary>

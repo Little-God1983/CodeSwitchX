@@ -222,8 +222,9 @@ public class SessionEngineTests
         _engine.Get("s9")!.State.ShouldBe(SessionState.Ended);
     }
 
+    /// <summary>The writer listens before the engine restores, so a corrected chat's stored row follows; the rest is already right as stored.</summary>
     [Fact]
-    public void Restore_loads_snapshots_without_publishing()
+    public void Restore_publishes_only_the_snapshots_it_corrected()
     {
         var persisted = new SessionSnapshot
         {
@@ -233,11 +234,15 @@ public class SessionEngineTests
             LastEventAt = _time.GetUtcNow().AddHours(-1),
             StateSince = _time.GetUtcNow().AddHours(-1),
         };
+        var quiet = persisted with { SessionId = "quiet", State = SessionState.Working, LastEventAt = _time.GetUtcNow().AddMinutes(-3) };
 
-        _engine.Restore([persisted]);
+        _engine.Restore([persisted, quiet]);
 
         _engine.Get("old").ShouldBe(persisted);
-        _changes.ShouldBeEmpty();
+        var change = _changes.ShouldHaveSingleItem("what came back as stored is not published: its row is already right");
+        change.Previous.ShouldBe(quiet);
+        change.Current.ShouldBe(_engine.Get("quiet"));
+        change.Current.State.ShouldBe(SessionState.Idle);
     }
 
     [Fact]
@@ -461,6 +466,7 @@ public class SessionEngineTests
         engine.Get("gone")!.ClaudePid.ShouldBeNull("a dead PID must not be matched against whatever process reuses it");
         engine.Get("alive")!.State.ShouldBe(SessionState.Waiting);
         engine.Get("alive")!.ClaudePid.ShouldBe(88);
+        _changes.ShouldHaveSingleItem().Current.SessionId.ShouldBe("gone", "the forgotten PID and the Idle state reach the stored row");
     }
 
     [Fact]
