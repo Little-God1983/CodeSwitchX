@@ -16,5 +16,8 @@ public interface IWindowDocker
     /// windows of an elevated one (UIPI).
     /// </summary>
     bool IsOutOfReach(nint hwnd);
+
+    /// <summary>True while the user holds the primary mouse button, as in a drag.</summary>
+    bool IsPrimaryButtonDown();
     ScreenRect? GetRect(nint hwnd);
 }

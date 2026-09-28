@@ -13,6 +13,8 @@ namespace CodeSwitchX.Hosting.Win32;
 public sealed class SnapWindowDocker : IWindowDocker
 {
     private const int ErrorAccessDenied = 5;
+    private const int VkLButton = 0x01;
+    private const int VkRButton = 0x02;
 
     public void MoveTo(nint hwnd, ScreenRect rect)
     {
@@ -48,7 +50,11 @@ public sealed class SnapWindowDocker : IWindowDocker
 
     public bool IsAlive(nint hwnd) => PInvoke.IsWindow(new HWND(hwnd));
 
-    /// <summary>A move that changes nothing: Windows checks the right to move the window all the same, and says ERROR_ACCESS_DENIED.</summary>
+    /// <summary>
+    /// A move that changes nothing: Windows checks the right to move the window all the same, and says
+    /// ERROR_ACCESS_DENIED. It does so at the call, before anything is posted: checked against an elevated app's
+    /// windows from a process that is not, with and without SWP_ASYNCWINDOWPOS.
+    /// </summary>
     public bool IsOutOfReach(nint hwnd)
     {
         if (PInvoke.SetWindowPos(new HWND(hwnd), HWND.Null, 0, 0, 0, 0,
@@ -60,6 +66,10 @@ public sealed class SnapWindowDocker : IWindowDocker
 
         return Marshal.GetLastPInvokeError() == ErrorAccessDenied;
     }
+
+    /// <summary>GetAsyncKeyState reads the physical buttons: with the buttons swapped, the primary one is the right one.</summary>
+    public bool IsPrimaryButtonDown() =>
+        PInvoke.GetAsyncKeyState(PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_SWAPBUTTON) != 0 ? VkRButton : VkLButton) < 0;
 
     public ScreenRect? GetRect(nint hwnd)
     {

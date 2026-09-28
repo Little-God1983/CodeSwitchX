@@ -330,8 +330,9 @@ public class HostManagerTests
         _launcher.Launch(_workspace).Returns(_ =>
         {
             foreground = 701;
-            return new LaunchResult(true, 1, null);
+            return new LaunchResult(true, 1234, null);
         });
+        _windows.ProcessName(1234).Returns((string?)null);
 
         var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
 
@@ -433,6 +434,119 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task A_floating_editor_window_of_a_tile_with_the_same_folder_name_is_not_taken_without_asking_vs_code()
+    {
+        // c:\repo\app is docked, and one of its editors floats in window 510. That title names "app" where VS Code
+        // writes the folder name, like any window of c:\repo\app, so for c:\forks\app it proves nothing.
+        _windows.TopLevelWindows().Returns([new WindowInfo(500, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")]);
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var fork = new Workspace { Name = "App (fork)", RootPath = @"c:\forks\app" };
+        WindowInfo[] open = [new(500, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code"), new(510, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code")];
+        _windows.TopLevelWindows().Returns(open, [.. open, new WindowInfo(800, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        _launcher.Launch(fork).Returns(new LaunchResult(true, 1234, null));
+
+        var hosted = await _manager.OpenAsync(fork, CancellationToken.None);
+
+        _launcher.Received(1).Launch(fork);
+        hosted.Hwnd.ShouldBe((nint)800);
+    }
+
+    [Fact]
+    public async Task A_window_switched_to_a_folder_whose_name_contains_its_tiles_name_goes_to_that_folders_tile()
+    {
+        var app = new Workspace { Name = "App", RootPath = @"c:\repo\App" };
+        var copy = new Workspace { Name = "App - Copy", RootPath = @"c:\repo\App - Copy" };
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "App - Visual Studio Code")]);
+        await _manager.OpenAsync(app, CancellationToken.None);
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - App - Copy - Visual Studio Code")]);
+
+        var hosted = await _manager.OpenAsync(copy, CancellationToken.None);
+
+        _launcher.DidNotReceive().Launch(copy);
+        hosted.Hwnd.ShouldBe((nint)700);
+        _manager.Get(app.Id)!.State.ShouldBe(HostState.Stopped);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_discovery_that_waited_behind_a_namesake_does_not_launch_once_its_tile_is_gone_or_CodeSwitchX_closes(bool closing)
+    {
+        _windows.TopLevelWindows().Returns([]);
+        _launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(true, 1234, null));
+        var fork = new Workspace { Name = "App (fork)", RootPath = @"c:\forks\app" };
+
+        var first = _manager.OpenAsync(_workspace, CancellationToken.None);
+        var second = _manager.OpenAsync(fork, CancellationToken.None);
+        if (closing)
+        {
+            _manager.ReleaseAll();
+        }
+        else
+        {
+            _manager.Forget(fork.Id);
+        }
+
+        await Task.WhenAll(first, second);
+
+        _launcher.DidNotReceive().Launch(fork);
+        (await second).State.ShouldBe(HostState.Stopped);
+    }
+
+    [Fact]
+    public async Task A_window_the_user_switches_to_before_vs_code_has_answered_is_not_taken_for_its_answer()
+    {
+        // c:\repo\app is not open. While VS Code builds its window, the user Alt+Tabs to the other "app" window.
+        nint foreground = 42;
+        _windows.ForegroundWindow().Returns(_ => foreground);
+        WindowInfo[] open = [new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"), new(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code")];
+        _windows.TopLevelWindows().Returns(open, open, open, [.. open, new WindowInfo(900, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        _launcher.Launch(_workspace).Returns(_ =>
+        {
+            foreground = 701;
+            return new LaunchResult(true, 1234, null);
+        });
+        _windows.ProcessName(1234).Returns("Code");
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.Hwnd.ShouldBe((nint)900);
+    }
+
+    [Fact]
+    public async Task A_window_in_front_for_a_single_poll_is_no_answer()
+    {
+        // The user is in 701 as the launched Code.exe exits, and VS Code's focus on 700 lands a moment later.
+        _windows.ForegroundWindow().Returns((nint)701, (nint)700);
+        _windows.TopLevelWindows().Returns([
+            new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"),
+            new WindowInfo(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code"),
+        ]);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+        _windows.ProcessName(1234).Returns((string?)null);
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.Hwnd.ShouldBe((nint)700);
+    }
+
+    [Fact]
+    public async Task A_new_window_that_shows_another_folder_does_not_hide_vs_codes_answer()
+    {
+        // The jump hotkey is pressed while typing in 700; meanwhile another tile's window, or a floating editor, opens.
+        _windows.ForegroundWindow().Returns((nint)700);
+        WindowInfo[] open = [new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"), new(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code")];
+        _windows.TopLevelWindows().Returns(open, [.. open, new WindowInfo(902, 30, "Chrome_WidgetWin_1", "Other.cs - beta - Visual Studio Code")]);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+        _windows.ProcessName(1234).Returns((string?)null);
+
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        hosted.State.ShouldBe(HostState.Running);
+        hosted.Hwnd.ShouldBe((nint)700);
+    }
+
+    [Fact]
     public async Task A_hosted_window_that_now_shows_another_folder_is_adopted_by_that_folder_and_its_first_tile_stops()
     {
         var window = new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code");
@@ -463,10 +577,29 @@ public class HostManagerTests
             new WindowInfo(704, 30, "Chrome_WidgetWin_0", "app - Visual Studio Code") { IsVisible = false },
         ]);
 
-        new HiddenWindowSweep(_manager).StartAsync(CancellationToken.None);
+        new HiddenWindowSweep(_manager, NullLogger<HiddenWindowSweep>.Instance, anotherInstanceRuns: () => false).StartAsync(CancellationToken.None);
 
         _docker.Received(1).Uncloak(700);
         _docker.DidNotReceive().Uncloak(Arg.Is<nint>(h => h != 700));
+    }
+
+    [Fact]
+    public void The_sweep_leaves_the_windows_of_another_running_instance_alone()
+    {
+        // Until single-instance is enforced (L8), a second start must not show the windows the first one hides.
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code") { IsVisible = false }]);
+
+        new HiddenWindowSweep(_manager, NullLogger<HiddenWindowSweep>.Instance, anotherInstanceRuns: () => true).StartAsync(CancellationToken.None);
+
+        _docker.DidNotReceive().Uncloak(Arg.Any<nint>());
+    }
+
+    [Fact]
+    public async Task A_sweep_that_fails_does_not_stop_CodeSwitchX_from_starting()
+    {
+        _windows.TopLevelWindows().Returns(_ => throw new InvalidOperationException("EnumWindows failed"));
+
+        await new HiddenWindowSweep(_manager, NullLogger<HiddenWindowSweep>.Instance, anotherInstanceRuns: () => false).StartAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -535,6 +668,31 @@ public class HostManagerTests
         _docker.ClearReceivedCalls();
         manager.SnapBack(700);
         _docker.Received(1).MoveTo(700, cab);
+    }
+
+    [Fact]
+    public async Task SnapBack_keeps_following_while_the_user_holds_a_drag_still()
+    {
+        // With the mouse held still, the move loop puts the window back under the cursor after every snap: the same
+        // place again and again, as a tiling window manager would, but it is the user, and the last snap-back must win.
+        var (manager, _) = ManagerWithFakeTime();
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
+        await manager.OpenAsync(_workspace, CancellationToken.None);
+        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
+        manager.ShowInCab(_workspace.Id, cab);
+        _docker.GetRect(700).Returns(ScreenRect.FromSize(300, 200, 1600, 900));
+        _docker.IsPrimaryButtonDown().Returns(true);
+        _docker.ClearReceivedCalls();
+
+        for (var i = 0; i < 20; i++)
+        {
+            manager.SnapBack(700);
+        }
+
+        _docker.IsPrimaryButtonDown().Returns(false);
+        manager.SnapBack(700);
+
+        _docker.Received(21).MoveTo(700, cab);
     }
 
     [Fact]

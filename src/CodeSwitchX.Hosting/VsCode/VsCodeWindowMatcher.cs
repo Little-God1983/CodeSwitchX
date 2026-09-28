@@ -19,23 +19,20 @@ public static class VsCodeWindowMatcher
         return Matches(after.Where(w => w.IsVisible && !known.Contains(w.Hwnd)), displayName, processName).FirstOrDefault();
     }
 
-    /// <summary>
-    /// A VS Code window that already shows the workspace (VS Code is single-instance and focuses it instead of opening
-    /// a new one). Hidden windows count too: that is how a window hidden by a crashed instance gets back to the user.
-    /// </summary>
-    public static WindowInfo? FindExisting(IReadOnlyList<WindowInfo> windows, string displayName, Func<uint, string?> processName) =>
-        Matches(windows, displayName, processName).FirstOrDefault();
-
-    /// <summary>Every window <see cref="FindExisting"/> would consider, best first.</summary>
+    /// <summary>The VS Code windows whose titles name the workspace, best first. Hidden windows count too.</summary>
     public static IReadOnlyList<WindowInfo> FindAllExisting(IReadOnlyList<WindowInfo> windows, string displayName, Func<uint, string?> processName) =>
         Matches(windows, displayName, processName);
 
+    /// <summary>A top-level window of VS Code, whatever it shows.</summary>
+    public static bool IsVsCodeWindow(WindowInfo window, Func<uint, string?> processName) =>
+        string.Equals(window.ClassName, ElectronClass, StringComparison.Ordinal)
+        && string.Equals(processName(window.ProcessId), ProcessName, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>A VS Code window that shows a folder or workspace: its title names one before the app name.</summary>
     public static bool ShowsAFolder(WindowInfo window, Func<uint, string?> processName) =>
-        string.Equals(window.ClassName, ElectronClass, StringComparison.Ordinal)
-        && window.Title.Contains(Separator, StringComparison.Ordinal)
+        window.Title.Contains(Separator, StringComparison.Ordinal)
         && window.Title.Contains(TitleSuffix, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(processName(window.ProcessId), ProcessName, StringComparison.OrdinalIgnoreCase);
+        && IsVsCodeWindow(window, processName);
 
     /// <summary>
     /// True when the name stands where VS Code writes the folder name: "${activeEditorShort} - ${rootName} -
@@ -72,9 +69,8 @@ public static class VsCodeWindowMatcher
 
     private static List<WindowInfo> Matches(IEnumerable<WindowInfo> windows, string displayName, Func<uint, string?> processName) =>
         windows
-            .Where(w => string.Equals(w.ClassName, ElectronClass, StringComparison.Ordinal))
             .Where(w => TitleNamesWorkspace(w.Title, displayName))
-            .Where(w => string.Equals(processName(w.ProcessId), ProcessName, StringComparison.OrdinalIgnoreCase))
+            .Where(w => IsVsCodeWindow(w, processName))
             .OrderBy(w => TitleNamesRoot(w.Title, displayName, profile: null) ? 0 : 1)
             .ThenBy(w => w.Title.Contains(TitleSuffix, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ThenBy(w => w.IsVisible ? 0 : 1)

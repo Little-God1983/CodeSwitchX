@@ -29,3 +29,5 @@ DWM_TNP_OPACITY
 DWM_TNP_SOURCECLIENTAREAONLY
 HWND_TOP
 GetForegroundWindow
+GetAsyncKeyState
+GetSystemMetrics

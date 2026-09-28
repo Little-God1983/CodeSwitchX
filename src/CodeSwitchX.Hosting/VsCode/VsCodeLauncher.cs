@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Text;
 using CodeSwitchX.Core.Workspaces;
 
 namespace CodeSwitchX.Hosting.VsCode;
@@ -15,11 +14,14 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
 
     public string? Executable => _executable;
 
-    public static string BuildArguments(Workspace workspace)
-    {
-        var profile = string.IsNullOrWhiteSpace(workspace.VsCodeProfile) ? string.Empty : $" --profile {Quote(workspace.VsCodeProfile)}";
-        return $"--new-window{profile} {Quote(Target(workspace))}";
-    }
+    /// <summary>
+    /// The arguments one by one: <see cref="ProcessStartInfo.ArgumentList"/> quotes each for Windows' parser, where a
+    /// backslash before a closing quote would otherwise escape it (a drive root "R:\" arrived as R:").
+    /// </summary>
+    public static IReadOnlyList<string> BuildArguments(Workspace workspace) =>
+        string.IsNullOrWhiteSpace(workspace.VsCodeProfile)
+            ? ["--new-window", Target(workspace)]
+            : ["--new-window", "--profile", workspace.VsCodeProfile, Target(workspace)];
 
     /// <summary>The text VS Code puts in its title for this target: the folder name, or "<file> (Workspace)".</summary>
     public static string DisplayNameForMatching(Workspace workspace)
@@ -52,12 +54,17 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
 
         try
         {
-            var info = new ProcessStartInfo(_executable, BuildArguments(workspace))
+            var info = new ProcessStartInfo(_executable)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 WorkingDirectory = Directory.Exists(workspace.RootPath) ? workspace.RootPath : null,
             };
+            foreach (var argument in BuildArguments(workspace))
+            {
+                info.ArgumentList.Add(argument);
+            }
+
             using var process = Process.Start(info);
             return new LaunchResult(true, process?.Id, null);
         }
@@ -68,27 +75,4 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
     }
 
     private static string Target(Workspace workspace) => workspace.WorkspaceFile is { Length: > 0 } file ? file : workspace.RootPath;
-
-    /// <summary>
-    /// Quotes one argument so that Windows' command-line parsing gives it back unchanged. Backslashes count only in
-    /// front of a quote, the closing one included: there each is doubled. A drive root "R:\" would otherwise arrive as R:".
-    /// </summary>
-    private static string Quote(string argument)
-    {
-        var quoted = new StringBuilder("\"");
-        var backslashes = 0;
-        foreach (var c in argument)
-        {
-            if (c == '\\')
-            {
-                backslashes++;
-                continue;
-            }
-
-            quoted.Append('\\', c == '"' ? (backslashes * 2) + 1 : backslashes).Append(c);
-            backslashes = 0;
-        }
-
-        return quoted.Append('\\', backslashes * 2).Append('"').ToString();
-    }
 }

@@ -52,7 +52,7 @@ public class VsCodeWindowMatcherTests
         var hidden = new WindowInfo(800, 30, "Chrome_WidgetWin_1", "App - Visual Studio Code") { IsVisible = false };
 
         VsCodeWindowMatcher.FindNew([], [hidden], "App", ProcessName).ShouldBeNull("adopting it before VS Code shows it would race its own ShowWindow and flash it undocked");
-        VsCodeWindowMatcher.FindExisting([hidden], "App", ProcessName)!.Hwnd.ShouldBe((nint)800);
+        VsCodeWindowMatcher.FindAllExisting([hidden], "App", ProcessName).Single().Hwnd.ShouldBe((nint)800);
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public class VsCodeWindowMatcherTests
         var window = new WindowInfo(500, 30, "Chrome_WidgetWin_1", "● Program.cs - Kunde - Portal - Visual Studio Code");
 
         VsCodeWindowMatcher.FindNew([], [window], "Kunde - Portal", ProcessName)!.Hwnd.ShouldBe((nint)500);
-        VsCodeWindowMatcher.FindExisting([window], "kunde - portal", ProcessName)!.Hwnd.ShouldBe((nint)500);
+        VsCodeWindowMatcher.FindAllExisting([window], "kunde - portal", ProcessName).Single().Hwnd.ShouldBe((nint)500);
         VsCodeWindowMatcher.FindNew([], [window], "Kunde - Portal2", ProcessName).ShouldBeNull();
         VsCodeWindowMatcher.FindNew([], [window], "Portal - Kunde", ProcessName).ShouldBeNull();
     }

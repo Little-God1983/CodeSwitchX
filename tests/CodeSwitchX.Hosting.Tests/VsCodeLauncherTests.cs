@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.VsCode;
 
@@ -11,7 +10,7 @@ public class VsCodeLauncherTests
     {
         var workspace = new Workspace { Name = "App", RootPath = @"c:\repo\app" };
 
-        VsCodeLauncher.BuildArguments(workspace).ShouldBe("--new-window \"c:\\repo\\app\"");
+        VsCodeLauncher.BuildArguments(workspace).ShouldBe(["--new-window", @"c:\repo\app"]);
         VsCodeLauncher.DisplayNameForMatching(workspace).ShouldBe("app");
     }
 
@@ -20,19 +19,19 @@ public class VsCodeLauncherTests
     {
         var workspace = new Workspace { Name = "App", RootPath = @"c:\repo\app", WorkspaceFile = @"c:\repo\app\app.code-workspace", VsCodeProfile = "Dev Kit" };
 
-        VsCodeLauncher.BuildArguments(workspace).ShouldBe("--new-window --profile \"Dev Kit\" \"c:\\repo\\app\\app.code-workspace\"");
+        VsCodeLauncher.BuildArguments(workspace).ShouldBe(["--new-window", "--profile", "Dev Kit", @"c:\repo\app\app.code-workspace"]);
         VsCodeLauncher.DisplayNameForMatching(workspace).ShouldBe("app (Workspace)");
     }
 
     [Fact]
     public void A_drive_root_reaches_vs_code_whole_and_is_matched_by_its_drive()
     {
-        // PathNormalizer keeps the separator on a drive root (a subst drive for a long repo path, say); before its
-        // closing quote a backslash escapes the quote, so VS Code was asked to open R:" instead.
+        // PathNormalizer keeps the separator on a drive root (a subst drive for a long repo path, say). Quoted by hand,
+        // the backslash before the closing quote escaped it, so VS Code was asked to open R:" instead. Each argument now
+        // goes to ProcessStartInfo.ArgumentList as it is, which quotes it for Windows' parser.
         var workspace = new Workspace { Name = "Repo", RootPath = @"R:\", VsCodeProfile = "My \"Dev\" Kit" };
 
-        ParseLikeWindows("Code.exe " + VsCodeLauncher.BuildArguments(workspace))
-            .ShouldBe(["Code.exe", "--new-window", "--profile", "My \"Dev\" Kit", @"R:\"]);
+        VsCodeLauncher.BuildArguments(workspace).ShouldBe(["--new-window", "--profile", "My \"Dev\" Kit", @"R:\"]);
         VsCodeLauncher.DisplayNameForMatching(workspace).ShouldBe("R:", "VS Code names a drive root by its drive: the base name of /R:/");
     }
 
@@ -63,23 +62,4 @@ public class VsCodeLauncherTests
         file.Started.ShouldBeFalse();
         file.Error.ShouldNotBeNull().ShouldContain(missing + ".code-workspace");
     }
-
-    private static string[] ParseLikeWindows(string commandLine)
-    {
-        var argv = CommandLineToArgvW(commandLine, out var count);
-        try
-        {
-            return Enumerable.Range(0, count).Select(i => Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * nint.Size))!).ToArray();
-        }
-        finally
-        {
-            LocalFree(argv);
-        }
-    }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint CommandLineToArgvW(string commandLine, out int count);
-
-    [DllImport("kernel32.dll")]
-    private static extern nint LocalFree(nint memory);
 }
