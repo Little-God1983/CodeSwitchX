@@ -362,6 +362,126 @@ public class TranscriptIndexerTests : IDisposable
         _updates.ShouldHaveSingleItem().Title.ShouldBeNull("sent once, so it never undoes a later generated title");
     }
 
+    private static string CustomTitle(string session, string title) => $$$"""{"type":"custom-title","customTitle":"{{{title}}}","sessionId":"{{{session}}}"}""";
+
+    [Fact]
+    public async Task A_name_given_with_rename_in_Claude_Code_beats_the_generated_title_and_only_a_later_one_replaces_it()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Fix the build please"), AiTitle("s1", "Build fixes"), CustomTitle("s1", "Build work")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Build work");
+        _updates.Clear();
+
+        File.AppendAllLines(path, [AiTitle("s1", "Build fixes, again"), CustomTitle("s1", "Build, second try")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Build, second try");
+        _updates.Clear();
+
+        File.AppendAllLines(path, [AiTitle("s1", "Build fixes, third"), User("s1", "one more prompt")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Title.ShouldBeNull("only another /rename replaces a /rename name");
+    }
+
+    [Fact]
+    public async Task The_cursor_carries_the_title_and_where_it_came_from()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Fix the build please")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        var cursor = _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull();
+        cursor.Title.ShouldBe("Fix the build please");
+        cursor.TitleSource.ShouldBe(TitleSource.Prompt);
+        _updates.Clear();
+
+        File.AppendAllLines(path, [AiTitle("s1", "Build fixes")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        cursor = _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull();
+        cursor.Title.ShouldBe("Build fixes");
+        cursor.TitleSource.ShouldBe(TitleSource.Generated);
+    }
+
+    private TranscriptIndexer RestoredWith(params TranscriptCursor[] cursors)
+    {
+        var store = Substitute.For<IUsageStore>();
+        store.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(cursors));
+        store.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        return new TranscriptIndexer(_claude, store, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
+    }
+
+    [Fact]
+    public async Task A_chat_resumed_after_a_restart_gets_the_title_stored_with_its_cursor()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Original task"), AiTitle("s1", "Original work")]);
+        using var restarted = RestoredWith(new TranscriptCursor
+        {
+            Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = _time.GetUtcNow().AddDays(-3), SessionId = "s1",
+            Title = "Original work", TitleSource = TitleSource.Generated,
+        });
+
+        // The chat engine dropped the title while the chat was historical, and the restart lost what the indexer had not delivered.
+        File.AppendAllLines(path, [User("s1", "continue please", _time.GetUtcNow().ToString("O"))]);
+        await restarted.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Original work");
+    }
+
+    [Fact]
+    public async Task After_a_restart_a_generated_title_still_replaces_a_stored_prompt_title()
+    {
+        var path = Transcript("s1");
+        File.WriteAllLines(path, [User("s1", "Original task")]);
+        using var restarted = RestoredWith(new TranscriptCursor
+        {
+            Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = _time.GetUtcNow(), SessionId = "s1",
+            Title = "Original task", TitleSource = TitleSource.Prompt,
+        });
+
+        File.AppendAllLines(path, [User("s1", "second prompt", _time.GetUtcNow().ToString("O")), AiTitle("s1", "Original work")]);
+        await restarted.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Title.ShouldBe("Original work");
+    }
+
+    [Fact]
+    public async Task Cursors_of_transcripts_that_are_gone_are_removed_from_the_store_once()
+    {
+        var gone = Path.Combine(_projectDir, "gone.jsonl").ToLowerInvariant();
+        _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
+            [new TranscriptCursor { Path = gone, ByteOffset = 10, LastWriteUtc = _time.GetUtcNow().AddDays(-40), SessionId = "gone" }]));
+        var live = Transcript("s1");
+        File.WriteAllLines(live, [User("s1", "Fix")]);
+
+        // Claude Code's cleanupPeriodDays deleted the first transcript while the app was down, the second while it runs.
+        await _indexer.ScanAsync(CancellationToken.None);
+        await _cursors.Received(1).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == gone), Arg.Any<CancellationToken>());
+
+        File.Delete(live);
+        await _indexer.ScanAsync(CancellationToken.None);
+        await _cursors.Received(1).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == live.ToLowerInvariant()), Arg.Any<CancellationToken>());
+
+        await _indexer.ScanAsync(CancellationToken.None);
+        _cursors.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IUsageStore.RemoveCursorsAsync)).ShouldBe(2, "a cursor is removed once");
+    }
+
+    [Fact]
+    public async Task A_cursor_the_store_could_not_remove_is_removed_on_the_next_scan()
+    {
+        var gone = Path.Combine(_projectDir, "gone.jsonl").ToLowerInvariant();
+        _cursors.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
+            [new TranscriptCursor { Path = gone, ByteOffset = 10, LastWriteUtc = _time.GetUtcNow().AddDays(-40), SessionId = "gone" }]));
+        _cursors.RemoveCursorsAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new IOException("database is locked")), Task.CompletedTask);
+
+        await Should.NotThrowAsync(() => _indexer.ScanAsync(CancellationToken.None));
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        await _cursors.Received(2).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == gone), Arg.Any<CancellationToken>());
+    }
+
     private static string LastPrompt(string session) => $$$"""{"type":"last-prompt","lastPrompt":"go","sessionId":"{{{session}}}"}""";
 
     [Fact]
