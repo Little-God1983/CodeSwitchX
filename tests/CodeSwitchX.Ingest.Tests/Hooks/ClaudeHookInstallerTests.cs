@@ -240,6 +240,20 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
+    public void Uninstall_with_nothing_of_ours_leaves_the_settings_file_as_it_is()
+    {
+        WriteSettings("""{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify.exe"}]}]},"theme":"dark"}""");
+        var before = File.ReadAllText(_paths.SettingsFile);
+
+        var result = _installer.Uninstall();
+
+        result.Changed.ShouldBeFalse();
+        result.BackupFile.ShouldBeNull();
+        File.ReadAllText(_paths.SettingsFile).ShouldBe(before);
+        Directory.GetFiles(_paths.ClaudeDirectory).ShouldHaveSingleItem("no backup and no temporary file");
+    }
+
+    [Fact]
     public void Uninstall_drops_the_hooks_object_when_nothing_is_left()
     {
         _installer.Install(Exe);

@@ -74,10 +74,82 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.StorePayloads = false;
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await FlushAsync();
 
         _writerOptions.StorePayloads.ShouldBeFalse();
         await _store.Received().SetAsync(SettingKeys.StorePayloads, false, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Bounded: a queued save that never finishes must fail this test, not hang the run.</summary>
+    private async Task FlushAsync()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _vm.FlushSavesAsync(timeout.Token);
+    }
+
+    [Fact]
+    public async Task The_flush_at_exit_waits_for_a_save_still_running()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        var stored = new List<long?>();
+        _store.SetAsync(SettingKeys.FiveHourBudgetTokens, Arg.Any<long?>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            await Task.Delay(200); // one SQLite write
+            lock (stored)
+            {
+                stored.Add(call.ArgAt<long?>(1));
+            }
+        });
+
+        _vm.FiveHourBudgetTokens = 7;
+        await FlushAsync();
+
+        stored.ShouldBe([7L], "the value changed right before the exit must be in the database when the host stops");
+    }
+
+    [Fact]
+    public async Task Saves_of_one_key_that_pile_up_behind_a_slow_one_collapse_to_the_latest_value()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        var stored = new List<long?>();
+        var firstSaveRunning = new TaskCompletionSource();
+        _store.SetAsync(SettingKeys.FiveHourBudgetTokens, Arg.Any<long?>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var value = call.ArgAt<long?>(1);
+            if (value == 1)
+            {
+                firstSaveRunning.SetResult();
+                await Task.Delay(200); // the first save is the slow one
+            }
+
+            lock (stored)
+            {
+                stored.Add(value);
+            }
+        });
+
+        _vm.FiveHourBudgetTokens = 1;
+        await firstSaveRunning.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        _vm.FiveHourBudgetTokens = 2;
+        _vm.FiveHourBudgetTokens = 3;
+        await FlushAsync();
+
+        stored.ShouldBe([1L, 3L], "only the latest value of a key matters once the save before it is running");
+    }
+
+    [Fact]
+    public async Task A_save_that_hangs_is_given_up_after_the_save_timeout_and_does_not_hold_the_next_key_back()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.SaveTimeout = TimeSpan.FromMilliseconds(200);
+        _store.SetAsync(SettingKeys.FiveHourBudgetTokens, Arg.Any<long?>(), Arg.Any<CancellationToken>())
+            .Returns(new TaskCompletionSource().Task); // a write waiting out SQLite's busy timeout, and one that ignores the token
+
+        _vm.FiveHourBudgetTokens = 1;
+        _vm.StorePayloads = true;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.StorePayloads, true, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -103,5 +175,34 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.LastMessage.ShouldNotBeNull().ShouldContain("not valid JSON");
         File.ReadAllText(_claude.SettingsFile).ShouldBe("{ broken");
+    }
+
+    [Fact]
+    public async Task Saves_of_one_setting_land_in_the_order_the_value_changed()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        var stored = new List<long?>();
+        var firstSaveRunning = new TaskCompletionSource();
+        _store.SetAsync(SettingKeys.FiveHourBudgetTokens, Arg.Any<long?>(), Arg.Any<CancellationToken>()).Returns(async call =>
+        {
+            var value = call.ArgAt<long?>(1);
+            if (value == 1)
+            {
+                firstSaveRunning.SetResult();
+                await Task.Delay(100); // the first save is the slow one (one SQLite write)
+            }
+
+            lock (stored)
+            {
+                stored.Add(value);
+            }
+        });
+
+        _vm.FiveHourBudgetTokens = 1;
+        await firstSaveRunning.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        _vm.FiveHourBudgetTokens = 2;
+        await FlushAsync();
+
+        stored.ShouldBe([1L, 2L], "the value stored last must be the one the view shows");
     }
 }

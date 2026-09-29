@@ -18,7 +18,12 @@ public static class DataServiceCollectionExtensions
             Pooling = true,
         }.ToString();
 
-        services.AddPooledDbContextFactory<CodeSwitchXDbContext>(options => options.UseSqlite(connectionString));
+        services.AddSingleton<SqlitePragmaInterceptor>();
+        services.AddPooledDbContextFactory<CodeSwitchXDbContext>((sp, options) => options
+            // A collection in a query goes as one JSON parameter: EF Core 10 sends one parameter per item by default, and
+            // SQLite takes at most 32,766 of them in a statement.
+            .UseSqlite(connectionString, sqlite => sqlite.UseParameterizedCollectionMode(ParameterTranslationMode.Parameter))
+            .AddInterceptors(sp.GetRequiredService<SqlitePragmaInterceptor>()));
         services.AddSingleton<DatabaseInitializer>();
         services.AddSingleton<IWorkspaceStore, WorkspaceStore>();
         services.AddSingleton<ISessionStore, SessionStore>();

@@ -18,6 +18,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly PersistenceWriterOptions _writerOptions;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
+    private readonly Lock _saveGate = new();
+    private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
+    private Task _drain = Task.CompletedTask;
+    private bool _draining;
 
     [ObservableProperty] private string _relayExecutable;
     [ObservableProperty] private HookInstallState _hookState;
@@ -146,6 +150,29 @@ public sealed partial class SettingsViewModel : ObservableObject
         Refresh();
     }
 
+    /// <summary>How long one save may take. A write waiting out SQLite's busy timeout must not hold every later save back.</summary>
+    internal TimeSpan SaveTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Waits for the saves queued so far. The app's exit calls this before the host stops, so a value changed right
+    /// before the exit is in the database at the next start, the way the view and the writer already had it.
+    /// </summary>
+    public async Task FlushSavesAsync(CancellationToken ct)
+    {
+        Task drain;
+        lock (_saveGate)
+        {
+            drain = _drain;
+        }
+
+        await drain.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Saves run one after the other on one queue, and the queue holds the latest value per key: a change while the
+    /// key's save runs is saved after it, and changes behind that collapse into the latest, so the value stored last is
+    /// the one the view shows.
+    /// </summary>
     private void Persist<T>(string key, T value)
     {
         if (_loading)
@@ -153,17 +180,46 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        _ = Task.Run(async () =>
+        lock (_saveGate)
         {
+            _pendingSaves[key] = ct => _settings.SetAsync(key, value, ct);
+            if (!_draining)
+            {
+                _draining = true;
+                _drain = Task.Run(DrainSavesAsync);
+            }
+        }
+    }
+
+    private async Task DrainSavesAsync()
+    {
+        while (true)
+        {
+            string key;
+            Func<CancellationToken, Task> save;
+            lock (_saveGate)
+            {
+                if (_pendingSaves.Count == 0)
+                {
+                    _draining = false;
+                    return;
+                }
+
+                (key, save) = _pendingSaves.First();
+                _pendingSaves.Remove(key);
+            }
+
             try
             {
-                await _settings.SetAsync(key, value, CancellationToken.None);
+                using var timeout = new CancellationTokenSource(SaveTimeout);
+                // WaitAsync as well: a store call that ignores the token is given up too, not waited for.
+                await save(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Saving setting {Key} failed", key);
             }
-        });
+        }
     }
 
     private static void OpenFolder(string folder)
