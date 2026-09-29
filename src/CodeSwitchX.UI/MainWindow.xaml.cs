@@ -73,6 +73,7 @@ public partial class MainWindow : Window
         _tray.Attach(this, _shell);
         _locationWatcher = new WindowLocationWatcher(_watcherLogger);
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);
+        _locationWatcher.MoveSizeStarted += draggedHwnd => _host.RefuseMoveSize(draggedHwnd);
         _livenessTimer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(2), System.Windows.Threading.DispatcherPriority.Background,
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();

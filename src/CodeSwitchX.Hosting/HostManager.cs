@@ -414,10 +414,28 @@ public sealed class HostManager : IDisposable
     }
 
     /// <summary>
-    /// Called from the WinEvent watcher: put a docked window back if the user dragged it. Something that puts the
-    /// window back in its own place after every snap (a tiling window manager, a second CodeSwitchX) would move it to
-    /// and fro for ever, so after <see cref="SnapBackLimit"/> quick snap-backs from the same place the window is left
-    /// there until the next dock. A drag reaches a new place every time and is always followed.
+    /// Called from the WinEvent watcher when the user starts to drag or resize a window by its frame: a docked window
+    /// does not go. Windows' move loop is ended as it starts, so nothing has moved, and nothing fights: snapped back
+    /// after each step instead, the window flipped between the cursor and the Cab at every move of the mouse. The odd
+    /// step a fast drag gets in before the cancel lands is <see cref="SnapBack"/>'s.
+    /// </summary>
+    public void RefuseMoveSize(nint hwnd)
+    {
+        lock (_gate)
+        {
+            if (_hosted.Values.Any(h => h.Hwnd == hwnd && h.Visible && h.TargetRect is not null))
+            {
+                _docker.CancelMoveSize(hwnd);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Called from the WinEvent watcher: put a docked window back if something moved it (a maximize, a Win+arrow, the
+    /// step of a drag that landed before <see cref="RefuseMoveSize"/>). Something that puts the window back in its own
+    /// place after every snap (a tiling window manager, a second CodeSwitchX) would move it to and fro for ever, so
+    /// after <see cref="SnapBackLimit"/> quick snap-backs from the same place the window is left there until the next
+    /// dock. A drag reaches a new place every time and is always followed.
     /// </summary>
     public void SnapBack(nint hwnd)
     {

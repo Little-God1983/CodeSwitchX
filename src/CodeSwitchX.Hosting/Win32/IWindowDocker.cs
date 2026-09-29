@@ -9,6 +9,12 @@ public interface IWindowDocker
     /// <summary>Show a hidden window again without activating it.</summary>
     void Uncloak(nint hwnd);
     void BringToFront(nint hwnd);
+
+    /// <summary>
+    /// Ends the drag or resize the user has just started on the window's frame, before it has moved anything, without
+    /// waiting for the window's thread.
+    /// </summary>
+    void CancelMoveSize(nint hwnd);
     bool IsAlive(nint hwnd);
 
     /// <summary>

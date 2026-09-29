@@ -65,6 +65,14 @@ public sealed class SnapWindowDocker : IWindowDocker
         PInvoke.SetForegroundWindow(h);
     }
 
+    /// <summary>
+    /// A drag or resize by the frame runs in Windows' modal move loop, inside the window's own thread, which holds the
+    /// mouse capture for as long as it lasts. WM_CANCELMODE makes DefWindowProc release that capture, and the loop ends
+    /// where it is: at its start, before it has moved anything. Delivered as a notification: a stalled VS Code would
+    /// otherwise hold the WPF thread, in a WinEvent callback.
+    /// </summary>
+    public void CancelMoveSize(nint hwnd) => PInvoke.SendNotifyMessage(new HWND(hwnd), PInvoke.WM_CANCELMODE, default, default);
+
     public bool IsAlive(nint hwnd) => PInvoke.IsWindow(new HWND(hwnd));
 
     /// <summary>

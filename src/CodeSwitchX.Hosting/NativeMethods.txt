@@ -16,6 +16,9 @@ SetWindowPlacement
 SetForegroundWindow
 SetWinEventHook
 UnhookWinEvent
+SendNotifyMessage
+WM_CANCELMODE
+EVENT_SYSTEM_MOVESIZESTART
 DwmRegisterThumbnail
 DwmUnregisterThumbnail
 DwmUpdateThumbnailProperties

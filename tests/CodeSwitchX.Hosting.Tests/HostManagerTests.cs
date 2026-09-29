@@ -721,6 +721,43 @@ public class HostManagerTests
         _docker.Received(40).MoveTo(700, cab);
     }
 
+    [Fact]
+    public async Task A_drag_of_a_docked_window_by_its_frame_is_refused_before_it_moves()
+    {
+        // Snapping the window back after each step of a drag fought Windows' move loop: the window flipped between the
+        // cursor and the Cab at every mouse move. The loop is ended as it starts instead, so the window never leaves.
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
+        _manager.ShowInCab(_workspace.Id, cab);
+        _docker.ClearReceivedCalls();
+
+        _manager.RefuseMoveSize(500);
+
+        _docker.Received(1).CancelMoveSize(500);
+    }
+
+    [Fact]
+    public async Task A_drag_of_a_window_that_is_not_docked_is_left_alone()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
+        _manager.ShowInCab(_workspace.Id, cab);
+
+        _manager.RefuseMoveSize(999);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
+
+        _manager.HideAll();
+        _manager.RefuseMoveSize(500);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
+
+        _manager.ShowInCab(_workspace.Id, cab);
+        _manager.ReleaseAll();
+        _manager.RefuseMoveSize(500);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
+    }
+
     private (HostManager Manager, FakeTimeProvider Time) ManagerWithFakeTime()
     {
         var time = new FakeTimeProvider();

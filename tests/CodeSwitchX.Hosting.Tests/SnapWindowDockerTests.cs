@@ -77,15 +77,20 @@ public class SnapWindowDockerTests
     private sealed class ProbeWindow : IDisposable
     {
         private readonly Thread _owner;
+        private readonly System.Collections.Concurrent.ConcurrentBag<uint> _received = [];
+        private readonly WndProc _subclass;
+        private nint _originalProc;
         private volatile bool _closing;
 
         public ProbeWindow(bool minimizedAndHidden)
         {
+            _subclass = OnMessage;
             using var created = new ManualResetEventSlim();
             _owner = new Thread(() =>
             {
                 Hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
                     -20000, -20000, 200, 100, 0, 0, 0, 0);
+                _originalProc = SetWindowLongPtrW(Hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_subclass));
                 if (minimizedAndHidden)
                 {
                     ShowWindow(Hwnd, SW_MINIMIZE);
@@ -113,6 +118,15 @@ public class SnapWindowDockerTests
 
         public nint Hwnd { get; private set; }
 
+        /// <summary>True once the window's own thread has seen the message.</summary>
+        public bool Received(uint message) => _received.Contains(message);
+
+        private nint OnMessage(nint hwnd, uint message, nint wParam, nint lParam)
+        {
+            _received.Add(message);
+            return CallWindowProcW(_originalProc, hwnd, message, wParam, lParam);
+        }
+
         /// <summary>Long enough for the posted shows and moves to be processed by the thread above.</summary>
         public static void Pump() => Thread.Sleep(150);
 
@@ -121,6 +135,22 @@ public class SnapWindowDockerTests
             _closing = true;
             _owner.Join();
         }
+    }
+
+    [Fact]
+    public void CancelMoveSize_delivers_WM_CANCELMODE_to_the_window_without_waiting_for_it()
+    {
+        // WM_CANCELMODE ends the move loop DefWindowProc runs while the user drags a window by its frame (checked on
+        // screen: a caption drag with it sent at EVENT_SYSTEM_MOVESIZESTART moved the window by nothing). It must go
+        // the asynchronous way: a stalled VS Code would otherwise hold the WPF thread, from a WinEvent callback.
+        using var window = new ProbeWindow(minimizedAndHidden: false);
+        var docker = new SnapWindowDocker();
+
+        docker.CancelMoveSize(window.Hwnd);
+        window.Received(WM_CANCELMODE).ShouldBeFalse("the message must not be delivered synchronously on this thread");
+        ProbeWindow.Pump();
+
+        window.Received(WM_CANCELMODE).ShouldBeTrue();
     }
 
     [Fact]
@@ -142,6 +172,16 @@ public class SnapWindowDockerTests
     private const uint PM_REMOVE = 0x0001;
     private const int SW_HIDE = 0;
     private const int SW_MINIMIZE = 6;
+    private const int GWLP_WNDPROC = -4;
+    private const uint WM_CANCELMODE = 0x001F;
+
+    private delegate nint WndProc(nint hwnd, uint message, nint wParam, nint lParam);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtrW(nint hwnd, int index, nint value);
+
+    [DllImport("user32.dll")]
+    private static extern nint CallWindowProcW(nint previous, nint hwnd, uint message, nint wParam, nint lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Rect
