@@ -29,6 +29,13 @@ public sealed partial class CabViewModel : ObservableObject
         }
     }
 
+    /// <summary>No workspace to show: the strip names nothing and offers no pips.</summary>
+    public void Clear()
+    {
+        ActiveTile = null;
+        Pips.Clear();
+    }
+
     [RelayCommand]
     private void Back() => BackRequested?.Invoke();
 

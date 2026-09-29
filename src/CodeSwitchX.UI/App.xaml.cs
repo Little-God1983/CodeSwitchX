@@ -20,6 +20,7 @@ using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using Serilog.Extensions.Logging;
 
 namespace CodeSwitchX.UI;
 
@@ -27,6 +28,7 @@ public partial class App : Application
 {
     private IHost? _host;
     private SingleInstance? _instance;
+    private IDisposable? _crashLogging;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -46,7 +48,17 @@ public partial class App : Application
 
         _instance = claim.Instance;
         var paths = AppPaths.Default();
-        paths.EnsureCreated();
+        try
+        {
+            paths.EnsureCreated();
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            // Before the log exists, a message box is the only place this can be said; without it CodeSwitchX just ended.
+            MessageBox.Show($"CodeSwitchX cannot create its data folder:\n\n{paths.Root}\n\n{ex.Message}", "CodeSwitchX", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown(1);
+            return;
+        }
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
@@ -57,6 +69,7 @@ public partial class App : Application
             .CreateLogger();
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+        _crashLogging = UnhandledExceptionLogging.Attach(new SerilogLoggerFactory(Log.Logger).CreateLogger<App>());
         if (claim.Problem is { } problem)
         {
             Log.Warning(problem, "Could not check whether CodeSwitchX is already running; starting without that check");
@@ -191,8 +204,11 @@ public partial class App : Application
             }
 
             _host.Dispose();
+            // ProcessExit runs after this on every exit and releases the hosted windows through the host; a disposed one throws.
+            _host = null;
         }
 
+        _crashLogging?.Dispose();
         Log.CloseAndFlush();
         // Last: until the host has stopped, this process still holds the pipe and the database.
         _instance?.Dispose();

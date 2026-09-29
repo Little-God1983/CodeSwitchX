@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Settings;
 using NSubstitute;
@@ -54,13 +55,30 @@ public class PerformanceBarViewModelTests
         var bar = _h.Shell.PerformanceBar;
         await bar.InitializeAsync(CancellationToken.None);
         var now = _h.Time.GetUtcNow();
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
 
-        _h.Engine.Apply(new HookEvent { SessionId = "a", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now });
-        _h.Engine.Apply(new HookEvent { SessionId = "b", EventName = "Notification", Signal = SessionSignal.Notification, At = now });
-        _h.Engine.Apply(new HookEvent { SessionId = "c", EventName = "SessionEnd", Signal = SessionSignal.SessionEnd, At = now });
+        _h.Engine.Apply(new HookEvent { SessionId = "a", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "b", EventName = "Notification", Signal = SessionSignal.Notification, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "c", EventName = "SessionEnd", Signal = SessionSignal.SessionEnd, At = now, Cwd = _h.App.RootPath });
 
         bar.ActiveSessions.ShouldBe(2);
         bar.WaitingSessions.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Active_chats_are_the_live_rows_of_the_yard_not_stale_ones_or_chats_on_no_tile()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        var now = _h.Time.GetUtcNow();
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+        _h.Engine.Apply(new HookEvent { SessionId = "on-tile", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "elsewhere", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = @"c:\notes" });
+        _h.Engine.Restore([new SessionSnapshot { SessionId = "old", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddDays(-1), LastEventAt = now.AddDays(-1), StateSince = now.AddHours(-23) }]);
+
+        bar.RecountSessions();
+
+        bar.ActiveSessions.ShouldBe(1, "a Stale chat and a chat on no tile are not rows on the Yard, and the count grew over the 24 h restore window");
     }
 
     [Fact]

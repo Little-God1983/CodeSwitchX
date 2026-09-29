@@ -72,7 +72,9 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     public void RecountSessions()
     {
         var snapshots = _engine.Snapshots;
-        ActiveSessions = snapshots.Count(s => SessionStateMachine.IsLive(s.State));
+        // The rows on the Yard: a Stale chat has left its tile, and a chat on no tile (its cwd outside every workspace) is
+        // shown nowhere; counted, the number grew over the 24 h restore window and matched nothing on screen.
+        ActiveSessions = snapshots.Count(s => s.WorkspaceId is not null && SessionStateMachine.IsLive(s.State) && s.State != SessionState.Stale);
         WaitingSessions = snapshots.Count(s => SessionStateMachine.NeedsUser(s.State));
     }
 

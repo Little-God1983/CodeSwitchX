@@ -45,6 +45,47 @@ public sealed class WorkspaceRegistry
         await LoadAsync(ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Replaces the workspace's worktrees with the ones git lists now, when they differ: a worktree added after the
+    /// registration becomes a child root, a removed one stops being one, and a moved branch is noted. Saved and reloaded
+    /// like a registration, so the engine re-maps chats at once. A worktree that stays keeps its row. Returns whether
+    /// anything changed.
+    /// </summary>
+    public async Task<bool> UpdateWorktreesAsync(Workspace workspace, IReadOnlyList<WorktreeInfo> found, CancellationToken ct)
+    {
+        var current = workspace.Worktrees.ToDictionary(w => PathNormalizer.Normalize(w.Path), StringComparer.Ordinal);
+        var next = new List<Worktree>();
+        var changed = false;
+        foreach (var info in found)
+        {
+            var path = PathNormalizer.Canonical(info.Path);
+            if (current.Remove(PathNormalizer.Normalize(path), out var existing))
+            {
+                changed |= existing.Path != path || existing.Branch != info.Branch;
+                existing.WorkspaceId = workspace.Id;
+                existing.Path = path;
+                existing.Branch = info.Branch;
+                next.Add(existing);
+            }
+            else
+            {
+                changed = true;
+                next.Add(new Worktree { WorkspaceId = workspace.Id, Path = path, Branch = info.Branch });
+            }
+        }
+
+        changed |= current.Count > 0;
+        if (!changed)
+        {
+            return false;
+        }
+
+        workspace.Worktrees = next;
+        await _store.UpdateAsync(workspace, ct).ConfigureAwait(false);
+        await LoadAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task UnregisterAsync(Guid workspaceId, CancellationToken ct)
     {
         await _store.RemoveAsync(workspaceId, ct).ConfigureAwait(false);

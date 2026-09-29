@@ -4,15 +4,18 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.Tests;
 using CodeSwitchX.UI.Yard;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
-public class YardViewModelTests
+public class YardViewModelTests : IDisposable
 {
+    private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "csx-yard-" + Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
     private readonly EventBus _bus = new(NullLogger<EventBus>.Instance);
     private readonly IWorkspaceStore _store = Substitute.For<IWorkspaceStore>();
@@ -37,6 +40,31 @@ public class YardViewModelTests
         _registry = new WorkspaceRegistry(_store, _resolver, _bus);
         var git = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
         _yard = new YardViewModel(_store, _registry, _engine, pricing, git, _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempRoot))
+        {
+            Directory.Delete(_tempRoot, recursive: true);
+        }
+    }
+
+    /// <summary>A folder with a .git/HEAD on main, which is all GitInspector reads from disk.</summary>
+    private string Repo(string name)
+    {
+        var root = Path.Combine(_tempRoot, name);
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        File.WriteAllText(Path.Combine(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+        return root;
+    }
+
+    /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger.</summary>
+    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null)
+    {
+        var pricing = Substitute.For<IPricingProvider>();
+        pricing.Pricing.Returns(PricingTable.Default);
+        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, new ImmediateDispatcher(), _time, logger ?? NullLogger<YardViewModel>.Instance);
     }
 
     private SessionSnapshot Snapshot(string id, Guid workspaceId, SessionState state) => new()
@@ -244,5 +272,113 @@ public class YardViewModelTests
 
         _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients", "Tools"]);
         _yard.Tracks[2].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Cli");
+    }
+
+    [Fact]
+    public async Task Tiles_keep_their_order_when_needs_me_first_is_turned_on_and_off()
+    {
+        // The start sorted with the culture comparer, AddTile and Resort ordinal ignoring case: "_tools" and "Zeta" swapped.
+        var tools = new Workspace { Name = "_tools", RootPath = @"c:\repo\_tools", TrackId = _general.Id };
+        var zeta = new Workspace { Name = "Zeta", RootPath = @"c:\repo\zeta", TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, tools, zeta]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var atStart = _yard.Tracks[0].Tiles.Select(t => t.Name).ToList();
+
+        _yard.NeedsMeFirst = true;
+        _yard.NeedsMeFirst = false;
+
+        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(atStart, "the jump keys follow the order shown, so it must not change with the checkbox");
+        atStart.ShouldBe(["App", "Zeta", "_tools"], "one comparer everywhere: ordinal, ignoring case");
+    }
+
+    [Fact]
+    public async Task A_track_list_that_cannot_be_read_when_a_tile_lands_in_a_new_track_is_logged_not_lost()
+    {
+        var log = new ListLogger<YardViewModel>();
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(null), log);
+        await yard.InitializeAsync(CancellationToken.None);
+        _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<IReadOnlyList<Track>>(new IOException("database is locked")));
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = Guid.NewGuid() };
+
+        _bus.Publish(new WorkspaceRegistered(cli));
+
+        yard.FindTile(cli.Id).ShouldNotBeNull("the tile is there, under a placeholder track name");
+        log.Entries.ShouldContain(e => e.Level == LogLevel.Error && e.Message.Contains("track"), "a faulted task nobody awaits leaves no trace otherwise");
+    }
+
+    [Fact]
+    public async Task A_tile_whose_git_check_throws_does_not_stop_the_refresh_of_the_tiles_after_it()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        var shop = new Workspace { Name = "Shop", RootPath = Repo("shop"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app, shop]));
+        var yard = Yard((dir, _, _) => dir == app.RootPath ? throw new InvalidOperationException("git hung") : Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(shop.Id)!.Branch.ShouldBe("main", "one tile's failure is its own, every cycle");
+        yard.FindTile(shop.Id)!.DirtyCount.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_workspace_added_during_a_git_refresh_is_refreshed_as_soon_as_that_refresh_ends()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var appStatusMayEnd = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yard = Yard((dir, args, _) => dir == app.RootPath && args.StartsWith("status", StringComparison.Ordinal) ? appStatusMayEnd.Task : Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        var running = yard.RefreshGitAsync(CancellationToken.None); // waits in App's git status
+        var extra = new Workspace { Name = "Extra", RootPath = Repo("extra"), TrackId = _general.Id };
+
+        _bus.Publish(new WorkspaceRegistered(extra)); // the tile asks for a refresh while one runs
+        appStatusMayEnd.SetResult(string.Empty);
+        await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        yard.FindTile(extra.Id)!.Branch.ShouldBe("main", "the refresh asked for during the running one was dropped, and the tile said no git for 30 s");
+    }
+
+    [Fact]
+    public async Task The_hooks_banner_stays_away_once_the_installer_says_the_hooks_are_installed()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var now = _time.GetUtcNow();
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s2", TranscriptPath = @"c:\t\s2.jsonl", ObservedAt = now, LastActivityAt = now, Cwd = @"c:\repo\shop", InferredSignal = SessionSignal.PromptSubmit,
+        }); // a chat that ran before Install hooks was clicked: it stays inferred until it sends a hook or ends
+        _yard.Tick(now);
+        _yard.HooksInferredOnly.ShouldBeTrue();
+
+        _yard.HooksInstalled = true;
+        _yard.Tick(now);
+
+        _yard.HooksInferredOnly.ShouldBeFalse("the installer, not a chat that happens to send a hook, says whether the hooks are installed");
+    }
+
+    [Fact]
+    public async Task A_worktree_added_after_registration_becomes_a_child_root_at_the_next_git_refresh()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        var hotfix = Path.Combine(_tempRoot, "app-hotfix");
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([app]));
+        var yard = Yard((_, args, _) => Task.FromResult<string?>(args.StartsWith("worktree list", StringComparison.Ordinal)
+            ? $"worktree {app.RootPath}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n\nworktree {hotfix}\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/hotfix\n\n"
+            : string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        await _store.Received(1).UpdateAsync(app, Arg.Any<CancellationToken>());
+        var worktree = app.Worktrees.ShouldHaveSingleItem();
+        worktree.Path.ShouldBe(hotfix);
+        worktree.Branch.ShouldBe("hotfix");
+        _resolver.Resolve(Path.Combine(hotfix, "src")).ShouldBe(app.Id, "a chat started in the new worktree moves onto App's tile");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await _store.Received(1).UpdateAsync(app, Arg.Any<CancellationToken>()); // the same set again: nothing saved
     }
 }

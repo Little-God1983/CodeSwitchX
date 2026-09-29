@@ -54,6 +54,29 @@ public class WorkspaceRegistryTests
     }
 
     [Fact]
+    public async Task Update_worktrees_saves_and_reloads_only_when_the_set_git_lists_differs()
+    {
+        var workspace = new Workspace { Name = "App", RootPath = @"C:\Repo\App", Worktrees = { new Worktree { Path = @"C:\Repo\App-wt", Branch = "wt" } } };
+        var kept = workspace.Worktrees[0].Id;
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:\Repo\App-wt", "wt")], CancellationToken.None)).ShouldBeFalse("nothing changed");
+        await _store.DidNotReceive().UpdateAsync(Arg.Any<Workspace>(), Arg.Any<CancellationToken>());
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:/Repo/App-wt/", "wt"), new WorktreeInfo(@"C:\Repo\App-hotfix", "hotfix")], CancellationToken.None)).ShouldBeTrue();
+
+        await _store.Received(1).UpdateAsync(workspace, Arg.Any<CancellationToken>());
+        workspace.Worktrees.Select(w => w.Path).ShouldBe([@"C:\Repo\App-wt", @"C:\Repo\App-hotfix"]);
+        workspace.Worktrees[0].Id.ShouldBe(kept, "a worktree that stays keeps its row");
+        workspace.Worktrees.ShouldAllBe(w => w.WorkspaceId == workspace.Id);
+        _resolver.Resolve(@"C:\Repo\App-hotfix\src").ShouldBe(workspace.Id);
+        _messages.OfType<WorkspaceRootsChanged>().ShouldNotBeEmpty();
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:\Repo\App-hotfix", "hotfix")], CancellationToken.None)).ShouldBeTrue("a removed worktree stops being a child root");
+        _resolver.Resolve(@"C:\Repo\App-wt\src").ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Unregister_removes_and_reloads()
     {
         var id = Guid.NewGuid();

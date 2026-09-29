@@ -1,5 +1,6 @@
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
+using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Telemetry;
@@ -27,6 +28,9 @@ public sealed partial class ShellViewModel : ObservableObject
 
     private bool _shellMinimized;
 
+    /// <summary>Counts the opens; the status strip belongs to the latest one (see <see cref="ReportFor"/>).</summary>
+    private int _openAttempt;
+
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
         HostManager host, ILogger<ShellViewModel> logger)
     {
@@ -37,6 +41,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _host = host;
         _logger = logger;
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
+        Yard.TileRemoved += OnTileRemoved;
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
@@ -53,7 +58,36 @@ public sealed partial class ShellViewModel : ObservableObject
         await Settings.LoadAsync(ct);
         Settings.BudgetChanged += PerformanceBar.SetBudget;
         Settings.CloseRequested += CloseSettings;
+        // The Yard's "Hooks not installed" banner follows the installer, so it goes when Install hooks is clicked.
+        Yard.HooksInstalled = HooksReachUs(Settings.HookState);
+        Settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.HookState))
+            {
+                Yard.HooksInstalled = HooksReachUs(Settings.HookState);
+            }
+        };
         _ = AutoStartAsync();
+    }
+
+    /// <summary>Installed, or Partial (every installed event reaches us); Outdated entries point elsewhere and reach nobody.</summary>
+    private static bool HooksReachUs(HookInstallState state) => state is HookInstallState.Installed or HookInstallState.Partial;
+
+    /// <summary>The Cab cannot show a workspace that is gone: the strip's name, the pips and the jump target are cleared, and the Yard is shown.</summary>
+    private void OnTileRemoved(Guid workspaceId)
+    {
+        if (ActiveWorkspaceId != workspaceId)
+        {
+            return;
+        }
+
+        ActiveWorkspaceId = null;
+        StatusMessage = null;
+        Cab.Clear();
+        if (Mode == ShellMode.Cab)
+        {
+            BackToYard();
+        }
     }
 
     /// <summary>"Start with CodeSwitchX": launch those workspaces now; their windows stay cloaked until a tile is opened.</summary>
@@ -92,13 +126,14 @@ public sealed partial class ShellViewModel : ObservableObject
         Cab.SetActive(tile, Yard.Tiles);
         Mode = ShellMode.Cab;
         StatusMessage = null;
+        var attempt = ++_openAttempt;
 
         try
         {
             var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None);
             if (hosted.State != HostState.Running)
             {
-                ReportFor(workspaceId, hosted.Error ?? "VS Code did not start.");
+                ReportFor(attempt, hosted.Error ?? "VS Code did not start.");
                 return;
             }
 
@@ -110,14 +145,17 @@ public sealed partial class ShellViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogError(ex, "Opening workspace {Workspace} failed", tile.Name);
-            ReportFor(workspaceId, ex.Message);
+            ReportFor(attempt, ex.Message);
         }
     }
 
-    /// <summary>The status strip belongs to the active workspace: an open the user has moved on from does not report there.</summary>
-    private void ReportFor(Guid workspaceId, string message)
+    /// <summary>
+    /// The status strip belongs to the latest open: one the user has moved on from, to another workspace or to a retry of
+    /// this one, does not report there. Which workspace is active cannot tell a retry apart from the open before it.
+    /// </summary>
+    private void ReportFor(int attempt, string message)
     {
-        if (ActiveWorkspaceId == workspaceId)
+        if (attempt == _openAttempt)
         {
             StatusMessage = message;
         }

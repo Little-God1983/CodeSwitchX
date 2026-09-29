@@ -28,12 +28,21 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly TimeProvider _time;
     private readonly ILogger<YardViewModel> _logger;
     private readonly List<IDisposable> _subscriptions = [];
+    private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
     private ITimer? _gitTimer;
-    private int _gitRefreshRunning;
+    private Task _gitRefresh = Task.CompletedTask;
+    private bool _gitRefreshAgain;
 
     [ObservableProperty] private bool _needsMeFirst;
     [ObservableProperty] private bool _hooksInferredOnly;
+
+    /// <summary>
+    /// What the installer says (set by the shell from Settings). The "Hooks not installed" banner shows only while it says
+    /// no: a chat that ran before Install hooks was clicked stays inferred until it sends a hook, and must not keep the
+    /// banner up meanwhile.
+    /// </summary>
+    public bool HooksInstalled { get; set; }
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger)
@@ -56,15 +65,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public event Action<Guid>? OpenRequested;
     public event Action? AddWorkspaceRequested;
 
+    /// <summary>A tile left the board (its workspace was unregistered): the Cab cannot show it any more.</summary>
+    public event Action<Guid>? TileRemoved;
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         var tracks = await _store.GetTracksAsync(ct);
         var workspaces = await _store.GetAllAsync(ct);
         Tracks.Clear();
-        foreach (var track in tracks.OrderBy(t => t.SortOrder).ThenBy(t => t.Name))
+        // Ordinal, ignoring case, like AddTile and Resort: the jump keys follow the order shown, so it must not change with "Needs me first".
+        foreach (var track in tracks.OrderBy(t => t.SortOrder).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase))
         {
             var group = new TrackGroupViewModel(track);
-            foreach (var workspace in workspaces.Where(w => w.TrackId == track.Id).OrderBy(w => w.Name))
+            foreach (var workspace in workspaces.Where(w => w.TrackId == track.Id).OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase))
             {
                 group.Tiles.Add(new WorkspaceTileViewModel(workspace, this));
             }
@@ -111,41 +124,93 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.Tick(now);
         }
 
-        // A hook-fed chat proves the hooks work wherever it is shown, including on no tile.
-        HooksInferredOnly = Tiles.Any(t => t.HasInferredChats) && !_engine.Snapshots.Any(s => !s.Inferred && SessionStateMachine.IsLive(s.State));
+        // A hook-fed chat proves the hooks work wherever it is shown, including on no tile; so does the installer.
+        HooksInferredOnly = !HooksInstalled && Tiles.Any(t => t.HasInferredChats) && !_engine.Snapshots.Any(s => !s.Inferred && SessionStateMachine.IsLive(s.State));
         if (NeedsMeFirst)
         {
             Resort();
         }
     }
 
-    public async Task RefreshGitAsync(CancellationToken ct)
+    /// <summary>
+    /// Refreshes every tile's git facts and the worktrees of every repository workspace. One refresh runs at a time; one
+    /// asked for while it runs (a workspace added meanwhile) makes it run once more when it ends, and the task returned
+    /// to either caller ends with that. A tile whose check fails is logged, and the others go on.
+    /// </summary>
+    public Task RefreshGitAsync(CancellationToken ct)
     {
-        if (Interlocked.Exchange(ref _gitRefreshRunning, 1) == 1)
+        lock (_gitGate)
+        {
+            if (!_gitRefresh.IsCompleted)
+            {
+                _gitRefreshAgain = true;
+                return _gitRefresh;
+            }
+
+            _gitRefreshAgain = false;
+            _gitRefresh = RefreshGitLoopAsync(ct);
+            return _gitRefresh;
+        }
+    }
+
+    private async Task RefreshGitLoopAsync(CancellationToken ct)
+    {
+        do
+        {
+            foreach (var tile in await TilesOnUiThreadAsync().ConfigureAwait(false))
+            {
+                try
+                {
+                    await RefreshGitAsync(tile, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Git refresh of {Root} failed", tile.RootPath);
+                }
+            }
+        }
+        while (AnotherRefreshWasAskedFor());
+    }
+
+    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, CancellationToken ct)
+    {
+        var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
+        _ui.Post(() =>
+        {
+            tile.Branch = info.Branch;
+            tile.DirtyCount = info.DirtyCount;
+        });
+
+        if (!info.IsRepository)
         {
             return;
         }
 
-        try
+        // A worktree added next to the repository after the registration is a child root from here on, so the chat started
+        // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
+        var porcelain = await _git.RunAsync(tile.RootPath, "worktree list --porcelain", ct).ConfigureAwait(false);
+        if (porcelain is not null)
         {
-            foreach (var tile in Tiles.ToList())
-            {
-                var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-                _ui.Post(() =>
-                {
-                    tile.Branch = info.Branch;
-                    tile.DirtyCount = info.DirtyCount;
-                });
-            }
+            await _registry.UpdateWorktreesAsync(tile.Workspace, WorkspaceProbe.ParseWorktreeList(porcelain, tile.RootPath), ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+    }
+
+    private bool AnotherRefreshWasAskedFor()
+    {
+        lock (_gitGate)
         {
-            _logger.LogWarning(ex, "Git refresh failed");
+            var again = _gitRefreshAgain;
+            _gitRefreshAgain = false;
+            return again;
         }
-        finally
-        {
-            Volatile.Write(ref _gitRefreshRunning, 0);
-        }
+    }
+
+    /// <summary>The tiles as of now, read on the UI thread, which alone enumerates the tile collections.</summary>
+    private Task<List<WorkspaceTileViewModel>> TilesOnUiThreadAsync()
+    {
+        var tiles = new TaskCompletionSource<List<WorkspaceTileViewModel>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ui.Post(() => tiles.SetResult(Tiles.ToList()));
+        return tiles.Task;
     }
 
     [RelayCommand]
@@ -213,18 +278,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
     private async Task ReloadTrackNamesAsync()
     {
-        var tracks = await _store.GetTracksAsync(CancellationToken.None);
-        _ui.Post(() =>
+        try
         {
-            var byId = tracks.ToDictionary(t => t.Id);
-            foreach (var group in Tracks)
+            var tracks = await _store.GetTracksAsync(CancellationToken.None);
+            _ui.Post(() =>
             {
-                if (byId.TryGetValue(group.Id, out var track))
+                var byId = tracks.ToDictionary(t => t.Id);
+                foreach (var group in Tracks)
                 {
-                    group.Track = track;
+                    if (byId.TryGetValue(group.Id, out var track))
+                    {
+                        group.Track = track;
+                    }
                 }
-            }
-        });
+            });
+        }
+        catch (Exception ex)
+        {
+            // Fire-and-forget from AddTile: a failed read would otherwise leave no trace, and the group its placeholder name.
+            _logger.LogError(ex, "Reading the tracks for a new group failed; the group keeps its placeholder name");
+        }
     }
 
     private void RemoveTile(Guid workspaceId)
@@ -235,6 +308,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             if (tile is not null)
             {
                 group.Tiles.Remove(tile);
+                TileRemoved?.Invoke(workspaceId);
                 return;
             }
         }
@@ -243,8 +317,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private void Resort()
     {
         var orderedGroups = NeedsMeFirst
-            ? Tracks.OrderBy(g => g.Tiles.Count == 0 ? 2 : g.Tiles.Min(t => t.AttentionRank)).ThenBy(g => g.SortOrder).ThenBy(g => g.Name).ToList()
-            : Tracks.OrderBy(g => g.SortOrder).ThenBy(g => g.Name).ToList();
+            ? Tracks.OrderBy(g => g.Tiles.Count == 0 ? 2 : g.Tiles.Min(t => t.AttentionRank)).ThenBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList()
+            : Tracks.OrderBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
         for (var i = 0; i < orderedGroups.Count; i++)
         {
             var currentIndex = Tracks.IndexOf(orderedGroups[i]);
