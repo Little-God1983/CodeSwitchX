@@ -94,23 +94,39 @@
                        Text="{Binding HostState, Converter={StaticResource HostStateText}}" />
             <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
           </DockPanel>
-          <StackPanel Orientation="Horizontal" Margin="0,4,0,8" Opacity="0.75">
-            <TextBlock Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" />
-            <TextBlock Text="{Binding Branch, TargetNullValue=no git}" />
-            <StackPanel Orientation="Horizontal">
-              <StackPanel.Style>
-                <Style TargetType="StackPanel">
+          <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+            <TextBlock Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" Opacity="0.75" />
+            <TextBlock Text="{Binding Branch, TargetNullValue=no git}" VerticalAlignment="Center" Opacity="0.75" />
+            <!-- the git state as a pill: green when clean, amber with uncommitted changes, none when git could not tell -->
+            <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Background" Value="#26F59E0B" />
+                  <Setter Property="BorderBrush" Value="#80F59E0B" />
                   <Style.Triggers>
-                    <!-- no count when git could not report one: a made-up 0 would read as a clean tree -->
-                    <DataTrigger Binding="{Binding DirtyCount}" Value="{x:Null}">
+                    <DataTrigger Binding="{Binding GitStateLabel}" Value="{x:Null}">
                       <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding DirtyCount}" Value="0">
+                      <Setter Property="Background" Value="#2622C55E" />
+                      <Setter Property="BorderBrush" Value="#8022C55E" />
                     </DataTrigger>
                   </Style.Triggers>
                 </Style>
-              </StackPanel.Style>
-              <TextBlock Text=" · " />
-              <TextBlock><Run Text="{Binding DirtyCount, Mode=OneWay}" /> dirty</TextBlock>
-            </StackPanel>
+              </Border.Style>
+              <TextBlock Text="{Binding GitStateLabel}" FontSize="11" FontWeight="SemiBold">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="#F59E0B" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding DirtyCount}" Value="0">
+                        <Setter Property="Foreground" Value="#22C55E" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+            </Border>
           </StackPanel>
           <ItemsControl ItemsSource="{Binding Chats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
           <TextBlock Text="No Claude Code chats yet" FontStyle="Italic" Opacity="0.5" Margin="0,6,0,0">

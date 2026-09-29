@@ -415,6 +415,23 @@ public class YardViewModelTests : IDisposable
         yard.FindTile(shop.Id)!.DirtyCount.ShouldBe(0);
     }
 
+    [Theory]
+    [InlineData("", "clean")]
+    [InlineData(" M src/app.cs\n?? notes.md\n", "2 changed")]
+    [InlineData(null, null)]
+    public async Task The_tile_labels_its_git_state_clean_or_by_its_uncommitted_files_and_not_at_all_when_git_cannot_tell(string? status, string? label)
+    {
+        // "0 dirty" on a clean repository read as if something were wrong.
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult(status));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(app.Id)!.GitStateLabel.ShouldBe(label);
+    }
+
     [Fact]
     public async Task A_workspace_added_during_a_git_refresh_is_refreshed_as_soon_as_that_refresh_ends()
     {
