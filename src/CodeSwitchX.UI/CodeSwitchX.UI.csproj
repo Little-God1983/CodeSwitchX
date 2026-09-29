@@ -25,10 +25,31 @@
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
   </ItemGroup>
-  <Target Name="CopyRelay" AfterTargets="Build">
+  <!--
+    The relay is referenced for build order only (ReferenceOutputAssembly="false") and rides along as its own program in
+    relay\csx-hook.exe, in the build output and in a publish alike. Its folder is asked of the project rather than assumed, so a
+    runtime identifier (a win-x64 subfolder) does not leave the copy empty.
+  -->
+  <Target Name="CollectRelay">
+    <MSBuild Projects="..\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="RelayTargetPath" />
+    </MSBuild>
+    <PropertyGroup>
+      <RelayDirectory>@(RelayTargetPath->'%(RootDir)%(Directory)')</RelayDirectory>
+    </PropertyGroup>
     <ItemGroup>
-      <RelayFiles Include="..\CodeSwitchX.Hook\bin\$(Configuration)\$(TargetFramework)\csx-hook.*" />
+      <RelayFiles Include="$(RelayDirectory)csx-hook.*" />
     </ItemGroup>
+  </Target>
+  <Target Name="CopyRelay" AfterTargets="Build" DependsOnTargets="CollectRelay">
     <Copy SourceFiles="@(RelayFiles)" DestinationFolder="$(OutDir)relay" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishRelay" AfterTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="CollectRelay">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(RelayFiles)">
+        <RelativePath>relay\%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
   </Target>
 </Project>

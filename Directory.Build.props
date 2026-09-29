@@ -10,5 +10,11 @@
     <Version>0.1.0</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!--
+      Every review PR requires a warning-free rebuild; the build enforces it, together with the .editorconfig rules that carry a
+      warning severity (docs/review/decisions.md, #34). An SDK update that brings new warnings breaks the build until they are fixed.
+    -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 </Project>
