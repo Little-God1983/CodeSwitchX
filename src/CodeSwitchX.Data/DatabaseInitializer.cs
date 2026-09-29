@@ -10,11 +10,13 @@ public sealed class DatabaseInitializer
     public const string DefaultTrackName = "General";
 
     private readonly IDbContextFactory<CodeSwitchXDbContext> _factory;
+    private readonly SqlitePragmaInterceptor _pragmas;
     private readonly ILogger<DatabaseInitializer> _logger;
 
-    public DatabaseInitializer(IDbContextFactory<CodeSwitchXDbContext> factory, ILogger<DatabaseInitializer> logger)
+    public DatabaseInitializer(IDbContextFactory<CodeSwitchXDbContext> factory, SqlitePragmaInterceptor pragmas, ILogger<DatabaseInitializer> logger)
     {
         _factory = factory;
+        _pragmas = pragmas;
         _logger = logger;
     }
 
@@ -40,8 +42,18 @@ public sealed class DatabaseInitializer
             throw new InvalidOperationException("The data model has changes that no migration covers; add one with 'dotnet ef migrations add'.");
         }
 
-        // Persistent, unlike the per-connection pragmas SqlitePragmaInterceptor sets on every open.
-        await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;", ct);
+        // Persistent, unlike synchronous, which SqlitePragmaInterceptor sets per connection, and only once this says "wal":
+        // SQLite answers with the mode the database is in, and keeps rollback journaling where WAL cannot work (a file
+        // system without shared memory, a read-only file), where NORMAL sync could corrupt the database on a power loss.
+        var mode = await JournalModeAsync(db, ct);
+        if (string.Equals(mode, "wal", StringComparison.OrdinalIgnoreCase))
+        {
+            _pragmas.WriteAheadLog = true;
+        }
+        else
+        {
+            _logger.LogWarning("The database could not switch to write-ahead logging and stays in {Mode} mode; commits keep full sync", mode);
+        }
 
         if (!await db.Tracks.AnyAsync(ct))
         {
@@ -78,4 +90,20 @@ public sealed class DatabaseInitializer
     }
 
     private static Task<int> CountAsync(CodeSwitchXDbContext db, string sql, CancellationToken ct) => db.Database.SqlQueryRaw<int>(sql).SingleAsync(ct);
+
+    /// <summary>A pragma cannot sit in the subquery EF Core's scalar query wraps it in, so this runs on the connection itself.</summary>
+    private static async Task<string> JournalModeAsync(CodeSwitchXDbContext db, CancellationToken ct)
+    {
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            await using var command = db.Database.GetDbConnection().CreateCommand();
+            command.CommandText = "PRAGMA journal_mode=WAL;";
+            return (await command.ExecuteScalarAsync(ct))?.ToString() ?? string.Empty;
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
+    }
 }

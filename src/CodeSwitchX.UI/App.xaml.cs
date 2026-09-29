@@ -179,7 +179,11 @@ public partial class App : Application
             {
                 ReleaseHostedWindows();
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                Task.Run(() => _host.StopAsync(cts.Token)).GetAwaiter().GetResult();
+                Task.Run(async () =>
+                {
+                    await FlushSettingsSavesAsync(cts.Token);
+                    await _host.StopAsync(cts.Token);
+                }).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -193,6 +197,22 @@ public partial class App : Application
         // Last: until the host has stopped, this process still holds the pipe and the database.
         _instance?.Dispose();
         base.OnExit(e);
+    }
+
+    /// <summary>A setting changed right before the exit is still on the Settings view's save queue; it must reach the database before the host stops.</summary>
+    private async Task FlushSettingsSavesAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (_host?.Services.GetService<SettingsViewModel>() is { } settings)
+            {
+                await settings.FlushSavesAsync(ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Settings saves did not finish before exit");
+        }
     }
 
     private void ReleaseHostedWindows()

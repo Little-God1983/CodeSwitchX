@@ -73,7 +73,7 @@ public class DatabaseInitializerTests : IAsyncLifetime
             .UseSqlite($"Data Source={_db.DatabaseFile}")
             .ReplaceService<IModelCustomizer, ForgottenMigration>()
             .Options;
-        var initializer = new DatabaseInitializer(new PooledDbContextFactory<CodeSwitchXDbContext>(options), NullLogger<DatabaseInitializer>.Instance);
+        var initializer = new DatabaseInitializer(new PooledDbContextFactory<CodeSwitchXDbContext>(options), new SqlitePragmaInterceptor(), NullLogger<DatabaseInitializer>.Instance);
 
         await Should.ThrowAsync<InvalidOperationException>(() => initializer.InitializeAsync(TestContext.Current.CancellationToken));
     }
@@ -99,6 +99,64 @@ public class DatabaseInitializerTests : IAsyncLifetime
 
         (await SynchronousAsync(first)).ShouldBe(1L);
         (await SynchronousAsync(second)).ShouldBe(1L, "a fresh pooled connection stayed FULL: an extra WAL fsync per commit");
+    }
+
+    [Fact]
+    public async Task A_connection_keeps_full_sync_until_the_initializer_has_the_database_in_write_ahead_logging()
+    {
+        // No initializer: a fresh file is in rollback-journal mode, where NORMAL can corrupt the database on a power loss.
+        await using var db = await CreateContextAsync();
+        await db.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+
+        (await SynchronousAsync(db)).ShouldBe(2L, "FULL until write-ahead logging is on");
+    }
+
+    [Fact]
+    public async Task The_pragma_runs_once_per_physical_connection_not_on_every_open()
+    {
+        await _db.InitializeAsync();
+        var pragmas = _db.Get<SqlitePragmaInterceptor>();
+        await using var db = await CreateContextAsync();
+        await db.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        (await SynchronousAsync(db)).ShouldBe(1L);
+        await db.Database.CloseConnectionAsync();
+        var runs = pragmas.PragmaRuns;
+
+        for (var i = 0; i < 3; i++)
+        {
+            // The pool hands the same handle back, and it keeps its pragmas.
+            await db.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+            (await SynchronousAsync(db)).ShouldBe(1L);
+            await db.Database.CloseConnectionAsync();
+        }
+
+        pragmas.PragmaRuns.ShouldBe(runs, "a handle that has the pragma does not get it again on every open");
+    }
+
+    [Fact]
+    public async Task A_pragma_that_fails_leaves_the_connection_closed_so_the_next_open_sets_it()
+    {
+        await _db.InitializeAsync();
+        // Holds the pooled handle the initializer configured, so the opens below get fresh handles that still need the pragma.
+        await using var holder = await CreateContextAsync();
+        await holder.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using var db = await CreateContextAsync();
+        var connection = db.Database.GetDbConnection();
+        using var cancelled = new CancellationTokenSource();
+        // Cancelled the moment the connection is open: the pragma after it is what fails.
+        connection.StateChange += (_, e) =>
+        {
+            if (e.CurrentState == System.Data.ConnectionState.Open)
+            {
+                cancelled.Cancel();
+            }
+        };
+
+        await Should.ThrowAsync<OperationCanceledException>(() => db.Database.OpenConnectionAsync(cancelled.Token));
+
+        connection.State.ShouldBe(System.Data.ConnectionState.Closed, "EF Core did not record the open, so it would neither close the connection nor configure it again");
+        await db.Database.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        (await SynchronousAsync(db)).ShouldBe(1L);
     }
 
     [Fact]

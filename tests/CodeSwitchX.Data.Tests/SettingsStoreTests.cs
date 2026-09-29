@@ -1,4 +1,7 @@
 using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Data.Stores;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace CodeSwitchX.Data.Tests;
 
@@ -16,6 +19,37 @@ public class SettingsStoreTests : IAsyncLifetime
     public ValueTask DisposeAsync() => _db.DisposeAsync();
 
     private sealed record Hotkeys(string Toggle, int Count);
+
+    /// <summary>The settings table and its value column under other names, as a later migration might map them.</summary>
+    private sealed class RenamedSettings(ModelCustomizerDependencies dependencies) : RelationalModelCustomizer(dependencies)
+    {
+        public override void Customize(ModelBuilder modelBuilder, DbContext context)
+        {
+            base.Customize(modelBuilder, context);
+            modelBuilder.Entity<Setting>().ToTable("Preferences").Property(s => s.ValueJson).HasColumnName("Json");
+        }
+    }
+
+    [Fact]
+    public async Task A_setting_is_saved_where_the_model_maps_it_not_where_the_SQL_was_written()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var options = new DbContextOptionsBuilder<CodeSwitchXDbContext>()
+            .UseSqlite($"Data Source={Path.Combine(_db.Root, "renamed.db")}")
+            .ReplaceService<IModelCustomizer, RenamedSettings>()
+            .Options;
+        var factory = new PooledDbContextFactory<CodeSwitchXDbContext>(options);
+        await using (var db = await factory.CreateDbContextAsync(ct))
+        {
+            await db.Database.EnsureCreatedAsync(ct);
+        }
+
+        var store = new SettingsStore(factory);
+        await store.SetAsync("budget", 5L, ct);
+        await store.SetAsync("budget", 6L, ct);
+
+        (await store.GetAsync<long?>("budget", ct)).ShouldBe(6L);
+    }
 
     [Fact]
     public async Task Settings_round_trip_as_json()

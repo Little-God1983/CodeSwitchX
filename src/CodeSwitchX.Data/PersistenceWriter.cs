@@ -279,10 +279,7 @@ public sealed class PersistenceWriter : BackgroundService
                             Buckets[key] = bucket;
                         }
 
-                        bucket.Input += delta.Tokens.Input;
-                        bucket.Output += delta.Tokens.Output;
-                        bucket.CacheWrite += delta.Tokens.CacheWrite;
-                        bucket.CacheRead += delta.Tokens.CacheRead;
+                        bucket.Add(delta.Tokens);
                     }
 
                     if (update.Cursor is { } cursor)

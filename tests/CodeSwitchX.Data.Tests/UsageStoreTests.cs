@@ -46,6 +46,45 @@ public class UsageStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_batch_adds_to_the_buckets_stored_at_both_ends_of_its_minute_span_and_keeps_the_other_keys_apart()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.AddUsageAsync([
+            new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute.AddMinutes(-1), Input = 1 },
+            new UsageBucket { SessionId = "s2", Model = "m2", MinuteUtc = _minute.AddMinutes(1), Input = 2 },
+            new UsageBucket { SessionId = "s2", Model = "m", MinuteUtc = _minute.AddMinutes(1), Input = 4 }, // same session and minute, another model
+            new UsageBucket { SessionId = "s3", Model = "m", MinuteUtc = _minute, Input = 8 }, // a session the batch does not touch
+        ], ct);
+
+        await _store.AddUsageAsync([
+            new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute.AddMinutes(-1), Input = 10 }, // the first minute of the span
+            new UsageBucket { SessionId = "s2", Model = "m2", MinuteUtc = _minute.AddMinutes(1).AddSeconds(30), Input = 20 }, // the last minute, with seconds
+            new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 40 }, // new
+        ], ct);
+
+        var buckets = await _store.GetBucketsAsync(_minute.AddMinutes(-1), _minute.AddMinutes(2), ct);
+        buckets.Select(b => (b.SessionId, b.Model, b.MinuteUtc, b.Input)).ShouldBe(
+        [
+            ("s1", "m", _minute.AddMinutes(-1), 11L),
+            ("s2", "m2", _minute.AddMinutes(1), 22L),
+            ("s2", "m", _minute.AddMinutes(1), 4L),
+            ("s3", "m", _minute, 8L),
+            ("s1", "m", _minute, 40L),
+        ], ignoreOrder: true);
+    }
+
+    [Fact]
+    public void A_bucket_adds_every_token_kind_of_a_delta_and_of_tokens()
+    {
+        var bucket = new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 1, Output = 2, CacheWrite = 3, CacheRead = 4 };
+
+        bucket.Add(new UsageBucket { Input = 10, Output = 20, CacheWrite = 30, CacheRead = 40 });
+        bucket.Add(new CodeSwitchX.Core.Sessions.TokenUsage(100, 200, 300, 400));
+
+        bucket.Tokens.ShouldBe(new CodeSwitchX.Core.Sessions.TokenUsage(111, 222, 333, 444));
+    }
+
+    [Fact]
     public void FloorToMinute_drops_seconds_and_converts_to_utc()
     {
         var local = new DateTimeOffset(2026, 9, 23, 14, 34, 59, 999, TimeSpan.FromHours(2));

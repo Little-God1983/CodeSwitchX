@@ -97,10 +97,7 @@ public sealed class UsageStore : IUsageStore
                 existing[key] = bucket;
             }
 
-            bucket.Input += delta.Input;
-            bucket.Output += delta.Output;
-            bucket.CacheWrite += delta.CacheWrite;
-            bucket.CacheRead += delta.CacheRead;
+            bucket.Add(delta);
         }
     }
 
