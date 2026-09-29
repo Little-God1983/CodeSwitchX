@@ -77,6 +77,7 @@ public partial class MainWindow : Window
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);
         _locationWatcher.MoveSizeStarted += draggedHwnd => _host.RefuseMoveSize(draggedHwnd);
         _locationWatcher.Destroyed += destroyedHwnd => _host.WindowDestroyed(destroyedHwnd);
+        _locationWatcher.Appeared += newHwnd => _host.WindowAppeared(newHwnd);
         _backButtonHook = new MouseBackButtonHook(_host.IsShownInCab,
             () => Dispatcher.BeginInvoke(() => { if (_shell.Mode == ShellMode.Cab) { _shell.BackToYard(); } }), _watcherLogger);
         // Only while the Cab shows a window: the rest of the time the hook would hold every mouse event for nothing.

@@ -47,7 +47,8 @@ public class ShellViewModelTests
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
         _h.Shell.Cab.ActiveTile!.Id.ShouldBe(_h.App.Id);
         _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Running);
-        _h.Docker.Received(1).MoveTo(500, rect);
+        _h.Docker.Received(2).MoveTo(500, rect); // placed in the Cab as it appeared, then docked there
+        _h.Docker.DidNotReceive().Cloak(500);
         _h.Shell.StatusMessage.ShouldBeNull();
     }
 

@@ -152,7 +152,7 @@ public sealed partial class ShellViewModel : ObservableObject
 
         try
         {
-            var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None);
+            var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None, () => CabRectWaitingFor(workspaceId));
             if (hosted.State != HostState.Running)
             {
                 ReportFor(attempt, hosted.Error ?? "VS Code did not start.");
@@ -170,6 +170,13 @@ public sealed partial class ShellViewModel : ObservableObject
             ReportFor(attempt, ex.Message);
         }
     }
+
+    /// <summary>
+    /// Where a new VS Code window of the workspace goes as it appears: the Cab, while it shows that workspace and can show
+    /// VS Code (the rule of <see cref="RaiseHostedWindow()"/>). Asked from the host's discovery, whenever a window comes.
+    /// </summary>
+    private ScreenRect? CabRectWaitingFor(Guid workspaceId) =>
+        !_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId ? Cab.LastHostRect : null;
 
     /// <summary>
     /// The status strip belongs to the latest open: one the user has moved on from, to another workspace or to a retry of
