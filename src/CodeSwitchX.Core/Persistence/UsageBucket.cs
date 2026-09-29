@@ -12,8 +12,9 @@ public sealed class UsageBucket
     public long Output { get; set; }
     public long CacheWrite { get; set; }
     public long CacheRead { get; set; }
+    public long CacheWrite1h { get; set; }
 
-    public TokenUsage Tokens => new(Input, Output, CacheWrite, CacheRead);
+    public TokenUsage Tokens => new(Input, Output, CacheWrite, CacheRead, CacheWrite1h);
 
     /// <summary>The one place that adds usage up, so a new token kind reaches every sum.</summary>
     public void Add(TokenUsage tokens)
@@ -22,6 +23,7 @@ public sealed class UsageBucket
         Output += tokens.Output;
         CacheWrite += tokens.CacheWrite;
         CacheRead += tokens.CacheRead;
+        CacheWrite1h += tokens.CacheWrite1h;
     }
 
     public void Add(UsageBucket delta) => Add(delta.Tokens);

@@ -20,4 +20,13 @@ public class CostEstimatorTests
     {
         CostEstimator.Estimate(TokenUsage.Zero, PricingTable.Default.Find("claude-opus-5")).ShouldBe(0m);
     }
+
+    [Fact]
+    public void A_one_hour_cache_write_is_priced_at_its_own_rate()
+    {
+        var rule = new PricingRule { Model = "m", InputPerM = 3m, OutputPerM = 15m, CacheWritePerM = 3.75m, CacheWrite1hPerM = 6m, CacheReadPerM = 0.30m };
+        var usage = new TokenUsage(Input: 0, Output: 0, CacheWrite: 200_000, CacheRead: 0, CacheWrite1h: 500_000);
+
+        CostEstimator.Estimate(usage, rule).ShouldBe(0.75m + 3m);
+    }
 }

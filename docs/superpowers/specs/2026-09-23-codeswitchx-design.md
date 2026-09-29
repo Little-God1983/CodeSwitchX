@@ -233,9 +233,9 @@ through EF Core with WAL mode on and migrations applied at startup.
 | Track | Id, Name, SortOrder | Tile groups |
 | Session | Id (Claude session id), WorkspaceId, Title, State, StartedAt, LastEventAt, TranscriptPath, Model | One row per chat |
 | SessionEvent | Id, SessionId, Kind, ToolName, At, PayloadJson | Pruned after 14 days by default |
-| UsageBucket | SessionId, Model, MinuteUtc, Input, Output, CacheWrite, CacheRead | Composite key; source of all token figures |
+| UsageBucket | SessionId, Model, MinuteUtc, Input, Output, CacheWrite, CacheWrite1h, CacheRead | Composite key; source of all token figures |
 | TranscriptCursor | Path, ByteOffset, LastWriteUtc | Incremental tailing |
-| PricingRule | Model, InputPerM, OutputPerM, CacheWritePerM, CacheReadPerM, ContextWindow | User-editable |
+| PricingRule | Model, InputPerM, OutputPerM, CacheWritePerM, CacheWrite1hPerM, CacheReadPerM, ContextWindow | User-editable |
 | Setting | Key, ValueJson | Hotkeys, budgets, notification rules |
 
 Writes from the event stream go through a single background channel

@@ -73,4 +73,10 @@ public class PricingTableTests
         table.Find("claude-sonnet-5").InputPerM.ShouldBe(42);
         table.Find("claude-sonnet-5").ContextWindow.ShouldBe(500_000);
     }
+
+    [Fact]
+    public void Default_rules_price_a_one_hour_cache_write_at_twice_the_input()
+    {
+        DefaultPricing.Rules.ShouldAllBe(r => r.CacheWrite1hPerM == 2 * r.InputPerM);
+    }
 }

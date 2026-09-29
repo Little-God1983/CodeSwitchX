@@ -23,6 +23,7 @@ public sealed class SessionRecord
     public long ContextOutput { get; set; }
     public long ContextCacheWrite { get; set; }
     public long ContextCacheRead { get; set; }
+    public long ContextCacheWrite1h { get; set; }
 
     public static SessionRecord FromSnapshot(SessionSnapshot s)
     {
@@ -51,6 +52,7 @@ public sealed class SessionRecord
         ContextOutput = s.LatestContext.Output;
         ContextCacheWrite = s.LatestContext.CacheWrite;
         ContextCacheRead = s.LatestContext.CacheRead;
+        ContextCacheWrite1h = s.LatestContext.CacheWrite1h;
     }
 
     public SessionSnapshot ToSnapshot() => new()
@@ -70,6 +72,6 @@ public sealed class SessionRecord
         LastNotification = LastNotification,
         Inferred = Inferred,
         ClaudePid = ClaudePid,
-        LatestContext = new TokenUsage(ContextInput, ContextOutput, ContextCacheWrite, ContextCacheRead),
+        LatestContext = new TokenUsage(ContextInput, ContextOutput, ContextCacheWrite, ContextCacheRead, ContextCacheWrite1h),
     };
 }

@@ -11,5 +11,6 @@ public static class CostEstimator
         (usage.Input * rule.InputPerM
          + usage.Output * rule.OutputPerM
          + usage.CacheWrite * rule.CacheWritePerM
+         + usage.CacheWrite1h * rule.CacheWrite1hPerM
          + usage.CacheRead * rule.CacheReadPerM) / Million;
 }

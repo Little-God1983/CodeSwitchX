@@ -4,7 +4,8 @@ namespace CodeSwitchX.Telemetry;
 
 /// <summary>
 /// Shipped defaults in USD per million tokens (Anthropic list prices as of 2026-09; estimates the user can edit).
-/// Cache write is 1.25x input and cache read 0.10x input unless Anthropic publishes a different rate.
+/// A 5-minute cache write is 1.25x input, a 1-hour cache write 2x input, and a cache read 0.10x input unless Anthropic
+/// publishes a different rate.
 /// </summary>
 public static class DefaultPricing
 {
@@ -35,6 +36,7 @@ public static class DefaultPricing
         InputPerM = input,
         OutputPerM = output,
         CacheWritePerM = cacheWrite,
+        CacheWrite1hPerM = input * 2,
         CacheReadPerM = cacheRead,
         ContextWindow = context,
     };

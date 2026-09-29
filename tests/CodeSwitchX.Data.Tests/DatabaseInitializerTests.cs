@@ -233,4 +233,15 @@ public class DatabaseInitializerTests : IAsyncLifetime
             await stop.CancelAsync();
         }
     }
+
+    [Fact]
+    public async Task An_upgrade_prices_a_stored_rules_one_hour_cache_writes_at_twice_its_input()
+    {
+        await MigrateToAsync("20260928191609_CursorTitles");
+        await ExecuteAsync("""INSERT INTO "PricingRules" ("Model", "InputPerM", "OutputPerM", "CacheWritePerM", "CacheReadPerM", "ContextWindow") VALUES ('claude-sonnet-5', 3, 15, 3.75, 0.3, 200000);""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        (await ExecuteAsync("""SELECT "CacheWrite1hPerM" FROM "PricingRules" WHERE "Model" = 'claude-sonnet-5';""")).ShouldBe(6.0);
+    }
 }
