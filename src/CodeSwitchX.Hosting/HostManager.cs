@@ -27,6 +27,9 @@ public sealed class HostManager : IDisposable
     private readonly IDisposable _unregistered;
     private bool _released;
 
+    /// <summary>The window the Cab shows, or 0; written under the lock, read without it (see <see cref="IsShownInCab"/>).</summary>
+    private nint _shownInCab;
+
     public HostManager(IWindowEnumerator windows, IWindowDocker docker, IVsCodeLauncher launcher, IEventBus bus, TimeProvider time,
         ILogger<HostManager> logger, HostManagerOptions? options = null)
     {
@@ -40,6 +43,12 @@ public sealed class HostManager : IDisposable
         // An unregistered workspace must hand its window back to the desktop instead of staying hidden and tracked.
         _unregistered = _bus.Subscribe<WorkspaceUnregistered>(m => Forget(m.WorkspaceId));
     }
+
+    /// <summary>
+    /// The window the Cab shows has changed: the new one, or 0 for none. Raised under the host lock, on whatever thread
+    /// changed it, so a handler must hand the work on, not do it.
+    /// </summary>
+    public event Action<nint>? ShownInCabChanged;
 
     public IReadOnlyList<HostedWorkspace> All
     {
@@ -327,14 +336,17 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    /// <summary>Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it.</summary>
-    public void ShowInCab(Guid workspaceId, ScreenRect rect)
+    /// <summary>
+    /// Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it; with
+    /// <paramref name="focus"/> false it goes on top without taking the foreground (see <see cref="IWindowDocker.PlaceOnTop"/>).
+    /// </summary>
+    public void ShowInCab(Guid workspaceId, ScreenRect rect, bool focus = true)
     {
         lock (_gate)
         {
             if (_hosted.TryGetValue(workspaceId, out var target) && target.State == HostState.Running)
             {
-                ShowInCabLocked(target, rect);
+                ShowInCabLocked(target, rect, focus);
             }
         }
     }
@@ -365,7 +377,7 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect)
+    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect, bool focus = true)
     {
         foreach (var other in _hosted.Values.Where(h => h != target && h.State == HostState.Running && h.Visible))
         {
@@ -379,8 +391,17 @@ public sealed class HostManager : IDisposable
         // shown first it drew a frame there.
         _docker.MoveTo(target.Hwnd, rect);
         _docker.Uncloak(target.Hwnd);
-        _docker.BringToFront(target.Hwnd);
+        if (focus)
+        {
+            _docker.BringToFront(target.Hwnd);
+        }
+        else
+        {
+            _docker.PlaceOnTop(target.Hwnd);
+        }
+
         target.Visible = true;
+        PublishShownLocked();
     }
 
     public void HideAll()
@@ -392,6 +413,8 @@ public sealed class HostManager : IDisposable
                 _docker.Cloak(hosted.Hwnd);
                 hosted.Visible = false;
             }
+
+            PublishShownLocked();
         }
     }
 
@@ -410,6 +433,8 @@ public sealed class HostManager : IDisposable
                 hosted.Visible = true;
                 hosted.TargetRect = null;
             }
+
+            PublishShownLocked();
         }
     }
 
@@ -480,6 +505,29 @@ public sealed class HostManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// Called from the WinEvent watcher when a window is destroyed: a hosted one closed by the user is known at once, where
+    /// <see cref="PollLiveness"/> would find it only on its next round. The event is taken at its word: Windows sends it
+    /// while the destruction is still under way, and IsWindow, asked then, may still say yes.
+    /// </summary>
+    public void WindowDestroyed(nint hwnd)
+    {
+        lock (_gate)
+        {
+            foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && h.Hwnd == hwnd).ToList())
+            {
+                hosted.Visible = false;
+                Transition(hosted, HostState.Stopped, "VS Code window closed");
+            }
+        }
+    }
+
+    /// <summary>
+    /// True for the window the Cab shows right now. Lock-free, for the mouse hook: it holds every mouse event of the
+    /// desktop while it asks, and the lock is held across calls into VS Code.
+    /// </summary>
+    public bool IsShownInCab(nint hwnd) => hwnd != 0 && hwnd == Volatile.Read(ref _shownInCab);
+
     /// <summary>Stops tracking a workspace (e.g. it was unregistered); its window is handed back to the desktop visible.</summary>
     public void Forget(Guid workspaceId)
     {
@@ -489,6 +537,8 @@ public sealed class HostManager : IDisposable
             {
                 _docker.Uncloak(hosted.Hwnd);
             }
+
+            PublishShownLocked();
         }
     }
 
@@ -558,7 +608,19 @@ public sealed class HostManager : IDisposable
     {
         hosted.State = state;
         hosted.Error = error;
+        PublishShownLocked();
         _bus.Publish(new HostStateChanged(hosted.WorkspaceId, state, hosted.Hwnd, error));
+    }
+
+    /// <summary>Called after every change to what is Running, visible or docked.</summary>
+    private void PublishShownLocked()
+    {
+        var shown = _hosted.Values.FirstOrDefault(h => h.State == HostState.Running && h.Visible && h.TargetRect is not null)?.Hwnd ?? 0;
+        if (shown != _shownInCab)
+        {
+            Volatile.Write(ref _shownInCab, shown);
+            ShownInCabChanged?.Invoke(shown);
+        }
     }
 
     private sealed record Discovery(Task<HostedWorkspace> Task, string DisplayName);

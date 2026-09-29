@@ -43,6 +43,7 @@ public sealed partial class ShellViewModel : ObservableObject
         _logger = logger;
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
         Yard.TileRemoved += OnTileRemoved;
+        Yard.HostStopped += OnHostStopped;
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
@@ -94,6 +95,18 @@ public sealed partial class ShellViewModel : ObservableObject
         StatusMessage = null;
         Cab.Clear();
         if (Mode == ShellMode.Cab)
+        {
+            BackToYard();
+        }
+    }
+
+    /// <summary>
+    /// The VS Code the Cab shows was closed (its X button, File > Close Window): the Cab would stay empty, so the Yard is
+    /// shown. A workspace that is not active, or an open that never got a window, leaves the Cab alone.
+    /// </summary>
+    private void OnHostStopped(Guid workspaceId)
+    {
+        if (Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId)
         {
             BackToYard();
         }
@@ -246,11 +259,14 @@ public sealed partial class ShellViewModel : ObservableObject
     /// minimised, with a known Cab rectangle. The one place for that rule: an open that finishes, a restore, and an
     /// activation of the shell (which puts the shell above the docked VS Code) all come here.
     /// </summary>
-    public void RaiseHostedWindow()
+    public void RaiseHostedWindow() => RaiseHostedWindow(focus: true);
+
+    /// <param name="focus">False puts VS Code on top without the foreground: a click on the shell that activated it is still going on.</param>
+    public void RaiseHostedWindow(bool focus)
     {
         if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
         {
-            _host.ShowInCab(id, rect);
+            _host.ShowInCab(id, rect, focus);
         }
     }
 

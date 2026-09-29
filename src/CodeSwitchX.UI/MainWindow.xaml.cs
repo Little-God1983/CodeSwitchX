@@ -19,7 +19,9 @@ public partial class MainWindow : Window
     private readonly Func<AddWorkspaceViewModel> _addWorkspaceFactory;
     private readonly ILogger<WindowLocationWatcher> _watcherLogger;
     private WindowLocationWatcher? _locationWatcher;
+    private MouseBackButtonHook? _backButtonHook;
     private System.Windows.Threading.DispatcherTimer? _livenessTimer;
+    private System.Windows.Threading.DispatcherTimer? _focusOnRelease;
 
     public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, Func<AddWorkspaceViewModel> addWorkspaceFactory,
         ILogger<WindowLocationWatcher> watcherLogger)
@@ -74,6 +76,11 @@ public partial class MainWindow : Window
         _locationWatcher = new WindowLocationWatcher(_watcherLogger);
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);
         _locationWatcher.MoveSizeStarted += draggedHwnd => _host.RefuseMoveSize(draggedHwnd);
+        _locationWatcher.Destroyed += destroyedHwnd => _host.WindowDestroyed(destroyedHwnd);
+        _backButtonHook = new MouseBackButtonHook(_host.IsShownInCab,
+            () => Dispatcher.BeginInvoke(() => { if (_shell.Mode == ShellMode.Cab) { _shell.BackToYard(); } }), _watcherLogger);
+        // Only while the Cab shows a window: the rest of the time the hook would hold every mouse event for nothing.
+        _host.ShownInCabChanged += shownHwnd => _backButtonHook?.SetActive(shownHwnd != 0);
         _livenessTimer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(2), System.Windows.Threading.DispatcherPriority.Background,
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();
@@ -81,17 +88,52 @@ public partial class MainWindow : Window
         StateChanged += (_, _) => _shell.SetShellMinimized(WindowState == WindowState.Minimized);
     }
 
-    /// <summary>Activating the shell raises it above the docked VS Code window; put VS Code back on top while in Cab mode.</summary>
+    /// <summary>
+    /// Activating the shell raises it above the docked VS Code window; put VS Code back on top while in Cab mode. A click
+    /// that activated the shell must keep the foreground until it is released: VS Code, given the foreground while the
+    /// button was still down, took the mouse from the shell's button, which then never clicked (← Yard did nothing while
+    /// VS Code had the focus). So VS Code goes back on top at once without the foreground, and takes it on the release,
+    /// unless the click left the Cab. A drag of the shell's title bar is such a click too.
+    /// </summary>
     private void OnActivated(object? sender, EventArgs e)
     {
-        // Let the click that activated us finish first (e.g. a pip button), then put VS Code back on top.
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, _shell.RaiseHostedWindow);
+        if (!WindowActivation.AnyMouseButtonDown())
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => _shell.RaiseHostedWindow());
+            return;
+        }
+
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => _shell.RaiseHostedWindow(focus: false));
+        if (_focusOnRelease is null)
+        {
+            _focusOnRelease = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background, Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(30),
+            };
+            _focusOnRelease.Tick += FocusOnRelease;
+        }
+
+        _focusOnRelease.Start();
+    }
+
+    /// <summary>Background priority: the release's own click, queued as input, has run by the time this does.</summary>
+    private void FocusOnRelease(object? sender, EventArgs e)
+    {
+        if (WindowActivation.AnyMouseButtonDown())
+        {
+            return;
+        }
+
+        _focusOnRelease!.Stop();
+        _shell.RaiseHostedWindow();
     }
 
     protected override void OnClosed(EventArgs e)
     {
         _livenessTimer?.Stop();
+        _focusOnRelease?.Stop();
         _locationWatcher?.Dispose();
+        _backButtonHook?.Dispose();
         _hotkeys.Detach();
         _tray.Detach();
         // DWM cloaking outlives this process: give every hosted VS Code window back to the desktop.

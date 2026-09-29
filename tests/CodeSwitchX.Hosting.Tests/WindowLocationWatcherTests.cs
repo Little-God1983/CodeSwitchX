@@ -36,7 +36,7 @@ public class WindowLocationWatcherTests
             return eventId == PInvoke.EVENT_OBJECT_LOCATIONCHANGE ? new HWINEVENTHOOK(1) : default;
         }, unhook: unhooked.Add);
 
-        hooked.ShouldBe([PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_SYSTEM_MOVESIZESTART]);
+        hooked.ShouldBe([PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_SYSTEM_MOVESIZESTART, PInvoke.EVENT_OBJECT_DESTROY]);
         watcher.IsHooked.ShouldBeTrue();
         log.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("drag") && e.Message.Contains("snap-back"),
             "nothing else says that drags are not refused and fight the snap-back");
@@ -52,16 +52,21 @@ public class WindowLocationWatcherTests
         using var watcher = new WindowLocationWatcher(null, setHook: (_, cb) => { callback = cb; return new HWINEVENTHOOK(1); }, unhook: _ => { });
         var moved = new List<nint>();
         var started = new List<nint>();
+        var destroyed = new List<nint>();
         watcher.Moved += moved.Add;
         watcher.MoveSizeStarted += started.Add;
+        watcher.Destroyed += destroyed.Add;
 
         callback!(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, new HWND(500), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_SYSTEM_MOVESIZESTART, new HWND(600), 0, 0, 0, 0);
+        callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_DESTROY, new HWND(650), 0, 0, 0, 0);
+        callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_DESTROY, new HWND(660), idObject: 0, idChild: 3, 0, 0);
         callback(new HWINEVENTHOOK(1), SomeOtherEvent, new HWND(700), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, new HWND(800), idObject: -4 /* OBJID_CARET */, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, HWND.Null, 0, 0, 0, 0);
 
         moved.ShouldBe([500]);
         started.ShouldBe([600]);
+        destroyed.ShouldBe([650], "an element inside a window is not the window");
     }
 }

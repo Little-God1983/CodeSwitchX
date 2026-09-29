@@ -70,6 +70,37 @@ public class SnapWindowDockerTests
         (shown.Left, shown.Top, shown.Right, shown.Bottom).ShouldBe((rect.Left, rect.Top, rect.Right, rect.Bottom));
     }
 
+    [Fact]
+    public void A_maximized_window_is_moved_out_of_its_maximized_state_into_the_rect()
+    {
+        // A VS Code window the user had maximized stayed maximized when moved: Windows laid it over the whole monitor, the
+        // shell's Yard button included, and the snap-back only moved it again, still maximized.
+        // Not a tool window, as VS Code's is not: its restore rectangle is in workspace coordinates.
+        using var window = new ProbeWindow(minimizedAndHidden: false, maximized: true, toolWindow: false);
+        IsZoomed(window.Hwnd).ShouldBeTrue();
+        var docker = new SnapWindowDocker();
+        var rect = ScreenRect.FromSize(10, 20, 300, 200);
+
+        docker.MoveTo(window.Hwnd, rect);
+        ProbeWindow.Pump();
+
+        IsZoomed(window.Hwnd).ShouldBeFalse();
+        IsWindowVisible(window.Hwnd).ShouldBeTrue();
+        GetWindowRect(window.Hwnd, out var shown);
+        (shown.Left, shown.Top, shown.Right, shown.Bottom).ShouldBe((rect.Left, rect.Top, rect.Right, rect.Bottom));
+    }
+
+    [Fact]
+    public void The_restore_rectangle_of_a_window_is_given_relative_to_the_work_area()
+    {
+        // A taskbar on the left 48 px wide and one at the top 40 px high: the work area starts that far in.
+        var rect = ScreenRect.FromSize(100, 128, 1600, 900);
+
+        SnapWindowDocker.ToWorkspace(rect, (48, 0)).ShouldBe(ScreenRect.FromSize(52, 128, 1600, 900));
+        SnapWindowDocker.ToWorkspace(rect, (0, 40)).ShouldBe(ScreenRect.FromSize(100, 88, 1600, 900));
+        SnapWindowDocker.ToWorkspace(rect, (0, 0)).ShouldBe(rect);
+    }
+
     /// <summary>
     /// A window on its own thread, which pumps its messages all the time like a VS Code that is not stalled: a move of a
     /// minimized window sends to that thread synchronously. <see cref="Pump"/> gives the thread time for what was posted.
@@ -84,7 +115,8 @@ public class SnapWindowDockerTests
         private volatile bool _closing;
 
         /// <param name="paused">Created with its pump held: nothing sent or posted to it is processed until <see cref="Resume"/>.</param>
-        public ProbeWindow(bool minimizedAndHidden, bool paused = false)
+        /// <param name="toolWindow">Kept off the taskbar; false for the placement VS Code's own windows get.</param>
+        public ProbeWindow(bool minimizedAndHidden, bool paused = false, bool maximized = false, bool toolWindow = true)
         {
             _subclass = OnMessage;
             if (paused)
@@ -95,9 +127,14 @@ public class SnapWindowDockerTests
             using var created = new ManualResetEventSlim();
             _owner = new Thread(() =>
             {
-                Hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
+                Hwnd = CreateWindowExW((toolWindow ? WS_EX_TOOLWINDOW : 0) | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
                     -20000, -20000, 200, 100, 0, 0, 0, 0);
                 _originalProc = SetWindowLongPtrW(Hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_subclass));
+                if (maximized)
+                {
+                    ShowWindow(Hwnd, SW_MAXIMIZE);
+                }
+
                 if (minimizedAndHidden)
                 {
                     ShowWindow(Hwnd, SW_MINIMIZE);
@@ -213,6 +250,7 @@ public class SnapWindowDockerTests
     private const uint PM_REMOVE = 0x0001;
     private const int SW_HIDE = 0;
     private const int SW_MINIMIZE = 6;
+    private const int SW_MAXIMIZE = 3;
     private const int GWLP_WNDPROC = -4;
     private const uint WM_CANCELMODE = 0x001F;
 
@@ -254,6 +292,10 @@ public class SnapWindowDockerTests
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsIconic(nint hwnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsZoomed(nint hwnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
