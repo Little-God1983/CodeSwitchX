@@ -207,6 +207,23 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task A_raise_without_focus_puts_vscode_on_top_and_leaves_the_foreground_to_the_shell()
+    {
+        // Taking the foreground while the click that activated the shell was still down took the mouse from the shell's
+        // button, which then never clicked: the ← Yard button did nothing while VS Code had the focus.
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Docker.ClearReceivedCalls();
+
+        _h.Shell.RaiseHostedWindow(focus: false);
+
+        _h.Docker.Received(1).PlaceOnTop(500);
+        _h.Docker.DidNotReceive().BringToFront(Arg.Any<nint>());
+    }
+
+    [Fact]
     public async Task Switching_inside_the_cab_to_a_workspace_that_still_has_to_start_hides_the_one_shown_so_far()
     {
         var shop = AddShopWithItsWindowOpen();
@@ -254,6 +271,40 @@ public class ShellViewModelTests
         _h.Shell.ActiveWorkspaceId.ShouldBeNull("Ctrl+Alt+Y would otherwise bring the shell forward and do nothing");
         _h.Shell.Cab.ActiveTile.ShouldBeNull();
         _h.Shell.Cab.Pips.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Closing_the_vscode_window_shown_in_the_cab_returns_to_the_yard()
+    {
+        // Closed by its X button, VS Code left an empty Cab behind, and the user had to find the way back themselves.
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Docker.IsAlive(500).Returns(false);
+        _h.Host.WindowDestroyed(500);
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+    }
+
+    [Fact]
+    public async Task A_vscode_window_that_closes_while_the_cab_shows_another_workspace_leaves_the_cab_alone()
+    {
+        var shop = new Workspace { Name = "Shop", RootPath = @"c:\repo\shop", TrackId = _h.General.Id };
+        _h.Workspaces.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_h.App, shop]));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
+        await _h.Shell.EnterCabAsync(shop.Id);
+
+        _h.Docker.IsAlive(500).Returns(false);
+        _h.Host.WindowDestroyed(500);
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.ActiveWorkspaceId.ShouldBe(shop.Id);
     }
 
     [Fact]

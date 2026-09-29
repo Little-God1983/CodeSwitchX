@@ -327,14 +327,17 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    /// <summary>Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it.</summary>
-    public void ShowInCab(Guid workspaceId, ScreenRect rect)
+    /// <summary>
+    /// Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it; with
+    /// <paramref name="focus"/> false it goes on top without taking the foreground (see <see cref="IWindowDocker.PlaceOnTop"/>).
+    /// </summary>
+    public void ShowInCab(Guid workspaceId, ScreenRect rect, bool focus = true)
     {
         lock (_gate)
         {
             if (_hosted.TryGetValue(workspaceId, out var target) && target.State == HostState.Running)
             {
-                ShowInCabLocked(target, rect);
+                ShowInCabLocked(target, rect, focus);
             }
         }
     }
@@ -365,7 +368,7 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect)
+    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect, bool focus = true)
     {
         foreach (var other in _hosted.Values.Where(h => h != target && h.State == HostState.Running && h.Visible))
         {
@@ -379,7 +382,15 @@ public sealed class HostManager : IDisposable
         // shown first it drew a frame there.
         _docker.MoveTo(target.Hwnd, rect);
         _docker.Uncloak(target.Hwnd);
-        _docker.BringToFront(target.Hwnd);
+        if (focus)
+        {
+            _docker.BringToFront(target.Hwnd);
+        }
+        else
+        {
+            _docker.PlaceOnTop(target.Hwnd);
+        }
+
         target.Visible = true;
     }
 
@@ -477,6 +488,30 @@ public sealed class HostManager : IDisposable
                 hosted.Visible = false;
                 Transition(hosted, HostState.Stopped, "VS Code window closed");
             }
+        }
+    }
+
+    /// <summary>
+    /// Called from the WinEvent watcher when a window is destroyed: a hosted one closed by the user is known at once, where
+    /// <see cref="PollLiveness"/> would find it only on its next round.
+    /// </summary>
+    public void WindowDestroyed(nint hwnd)
+    {
+        lock (_gate)
+        {
+            if (_hosted.Values.Any(h => h.State == HostState.Running && h.Hwnd == hwnd))
+            {
+                PollLiveness();
+            }
+        }
+    }
+
+    /// <summary>True for the window the Cab shows right now.</summary>
+    public bool IsShownInCab(nint hwnd)
+    {
+        lock (_gate)
+        {
+            return DockedLocked(hwnd) is not null;
         }
     }
 

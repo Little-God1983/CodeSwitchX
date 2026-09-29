@@ -7,7 +7,7 @@ namespace CodeSwitchX.Hosting.Win32;
 
 /// <summary>
 /// Raises <see cref="Moved"/> when any top-level window moves or resizes, and <see cref="MoveSizeStarted"/> when the
-/// user starts to drag or resize one by its frame. Create and dispose on a thread with a message loop (the WPF UI
+/// user starts to drag or resize one by its frame, and <see cref="Destroyed"/> when one is destroyed. Create and dispose on a thread with a message loop (the WPF UI
 /// thread): out-of-context WinEvent callbacks arrive through that loop.
 /// </summary>
 public sealed class WindowLocationWatcher : IDisposable
@@ -17,6 +17,7 @@ public sealed class WindowLocationWatcher : IDisposable
     private readonly Action<HWINEVENTHOOK> _unhook;
     private readonly HWINEVENTHOOK _locationHook;
     private readonly HWINEVENTHOOK _moveSizeHook;
+    private readonly HWINEVENTHOOK _destroyHook;
 
     public WindowLocationWatcher(ILogger<WindowLocationWatcher>? logger = null)
         : this(logger,
@@ -43,6 +44,12 @@ public sealed class WindowLocationWatcher : IDisposable
         {
             logger?.LogWarning("SetWinEventHook was refused; drags of a docked VS Code window are not refused and fight the snap-back");
         }
+
+        _destroyHook = setHook(PInvoke.EVENT_OBJECT_DESTROY, _callback);
+        if (_destroyHook == default)
+        {
+            logger?.LogWarning("SetWinEventHook was refused; a closed VS Code window is noticed only by the liveness poll");
+        }
     }
 
     /// <summary>False when Windows refused the location hook: <see cref="Moved"/> never fires then.</summary>
@@ -52,6 +59,9 @@ public sealed class WindowLocationWatcher : IDisposable
 
     /// <summary>The user has pressed a window's frame to drag or resize it; Windows' move loop has begun and moved nothing yet.</summary>
     public event Action<nint>? MoveSizeStarted;
+
+    /// <summary>A window was destroyed; by the time this runs, the handle names no window any more.</summary>
+    public event Action<nint>? Destroyed;
 
     private unsafe void OnWinEvent(HWINEVENTHOOK hook, uint eventId, HWND hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime)
     {
@@ -68,6 +78,10 @@ public sealed class WindowLocationWatcher : IDisposable
         {
             Moved?.Invoke((nint)hwnd.Value);
         }
+        else if (eventId == PInvoke.EVENT_OBJECT_DESTROY)
+        {
+            Destroyed?.Invoke((nint)hwnd.Value);
+        }
     }
 
     public void Dispose()
@@ -80,6 +94,11 @@ public sealed class WindowLocationWatcher : IDisposable
         if (_moveSizeHook != default)
         {
             _unhook(_moveSizeHook);
+        }
+
+        if (_destroyHook != default)
+        {
+            _unhook(_destroyHook);
         }
     }
 }

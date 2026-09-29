@@ -35,3 +35,16 @@ DWM_TNP_OPACITY
 DWM_TNP_SOURCECLIENTAREAONLY
 HWND_TOP
 GetForegroundWindow
+EVENT_OBJECT_DESTROY
+SetWindowsHookEx
+UnhookWindowsHookEx
+CallNextHookEx
+GetMessage
+PostThreadMessage
+GetCurrentThreadId
+GetModuleHandle
+WindowFromPoint
+MSLLHOOKSTRUCT
+WM_XBUTTONDOWN
+WM_XBUTTONUP
+WM_QUIT

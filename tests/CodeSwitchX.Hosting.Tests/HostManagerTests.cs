@@ -136,6 +136,38 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task A_hosted_window_that_Windows_reports_destroyed_stops_its_workspace_at_once()
+    {
+        // The liveness poll comes every 2 s; closed by its X button, the Cab stayed empty that long before the shell could react.
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        _manager.WindowDestroyed(999);
+        _manager.Get(_workspace.Id)!.State.ShouldBe(HostState.Running, "another window was destroyed");
+
+        _docker.IsAlive(500).Returns(false);
+        _manager.WindowDestroyed(500);
+
+        _manager.Get(_workspace.Id)!.State.ShouldBe(HostState.Stopped);
+        _changes[^1].Error.ShouldBe("VS Code window closed");
+    }
+
+    [Fact]
+    public async Task Only_the_window_shown_in_the_cab_counts_as_shown_there()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        _manager.IsShownInCab(500).ShouldBeFalse("discovered, but not shown yet");
+
+        _manager.ShowInCab(_workspace.Id, ScreenRect.FromSize(0, 28, 1600, 900));
+        _manager.IsShownInCab(500).ShouldBeTrue();
+        _manager.IsShownInCab(999).ShouldBeFalse();
+
+        _manager.HideAll();
+        _manager.IsShownInCab(500).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Open_cloaks_the_discovered_window_until_it_is_shown_in_the_cab()
     {
         WindowAppearsAfterLaunch();

@@ -75,6 +75,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>A tile left the board (its workspace was unregistered): the Cab cannot show it any more.</summary>
     public event Action<Guid>? TileRemoved;
 
+    /// <summary>A tile's VS Code window, open until now, is gone: closed by the user, or taken over by another folder.</summary>
+    public event Action<Guid>? HostStopped;
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         var tracks = await _store.GetTracksAsync(ct);
@@ -290,9 +293,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     internal void Apply(HostStateChanged change)
     {
         var tile = FindTile(change.WorkspaceId);
-        if (tile is not null)
+        if (tile is null)
         {
-            tile.HostState = change.State;
+            return;
+        }
+
+        var wasRunning = tile.HostState == HostState.Running;
+        tile.HostState = change.State;
+        if (wasRunning && change.State == HostState.Stopped)
+        {
+            HostStopped?.Invoke(change.WorkspaceId);
         }
     }
 

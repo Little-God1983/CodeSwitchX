@@ -10,6 +10,9 @@ public interface IWindowDocker
     void Uncloak(nint hwnd);
     void BringToFront(nint hwnd);
 
+    /// <summary>Puts the window above the others without activating it: the window in the foreground keeps the keyboard and the mouse.</summary>
+    void PlaceOnTop(nint hwnd);
+
     /// <summary>
     /// Ends the drag or resize the user has started on the window's frame, before it has moved anything, without
     /// waiting for the window's thread. Nothing happens when the window is not in a drag or resize any more.
