@@ -671,32 +671,7 @@ public class HostManagerTests
     }
 
     [Fact]
-    public async Task SnapBack_keeps_following_while_the_user_holds_a_drag_still()
-    {
-        // With the mouse held still, the move loop puts the window back under the cursor after every snap: the same
-        // place again and again, as a tiling window manager would, but it is the user, and the last snap-back must win.
-        var (manager, _) = ManagerWithFakeTime();
-        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
-        await manager.OpenAsync(_workspace, CancellationToken.None);
-        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
-        manager.ShowInCab(_workspace.Id, cab);
-        _docker.GetRect(700).Returns(ScreenRect.FromSize(300, 200, 1600, 900));
-        _docker.IsPrimaryButtonDown().Returns(true);
-        _docker.ClearReceivedCalls();
-
-        for (var i = 0; i < 20; i++)
-        {
-            manager.SnapBack(700);
-        }
-
-        _docker.IsPrimaryButtonDown().Returns(false);
-        manager.SnapBack(700);
-
-        _docker.Received(21).MoveTo(700, cab);
-    }
-
-    [Fact]
-    public async Task SnapBack_follows_a_drag_and_a_window_moved_away_now_and_then()
+    public async Task SnapBack_follows_a_window_moved_to_new_places_and_one_moved_away_now_and_then()
     {
         var (manager, time) = ManagerWithFakeTime();
         _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
@@ -719,6 +694,43 @@ public class HostManagerTests
         }
 
         _docker.Received(40).MoveTo(700, cab);
+    }
+
+    [Fact]
+    public async Task A_drag_of_a_docked_window_by_its_frame_is_refused_before_it_moves()
+    {
+        // Snapping the window back after each step of a drag fought Windows' move loop: the window flipped between the
+        // cursor and the Cab at every mouse move. The loop is ended as it starts instead, so the window never leaves.
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
+        _manager.ShowInCab(_workspace.Id, cab);
+        _docker.ClearReceivedCalls();
+
+        _manager.RefuseMoveSize(500);
+
+        _docker.Received(1).CancelMoveSize(500);
+    }
+
+    [Fact]
+    public async Task A_drag_of_a_window_that_is_not_docked_is_left_alone()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
+        _manager.ShowInCab(_workspace.Id, cab);
+
+        _manager.RefuseMoveSize(999);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
+
+        _manager.HideAll();
+        _manager.RefuseMoveSize(500);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
+
+        _manager.ShowInCab(_workspace.Id, cab);
+        _manager.ReleaseAll();
+        _manager.RefuseMoveSize(500);
+        _docker.DidNotReceive().CancelMoveSize(Arg.Any<nint>());
     }
 
     private (HostManager Manager, FakeTimeProvider Time) ManagerWithFakeTime()

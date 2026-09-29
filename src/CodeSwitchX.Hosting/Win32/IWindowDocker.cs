@@ -9,6 +9,12 @@ public interface IWindowDocker
     /// <summary>Show a hidden window again without activating it.</summary>
     void Uncloak(nint hwnd);
     void BringToFront(nint hwnd);
+
+    /// <summary>
+    /// Ends the drag or resize the user has started on the window's frame, before it has moved anything, without
+    /// waiting for the window's thread. Nothing happens when the window is not in a drag or resize any more.
+    /// </summary>
+    void CancelMoveSize(nint hwnd);
     bool IsAlive(nint hwnd);
 
     /// <summary>
@@ -16,8 +22,5 @@ public interface IWindowDocker
     /// windows of an elevated one (UIPI).
     /// </summary>
     bool IsOutOfReach(nint hwnd);
-
-    /// <summary>True while the user holds the primary mouse button, as in a drag.</summary>
-    bool IsPrimaryButtonDown();
     ScreenRect? GetRect(nint hwnd);
 }

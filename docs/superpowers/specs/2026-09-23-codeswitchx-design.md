@@ -133,7 +133,7 @@ reparenting is rejected.
 ### Snap hosting details
 
 - **Window discovery:** start the process with the user's normal profile (a separate `--user-data-dir` would lose their settings), then match new top-level `Chrome_WidgetWin_1` windows owned by `Code.exe` whose title contains the workspace folder name; confirm through the CodeSwitchX Link extension handshake when the extension is installed
-- **Positioning:** `SetWindowPos` on Cab resize and move; a `WinEventHook` on `EVENT_OBJECT_LOCATIONCHANGE` snaps the window back if the user drags it
+- **Positioning:** `SetWindowPos` on Cab resize and move; a `WinEventHook` on `EVENT_SYSTEM_MOVESIZESTART` ends a drag or resize by the frame with `WM_CANCELMODE` before it moves anything, and one on `EVENT_OBJECT_LOCATIONCHANGE` snaps the window back if something else moves it
 - **Hiding:** `DwmSetWindowAttribute(DWMWA_CLOAK)` keeps the window alive and fast to restore, and avoids taskbar flicker
 - **Thumbnails:** DWM thumbnails (`DwmRegisterThumbnail`) render live, GPU-composited previews on tiles at almost no cost; cloaked windows may not update, so fall back to a last-frame capture taken just before cloaking
 

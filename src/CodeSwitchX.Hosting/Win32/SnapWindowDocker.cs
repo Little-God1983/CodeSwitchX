@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.WindowsAndMessaging;
@@ -13,8 +14,21 @@ namespace CodeSwitchX.Hosting.Win32;
 public sealed class SnapWindowDocker : IWindowDocker
 {
     private const int ErrorAccessDenied = 5;
-    private const int VkLButton = 0x01;
-    private const int VkRButton = 0x02;
+
+    private readonly ILogger<SnapWindowDocker>? _logger;
+    private readonly Func<nint, bool> _isInMoveLoop;
+
+    public SnapWindowDocker(ILogger<SnapWindowDocker>? logger = null)
+        : this(logger, IsInMoveLoop)
+    {
+    }
+
+    /// <param name="isInMoveLoop">Whether the window is being dragged or resized right now; the real check in production, a fixed answer in tests.</param>
+    internal SnapWindowDocker(ILogger<SnapWindowDocker>? logger, Func<nint, bool> isInMoveLoop)
+    {
+        _logger = logger;
+        _isInMoveLoop = isInMoveLoop;
+    }
 
     public void MoveTo(nint hwnd, ScreenRect rect)
     {
@@ -65,6 +79,39 @@ public sealed class SnapWindowDocker : IWindowDocker
         PInvoke.SetForegroundWindow(h);
     }
 
+    /// <summary>
+    /// A drag or resize by the frame runs in Windows' modal move loop, inside the window's own thread, which holds the
+    /// mouse capture for as long as it lasts. WM_CANCELMODE makes DefWindowProc release that capture, and the loop ends
+    /// where it is: at its start, before it has moved anything. Delivered as a notification: a stalled VS Code would
+    /// otherwise hold the WPF thread, in a WinEvent callback.
+    /// </summary>
+    public void CancelMoveSize(nint hwnd)
+    {
+        // The event that asks for this was queued to the WPF thread. A click on the title bar starts and ends its loop
+        // within the time a busy shell takes to get here, and a cancel sent then would end whatever the user does next
+        // in the editor: a text selection, a tab drag. Only a loop still running is ended.
+        if (!_isInMoveLoop(hwnd))
+        {
+            return;
+        }
+
+        if (!PInvoke.SendNotifyMessage(new HWND(hwnd), PInvoke.WM_CANCELMODE, default, default))
+        {
+            // Nothing else would say why a drag went ahead and fought the snap-back.
+            _logger?.LogWarning("Windows refused to end the drag of window {Hwnd} (error {Error}); it is snapped back instead", hwnd, Marshal.GetLastPInvokeError());
+        }
+    }
+
+    /// <summary>Windows' move loop runs on the thread of the window it moves, and that thread's GUI state names the window while it does.</summary>
+    private static bool IsInMoveLoop(nint hwnd)
+    {
+        var h = new HWND(hwnd);
+        var thread = PInvoke.GetWindowThreadProcessId(h, out _);
+        var info = new GUITHREADINFO { cbSize = (uint)Marshal.SizeOf<GUITHREADINFO>() };
+        return thread != 0 && PInvoke.GetGUIThreadInfo(thread, ref info)
+            && (info.flags & GUITHREADINFO_FLAGS.GUI_INMOVESIZE) != 0 && info.hwndMoveSize == h;
+    }
+
     public bool IsAlive(nint hwnd) => PInvoke.IsWindow(new HWND(hwnd));
 
     /// <summary>
@@ -83,10 +130,6 @@ public sealed class SnapWindowDocker : IWindowDocker
 
         return Marshal.GetLastPInvokeError() == ErrorAccessDenied;
     }
-
-    /// <summary>GetAsyncKeyState reads the physical buttons: with the buttons swapped, the primary one is the right one.</summary>
-    public bool IsPrimaryButtonDown() =>
-        PInvoke.GetAsyncKeyState(PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_SWAPBUTTON) != 0 ? VkRButton : VkLButton) < 0;
 
     public ScreenRect? GetRect(nint hwnd)
     {
