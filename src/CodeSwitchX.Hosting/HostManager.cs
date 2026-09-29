@@ -311,7 +311,9 @@ public sealed class HostManager : IDisposable
             hosted.Hwnd = window.Hwnd;
             hosted.ProcessId = window.ProcessId;
             hosted.StartedAt = DateTimeOffset.UtcNow;
-            hosted.Visible = false;
+            // A window adopted as it is on the desktop is visible, so HideAll and another tile's ShowInCab hide it; before,
+            // it stayed on the desktop until its own tile had shown it once.
+            hosted.Visible = !hide && window.IsVisible;
             hosted.TargetRect = null;
             if (hide)
             {
@@ -371,8 +373,10 @@ public sealed class HostManager : IDisposable
 
         target.TargetRect = rect;
         target.ResetSnapBack();
-        _docker.Uncloak(target.Hwnd);
+        // Moved before it is shown: a fresh window is hidden where VS Code opened it, possibly on another monitor, and
+        // shown first it drew a frame there.
         _docker.MoveTo(target.Hwnd, rect);
+        _docker.Uncloak(target.Hwnd);
         _docker.BringToFront(target.Hwnd);
         target.Visible = true;
     }

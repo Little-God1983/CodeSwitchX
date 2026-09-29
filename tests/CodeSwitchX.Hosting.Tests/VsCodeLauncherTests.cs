@@ -62,4 +62,52 @@ public class VsCodeLauncherTests
         file.Started.ShouldBeFalse();
         file.Error.ShouldNotBeNull().ShouldContain(missing + ".code-workspace");
     }
+
+    [Fact]
+    public void An_override_that_is_not_Code_exe_is_refused_with_the_reason_instead_of_a_timeout_at_every_open()
+    {
+        // Insiders ("Code - Insiders.exe") or VSCodium: the launch works, but windows are matched by the process name Code and
+        // a title that says Visual Studio Code, so every open timed out after 20 s without a word about why.
+        var dir = Directory.CreateTempSubdirectory("csx-launcher-");
+        try
+        {
+            var insiders = Path.Combine(dir.FullName, "Code - Insiders.exe");
+            File.WriteAllBytes(insiders, []);
+            var launcher = new VsCodeLauncher(executable: insiders);
+
+            var result = launcher.Launch(new Workspace { Name = "App", RootPath = AppContext.BaseDirectory });
+
+            result.Started.ShouldBeFalse();
+            result.Error.ShouldNotBeNull().ShouldContain("Code.exe");
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void VS_Code_installed_after_the_start_is_found_at_the_next_open()
+    {
+        // The executable was located once, when the singleton was built: VS Code installed while CodeSwitchX ran was "not found" until a restart.
+        var dir = Directory.CreateTempSubdirectory("csx-launcher-");
+        try
+        {
+            var code = Path.Combine(dir.FullName, "Code.exe");
+            var launcher = new VsCodeLauncher(locate: () => File.Exists(code) ? code : null);
+            var workspace = new Workspace { Name = "App", RootPath = AppContext.BaseDirectory };
+
+            launcher.Launch(workspace).Error.ShouldNotBeNull().ShouldContain(VsCodeLocator.OverrideVariable, Case.Sensitive, "not found before the install");
+            File.WriteAllBytes(code, []);
+
+            var result = launcher.Launch(workspace);
+
+            result.Started.ShouldBeFalse("an empty file is no program; what matters is that it was found and started");
+            result.Error.ShouldNotBeNull().ShouldNotContain(VsCodeLocator.OverrideVariable);
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
 }

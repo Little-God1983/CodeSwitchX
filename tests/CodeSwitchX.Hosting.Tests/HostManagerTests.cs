@@ -586,7 +586,7 @@ public class HostManagerTests
     [Fact]
     public void The_sweep_leaves_the_windows_of_another_running_instance_alone()
     {
-        // Until single-instance is enforced (L8), a second start must not show the windows the first one hides.
+        // A start that went on without the single-instance claim must not show the windows the running instance hides.
         _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code") { IsVisible = false }]);
 
         new HiddenWindowSweep(_manager, NullLogger<HiddenWindowSweep>.Instance, anotherInstanceRuns: () => true).StartAsync(CancellationToken.None);
@@ -725,6 +725,39 @@ public class HostManagerTests
     {
         var time = new FakeTimeProvider();
         return (new HostManager(_windows, _docker, _launcher, _bus, time, NullLogger<HostManager>.Instance), time);
+    }
+
+    [Fact]
+    public async Task An_adopted_window_that_is_on_the_desktop_is_hidden_when_the_cab_shows_another_tile()
+    {
+        // AutoStart adopting the windows the previous run released: they are visible, and HideAll left them on the desktop.
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")]);
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+        hosted.Visible.ShouldBeTrue("the window was adopted as it was: on the desktop");
+
+        _manager.HideAll();
+
+        _docker.Received(1).Cloak(700);
+        hosted.Visible.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ShowInCab_moves_the_window_into_the_cab_before_it_shows_it()
+    {
+        // A fresh window is hidden where VS Code opened it, possibly on another monitor: shown first, it drew a frame there.
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        _docker.ClearReceivedCalls();
+
+        _manager.ShowInCab(_workspace.Id, rect);
+
+        Received.InOrder(() =>
+        {
+            _docker.MoveTo(500, rect);
+            _docker.Uncloak(500);
+            _docker.BringToFront(500);
+        });
     }
 
     [Fact]

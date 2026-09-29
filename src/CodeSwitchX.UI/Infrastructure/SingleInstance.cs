@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
+using CodeSwitchX.Core;
 using CodeSwitchX.Ingest.Api;
 
 namespace CodeSwitchX.UI.Infrastructure;
@@ -127,23 +127,7 @@ public sealed class SingleInstance : IDisposable
         }
     }
 
-    private static List<int> RunningInThisSession()
-    {
-        using var self = Process.GetCurrentProcess();
-        var running = new List<int>();
-        foreach (var process in Process.GetProcessesByName(self.ProcessName))
-        {
-            using (process)
-            {
-                if (process.Id != self.Id && process.SessionId == self.SessionId)
-                {
-                    running.Add(process.Id);
-                }
-            }
-        }
-
-        return running;
-    }
+    private static IReadOnlyList<int> RunningInThisSession() => ProcessNamesakes.InThisSession();
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

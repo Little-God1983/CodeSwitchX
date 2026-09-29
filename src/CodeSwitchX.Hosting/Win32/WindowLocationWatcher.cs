@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.Accessibility;
@@ -14,12 +16,25 @@ public sealed class WindowLocationWatcher : IDisposable
     private readonly WINEVENTPROC _callback;
     private readonly HWINEVENTHOOK _hook;
 
-    public WindowLocationWatcher()
+    public WindowLocationWatcher(ILogger<WindowLocationWatcher>? logger = null)
+        : this(logger, callback => PInvoke.SetWinEventHook(PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_OBJECT_LOCATIONCHANGE,
+            HMODULE.Null, callback, 0, 0, PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS))
+    {
+    }
+
+    internal WindowLocationWatcher(ILogger? logger, Func<WINEVENTPROC, HWINEVENTHOOK> setHook)
     {
         _callback = OnWinEvent;
-        _hook = PInvoke.SetWinEventHook(PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_OBJECT_LOCATIONCHANGE,
-            HMODULE.Null, _callback, 0, 0, PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS);
+        _hook = setHook(_callback);
+        if (_hook == default)
+        {
+            // Nothing else would say why a window dragged out of the Cab is never put back.
+            logger?.LogWarning("SetWinEventHook failed (error {Error}); VS Code windows dragged out of the Cab are not snapped back", Marshal.GetLastSystemError());
+        }
     }
+
+    /// <summary>False when Windows refused the hook: <see cref="Moved"/> never fires then.</summary>
+    public bool IsHooked => _hook != default;
 
     public event Action<nint>? Moved;
 
