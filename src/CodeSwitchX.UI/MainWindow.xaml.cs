@@ -79,6 +79,8 @@ public partial class MainWindow : Window
         _locationWatcher.Destroyed += destroyedHwnd => _host.WindowDestroyed(destroyedHwnd);
         _backButtonHook = new MouseBackButtonHook(_host.IsShownInCab,
             () => Dispatcher.BeginInvoke(() => { if (_shell.Mode == ShellMode.Cab) { _shell.BackToYard(); } }), _watcherLogger);
+        // Only while the Cab shows a window: the rest of the time the hook would hold every mouse event for nothing.
+        _host.ShownInCabChanged += shownHwnd => _backButtonHook?.SetActive(shownHwnd != 0);
         _livenessTimer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(2), System.Windows.Threading.DispatcherPriority.Background,
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();

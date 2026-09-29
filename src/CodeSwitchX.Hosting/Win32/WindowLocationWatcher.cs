@@ -60,7 +60,10 @@ public sealed class WindowLocationWatcher : IDisposable
     /// <summary>The user has pressed a window's frame to drag or resize it; Windows' move loop has begun and moved nothing yet.</summary>
     public event Action<nint>? MoveSizeStarted;
 
-    /// <summary>A window was destroyed; by the time this runs, the handle names no window any more.</summary>
+    /// <summary>
+    /// A window is being destroyed. Windows sends this while the destruction is still under way, when IsWindow may still
+    /// say yes: take the event at its word and do not ask IsWindow.
+    /// </summary>
     public event Action<nint>? Destroyed;
 
     private unsafe void OnWinEvent(HWINEVENTHOOK hook, uint eventId, HWND hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime)

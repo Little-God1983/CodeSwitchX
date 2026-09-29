@@ -49,3 +49,9 @@ WM_XBUTTONDOWN
 WM_XBUTTONUP
 WM_QUIT
 IsZoomed
+PeekMessage
+WM_APP
+MonitorFromRect
+GetMonitorInfo
+GetWindowLong
+WINDOW_EX_STYLE

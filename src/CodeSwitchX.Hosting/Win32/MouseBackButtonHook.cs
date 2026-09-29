@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -17,10 +18,18 @@ internal enum BackButtonAction
 /// the click goes to VS Code, a window of another process. A low-level mouse hook sees every mouse event of the desktop
 /// and holds each one until it returns, so it runs on a thread of its own that does nothing else: on the WPF thread, a
 /// busy shell would stall the mouse everywhere.
+/// <para>
+/// Even there, every mouse event waits for this process, and a blocking garbage collection or a debugger break in it
+/// holds the cursor of the whole desktop; a proc that takes too long is also removed by Windows without a word. So the
+/// hook is in place only while the Cab shows a window (<see cref="SetActive"/>), and put in afresh each time.
+/// </para>
 /// </summary>
 public sealed class MouseBackButtonHook : IDisposable
 {
     private const uint XButton1 = 0x0001;
+    private const uint Install = PInvoke.WM_APP + 1;
+    private const uint Remove = PInvoke.WM_APP + 2;
+    private const uint RemoveOwed = PInvoke.WM_APP + 3;
 
     private readonly Func<nint, bool> _isShownInCab;
     private readonly Action _backPressed;
@@ -30,10 +39,17 @@ public sealed class MouseBackButtonHook : IDisposable
     private HOOKPROC? _proc;
     private uint _threadId;
 
-    /// <summary>Whether the press being taken still owes its release; touched on the hook's thread only.</summary>
+    // Touched on the hook's thread only.
+    private UnhookWindowsHookExSafeHandle? _hook;
+    private SafeHandle? _module;
+
+    /// <summary>Whether the press being taken still owes its release.</summary>
     private bool _releasePending;
 
-    /// <param name="isShownInCab">Whether the top-level window is the one the Cab shows; called on the hook's thread, and must be quick.</param>
+    /// <summary>The hook was asked out while a release was owed; it goes once that release is taken.</summary>
+    private bool _removeAfterRelease;
+
+    /// <param name="isShownInCab">Whether the top-level window is the one the Cab shows; called on the hook's thread, and must be quick and take no lock.</param>
     /// <param name="backPressed">Called on the hook's thread for a press that was taken; must hand the work on, not do it.</param>
     public MouseBackButtonHook(Func<nint, bool> isShownInCab, Action backPressed, ILogger? logger = null)
     {
@@ -43,6 +59,15 @@ public sealed class MouseBackButtonHook : IDisposable
         _thread = new Thread(Run) { IsBackground = true, Name = "CodeSwitchX back button hook" };
         _thread.Start();
         _started.Wait();
+    }
+
+    /// <summary>Puts the hook in place (afresh, if it was) or takes it out; any thread, and it returns at once.</summary>
+    public void SetActive(bool active)
+    {
+        if (_threadId != 0)
+        {
+            PInvoke.PostThreadMessage(_threadId, active ? Install : Remove, default, default);
+        }
     }
 
     /// <summary>
@@ -70,29 +95,69 @@ public sealed class MouseBackButtonHook : IDisposable
 
     private void Run()
     {
-        _threadId = PInvoke.GetCurrentThreadId();
         _proc = OnMouse;
         using var module = PInvoke.GetModuleHandle((string?)null);
-        using var hook = PInvoke.SetWindowsHookEx(WINDOWS_HOOK_ID.WH_MOUSE_LL, _proc, module, 0);
+        _module = module;
+        // The first PeekMessage-family call gives the thread its message queue, so no SetActive posted after this is lost.
+        PInvoke.PeekMessage(out _, HWND.Null, 0, 0, PEEK_MESSAGE_REMOVE_TYPE.PM_NOREMOVE);
+        _threadId = PInvoke.GetCurrentThreadId();
         _started.Set();
-        if (hook.IsInvalid)
+
+        // The hook is called from inside GetMessage; the loop ends with the WM_QUIT that Dispose posts.
+        while (PInvoke.GetMessage(out var message, HWND.Null, 0, 0) > 0)
+        {
+            if (message.message == Install)
+            {
+                Unhook();
+                Hook();
+            }
+            else if (message.message == Remove)
+            {
+                if (_releasePending)
+                {
+                    _removeAfterRelease = true;
+                }
+                else
+                {
+                    Unhook();
+                }
+            }
+            else if (message.message == RemoveOwed && _removeAfterRelease)
+            {
+                // Unless the hook was put in afresh meanwhile.
+                Unhook();
+            }
+        }
+
+        Unhook();
+    }
+
+    private void Hook()
+    {
+        _removeAfterRelease = false;
+        _hook = PInvoke.SetWindowsHookEx(WINDOWS_HOOK_ID.WH_MOUSE_LL, _proc, _module, 0);
+        if (_hook.IsInvalid)
         {
             // Nothing else would say why the back button does nothing over VS Code.
             _logger?.LogWarning("SetWindowsHookEx was refused; the mouse back button does not return to the Yard while VS Code is under the cursor");
-            return;
+            Unhook();
         }
+    }
 
-        // The hook is called from inside GetMessage; the loop ends with the WM_QUIT that Dispose posts.
-        while (PInvoke.GetMessage(out _, HWND.Null, 0, 0) > 0)
-        {
-        }
+    private void Unhook()
+    {
+        _hook?.Dispose();
+        _hook = null;
+        _releasePending = false;
+        _removeAfterRelease = false;
     }
 
     private unsafe LRESULT OnMouse(int code, WPARAM wParam, LPARAM lParam)
     {
         try
         {
-            if (code >= 0)
+            // Every other mouse event of the desktop goes on at once, before anything is allocated for it.
+            if (code >= 0 && (uint)wParam.Value is PInvoke.WM_XBUTTONDOWN or PInvoke.WM_XBUTTONUP)
             {
                 var info = (MSLLHOOKSTRUCT*)lParam.Value;
                 var point = info->pt;
@@ -100,6 +165,12 @@ public sealed class MouseBackButtonHook : IDisposable
                 if (action == BackButtonAction.GoBack)
                 {
                     _backPressed();
+                }
+
+                if (action == BackButtonAction.Swallow && _removeAfterRelease)
+                {
+                    // Taken out after this call returns: a hook removed from inside its own proc still finishes the call.
+                    PInvoke.PostThreadMessage(_threadId, RemoveOwed, default, default);
                 }
 
                 if (action != BackButtonAction.Pass)

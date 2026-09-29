@@ -168,6 +168,26 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task Each_change_of_the_window_shown_in_the_cab_is_announced_once()
+    {
+        // The mouse back button hook is in place only while this says a window is shown.
+        var announced = new List<nint>();
+        _manager.ShownInCabChanged += announced.Add;
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        _manager.ShowInCab(_workspace.Id, ScreenRect.FromSize(0, 28, 1600, 900));
+        _manager.Dock(_workspace.Id, ScreenRect.FromSize(0, 28, 1500, 900));
+        _manager.HideAll();
+        _manager.HideAll();
+        _manager.ShowInCab(_workspace.Id, ScreenRect.FromSize(0, 28, 1600, 900));
+        _manager.WindowDestroyed(500);
+
+        announced.ShouldBe([500, 0, 500, 0]);
+        _manager.IsShownInCab(500).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Open_cloaks_the_discovered_window_until_it_is_shown_in_the_cab()
     {
         WindowAppearsAfterLaunch();

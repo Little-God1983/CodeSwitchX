@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.Graphics.Gdi;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace CodeSwitchX.Hosting.Win32;
@@ -10,6 +11,13 @@ namespace CodeSwitchX.Hosting.Win32;
 /// Positions, hides and focuses foreign top-level windows without reparenting them. Every call that reaches into the
 /// other process's message loop is asynchronous (ShowWindowAsync, SWP_ASYNCWINDOWPOS): these run on the WPF thread
 /// under the host lock, and a stalled VS Code must not freeze the shell.
+/// <para>
+/// One exception: <see cref="MoveTo"/> of a minimized or maximized window calls SetWindowPlacement, which waits for
+/// VS Code, and a snap-back reaches it right after the user maximized the docked window (a double click on its title
+/// bar, Win+Up). VS Code has just handled that maximize, so it is answering; a VS Code that stalls in between holds the
+/// shell until it answers. Nothing else takes the window out of either state while moving it, and the mouse hook does
+/// not wait for the host lock, so the rest of the desktop is not held with it.
+/// </para>
 /// </summary>
 public sealed class SnapWindowDocker : IWindowDocker
 {
@@ -50,7 +58,8 @@ public sealed class SnapWindowDocker : IWindowDocker
             var visible = PInvoke.IsWindowVisible(h);
             if (PInvoke.GetWindowPlacement(h, ref placement))
             {
-                placement.rcNormalPosition = new RECT { left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom };
+                var normal = IsToolWindow(h) ? rect : ToWorkspace(rect, WorkAreaOffset(rect));
+                placement.rcNormalPosition = new RECT { left = normal.Left, top = normal.Top, right = normal.Right, bottom = normal.Bottom };
                 placement.showCmd = visible || !minimized ? SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE : SHOW_WINDOW_CMD.SW_HIDE;
                 placement.flags = 0;
                 PInvoke.SetWindowPlacement(h, in placement);
@@ -65,6 +74,28 @@ public sealed class SnapWindowDocker : IWindowDocker
         PInvoke.SetWindowPos(h, HWND.Null, rect.Left, rect.Top, rect.Width, rect.Height,
             SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS);
     }
+
+    /// <summary>
+    /// The placement's normal rectangle is in workspace coordinates for a window that is not a tool window, as VS Code's
+    /// are not: relative to the work area, so a taskbar at the top or on the left shifts it. Given in screen coordinates,
+    /// the window was restored that far off the Cab, and shown there, before the move after it landed.
+    /// </summary>
+    internal static ScreenRect ToWorkspace(ScreenRect rect, (int X, int Y) workAreaOffset) =>
+        new(rect.Left - workAreaOffset.X, rect.Top - workAreaOffset.Y, rect.Right - workAreaOffset.X, rect.Bottom - workAreaOffset.Y);
+
+    /// <summary>How far the work area of the monitor the rect lands on starts from that monitor's corner.</summary>
+    private static (int X, int Y) WorkAreaOffset(ScreenRect rect)
+    {
+        var monitor = PInvoke.MonitorFromRect(new RECT { left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom },
+            MONITOR_FROM_FLAGS.MONITOR_DEFAULTTONEAREST);
+        var info = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+        return PInvoke.GetMonitorInfo(monitor, ref info)
+            ? (info.rcWork.left - info.rcMonitor.left, info.rcWork.top - info.rcMonitor.top)
+            : (0, 0);
+    }
+
+    private static bool IsToolWindow(HWND h) =>
+        ((WINDOW_EX_STYLE)PInvoke.GetWindowLong(h, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE) & WINDOW_EX_STYLE.WS_EX_TOOLWINDOW) != 0;
 
     /// <summary>
     /// Hides the window. DWM cloaking (DWMWA_CLOAK) is refused with E_ACCESSDENIED for windows of other processes,

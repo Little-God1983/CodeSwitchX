@@ -75,7 +75,8 @@ public class SnapWindowDockerTests
     {
         // A VS Code window the user had maximized stayed maximized when moved: Windows laid it over the whole monitor, the
         // shell's Yard button included, and the snap-back only moved it again, still maximized.
-        using var window = new ProbeWindow(minimizedAndHidden: false, maximized: true);
+        // Not a tool window, as VS Code's is not: its restore rectangle is in workspace coordinates.
+        using var window = new ProbeWindow(minimizedAndHidden: false, maximized: true, toolWindow: false);
         IsZoomed(window.Hwnd).ShouldBeTrue();
         var docker = new SnapWindowDocker();
         var rect = ScreenRect.FromSize(10, 20, 300, 200);
@@ -87,6 +88,17 @@ public class SnapWindowDockerTests
         IsWindowVisible(window.Hwnd).ShouldBeTrue();
         GetWindowRect(window.Hwnd, out var shown);
         (shown.Left, shown.Top, shown.Right, shown.Bottom).ShouldBe((rect.Left, rect.Top, rect.Right, rect.Bottom));
+    }
+
+    [Fact]
+    public void The_restore_rectangle_of_a_window_is_given_relative_to_the_work_area()
+    {
+        // A taskbar on the left 48 px wide and one at the top 40 px high: the work area starts that far in.
+        var rect = ScreenRect.FromSize(100, 128, 1600, 900);
+
+        SnapWindowDocker.ToWorkspace(rect, (48, 0)).ShouldBe(ScreenRect.FromSize(52, 128, 1600, 900));
+        SnapWindowDocker.ToWorkspace(rect, (0, 40)).ShouldBe(ScreenRect.FromSize(100, 88, 1600, 900));
+        SnapWindowDocker.ToWorkspace(rect, (0, 0)).ShouldBe(rect);
     }
 
     /// <summary>
@@ -103,7 +115,8 @@ public class SnapWindowDockerTests
         private volatile bool _closing;
 
         /// <param name="paused">Created with its pump held: nothing sent or posted to it is processed until <see cref="Resume"/>.</param>
-        public ProbeWindow(bool minimizedAndHidden, bool paused = false, bool maximized = false)
+        /// <param name="toolWindow">Kept off the taskbar; false for the placement VS Code's own windows get.</param>
+        public ProbeWindow(bool minimizedAndHidden, bool paused = false, bool maximized = false, bool toolWindow = true)
         {
             _subclass = OnMessage;
             if (paused)
@@ -114,7 +127,7 @@ public class SnapWindowDockerTests
             using var created = new ManualResetEventSlim();
             _owner = new Thread(() =>
             {
-                Hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
+                Hwnd = CreateWindowExW((toolWindow ? WS_EX_TOOLWINDOW : 0) | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
                     -20000, -20000, 200, 100, 0, 0, 0, 0);
                 _originalProc = SetWindowLongPtrW(Hwnd, GWLP_WNDPROC, Marshal.GetFunctionPointerForDelegate(_subclass));
                 if (maximized)
