@@ -29,10 +29,6 @@ public sealed record EndpointDescriptor(
         }
     }
 
-    public void Write(string file)
-    {
-        var tmp = file + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(this, Options));
-        File.Move(tmp, file, overwrite: true);
-    }
+    /// <summary>Replaces the file in one step; a relay that still reads the old file is waited out (<see cref="AtomicFile"/>).</summary>
+    public void Write(string file) => AtomicFile.Replace(file, JsonSerializer.Serialize(this, Options), ".tmp");
 }

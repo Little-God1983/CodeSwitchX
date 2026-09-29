@@ -25,6 +25,12 @@ public sealed record SessionSnapshot
     /// <summary>Transcript ends with a tool call awaiting its result; drives the inferred Working-to-Waiting decay. Not persisted.</summary>
     public bool AwaitingToolResult { get; init; }
 
+    /// <summary>
+    /// While Waiting: the sub-agent whose prompt the chat waits for, null for the main agent. A tool use by another agent of
+    /// the chat does not end the Waiting. Not persisted; after a restart the first tool use ends it, as before.
+    /// </summary>
+    public string? WaitingAgentId { get; init; }
+
     /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
     public long Version { get; init; }
     public int? ClaudePid { get; init; }

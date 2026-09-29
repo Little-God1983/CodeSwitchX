@@ -128,6 +128,18 @@ public class EventApiServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_body_over_the_limit_is_refused_and_nothing_is_published()
+    {
+        using var client = Loopback();
+        var body = """{"event":"Stop","payload":{"session_id":"s1","hook_event_name":"Stop","big":""" + "\"" + new string('x', 1024 * 1024) + "\"}}";
+
+        var response = await client.SendAsync(Post(body, _token), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.RequestEntityTooLarge);
+        _received.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Stopping_removes_the_endpoint_file()
     {
         await _api.StopAsync(CancellationToken.None);

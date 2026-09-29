@@ -26,6 +26,10 @@ public sealed class SessionEngine : IDisposable
     private readonly IProcessProbe? _probe;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.Ordinal);
+
+    /// <summary>Per chat, the tool uses whose PreToolUse has no PostToolUse yet, oldest first: which agent a nameless prompt belongs to.</summary>
+    private readonly Dictionary<string, List<(string? Agent, string? ToolUseId)>> _openTools = new(StringComparer.Ordinal);
+    private const int OpenToolsKept = 32;
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _sweepTimer;
     private long _version;
@@ -123,10 +127,11 @@ public sealed class SessionEngine : IDisposable
             var s = previous ?? NewSession(e.SessionId, e.At);
 
             var state = s.State;
+            var signal = SignalOfLocked(e, s, out var waitingAgent);
             // idle_prompt reports a quiet minute. Activity within the quiet window means it raced the next prompt (each relay
             // may take up to a second to land) and describes the turn before, which has already ended.
-            var staleIdlePrompt = e.Signal == SessionSignal.IdlePrompt && e.At - s.LastEventAt < _options.InferredIdleAfter;
-            if (e.Signal is { } signal && !staleIdlePrompt && SessionStateMachine.TryNext(state, signal, out var next))
+            var staleIdlePrompt = signal == SessionSignal.IdlePrompt && e.At - s.LastEventAt < _options.InferredIdleAfter;
+            if (signal is { } known && !staleIdlePrompt && SessionStateMachine.TryNext(state, known, out var next))
             {
                 state = next;
             }
@@ -157,9 +162,96 @@ public sealed class SessionEngine : IDisposable
                 Inferred = false,
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
+                WaitingAgentId = state == SessionState.Waiting ? waitingAgent : null,
                 ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
             });
         }
+    }
+
+    /// <summary>
+    /// The signal an event carries once the chat's agents are told apart. Sub-agents run tools while the parent's turn goes on,
+    /// and while a parallel sub-agent's permission prompt waits, so a tool use ends a Waiting only when it comes from the
+    /// agent whose prompt the chat waits for; that agent's own stop ends it too, as the parent's turn goes on without it. The
+    /// chat's prompt, stop, end and idle prompt end it whoever waited. A PermissionRequest names its agent; the permission_prompt
+    /// Notification names none and is pinned on the agent of the latest tool use still open, or keeps the agent a
+    /// PermissionRequest named before it.
+    /// </summary>
+    private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s, out string? waitingAgent)
+    {
+        var open = TrackOpenToolsLocked(e);
+        waitingAgent = s.State == SessionState.Waiting ? s.WaitingAgentId : null;
+        if (e.Signal == SessionSignal.Notification)
+        {
+            waitingAgent = e.AgentId ?? (s.State == SessionState.Waiting ? s.WaitingAgentId : open.Count > 0 ? open[^1].Agent : null);
+            return e.Signal;
+        }
+
+        if (s.State != SessionState.Waiting)
+        {
+            return e.Signal;
+        }
+
+        if (e.Signal == SessionSignal.ToolUse && !string.Equals(e.AgentId, s.WaitingAgentId, StringComparison.Ordinal))
+        {
+            return null; // another agent of the chat: the prompt still waits
+        }
+
+        if (e.EventName == "SubagentStop" && s.WaitingAgentId is not null && s.WaitingAgentId == e.AgentId)
+        {
+            return SessionSignal.ToolUse; // the waiting agent stopped (its prompt denied): the parent's turn goes on
+        }
+
+        return e.Signal;
+    }
+
+    private List<(string? Agent, string? ToolUseId)> TrackOpenToolsLocked(HookEvent e)
+    {
+        if (!_openTools.TryGetValue(e.SessionId, out var open))
+        {
+            open = [];
+        }
+
+        switch (e.EventName)
+        {
+            case "PreToolUse":
+                open.Add((e.AgentId, e.ToolUseId));
+                if (open.Count > OpenToolsKept)
+                {
+                    open.RemoveAt(0);
+                }
+
+                break;
+            case "PostToolUse":
+                var index = open.FindLastIndex(t => t.ToolUseId is not null && t.ToolUseId == e.ToolUseId);
+                if (index < 0)
+                {
+                    index = open.FindLastIndex(t => t.Agent == e.AgentId);
+                }
+
+                if (index >= 0)
+                {
+                    open.RemoveAt(index);
+                }
+
+                break;
+            case "SubagentStop":
+                open.RemoveAll(t => t.Agent == e.AgentId);
+                break;
+            case "UserPromptSubmit" or "Stop" or "StopFailure" or "SessionEnd":
+                open.Clear();
+                break;
+        }
+
+        if (open.Count == 0)
+        {
+            _openTools.Remove(e.SessionId);
+        }
+        else
+        {
+            _openTools[e.SessionId] = open;
+        }
+
+        return open;
     }
 
     public void Apply(TranscriptUpdate u)

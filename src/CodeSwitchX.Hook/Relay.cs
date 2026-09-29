@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.IO.Pipes;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace CodeSwitchX.Hook;
 
@@ -11,7 +13,7 @@ namespace CodeSwitchX.Hook;
 /// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
 /// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
-internal static class Relay
+internal static partial class Relay
 {
     internal const int ConnectTimeoutMs = 150;
     internal const int TotalTimeoutMs = 1000;
@@ -33,7 +35,7 @@ internal static class Relay
         {
             var eventName = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) ? args[0] : "Unknown";
             var endpoint = ReadEndpoint(Path.Combine(dataDirectory, "endpoint.json"));
-            if (endpoint is null || !OwnerIsAlive(endpoint.Pid))
+            if (endpoint is null || !OwnerIsAlive(endpoint.Pid, endpoint.StartedAtUtc))
             {
                 // A stale endpoint.json (crash, kill, missed shutdown) must not cost every hook a connect timeout.
                 return 0;
@@ -77,7 +79,11 @@ internal static class Relay
         }
     }
 
-    internal static bool OwnerIsAlive(int pid)
+    /// <summary>
+    /// Whether the process that wrote the descriptor still runs. A PID is reused after a crash, so the process holding it
+    /// counts only if it started no later than the descriptor was written; a descriptor without a time is trusted by the PID.
+    /// </summary>
+    internal static bool OwnerIsAlive(int pid, string? startedAtUtc)
     {
         if (pid <= 0)
         {
@@ -87,7 +93,13 @@ internal static class Relay
         try
         {
             using var process = System.Diagnostics.Process.GetProcessById(pid);
-            return !process.HasExited;
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            return !DateTimeOffset.TryParse(startedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var written)
+                || process.StartTime.ToUniversalTime() <= written.UtcDateTime;
         }
         catch (ArgumentException)
         {
@@ -162,6 +174,10 @@ internal static class Relay
                     {
                         WriteTrimmedObject(writer, document.RootElement);
                     }
+                    else if (LoneSurrogateEscape().IsMatch(payload))
+                    {
+                        writer.WriteStringValue(Truncate(payload));
+                    }
                     else
                     {
                         document.RootElement.WriteTo(writer);
@@ -187,10 +203,17 @@ internal static class Relay
             switch (property.Value.ValueKind)
             {
                 case JsonValueKind.String:
-                    writer.WriteString(property.Name, Truncate(property.Value.GetString() ?? string.Empty));
+                    writer.WriteString(property.Name, Truncate(StringOf(property.Value)));
                     break;
-                case JsonValueKind.Object or JsonValueKind.Array when property.Value.GetRawText().Length > MaxNestedBytes:
-                    // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size.
+                case JsonValueKind.Object or JsonValueKind.Array:
+                    // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size. One that holds
+                    // a lone surrogate escape cannot be written at all.
+                    var raw = property.Value.GetRawText();
+                    if (raw.Length <= MaxNestedBytes && !LoneSurrogateEscape().IsMatch(raw))
+                    {
+                        property.WriteTo(writer);
+                    }
+
                     break;
                 default:
                     property.WriteTo(writer);
@@ -200,6 +223,27 @@ internal static class Relay
 
         writer.WriteEndObject();
     }
+
+    /// <summary>
+    /// The element's string. A lone surrogate escape (half an emoji, cut by whoever wrote the payload) cannot be read, and the
+    /// writer refuses it; it becomes U+FFFD, so the ids and names around it still reach the engine.
+    /// </summary>
+    private static string StringOf(JsonElement element)
+    {
+        try
+        {
+            return element.GetString() ?? string.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            using var repaired = JsonDocument.Parse(LoneSurrogateEscape().Replace(element.GetRawText(), @"\uFFFD"));
+            return repaired.RootElement.GetString() ?? string.Empty;
+        }
+    }
+
+    /// <summary>A \uD800-\uDBFF escape not followed by a \uDC00-\uDFFF one, or such a low one not preceded by a high one.</summary>
+    [GeneratedRegex(@"\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}")]
+    private static partial Regex LoneSurrogateEscape();
 
     private static string Truncate(string value)
     {

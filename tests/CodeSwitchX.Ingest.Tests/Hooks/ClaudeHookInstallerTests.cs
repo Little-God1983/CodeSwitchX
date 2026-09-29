@@ -68,7 +68,7 @@ public class ClaudeHookInstallerTests : IDisposable
     [Fact]
     public void An_install_from_before_the_exec_form_shows_Partial_and_reinstall_converts_every_entry()
     {
-        // What an earlier CodeSwitchX wrote: the spec's eight events, each in the shell form, and no StopFailure.
+        // What an earlier CodeSwitchX wrote: the spec's eight events, each in the shell form, and neither StopFailure nor PermissionRequest.
         string[] earlierEvents = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "SubagentStop", "SessionEnd"];
         var hooks = new JsonObject();
         foreach (var eventName in earlierEvents)
@@ -80,7 +80,7 @@ public class ClaudeHookInstallerTests : IDisposable
 
         var status = _installer.GetStatus(Exe);
         status.State.ShouldBe(HookInstallState.Partial);
-        status.MissingEvents.ShouldBe(["StopFailure"]);
+        status.MissingEvents.ShouldBe(["PermissionRequest", "StopFailure"]);
 
         _installer.Install(Exe).Changed.ShouldBeTrue();
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
@@ -112,6 +112,90 @@ public class ClaudeHookInstallerTests : IDisposable
 
         var entry = Settings()["hooks"]!["StopFailure"].ShouldNotBeNull().AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
         entry["command"]!.GetValue<string>().ShouldContain(ClaudeHookInstaller.Marker);
+    }
+
+    [Fact]
+    public void Install_registers_PermissionRequest_so_waiting_starts_when_the_prompt_opens()
+    {
+        // The permission_prompt Notification comes 6 s after the prompt opens (never, when it is answered sooner); PermissionRequest fires at once.
+        _installer.Install(Exe);
+
+        var entry = Settings()["hooks"]!["PermissionRequest"].ShouldNotBeNull().AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        entry["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["PermissionRequest"]);
+    }
+
+    [Fact]
+    public void A_lone_surrogate_escape_in_settings_json_is_refused_with_a_message_not_an_exception()
+    {
+        // Half an emoji in a hook command: reading it threw InvalidOperationException, which failed the status and so the start.
+        var content = """{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify.exe \ud83d"}]}]}}""";
+        WriteSettings(content);
+
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Unreadable);
+        status.Problem.ShouldNotBeNullOrWhiteSpace();
+        Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+        File.ReadAllText(_paths.SettingsFile).ShouldBe(content);
+    }
+
+    [Fact]
+    public void Uninstall_without_a_settings_file_creates_none()
+    {
+        var result = _installer.Uninstall();
+
+        result.Changed.ShouldBeFalse();
+        File.Exists(_paths.SettingsFile).ShouldBeFalse("nothing of ours was there, so nothing is written");
+    }
+
+    [Fact]
+    public void Uninstall_keeps_an_empty_hooks_object_that_is_not_ours()
+    {
+        WriteSettings("""{"hooks":{},"theme":"dark"}""");
+        var before = File.ReadAllText(_paths.SettingsFile);
+
+        var result = _installer.Uninstall();
+
+        result.Changed.ShouldBeFalse();
+        File.ReadAllText(_paths.SettingsFile).ShouldBe(before);
+        Directory.GetFiles(_paths.ClaudeDirectory).ShouldHaveSingleItem("no backup for a file that did not change");
+    }
+
+    [Fact]
+    public void A_symlinked_settings_json_keeps_its_link_and_the_target_gets_the_hooks()
+    {
+        // Dotfiles setups link ~\.claude\settings.json to a file in a repository; a plain file in its place cuts the repository off.
+        var target = Path.Combine(_home, "dotfiles", "claude-settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, """{"theme":"dark"}""");
+        Directory.CreateDirectory(_paths.ClaudeDirectory);
+        try
+        {
+            File.CreateSymbolicLink(_paths.SettingsFile, target);
+        }
+        catch (IOException ex)
+        {
+            Assert.Skip($"symbolic links need a privilege this account lacks (Developer Mode or administrator): {ex.Message}");
+        }
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+
+        new FileInfo(_paths.SettingsFile).LinkTarget.ShouldNotBeNull("settings.json must stay a link");
+        JsonNode.Parse(File.ReadAllText(target))!["hooks"].ShouldNotBeNull("the hooks belong in the linked file");
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+    }
+
+    [Fact]
+    public void Only_the_newest_backups_are_kept()
+    {
+        WriteSettings("""{"theme":"dark"}""");
+
+        for (var i = 0; i < 12; i++)
+        {
+            _installer.Install(Exe).Changed.ShouldBeTrue();
+            _installer.Uninstall().Changed.ShouldBeTrue();
+        }
+
+        Directory.GetFiles(_paths.ClaudeDirectory, "settings.json.csx-backup-*").Length.ShouldBeLessThanOrEqualTo(ClaudeHookInstaller.BackupsKept);
     }
 
     [Fact]

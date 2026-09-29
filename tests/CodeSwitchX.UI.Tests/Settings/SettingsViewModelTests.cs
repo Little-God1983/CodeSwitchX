@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Data;
@@ -150,6 +151,39 @@ public class SettingsViewModelTests : IDisposable
         await FlushAsync();
 
         await _store.Received().SetAsync(SettingKeys.StorePayloads, true, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_partial_install_names_the_missing_events_and_says_to_install_again()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InstallHooksCommand.Execute(null);
+        var settings = JsonNode.Parse(File.ReadAllText(_claude.SettingsFile))!.AsObject();
+        settings["hooks"]!.AsObject().Remove("StopFailure");
+        File.WriteAllText(_claude.SettingsFile, settings.ToJsonString());
+
+        _vm.Refresh();
+
+        _vm.HookState.ShouldBe(HookInstallState.Partial);
+        _vm.HookStatusText.ShouldContain("StopFailure");
+        _vm.HookStatusText.ShouldContain("Install again", Case.Sensitive, "the text must say what to do");
+    }
+
+    [Fact]
+    public async Task An_outdated_install_says_the_entries_are_out_of_date_and_to_install_again()
+    {
+        // Since L6 an entry at the same path in the old shell form is Outdated too, so "a different csx-hook.exe" was not always true.
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InstallHooksCommand.Execute(null);
+        var settings = JsonNode.Parse(File.ReadAllText(_claude.SettingsFile))!.AsObject();
+        settings["hooks"]!["Stop"]![0]!["hooks"]![0] = new JsonObject { ["type"] = "command", ["command"] = $"\"{_vm.RelayExecutable}\" Stop", ["timeout"] = 5 };
+        File.WriteAllText(_claude.SettingsFile, settings.ToJsonString());
+
+        _vm.Refresh();
+
+        _vm.HookState.ShouldBe(HookInstallState.Outdated);
+        _vm.HookStatusText.ShouldContain("out of date");
+        _vm.HookStatusText.ShouldContain("Install again", Case.Sensitive, "the text must say what to do");
     }
 
     [Fact]

@@ -71,6 +71,19 @@ public class RelayEndToEndTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Relay_treats_an_endpoint_written_before_its_owner_process_started_as_stale()
+    {
+        // The PID of a crashed instance, reused by this process: the descriptor says its owner wrote it before this process existed.
+        var descriptor = EndpointDescriptor.TryRead(_paths.EndpointFile)!;
+        (descriptor with { StartedAtUtc = descriptor.StartedAtUtc.AddDays(-1) }).Write(_paths.EndpointFile);
+
+        var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"reused","hook_event_name":"Stop"}"""), _paths.Root);
+
+        code.ShouldBe(0);
+        _received.ShouldBeEmpty("a reused PID must not make a stale endpoint.json look alive");
+    }
+
+    [Fact]
     public async Task Relay_delivers_an_event_whose_raw_payload_exceeds_the_api_body_limit()
     {
         var payload = $$"""{"session_id":"big","hook_event_name":"PostToolUse","tool_name":"Read","tool_response":"{{new string('z', 2 * 1024 * 1024)}}"}""";
