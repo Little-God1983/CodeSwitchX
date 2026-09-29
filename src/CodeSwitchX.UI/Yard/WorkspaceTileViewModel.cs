@@ -19,7 +19,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private readonly YardViewModel _owner;
 
     [ObservableProperty] private string? _branch;
-    [ObservableProperty] private int? _dirtyCount;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GitStateLabel))]
+    private int? _dirtyCount;
     [ObservableProperty] private HostState _hostState = HostState.NotStarted;
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;
@@ -36,6 +38,17 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string AccentColor => Workspace.AccentColor;
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
+
+    /// <summary>
+    /// The pill after the branch: "clean", or how many files have uncommitted changes (edited, staged or new). Null when
+    /// git could not tell, so no pill: a made-up "clean" would hide changes.
+    /// </summary>
+    public string? GitStateLabel => DirtyCount switch
+    {
+        null => null,
+        0 => "clean",
+        var n => $"{n} changed",
+    };
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
     public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;
