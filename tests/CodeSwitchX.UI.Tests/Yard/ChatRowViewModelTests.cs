@@ -42,6 +42,37 @@ public class ChatRowViewModelTests
     }
 
     [Fact]
+    public void A_chat_on_the_1M_context_option_measures_its_fill_against_a_million()
+    {
+        var row = new ChatRowViewModel("s1");
+        var pricing = new PricingTable([new PricingRule { Model = "claude-sonnet-4-5", ContextWindow = 200_000 }]);
+
+        row.Update(new SessionSnapshot
+        {
+            SessionId = "s1", State = SessionState.Working, StartedAt = Now, LastEventAt = Now, StateSince = Now,
+            Model = "claude-sonnet-4-5[1m]", LatestContext = new TokenUsage(190_000, 0, 0, 0),
+        }, pricing);
+
+        row.ContextFill.ShouldBe(0.19, tolerance: 1e-9);
+        row.Pressure.ShouldBe(ContextPressure.Normal);
+    }
+
+    [Fact]
+    public void A_chat_on_a_model_without_a_rule_shows_no_context_fill()
+    {
+        var row = new ChatRowViewModel("s1");
+
+        row.Update(new SessionSnapshot
+        {
+            SessionId = "s1", State = SessionState.Working, StartedAt = Now, LastEventAt = Now, StateSince = Now,
+            Model = "claude-mythos-6", LatestContext = new TokenUsage(180_000, 0, 0, 0),
+        }, PricingTable.Default);
+
+        row.ContextFill.ShouldBe(0.0, "the window of a model without a rule is not known");
+        row.Pressure.ShouldBe(ContextPressure.Normal);
+    }
+
+    [Fact]
     public void Untitled_sessions_show_a_placeholder()
     {
         var row = new ChatRowViewModel("abcdef12-3456");

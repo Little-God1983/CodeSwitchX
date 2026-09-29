@@ -13,9 +13,29 @@ public class PricingTableTests
     [InlineData("claude-opus-5-20260401", "claude-opus-5")]
     [InlineData("claude-sonnet-4-5-20250929", "claude-sonnet-4-5")]
     [InlineData("CLAUDE-HAIKU-4-5-20251001", "claude-haiku-4-5")]
+    [InlineData("claude-opus-4-5@20251101", "claude-opus-4-5")]
+    [InlineData("claude-opus-4-6[1m]", "claude-opus-4-6")]
+    [InlineData("anthropic.claude-sonnet-4-5-20250929-v1:0", "claude-sonnet-4-5")]
+    [InlineData("us.anthropic.claude-opus-4-5-20251101-v1:0", "claude-opus-4-5")]
+    [InlineData("global.anthropic.claude-haiku-4-5-20251001-v1:0", "claude-haiku-4-5")]
+    [InlineData("eu.anthropic.claude-sonnet-5-v1:0", "claude-sonnet-5")]
     public void Find_uses_the_longest_prefix_on_a_segment_boundary(string model, string expectedRule)
     {
         PricingTable.Default.Find(model).Model.ShouldBe(expectedRule);
+    }
+
+    [Theory]
+    [InlineData("claude-sonnet-4-5", 200_000)]
+    [InlineData("claude-sonnet-4-5[1m]", 1_000_000)]
+    [InlineData("claude-sonnet-4-5-20250929[1m]", 1_000_000)]
+    [InlineData("claude-sonnet-4-5[1M]", 1_000_000)]
+    [InlineData("claude-opus-5[1m]", 1_000_000)]
+    [InlineData("claude-newer-6", 0)]
+    [InlineData("claude-newer-6[1m]", 1_000_000)]
+    [InlineData(null, 0)]
+    public void The_context_window_is_the_rules_or_a_million_with_the_1m_option(string? model, long expected)
+    {
+        PricingTable.Default.ContextWindowOf(model).ShouldBe(expected);
     }
 
     [Theory]
@@ -29,7 +49,7 @@ public class PricingTableTests
 
         rule.ShouldBeSameAs(PricingTable.Fallback);
         rule.InputPerM.ShouldBe(0);
-        rule.ContextWindow.ShouldBe(200_000);
+        rule.ContextWindow.ShouldBe(0, "the window of a model without a rule is not known, so no fill is measured against 200K");
     }
 
     [Fact]

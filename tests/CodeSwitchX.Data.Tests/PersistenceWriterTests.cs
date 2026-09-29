@@ -310,4 +310,48 @@ public class PersistenceWriterTests : IAsyncLifetime
         (await real.GetBucketsAsync(at.AddMinutes(-1), at.AddMinutes(1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Input.ShouldBe(10);
         (await _db.Get<ISessionStore>().GetActiveSinceAsync(at.AddHours(-1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
     }
+
+    private static TranscriptCursor Cursor(long offset, DateTimeOffset at) => new() { Path = @"c:\t\s1.jsonl", ByteOffset = offset, LastWriteUtc = at, SessionId = "s1" };
+
+    [Fact]
+    public async Task A_forgotten_transcript_loses_its_row_and_the_cursor_still_waiting_in_the_batch()
+    {
+        var at = _time.GetUtcNow();
+        await _db.Get<IUsageStore>().UpsertCursorsAsync([Cursor(10, at)], TestContext.Current.CancellationToken);
+        _bus.Publish(new TranscriptUpdated(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = at, Cursor = Cursor(20, at) }));
+        _bus.Publish(new TranscriptsForgotten([@"c:\t\s1.jsonl"]));
+
+        await _writer.FlushAsync(CancellationToken.None);
+
+        (await _db.Get<IUsageStore>().GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldBeEmpty("neither the row nor the cursor queued before the file went");
+    }
+
+    [Fact]
+    public async Task A_cursor_queued_after_its_transcript_was_forgotten_is_written()
+    {
+        // The file came back (its folder renamed away and back): the order on the bus decides.
+        var at = _time.GetUtcNow();
+        _bus.Publish(new TranscriptsForgotten([@"c:\t\s1.jsonl"]));
+        _bus.Publish(new TranscriptUpdated(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = at, Cursor = Cursor(20, at) }));
+
+        await _writer.FlushAsync(CancellationToken.None);
+
+        (await _db.Get<IUsageStore>().GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().ByteOffset.ShouldBe(20);
+    }
+
+    [Fact]
+    public async Task A_failed_removal_of_forgotten_cursors_is_retried_on_the_next_flush()
+    {
+        var usage = Substitute.For<IUsageStore>();
+        usage.RemoveCursorsAsync(Arg.Any<IReadOnlyCollection<string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => throw new InvalidOperationException("database is locked"), _ => Task.CompletedTask);
+        using var writer = new PersistenceWriter(_bus, _db.Get<ISessionStore>(), usage, _time, NullLogger<PersistenceWriter>.Instance, new PersistenceWriterOptions());
+        writer.Subscribe();
+        _bus.Publish(new TranscriptsForgotten([@"c:\t\s1.jsonl"]));
+
+        await writer.FlushAsync(CancellationToken.None);
+        await writer.FlushAsync(CancellationToken.None);
+
+        await usage.Received(2).RemoveCursorsAsync(Arg.Is<IReadOnlyCollection<string>>(p => p.Single() == @"c:\t\s1.jsonl"), Arg.Any<CancellationToken>());
+    }
 }

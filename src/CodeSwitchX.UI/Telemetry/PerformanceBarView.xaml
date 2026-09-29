@@ -21,7 +21,7 @@
         <TextBlock Style="{StaticResource Label}" Text="tokens today" />
         <TextBlock Style="{StaticResource Value}" Text="{Binding TokensTodayText}" />
         <TextBlock Style="{StaticResource Label}" Text="cost today" />
-        <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table" />
+        <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table; a model without a rule adds tokens but no cost" />
         <TextBlock Style="{StaticResource Label}" Text="5-hour window" />
         <TextBlock Style="{StaticResource Value}" Text="{Binding FiveHourText}" Margin="0,0,6,0" />
         <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,20,0" VerticalAlignment="Center"

@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Persistence;
+using Microsoft.Data.Sqlite;
 
 namespace CodeSwitchX.Data.Tests;
 
@@ -158,5 +159,37 @@ public class UsageStoreTests : IAsyncLifetime
         await _store.UpsertCursorsAsync(cursors, TestContext.Current.CancellationToken);
 
         (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).Count.ShouldBe(33_000);
+    }
+
+    [Fact]
+    public async Task Cursors_keep_the_title_and_where_it_came_from()
+    {
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 10, LastWriteUtc = _minute, SessionId = "s1", Title = "Fix the build", TitleSource = TitleSource.Prompt }], TestContext.Current.CancellationToken);
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute, SessionId = "s1", Title = "Build fixes", TitleSource = TitleSource.Generated }], TestContext.Current.CancellationToken);
+
+        var cursor = (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+
+        cursor.Title.ShouldBe("Build fixes");
+        cursor.TitleSource.ShouldBe(TitleSource.Generated);
+    }
+
+    [Fact]
+    public async Task Cursors_are_removed_by_path_even_more_of_them_than_SQLite_allows_parameters_in_one_statement()
+    {
+        // The first scan after an upgrade removes the cursors of every transcript Claude Code's cleanup deleted since the
+        // cursors were first stored, and SQLite allows at most 32,766 parameters per statement.
+        var paths = Enumerable.Range(0, 40_000).Select(i => $@"c:\t\s{i}.jsonl").ToArray();
+        await using (var connection = new SqliteConnection($"Data Source={_db.DatabaseFile}"))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = "INSERT INTO \"TranscriptCursors\" (\"Path\", \"ByteOffset\", \"LastWriteUtc\", \"SessionId\") VALUES "
+                + string.Join(",", paths.Select(p => $"('{p}', 1, 0, 's')")) + ";";
+            await insert.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+
+        await _store.RemoveCursorsAsync(paths[..^1], TestContext.Current.CancellationToken);
+
+        (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Path.ShouldBe(paths[^1]);
     }
 }

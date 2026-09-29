@@ -40,8 +40,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         StateSince = snapshot.StateSince;
         Inferred = snapshot.Inferred;
         LastToolName = snapshot.LastToolName;
-        var rule = pricing.Find(snapshot.Model);
-        ContextFill = ContextFillCalculator.Fill(snapshot.LatestContext, rule);
+        ContextFill = ContextFillCalculator.Fill(snapshot.LatestContext, pricing.ContextWindowOf(snapshot.Model));
         Pressure = ContextFillCalculator.Level(ContextFill);
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(NeedsUser));

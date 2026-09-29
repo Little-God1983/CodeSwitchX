@@ -89,6 +89,21 @@ public class DatabaseInitializerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_upgrade_marks_the_cursors_stored_before_titles_were_as_having_found_a_prompt_title()
+    {
+        await MigrateToAsync("20260924142231_RemoveSeededPricing");
+        await ExecuteAsync("""INSERT INTO "TranscriptCursors" ("Path", "ByteOffset", "LastWriteUtc", "SessionId") VALUES ('c:\t\s1.jsonl', 10, 0, 's1');""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        var cursor = (await _db.Get<IUsageStore>().GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        cursor.Title.ShouldBeNull();
+        // The indexer of that time took the first prompt as the title without storing it: a later prompt must not rename
+        // the chat, while a generated or /rename title still does.
+        cursor.TitleSource.ShouldBe(TitleSource.Prompt);
+    }
+
+    [Fact]
     public async Task Every_connection_writes_with_synchronous_NORMAL_not_only_the_one_that_ran_the_initializer()
     {
         await _db.InitializeAsync();

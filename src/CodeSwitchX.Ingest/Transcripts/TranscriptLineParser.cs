@@ -76,6 +76,12 @@ public static class TranscriptLineParser
                         ? new SummaryLine(type, timestamp, sessionId, cwd, title)
                         : new OtherLine(type, timestamp, sessionId, cwd);
 
+                // The name the user gave the chat with /rename; Claude Code's session list shows it before the generated title.
+                case "custom-title":
+                    return GetString(root, "customTitle") is { Length: > 0 } custom
+                        ? new CustomTitleLine(type, timestamp, sessionId, cwd, custom)
+                        : new OtherLine(type, timestamp, sessionId, cwd);
+
                 default:
                     return new OtherLine(type, timestamp, sessionId, cwd);
             }

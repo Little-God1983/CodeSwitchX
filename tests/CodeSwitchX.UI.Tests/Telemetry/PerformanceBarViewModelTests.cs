@@ -62,4 +62,16 @@ public class PerformanceBarViewModelTests
         bar.ActiveSessions.ShouldBe(2);
         bar.WaitingSessions.ShouldBe(1);
     }
+
+    [Fact]
+    public async Task The_cost_says_when_it_leaves_out_the_usage_of_a_model_without_a_price()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+
+        bar.Apply(new TelemetrySnapshot(
+            new UsageTotals(new TokenUsage(1_200_000, 0, 0, 0), 3.456m) { Unpriced = true }, UsageTotals.Zero, new long[60], _h.Time.GetUtcNow()));
+
+        bar.CostTodayText.ShouldBe("$3.46 est. incl. unpriced");
+    }
 }

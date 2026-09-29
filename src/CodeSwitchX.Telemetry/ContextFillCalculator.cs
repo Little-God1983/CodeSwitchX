@@ -15,14 +15,17 @@ public static class ContextFillCalculator
     public const double AmberThreshold = 0.8;
     public const double RedThreshold = 0.9;
 
-    public static double Fill(TokenUsage latest, PricingRule rule)
+    public static double Fill(TokenUsage latest, PricingRule rule) => Fill(latest, rule.ContextWindow);
+
+    /// <summary>The share of the window in use; zero when the window is not known (a model without a rule).</summary>
+    public static double Fill(TokenUsage latest, long contextWindow)
     {
-        if (rule.ContextWindow <= 0)
+        if (contextWindow <= 0)
         {
             return 0.0;
         }
 
-        return Math.Clamp((double)latest.ContextTokens / rule.ContextWindow, 0.0, 1.0);
+        return Math.Clamp((double)latest.ContextTokens / contextWindow, 0.0, 1.0);
     }
 
     public static ContextPressure Level(double fill) => fill switch
