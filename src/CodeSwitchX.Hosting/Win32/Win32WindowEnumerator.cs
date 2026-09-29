@@ -14,23 +14,34 @@ public sealed class Win32WindowEnumerator : IWindowEnumerator
         {
             // Hidden windows are included: a VS Code window hidden by an instance that crashed stays hidden, and
             // the only way to give it back to the user is to find and adopt it again.
-            if (PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER) != hwnd)
+            if (InfoOf(hwnd) is { } window)
             {
-                return true;
+                result.Add(window);
             }
 
-            uint pid;
-            nint handle;
-            unsafe
-            {
-                PInvoke.GetWindowThreadProcessId(hwnd, &pid);
-                handle = (nint)hwnd.Value;
-            }
-
-            result.Add(new WindowInfo(handle, pid, ClassNameOf(hwnd), TitleOf(hwnd)) { IsVisible = PInvoke.IsWindowVisible(hwnd) });
             return true;
         }, default);
         return result;
+    }
+
+    public WindowInfo? Describe(nint hwnd) => InfoOf(new HWND(hwnd));
+
+    private static WindowInfo? InfoOf(HWND hwnd)
+    {
+        if (!PInvoke.IsWindow(hwnd) || PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER) != hwnd)
+        {
+            return null;
+        }
+
+        uint pid;
+        nint handle;
+        unsafe
+        {
+            PInvoke.GetWindowThreadProcessId(hwnd, &pid);
+            handle = (nint)hwnd.Value;
+        }
+
+        return new WindowInfo(handle, pid, ClassNameOf(hwnd), TitleOf(hwnd)) { IsVisible = PInvoke.IsWindowVisible(hwnd) };
     }
 
     public string? ProcessName(uint pid)

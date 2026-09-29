@@ -5,6 +5,9 @@ public interface IWindowEnumerator
     /// <summary>Unowned top-level windows, hidden ones included (see <see cref="WindowInfo.IsVisible"/>).</summary>
     IReadOnlyList<WindowInfo> TopLevelWindows();
 
+    /// <summary>The window as <see cref="TopLevelWindows"/> would list it; null for a child or owned window, or one that is gone.</summary>
+    WindowInfo? Describe(nint hwnd);
+
     /// <summary>Process image name without extension, e.g. "Code"; null when the process is gone or inaccessible.</summary>
     string? ProcessName(uint pid);
 

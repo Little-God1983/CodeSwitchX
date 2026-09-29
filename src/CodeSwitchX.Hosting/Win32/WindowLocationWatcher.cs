@@ -7,7 +7,8 @@ namespace CodeSwitchX.Hosting.Win32;
 
 /// <summary>
 /// Raises <see cref="Moved"/> when any top-level window moves or resizes, and <see cref="MoveSizeStarted"/> when the
-/// user starts to drag or resize one by its frame, and <see cref="Destroyed"/> when one is destroyed. Create and dispose on a thread with a message loop (the WPF UI
+/// user starts to drag or resize one by its frame, <see cref="Destroyed"/> when one is destroyed and <see cref="Appeared"/>
+/// when one is created or shown. Create and dispose on a thread with a message loop (the WPF UI
 /// thread): out-of-context WinEvent callbacks arrive through that loop.
 /// </summary>
 public sealed class WindowLocationWatcher : IDisposable
@@ -18,6 +19,8 @@ public sealed class WindowLocationWatcher : IDisposable
     private readonly HWINEVENTHOOK _locationHook;
     private readonly HWINEVENTHOOK _moveSizeHook;
     private readonly HWINEVENTHOOK _destroyHook;
+    private readonly HWINEVENTHOOK _appearHook;
+    private readonly HWINEVENTHOOK _showHook;
 
     public WindowLocationWatcher(ILogger<WindowLocationWatcher>? logger = null)
         : this(logger,
@@ -50,6 +53,14 @@ public sealed class WindowLocationWatcher : IDisposable
         {
             logger?.LogWarning("SetWinEventHook was refused; a closed VS Code window is noticed only by the liveness poll");
         }
+
+        // Both: VS Code creates a new window already shown, and Windows may report the show before the creation.
+        _appearHook = setHook(PInvoke.EVENT_OBJECT_CREATE, _callback);
+        _showHook = setHook(PInvoke.EVENT_OBJECT_SHOW, _callback);
+        if (_appearHook == default || _showHook == default)
+        {
+            logger?.LogWarning("SetWinEventHook was refused; a new VS Code window is placed in the Cab only by the discovery's poll");
+        }
     }
 
     /// <summary>False when Windows refused the location hook: <see cref="Moved"/> never fires then.</summary>
@@ -65,6 +76,9 @@ public sealed class WindowLocationWatcher : IDisposable
     /// say yes: take the event at its word and do not ask IsWindow.
     /// </summary>
     public event Action<nint>? Destroyed;
+
+    /// <summary>A window was created or shown; raised for both, so it can come twice for one window.</summary>
+    public event Action<nint>? Appeared;
 
     private unsafe void OnWinEvent(HWINEVENTHOOK hook, uint eventId, HWND hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime)
     {
@@ -85,6 +99,10 @@ public sealed class WindowLocationWatcher : IDisposable
         {
             Destroyed?.Invoke((nint)hwnd.Value);
         }
+        else if (eventId == PInvoke.EVENT_OBJECT_CREATE || eventId == PInvoke.EVENT_OBJECT_SHOW)
+        {
+            Appeared?.Invoke((nint)hwnd.Value);
+        }
     }
 
     public void Dispose()
@@ -99,9 +117,9 @@ public sealed class WindowLocationWatcher : IDisposable
             _unhook(_moveSizeHook);
         }
 
-        if (_destroyHook != default)
+        foreach (var hook in new[] { _destroyHook, _appearHook, _showHook }.Where(h => h != default))
         {
-            _unhook(_destroyHook);
+            _unhook(hook);
         }
     }
 }

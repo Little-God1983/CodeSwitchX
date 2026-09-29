@@ -36,7 +36,7 @@ public class WindowLocationWatcherTests
             return eventId == PInvoke.EVENT_OBJECT_LOCATIONCHANGE ? new HWINEVENTHOOK(1) : default;
         }, unhook: unhooked.Add);
 
-        hooked.ShouldBe([PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_SYSTEM_MOVESIZESTART, PInvoke.EVENT_OBJECT_DESTROY]);
+        hooked.ShouldBe([PInvoke.EVENT_OBJECT_LOCATIONCHANGE, PInvoke.EVENT_SYSTEM_MOVESIZESTART, PInvoke.EVENT_OBJECT_DESTROY, PInvoke.EVENT_OBJECT_CREATE, PInvoke.EVENT_OBJECT_SHOW]);
         watcher.IsHooked.ShouldBeTrue();
         log.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("drag") && e.Message.Contains("snap-back"),
             "nothing else says that drags are not refused and fight the snap-back");
@@ -56,11 +56,15 @@ public class WindowLocationWatcherTests
         watcher.Moved += moved.Add;
         watcher.MoveSizeStarted += started.Add;
         watcher.Destroyed += destroyed.Add;
+        var appeared = new List<nint>();
+        watcher.Appeared += appeared.Add;
 
         callback!(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, new HWND(500), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_SYSTEM_MOVESIZESTART, new HWND(600), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_DESTROY, new HWND(650), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_DESTROY, new HWND(660), idObject: 0, idChild: 3, 0, 0);
+        callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_CREATE, new HWND(670), 0, 0, 0, 0);
+        callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_SHOW, new HWND(670), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), SomeOtherEvent, new HWND(700), 0, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, new HWND(800), idObject: -4 /* OBJID_CARET */, 0, 0, 0);
         callback(new HWINEVENTHOOK(1), PInvoke.EVENT_OBJECT_LOCATIONCHANGE, HWND.Null, 0, 0, 0, 0);
@@ -68,5 +72,6 @@ public class WindowLocationWatcherTests
         moved.ShouldBe([500]);
         started.ShouldBe([600]);
         destroyed.ShouldBe([650], "an element inside a window is not the window");
+        appeared.ShouldBe([670, 670], "created and shown are both reported");
     }
 }
