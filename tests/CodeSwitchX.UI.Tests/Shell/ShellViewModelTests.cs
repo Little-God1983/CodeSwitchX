@@ -25,6 +25,13 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public void The_window_title_names_the_build_version()
+    {
+        // The only place that tells a stable build from a Debug build on screen.
+        _h.Shell.Title.ShouldBe($"CodeSwitchX {CodeSwitchX.Core.AppVersion.Current}");
+    }
+
+    [Fact]
     public async Task EnterCab_switches_mode_opens_vscode_and_docks_into_the_known_rect()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

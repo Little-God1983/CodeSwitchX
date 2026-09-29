@@ -1,3 +1,4 @@
+using CodeSwitchX.Core;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
@@ -45,6 +46,9 @@ public sealed partial class ShellViewModel : ObservableObject
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
+
+    /// <summary>The window title: the only place on screen that tells a stable build from a Debug build.</summary>
+    public string Title { get; } = $"CodeSwitchX {AppVersion.Current}";
 
     public YardViewModel Yard { get; }
     public CabViewModel Cab { get; }
