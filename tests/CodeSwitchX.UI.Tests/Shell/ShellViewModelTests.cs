@@ -321,7 +321,7 @@ public class ShellViewModelTests
         _h.Shell.Yard.HooksInstalled.ShouldBeFalse();
         _h.Shell.Settings.RelayExecutable = Path.Combine(AppContext.BaseDirectory, "relay", "csx-hook.exe");
 
-        _h.Shell.Settings.InstallHooksCommand.Execute(null);
+        await _h.Shell.Settings.InstallHooksCommand.ExecuteAsync(null);
 
         _h.Shell.Settings.HookState.ShouldBe(HookInstallState.Installed, _h.Shell.Settings.LastMessage);
         _h.Shell.Yard.HooksInstalled.ShouldBeTrue("the banner must go when Install hooks is clicked, not when a chat happens to send a hook");
