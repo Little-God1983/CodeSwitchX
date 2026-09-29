@@ -433,6 +433,48 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_workspace_file_with_folders_in_several_repositories_gets_a_named_line_per_repository()
+    {
+        // Diffusion-Full lists DiffusionNexus.Installer.SDK and DiffusionNexus; changes in the second never showed.
+        var sdk = Repo("sdk");
+        var nexus = Repo("nexus");
+        var docs = Path.Combine(_tempRoot, "docs");
+        Directory.CreateDirectory(docs);
+        Directory.CreateDirectory(Path.Combine(sdk, "tools"));
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" }, { "path": "docs" }, { "path": "sdk/tools" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var yard = Yard((dir, _, _) => Task.FromResult<string?>(dir == nexus ? " M a.cs\n M b.cs\n?? c.cs\n" : string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var tile = yard.FindTile(full.Id)!;
+        tile.GitLines.Select(l => (l.Text, l.GitStateLabel)).ShouldBe([("sdk · main", "clean"), ("nexus · main", "3 changed")],
+            "docs is no repository, and sdk/tools is in sdk's");
+        tile.GitStateLabel.ShouldBe("clean", "the root folder's state stays the tile's own");
+    }
+
+    [Fact]
+    public async Task A_workspace_with_one_repository_shows_its_branch_without_a_folder_name()
+    {
+        var app = Repo("app");
+        var file = Path.Combine(_tempRoot, "App.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "app" } ] }""");
+        var single = new Workspace { Name = "App", RootPath = app, WorkspaceFile = file, TrackId = _general.Id };
+        var plain = new Workspace { Name = "Plain", RootPath = Repo("plain"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([single, plain]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(single.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("main");
+        yard.FindTile(plain.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("main");
+    }
+
+    [Fact]
     public async Task A_workspace_added_during_a_git_refresh_is_refreshed_as_soon_as_that_refresh_ends()
     {
         var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };

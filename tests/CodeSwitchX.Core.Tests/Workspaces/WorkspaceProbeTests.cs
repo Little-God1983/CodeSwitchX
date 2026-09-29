@@ -23,6 +23,40 @@ public class WorkspaceProbeTests : IDisposable
     public void Dispose() => Directory.Delete(Path.GetDirectoryName(_root)!, recursive: true);
 
     [Fact]
+    public void FoldersOf_lists_every_local_folder_of_a_workspace_file_in_its_order()
+    {
+        var parent = Path.GetDirectoryName(_root)!;
+        var file = Path.Combine(parent, "Full.code-workspace");
+        var other = Path.Combine(parent, "Other");
+        File.WriteAllText(file, $$"""
+            {
+              // VS Code allows comments and trailing commas here
+              "folders": [
+                { "path": "MyApp" },
+                { "uri": "{{new Uri(other).AbsoluteUri}}" },
+                { "uri": "vscode-remote://ssh-remote+box/src" },
+                { "name": "no path" },
+              ],
+            }
+            """);
+
+        WorkspaceProbe.FoldersOf(file).ShouldBe([_root, other]);
+    }
+
+    [Theory]
+    [InlineData("{ not json")]
+    [InlineData("""{ "settings": {} }""")]
+    [InlineData("[]")]
+    public void FoldersOf_is_empty_for_a_file_that_lists_no_folders(string content)
+    {
+        var file = Path.Combine(_root, "Broken.code-workspace");
+        File.WriteAllText(file, content);
+
+        WorkspaceProbe.FoldersOf(file).ShouldBeEmpty();
+        WorkspaceProbe.FoldersOf(Path.Combine(_root, "Missing.code-workspace")).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_folder_is_probed_for_git_solutions_claude_md_and_worktrees()
     {
         var result = await _probe.ProbeAsync(_root, CancellationToken.None);

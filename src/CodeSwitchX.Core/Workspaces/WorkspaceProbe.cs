@@ -101,32 +101,11 @@ public sealed class WorkspaceProbe
     /// </summary>
     private static string FirstFolderOf(string workspaceFile)
     {
-        var baseDirectory = Path.GetDirectoryName(workspaceFile)!;
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(workspaceFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            if (document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("folders", out var folders)
-                && folders.ValueKind == JsonValueKind.Array)
+            if (ListedFolders(workspaceFile).FirstOrDefault() is { } path)
             {
-                foreach (var folder in folders.EnumerateArray().Where(f => f.ValueKind == JsonValueKind.Object))
-                {
-                    string? path = null;
-                    if (folder.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
-                    {
-                        path = Path.GetFullPath(Path.Combine(baseDirectory, p.GetString()!));
-                    }
-                    else if (folder.TryGetProperty("uri", out var u) && u.ValueKind == JsonValueKind.String
-                        && Uri.TryCreate(u.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
-                    {
-                        path = uri.LocalPath;
-                    }
-
-                    if (path is not null)
-                    {
-                        return Directory.Exists(path) ? path : throw new DirectoryNotFoundException($"'{path}', the first folder of {workspaceFile}, does not exist.");
-                    }
-                }
+                return Directory.Exists(path) ? path : throw new DirectoryNotFoundException($"'{path}', the first folder of {workspaceFile}, does not exist.");
             }
         }
         catch (JsonException)
@@ -134,6 +113,48 @@ public sealed class WorkspaceProbe
         }
 
         throw new ArgumentException($"{workspaceFile} lists no local folder to use as the workspace root.", nameof(workspaceFile));
+    }
+
+    /// <summary>
+    /// Every local folder a <c>.code-workspace</c> file lists, in its order, as full paths; empty when the file cannot be
+    /// read or is no workspace file. Read on every git round, so a folder added to the file shows without re-adding the
+    /// tile. Reads the disk; call it off the UI thread.
+    /// </summary>
+    public static IReadOnlyList<string> FoldersOf(string workspaceFile)
+    {
+        try
+        {
+            return ListedFolders(workspaceFile).ToList();
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return [];
+        }
+    }
+
+    private static IEnumerable<string> ListedFolders(string workspaceFile)
+    {
+        var baseDirectory = Path.GetDirectoryName(workspaceFile)!;
+        using var document = JsonDocument.Parse(File.ReadAllText(workspaceFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        if (document.RootElement.ValueKind != JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("folders", out var folders)
+            || folders.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var folder in folders.EnumerateArray().Where(f => f.ValueKind == JsonValueKind.Object))
+        {
+            if (folder.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
+            {
+                yield return Path.GetFullPath(Path.Combine(baseDirectory, p.GetString()!));
+            }
+            else if (folder.TryGetProperty("uri", out var u) && u.ValueKind == JsonValueKind.String
+                && Uri.TryCreate(u.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
+            {
+                yield return uri.LocalPath;
+            }
+        }
     }
 
     /// <summary>

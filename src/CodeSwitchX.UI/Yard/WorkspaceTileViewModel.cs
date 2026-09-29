@@ -26,6 +26,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;
 
+    /// <summary>The tile's git lines: one per repository its folders are in, the root folder's first; see <see cref="GitLine"/>.</summary>
+    [ObservableProperty] private IReadOnlyList<GitLine> _gitLines = [GitLine.Unknown];
+
     public WorkspaceTileViewModel(Workspace workspace, YardViewModel owner)
     {
         Workspace = workspace;
@@ -39,16 +42,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
-    /// <summary>
-    /// The pill after the branch: "clean", or how many files have uncommitted changes (edited, staged or new). Null when
-    /// git could not tell, so no pill: a made-up "clean" would hide changes.
-    /// </summary>
-    public string? GitStateLabel => DirtyCount switch
+    /// <summary>The root folder's pill; see <see cref="GitLine.Label"/>.</summary>
+    public string? GitStateLabel => GitLine.Label(DirtyCount);
+
+    /// <summary>Shows a git round's lines; <see cref="Branch"/> and <see cref="DirtyCount"/> are the root folder's, the first.</summary>
+    public void ShowGit(IReadOnlyList<GitLine> lines)
     {
-        null => null,
-        0 => "clean",
-        var n => $"{n} changed",
-    };
+        Branch = lines[0].Branch;
+        DirtyCount = lines[0].DirtyCount;
+        GitLines = lines;
+    }
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
     public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;

@@ -56,7 +56,7 @@ public class GitInspectorTests : IDisposable
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2));
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git")), "the git directory tells folders of one checkout apart from another repository");
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class GitInspectorTests : IDisposable
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
         var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
 
-        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null), "a failed status must not claim a clean tree");
+        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null, Path.Combine(_root, ".git")), "a failed status must not claim a clean tree");
         (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
     }
 

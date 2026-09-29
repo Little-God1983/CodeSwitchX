@@ -209,11 +209,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        _ui.Post(() =>
-        {
-            tile.Branch = info.Branch;
-            tile.DirtyCount = info.DirtyCount;
-        });
+        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
+        _ui.Post(() => tile.ShowGit(lines));
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
         // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
@@ -229,6 +226,37 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             await _registry.UpdateWorktreesAsync(tile.Workspace, WorkspaceProbe.ParseWorktreeList(porcelain, tile.RootPath), ct).ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
+    /// (Diffusion-Full: DiffusionNexus.Installer.SDK and DiffusionNexus), each named after its folder. A folder that is no
+    /// repository, or in the same checkout as one before it, adds none. Runs off the UI thread: it reads the file.
+    /// </summary>
+    private async Task<IReadOnlyList<GitLine>> GitLinesAsync(WorkspaceTileViewModel tile, GitInfo root, CancellationToken ct)
+    {
+        var lines = new List<GitLine> { new(FolderName(tile.RootPath), root.Branch, root.DirtyCount) };
+        if (tile.Workspace.WorkspaceFile is { } file)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (root.GitDir is { } rootGitDir)
+            {
+                seen.Add(rootGitDir);
+            }
+
+            foreach (var folder in WorkspaceProbe.FoldersOf(file))
+            {
+                var info = await _git.InspectAsync(folder, ct).ConfigureAwait(false);
+                if (info.GitDir is { } gitDir && seen.Add(gitDir))
+                {
+                    lines.Add(new GitLine(FolderName(folder), info.Branch, info.DirtyCount));
+                }
+            }
+        }
+
+        return lines.Count > 1 ? lines : [lines[0] with { Folder = null }];
+    }
+
+    private static string FolderName(string path) => System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(path));
 
     /// <summary>True to run once more; otherwise the round is over, decided in the same critical section, so no request is lost.</summary>
     private bool AnotherRefreshWasAskedFor()
