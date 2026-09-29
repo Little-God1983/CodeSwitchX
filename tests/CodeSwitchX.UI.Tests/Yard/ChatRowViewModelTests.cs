@@ -27,7 +27,7 @@ public class ChatRowViewModelTests
         row.Update(new SessionSnapshot
         {
             SessionId = "s1", Title = "Fix build", State = SessionState.Waiting, StartedAt = Now.AddMinutes(-10), LastEventAt = Now, StateSince = Now.AddSeconds(-30),
-            Model = "claude-sonnet-5", Inferred = true, LastToolName = "Bash", LatestContext = new TokenUsage(100_000, 0, 50_000, 700_000),
+            Model = "claude-sonnet-5", Inferred = true, LastToolName = "Bash", LatestContext = new TokenUsage(100_000, 0, 50_000, 700_000, 0),
         }, Pricing);
         row.Tick(Now);
 
@@ -50,7 +50,7 @@ public class ChatRowViewModelTests
         row.Update(new SessionSnapshot
         {
             SessionId = "s1", State = SessionState.Working, StartedAt = Now, LastEventAt = Now, StateSince = Now,
-            Model = "claude-sonnet-4-5[1m]", LatestContext = new TokenUsage(190_000, 0, 0, 0),
+            Model = "claude-sonnet-4-5[1m]", LatestContext = new TokenUsage(190_000, 0, 0, 0, 0),
         }, pricing);
 
         row.ContextFill.ShouldBe(0.19, tolerance: 1e-9);
@@ -65,7 +65,7 @@ public class ChatRowViewModelTests
         row.Update(new SessionSnapshot
         {
             SessionId = "s1", State = SessionState.Working, StartedAt = Now, LastEventAt = Now, StateSince = Now,
-            Model = "claude-mythos-6", LatestContext = new TokenUsage(180_000, 0, 0, 0),
+            Model = "claude-mythos-6", LatestContext = new TokenUsage(180_000, 0, 0, 0, 0),
         }, PricingTable.Default);
 
         row.ContextFill.ShouldBe(0.0, "the window of a model without a rule is not known");

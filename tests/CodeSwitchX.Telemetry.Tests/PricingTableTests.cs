@@ -73,4 +73,19 @@ public class PricingTableTests
         table.Find("claude-sonnet-5").InputPerM.ShouldBe(42);
         table.Find("claude-sonnet-5").ContextWindow.ShouldBe(500_000);
     }
+
+    [Fact]
+    public void Default_rules_carry_the_published_one_hour_cache_write_prices()
+    {
+        var rules = DefaultPricing.Rules.ToDictionary(r => r.Model);
+
+        rules["claude-fable-5-1"].CacheWrite1hPerM.ShouldBe(20m);
+        rules["claude-opus-5-5"].CacheWrite1hPerM.ShouldBe(8m);
+        rules["claude-opus-5"].CacheWrite1hPerM.ShouldBe(10m);
+        rules["claude-opus-4-1"].CacheWrite1hPerM.ShouldBe(30m);
+        rules["claude-sonnet-5"].CacheWrite1hPerM.ShouldBe(4m);
+        rules["claude-haiku-4-5"].CacheWrite1hPerM.ShouldBe(2m);
+        rules["claude-3-5-haiku"].CacheWrite1hPerM.ShouldBe(1.6m);
+        rules.Values.ShouldAllBe(r => r.CacheWrite1hPerM > r.CacheWritePerM, "a 1-hour write costs more than a 5-minute one for every model");
+    }
 }

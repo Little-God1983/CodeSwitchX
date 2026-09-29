@@ -80,9 +80,9 @@ public class UsageStoreTests : IAsyncLifetime
         var bucket = new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 1, Output = 2, CacheWrite = 3, CacheRead = 4 };
 
         bucket.Add(new UsageBucket { Input = 10, Output = 20, CacheWrite = 30, CacheRead = 40 });
-        bucket.Add(new CodeSwitchX.Core.Sessions.TokenUsage(100, 200, 300, 400));
+        bucket.Add(new CodeSwitchX.Core.Sessions.TokenUsage(100, 200, 300, 400, CacheWrite1h: 500));
 
-        bucket.Tokens.ShouldBe(new CodeSwitchX.Core.Sessions.TokenUsage(111, 222, 333, 444));
+        bucket.Tokens.ShouldBe(new CodeSwitchX.Core.Sessions.TokenUsage(111, 222, 333, 444, CacheWrite1h: 500));
     }
 
     [Fact]
@@ -191,5 +191,18 @@ public class UsageStoreTests : IAsyncLifetime
         await _store.RemoveCursorsAsync(paths[..^1], TestContext.Current.CancellationToken);
 
         (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Path.ShouldBe(paths[^1]);
+    }
+
+    [Fact]
+    public async Task One_hour_cache_writes_are_stored_and_summed_with_the_bucket()
+    {
+        await _store.AddUsageAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, CacheWrite = 5, CacheWrite1h = 7 }], TestContext.Current.CancellationToken);
+        await _store.AddUsageAsync([new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, CacheWrite = 1, CacheWrite1h = 3 }], TestContext.Current.CancellationToken);
+
+        var bucket = (await _store.GetBucketsAsync(_minute, _minute.AddMinutes(1), TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+
+        bucket.CacheWrite.ShouldBe(6);
+        bucket.CacheWrite1h.ShouldBe(10);
+        bucket.Tokens.CacheWrite1h.ShouldBe(10);
     }
 }

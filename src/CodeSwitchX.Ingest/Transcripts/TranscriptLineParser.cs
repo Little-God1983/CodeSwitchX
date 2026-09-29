@@ -95,11 +95,24 @@ public static class TranscriptLineParser
             return null;
         }
 
+        // cache_creation_input_tokens is every cache write; cache_creation breaks it down by cache. The 1-hour writes are
+        // their own count (they cost more), and the rest stays the 5-minute count, so the sum of both is the total. The
+        // total is at least the breakdown's sum, so a line that reports the breakdown alone loses nothing, and a negative
+        // count in either is no write.
+        var cacheWrites = GetLong(usage, "cache_creation_input_tokens");
+        var oneHour = 0L;
+        if (usage.TryGetProperty("cache_creation", out var creation) && creation.ValueKind == JsonValueKind.Object)
+        {
+            oneHour = Math.Max(0, GetLong(creation, "ephemeral_1h_input_tokens"));
+            cacheWrites = Math.Max(cacheWrites, Math.Max(0, GetLong(creation, "ephemeral_5m_input_tokens")) + oneHour);
+        }
+
         return new TokenUsage(
             GetLong(usage, "input_tokens"),
             GetLong(usage, "output_tokens"),
-            GetLong(usage, "cache_creation_input_tokens"),
-            GetLong(usage, "cache_read_input_tokens"));
+            cacheWrites - oneHour,
+            GetLong(usage, "cache_read_input_tokens"),
+            oneHour);
     }
 
     private static (string? Text, bool IsToolResult) ExtractUserText(JsonElement message)

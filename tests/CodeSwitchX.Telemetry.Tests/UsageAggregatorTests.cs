@@ -142,4 +142,19 @@ public class UsageAggregatorTests
 
         totals.Unpriced.ShouldBeFalse("nothing was left out of the cost");
     }
+
+    [Fact]
+    public void One_hour_cache_writes_in_a_bucket_count_as_tokens_and_cost_at_their_own_rate()
+    {
+        var aggregator = new UsageAggregator(new PricingTable([new PricingRule { Model = "m", InputPerM = 1m, OutputPerM = 10m, CacheWritePerM = 1.25m, CacheWrite1hPerM = 2m, CacheReadPerM = 0.1m }]));
+        var bucket = Bucket("a", Now, 0);
+        bucket.CacheWrite = 1_000_000;
+        bucket.CacheWrite1h = 1_000_000;
+
+        var totals = aggregator.Sum([bucket]);
+
+        totals.Tokens.Total.ShouldBe(2_000_000);
+        totals.Cost.ShouldBe(1.25m + 2m);
+        aggregator.RateSeries([bucket], Now, 1).ShouldBe([2_000_000L]);
+    }
 }

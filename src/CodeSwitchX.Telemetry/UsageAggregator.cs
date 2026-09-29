@@ -19,7 +19,7 @@ public sealed class UsageAggregator
         var unpriced = false;
         foreach (var bucket in buckets)
         {
-            var usage = new TokenUsage(bucket.Input, bucket.Output, bucket.CacheWrite, bucket.CacheRead);
+            var usage = bucket.Tokens;
             var rule = _pricing.Find(bucket.Model);
             tokens += usage;
             cost += CostEstimator.Estimate(usage, rule);
@@ -61,7 +61,7 @@ public sealed class UsageAggregator
                 continue;
             }
 
-            series[minutes - 1 - age] += bucket.Input + bucket.Output + bucket.CacheWrite + bucket.CacheRead;
+            series[minutes - 1 - age] += bucket.Tokens.Total;
         }
 
         return series;

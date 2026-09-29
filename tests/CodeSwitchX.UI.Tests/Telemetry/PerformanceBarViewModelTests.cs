@@ -21,8 +21,8 @@ public class PerformanceBarViewModelTests
         rate[^2] = 1000;
 
         bar.Apply(new TelemetrySnapshot(
-            new UsageTotals(new TokenUsage(1_200_000, 34_000, 0, 0), 3.456m),
-            new UsageTotals(new TokenUsage(1_000_000, 0, 0, 0), 2m),
+            new UsageTotals(new TokenUsage(1_200_000, 34_000, 0, 0, 0), 3.456m),
+            new UsageTotals(new TokenUsage(1_000_000, 0, 0, 0, 0), 2m),
             rate,
             _h.Time.GetUtcNow()));
 
@@ -42,7 +42,7 @@ public class PerformanceBarViewModelTests
         var bar = _h.Shell.PerformanceBar;
         await bar.InitializeAsync(CancellationToken.None);
 
-        bar.Apply(new TelemetrySnapshot(UsageTotals.Zero, new UsageTotals(new TokenUsage(750_000, 0, 0, 0), 0m), new long[60], _h.Time.GetUtcNow()));
+        bar.Apply(new TelemetrySnapshot(UsageTotals.Zero, new UsageTotals(new TokenUsage(750_000, 0, 0, 0, 0), 0m), new long[60], _h.Time.GetUtcNow()));
 
         bar.HasBudget.ShouldBeFalse();
         bar.FiveHourText.ShouldBe("750K");
@@ -108,7 +108,7 @@ public class PerformanceBarViewModelTests
         await bar.InitializeAsync(CancellationToken.None);
 
         bar.Apply(new TelemetrySnapshot(
-            new UsageTotals(new TokenUsage(1_200_000, 0, 0, 0), 3.456m) { Unpriced = true }, UsageTotals.Zero, new long[60], _h.Time.GetUtcNow()));
+            new UsageTotals(new TokenUsage(1_200_000, 0, 0, 0, 0), 3.456m) { Unpriced = true }, UsageTotals.Zero, new long[60], _h.Time.GetUtcNow()));
 
         bar.CostTodayText.ShouldBe("$3.46 est. incl. unpriced");
     }

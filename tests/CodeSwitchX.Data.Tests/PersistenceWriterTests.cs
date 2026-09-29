@@ -74,9 +74,9 @@ public class PersistenceWriterTests : IAsyncLifetime
             SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
             Usage =
             [
-                new UsageDelta("claude-sonnet-5", at.AddSeconds(5), new TokenUsage(10, 1, 0, 100)),
-                new UsageDelta("claude-sonnet-5", at.AddSeconds(40), new TokenUsage(20, 2, 5, 200)),
-                new UsageDelta("claude-sonnet-5", at.AddMinutes(1), new TokenUsage(1, 1, 1, 1)),
+                new UsageDelta("claude-sonnet-5", at.AddSeconds(5), new TokenUsage(10, 1, 0, 100, 0)),
+                new UsageDelta("claude-sonnet-5", at.AddSeconds(40), new TokenUsage(20, 2, 5, 200, 0)),
+                new UsageDelta("claude-sonnet-5", at.AddMinutes(1), new TokenUsage(1, 1, 1, 1, 0)),
             ],
         }));
 
@@ -124,7 +124,7 @@ public class PersistenceWriterTests : IAsyncLifetime
         _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
         {
             SessionId = "s1", TranscriptPath = cursor.Path, ObservedAt = at, Cursor = cursor,
-            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100, 0))],
             MessageIds = ["msg_1"],
         }));
 
@@ -149,7 +149,7 @@ public class PersistenceWriterTests : IAsyncLifetime
         _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
         {
             SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
-            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100, 0))],
         }));
 
         await writer.FlushAsync(CancellationToken.None);
@@ -263,7 +263,7 @@ public class PersistenceWriterTests : IAsyncLifetime
         _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
         {
             SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
-            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100, 0))],
         }));
 
         await Should.ThrowAsync<OperationCanceledException>(() => writer.FlushAsync(CancellationToken.None));
@@ -299,7 +299,7 @@ public class PersistenceWriterTests : IAsyncLifetime
         _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
         {
             SessionId = "s1", TranscriptPath = "p", ObservedAt = at,
-            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100))],
+            Usage = [new UsageDelta("claude-sonnet-5", at, new TokenUsage(10, 1, 0, 100, 0))],
         }));
 
         // The session and the event are saved, the usage commit fails; the retry must only repeat the usage.

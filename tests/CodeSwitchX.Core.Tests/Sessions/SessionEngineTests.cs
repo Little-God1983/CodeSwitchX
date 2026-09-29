@@ -144,7 +144,7 @@ public class SessionEngineTests
             Model = "claude-sonnet-5",
             LastActivityAt = _time.GetUtcNow(),
             InferredSignal = SessionSignal.ToolUse,
-            LatestContext = new TokenUsage(1000, 50, 200, 3000),
+            LatestContext = new TokenUsage(1000, 50, 200, 3000, 0),
         }));
 
         var inferred = _engine.Get("s2").ShouldNotBeNull();
@@ -262,12 +262,12 @@ public class SessionEngineTests
             ObservedAt = later,
             LastActivityAt = later,
             Model = "claude-sonnet-5",
-            Usage = [new UsageDelta("claude-sonnet-5", later, new TokenUsage(10, 20, 30, 40))],
-            LatestContext = new TokenUsage(10, 20, 30, 40),
+            Usage = [new UsageDelta("claude-sonnet-5", later, new TokenUsage(10, 20, 30, 40, 0))],
+            LatestContext = new TokenUsage(10, 20, 30, 40, 0),
         });
 
         var snapshot = _engine.Get("s1")!;
-        snapshot.LatestContext.ShouldBe(new TokenUsage(10, 20, 30, 40));
+        snapshot.LatestContext.ShouldBe(new TokenUsage(10, 20, 30, 40, 0));
         snapshot.LastEventAt.ShouldBe(later);
         snapshot.Model.ShouldBe("claude-sonnet-5");
     }
@@ -350,7 +350,7 @@ public class SessionEngineTests
         {
             for (var i = 0; i < 300; i++)
             {
-                _engine.Apply(Update("s1", null) with { LatestContext = new TokenUsage(i, 1, 0, 0) });
+                _engine.Apply(Update("s1", null) with { LatestContext = new TokenUsage(i, 1, 0, 0, 0) });
             }
         });
         hooks.Start();
@@ -449,7 +449,7 @@ public class SessionEngineTests
 
         _engine.Apply(Update("s1", null) with
         {
-            Usage = [new UsageDelta("claude-haiku-4-5", _time.GetUtcNow(), new TokenUsage(9, 9, 9, 9))],
+            Usage = [new UsageDelta("claude-haiku-4-5", _time.GetUtcNow(), new TokenUsage(9, 9, 9, 9, 0))],
         });
 
         _engine.Get("s1")!.Model.ShouldBe("claude-opus-5", "a sub-agent's usage names the sub-agent's model; the context bar is measured against the parent's");

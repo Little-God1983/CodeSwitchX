@@ -233,4 +233,18 @@ public class DatabaseInitializerTests : IAsyncLifetime
             await stop.CancelAsync();
         }
     }
+
+    [Fact]
+    public async Task An_upgrade_leaves_a_stored_rules_one_hour_rate_unset_so_the_lookup_derives_it_from_the_input()
+    {
+        await MigrateToAsync("20260928191609_CursorTitles");
+        await ExecuteAsync("""INSERT INTO "PricingRules" ("Model", "InputPerM", "OutputPerM", "CacheWritePerM", "CacheReadPerM", "ContextWindow") VALUES ('claude-sonnet-5', 3, 15, 3.75, 0.3, 200000);""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        // A multiplier fixed into the row at the upgrade would never follow a later change of the shipped one (the reason
+        // RemoveSeededPricing exists); the estimator derives the rate from the input at every lookup instead.
+        (await ExecuteAsync("""SELECT "CacheWrite1hPerM" IS NULL FROM "PricingRules" WHERE "Model" = 'claude-sonnet-5';""")).ShouldBe(1L);
+        (await _db.Get<ISettingsStore>().GetPricingAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().CacheWrite1hPerM.ShouldBeNull();
+    }
 }

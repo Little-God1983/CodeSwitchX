@@ -11,14 +11,14 @@ public class ContextFillCalculatorTests
     [Fact]
     public void Fill_is_context_tokens_over_the_window()
     {
-        ContextFillCalculator.Fill(new TokenUsage(10_000, 5_000, 20_000, 70_000), Rule).ShouldBe(0.5, tolerance: 1e-9);
+        ContextFillCalculator.Fill(new TokenUsage(10_000, 5_000, 20_000, 70_000, 0), Rule).ShouldBe(0.5, tolerance: 1e-9);
     }
 
     [Fact]
     public void Fill_is_clamped_to_one_and_safe_for_a_zero_window()
     {
-        ContextFillCalculator.Fill(new TokenUsage(400_000, 0, 0, 0), Rule).ShouldBe(1.0);
-        ContextFillCalculator.Fill(new TokenUsage(1, 0, 0, 0), new PricingRule { Model = "m", ContextWindow = 0 }).ShouldBe(0.0);
+        ContextFillCalculator.Fill(new TokenUsage(400_000, 0, 0, 0, 0), Rule).ShouldBe(1.0);
+        ContextFillCalculator.Fill(new TokenUsage(1, 0, 0, 0, 0), new PricingRule { Model = "m", ContextWindow = 0 }).ShouldBe(0.0);
     }
 
     [Theory]

@@ -17,7 +17,7 @@ public class TranscriptLineParserTests
         parsed.Timestamp.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero));
         parsed.MessageId.ShouldBe("msg_1");
         parsed.Model.ShouldBe("claude-sonnet-5");
-        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 500, 3000));
+        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 500, 3000, 0));
         parsed.HasToolUse.ShouldBeTrue();
     }
 
@@ -134,5 +134,45 @@ public class TranscriptLineParserTests
     public void A_custom_title_line_without_a_name_is_not_a_title()
     {
         TranscriptLineParser.TryParse("""{"type":"custom-title","customTitle":"","sessionId":"s1"}""").ShouldBeOfType<OtherLine>();
+    }
+
+    [Fact]
+    public void A_write_to_the_one_hour_cache_is_its_own_count_and_the_rest_of_the_cache_writes_stays_the_five_minute_count()
+    {
+        const string line = """{"type":"assistant","sessionId":"s1","timestamp":"2026-09-23T10:00:05.000Z","uuid":"a1","message":{"id":"msg_1","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":500,"cache_read_input_tokens":3000,"cache_creation":{"ephemeral_5m_input_tokens":300,"ephemeral_1h_input_tokens":200}}}}""";
+
+        var parsed = TranscriptLineParser.TryParse(line).ShouldBeOfType<AssistantLine>();
+
+        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 300, 3000, CacheWrite1h: 200));
+    }
+
+    [Fact]
+    public void Cache_writes_without_a_cache_creation_breakdown_are_five_minute_writes()
+    {
+        const string line = """{"type":"assistant","sessionId":"s1","timestamp":"2026-09-23T10:00:05.000Z","uuid":"a1","message":{"id":"msg_1","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":500,"cache_read_input_tokens":3000}}}""";
+
+        var parsed = TranscriptLineParser.TryParse(line).ShouldBeOfType<AssistantLine>();
+
+        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 500, 3000, CacheWrite1h: 0));
+    }
+
+    [Fact]
+    public void One_hour_cache_writes_in_the_breakdown_count_even_when_the_total_is_missing()
+    {
+        const string line = """{"type":"assistant","sessionId":"s1","timestamp":"2026-09-23T10:00:05.000Z","uuid":"a1","message":{"id":"msg_1","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":3000,"cache_creation":{"ephemeral_5m_input_tokens":300,"ephemeral_1h_input_tokens":200}}}}""";
+
+        var parsed = TranscriptLineParser.TryParse(line).ShouldBeOfType<AssistantLine>();
+
+        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 300, 3000, CacheWrite1h: 200));
+    }
+
+    [Fact]
+    public void A_negative_one_hour_count_in_the_breakdown_is_no_write_and_takes_nothing_off_the_total()
+    {
+        const string line = """{"type":"assistant","sessionId":"s1","timestamp":"2026-09-23T10:00:05.000Z","uuid":"a1","message":{"id":"msg_1","model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":100,"output_tokens":20,"cache_creation_input_tokens":500,"cache_read_input_tokens":3000,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":-7}}}}""";
+
+        var parsed = TranscriptLineParser.TryParse(line).ShouldBeOfType<AssistantLine>();
+
+        parsed.Usage.ShouldBe(new TokenUsage(100, 20, 500, 3000, CacheWrite1h: 0));
     }
 }
