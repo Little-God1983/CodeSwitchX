@@ -3,7 +3,12 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>csx-hook</AssemblyName>
     <RootNamespace>CodeSwitchX.Hook</RootNamespace>
-    <PublishAot>true</PublishAot>
+    <!--
+      Framework-dependent until the Native AOT build tools (C++ linker) are installed (decisions.md); IsAotCompatible keeps the
+      analyzers on so the switch is one line. With PublishAot on, a publish of the app built this project self-contained, without
+      an apphost, and the SDK refused the reference (NETSDK1151).
+    -->
+    <PublishAot>false</PublishAot>
     <IsAotCompatible>true</IsAotCompatible>
     <InvariantGlobalization>true</InvariantGlobalization>
     <UseSystemResourceKeys>true</UseSystemResourceKeys>
