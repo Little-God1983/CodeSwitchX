@@ -70,7 +70,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public IEnumerable<WorkspaceTileViewModel> Tiles => Tracks.SelectMany(t => t.Tiles);
 
     public event Action<Guid>? OpenRequested;
-    public event Action? AddWorkspaceRequested;
+    /// <summary>Open the Add workspace dialog; with a path (a file or folder dropped on the Yard), detect that path at once.</summary>
+    public event Action<string?>? AddWorkspaceRequested;
 
     /// <summary>A tile left the board (its workspace was unregistered): the Cab cannot show it any more.</summary>
     public event Action<Guid>? TileRemoved;
@@ -264,7 +265,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void AddWorkspace() => AddWorkspaceRequested?.Invoke();
+    private void AddWorkspace() => AddWorkspaceRequested?.Invoke(null);
+
+    public void AddWorkspaceFrom(string path) => AddWorkspaceRequested?.Invoke(path);
+
+    /// <summary>
+    /// The path to add when <paramref name="paths"/> are dropped on the Yard, or null to refuse the drop: exactly one
+    /// path, shaped like one the Add workspace dialog can detect (judged without the disk: it runs in DragEnter). The
+    /// dialog adds one workspace at a time, so several are refused rather than all but one dropped silently.
+    /// </summary>
+    public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
     [RelayCommand]
     private Task RefreshGit() => RefreshGitAsync(CancellationToken.None);

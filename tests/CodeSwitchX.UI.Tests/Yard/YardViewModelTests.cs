@@ -548,4 +548,38 @@ public class YardViewModelTests : IDisposable
 
         yard.CurrentGitRefresh.IsCompleted.ShouldBeTrue("a round that cannot read the tiles ends, so the next one can run");
     }
+
+    [Theory]
+    [InlineData(@"c:\repo\shop\Shop.code-workspace")]
+    [InlineData(@"c:\repo\shop\Shop.sln")]
+    [InlineData(@"c:\repo\shop\Shop.slnx")]
+    [InlineData(@"c:\repo\shop")]
+    [InlineData(@"\\offline-server\share\x.code-workspace")]
+    public void A_single_dropped_workspace_file_solution_or_folder_is_taken_as_the_path_to_add_without_asking_the_disk(string path)
+    {
+        // None of these exist: DragEnter runs on the UI thread, where an offline share would freeze the Yard and Explorer.
+        YardViewModel.DroppedWorkspacePath([path]).ShouldBe(path);
+    }
+
+    [Fact]
+    public void A_drop_the_add_workspace_dialog_cannot_detect_is_refused()
+    {
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\README.md"]).ShouldBeNull("only what the dialog detects is accepted");
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\notes.txt"]).ShouldBeNull();
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\Shop.code-workspace", @"c:\repo\shop"]).ShouldBeNull("the dialog adds one workspace at a time");
+        YardViewModel.DroppedWorkspacePath([]).ShouldBeNull();
+        YardViewModel.DroppedWorkspacePath(null).ShouldBeNull("the drag carries no files, text say");
+    }
+
+    [Fact]
+    public void Add_workspace_asks_for_an_empty_dialog_and_a_drop_for_one_with_the_dropped_path()
+    {
+        var requested = new List<string?>();
+        _yard.AddWorkspaceRequested += path => requested.Add(path);
+
+        _yard.AddWorkspaceCommand.Execute(null);
+        _yard.AddWorkspaceFrom(@"c:\repo\shop\Shop.code-workspace");
+
+        requested.ShouldBe([null, @"c:\repo\shop\Shop.code-workspace"]);
+    }
 }

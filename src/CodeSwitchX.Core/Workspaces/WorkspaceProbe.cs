@@ -38,14 +38,13 @@ public sealed class WorkspaceProbe
         string? workspaceFile = null;
         if (File.Exists(input))
         {
-            var extension = Path.GetExtension(input);
-            if (extension.Equals(".code-workspace", StringComparison.OrdinalIgnoreCase))
+            if (IsWorkspaceFile(input))
             {
                 workspaceFile = Path.GetFullPath(input);
                 root = FirstFolderOf(workspaceFile);
                 name = Path.GetFileNameWithoutExtension(workspaceFile);
             }
-            else if (extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+            else if (IsSolutionFile(input))
             {
                 root = Path.GetDirectoryName(Path.GetFullPath(input))!;
             }
@@ -80,6 +79,21 @@ public sealed class WorkspaceProbe
             File.Exists(Path.Combine(root, "CLAUDE.md")),
             worktrees);
     }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> has the shape of something <see cref="ProbeAsync"/> takes: a .code-workspace or
+    /// .sln/.slnx file, or a path with no extension, which is taken for a folder. The Yard asks on the UI thread while a
+    /// file is dragged over it, so the disk is never asked: an offline share in Explorer's Recent list would freeze both
+    /// the Yard and Explorer's drag for about 20 s. Whether the path exists is left to the probe, which reports it in
+    /// the dialog; a folder with a dot in its name is refused.
+    /// </summary>
+    public static bool LooksProbeable(string path) =>
+        !string.IsNullOrWhiteSpace(path) && (IsWorkspaceFile(path) || IsSolutionFile(path) || Path.GetExtension(path).Length == 0);
+
+    private static bool IsWorkspaceFile(string path) => Path.GetExtension(path).Equals(".code-workspace", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSolutionFile(string path) =>
+        Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The first local folder a <c>.code-workspace</c> file lists, which VS Code treats as the workspace's primary folder.

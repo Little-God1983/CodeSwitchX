@@ -120,6 +120,29 @@ public class WorkspaceProbeTests : IDisposable
     }
 
     [Fact]
+    public void LooksProbeable_takes_a_folder_code_workspace_or_solution_by_its_shape_and_nothing_else()
+    {
+        WorkspaceProbe.LooksProbeable(@"c:\repo\MyApp").ShouldBeTrue("no extension is taken for a folder");
+        WorkspaceProbe.LooksProbeable(@"c:\repo\MyApp\").ShouldBeTrue();
+        WorkspaceProbe.LooksProbeable(@"c:\repo\MyApp.code-workspace").ShouldBeTrue();
+        WorkspaceProbe.LooksProbeable(@"c:\repo\MyApp.slnx").ShouldBeTrue();
+        WorkspaceProbe.LooksProbeable(@"c:\repo\Legacy.sln").ShouldBeTrue();
+        WorkspaceProbe.LooksProbeable(@"c:\repo\LEGACY.SLN").ShouldBeTrue("Windows paths and extensions ignore case");
+
+        WorkspaceProbe.LooksProbeable(@"c:\repo\CLAUDE.md").ShouldBeFalse();
+        WorkspaceProbe.LooksProbeable(@"c:\repo\notes.txt").ShouldBeFalse();
+        WorkspaceProbe.LooksProbeable(string.Empty).ShouldBeFalse();
+        WorkspaceProbe.LooksProbeable("  ").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void LooksProbeable_takes_a_workspace_file_on_an_offline_share_without_asking_the_disk()
+    {
+        // Neither the server nor the file exists: asking the disk would refuse it, after about 20 s.
+        WorkspaceProbe.LooksProbeable(@"\\offline-server\share\x.code-workspace").ShouldBeTrue("whether it exists is the probe's to report");
+    }
+
+    [Fact]
     public void ParseWorktreeList_skips_the_main_root_and_handles_detached_entries()
     {
         const string porcelain = "worktree C:/repo/app\nHEAD 111\nbranch refs/heads/main\n\nworktree C:/repo/app-a\nHEAD 222\nbranch refs/heads/a\n\nworktree C:/repo/app-b\nHEAD 333\ndetached\n\n";
