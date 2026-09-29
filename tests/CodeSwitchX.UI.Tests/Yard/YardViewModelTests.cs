@@ -465,34 +465,23 @@ public class YardViewModelTests : IDisposable
     }
 
     [Theory]
-    [InlineData("Shop.code-workspace")]
-    [InlineData("Shop.sln")]
-    [InlineData("Shop.slnx")]
-    [InlineData("")]
-    public void A_single_dropped_workspace_file_solution_or_folder_is_taken_as_the_path_to_add(string name)
+    [InlineData(@"c:\repo\shop\Shop.code-workspace")]
+    [InlineData(@"c:\repo\shop\Shop.sln")]
+    [InlineData(@"c:\repo\shop\Shop.slnx")]
+    [InlineData(@"c:\repo\shop")]
+    [InlineData(@"\\offline-server\share\x.code-workspace")]
+    public void A_single_dropped_workspace_file_solution_or_folder_is_taken_as_the_path_to_add_without_asking_the_disk(string path)
     {
-        var folder = Repo("shop");
-        var path = Path.Combine(folder, name);
-        if (name.Length > 0)
-        {
-            File.WriteAllText(path, "{}");
-        }
-
+        // None of these exist: DragEnter runs on the UI thread, where an offline share would freeze the Yard and Explorer.
         YardViewModel.DroppedWorkspacePath([path]).ShouldBe(path);
     }
 
     [Fact]
     public void A_drop_the_add_workspace_dialog_cannot_detect_is_refused()
     {
-        var folder = Repo("shop");
-        var readme = Path.Combine(folder, "README.md");
-        var workspaceFile = Path.Combine(folder, "Shop.code-workspace");
-        File.WriteAllText(readme, "# shop");
-        File.WriteAllText(workspaceFile, "{}");
-
-        YardViewModel.DroppedWorkspacePath([readme]).ShouldBeNull("only what the dialog detects is accepted");
-        YardViewModel.DroppedWorkspacePath([Path.Combine(folder, "gone.code-workspace")]).ShouldBeNull();
-        YardViewModel.DroppedWorkspacePath([workspaceFile, folder]).ShouldBeNull("the dialog adds one workspace at a time");
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\README.md"]).ShouldBeNull("only what the dialog detects is accepted");
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\notes.txt"]).ShouldBeNull();
+        YardViewModel.DroppedWorkspacePath([@"c:\repo\shop\Shop.code-workspace", @"c:\repo\shop"]).ShouldBeNull("the dialog adds one workspace at a time");
         YardViewModel.DroppedWorkspacePath([]).ShouldBeNull();
         YardViewModel.DroppedWorkspacePath(null).ShouldBeNull("the drag carries no files, text say");
     }

@@ -27,7 +27,7 @@ public partial class YardView : UserControl
     {
         e.Handled = true;
         var path = DroppedPath(e.Data);
-        _dragData = null;
+        ForgetDrag();
         if (path is not null && DataContext is YardViewModel yard)
         {
             // Explorer waits in its drag loop until Drop returns; a dialog shown from here would hang it until closed.
@@ -36,8 +36,20 @@ public partial class YardView : UserControl
     }
 
     /// <summary>
-    /// The path the drop would add, or null. DragOver repeats while the mouse is held still, so the answer, which looks
-    /// at the disk, is kept for the drag it was worked out for.
+    /// A cancelled drag ends here, not in Drop: let go of Explorer's data object. It also fires when the mouse crosses
+    /// onto a tile inside the Yard, which only costs working the path out again.
+    /// </summary>
+    private void OnDragLeave(object sender, DragEventArgs e) => ForgetDrag();
+
+    private void ForgetDrag()
+    {
+        _dragData = null;
+        _dragPath = null;
+    }
+
+    /// <summary>
+    /// The path the drop would add, or null. DragOver repeats while the mouse is held still, so the answer, read from a
+    /// data object that may live in Explorer, is kept for the drag it was worked out for.
     /// </summary>
     private string? DroppedPath(IDataObject data)
     {

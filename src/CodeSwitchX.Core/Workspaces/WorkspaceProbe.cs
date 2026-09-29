@@ -81,11 +81,14 @@ public sealed class WorkspaceProbe
     }
 
     /// <summary>
-    /// Whether <see cref="ProbeAsync"/> takes <paramref name="path"/> at all: an existing folder, or an existing
-    /// .code-workspace or .sln/.slnx file. The Yard asks while a file is dragged over it, so it looks at the path
-    /// alone; whether a .code-workspace file lists a usable folder is left to the probe, which reports it in the dialog.
+    /// Whether <paramref name="path"/> has the shape of something <see cref="ProbeAsync"/> takes: a .code-workspace or
+    /// .sln/.slnx file, or a path with no extension, which is taken for a folder. The Yard asks on the UI thread while a
+    /// file is dragged over it, so the disk is never asked: an offline share in Explorer's Recent list would freeze both
+    /// the Yard and Explorer's drag for about 20 s. Whether the path exists is left to the probe, which reports it in
+    /// the dialog; a folder with a dot in its name is refused.
     /// </summary>
-    public static bool CanProbe(string path) => File.Exists(path) ? IsWorkspaceFile(path) || IsSolutionFile(path) : Directory.Exists(path);
+    public static bool LooksProbeable(string path) =>
+        !string.IsNullOrWhiteSpace(path) && (IsWorkspaceFile(path) || IsSolutionFile(path) || Path.GetExtension(path).Length == 0);
 
     private static bool IsWorkspaceFile(string path) => Path.GetExtension(path).Equals(".code-workspace", StringComparison.OrdinalIgnoreCase);
 

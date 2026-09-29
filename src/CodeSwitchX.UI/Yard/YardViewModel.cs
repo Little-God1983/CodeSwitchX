@@ -268,10 +268,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The path to add when <paramref name="paths"/> are dropped on the Yard, or null to refuse the drop: exactly one
-    /// path, and one the Add workspace dialog can detect. The dialog adds one workspace at a time, so several are refused
-    /// rather than all but one dropped silently.
+    /// path, shaped like one the Add workspace dialog can detect (judged without the disk: it runs in DragEnter). The
+    /// dialog adds one workspace at a time, so several are refused rather than all but one dropped silently.
     /// </summary>
-    public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.CanProbe(path) ? path : null;
+    public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
     [RelayCommand]
     private Task RefreshGit() => RefreshGitAsync(CancellationToken.None);
