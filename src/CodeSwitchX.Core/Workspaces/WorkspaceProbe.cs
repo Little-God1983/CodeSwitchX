@@ -38,14 +38,13 @@ public sealed class WorkspaceProbe
         string? workspaceFile = null;
         if (File.Exists(input))
         {
-            var extension = Path.GetExtension(input);
-            if (extension.Equals(".code-workspace", StringComparison.OrdinalIgnoreCase))
+            if (IsWorkspaceFile(input))
             {
                 workspaceFile = Path.GetFullPath(input);
                 root = FirstFolderOf(workspaceFile);
                 name = Path.GetFileNameWithoutExtension(workspaceFile);
             }
-            else if (extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+            else if (IsSolutionFile(input))
             {
                 root = Path.GetDirectoryName(Path.GetFullPath(input))!;
             }
@@ -80,6 +79,18 @@ public sealed class WorkspaceProbe
             File.Exists(Path.Combine(root, "CLAUDE.md")),
             worktrees);
     }
+
+    /// <summary>
+    /// Whether <see cref="ProbeAsync"/> takes <paramref name="path"/> at all: an existing folder, or an existing
+    /// .code-workspace or .sln/.slnx file. The Yard asks while a file is dragged over it, so it looks at the path
+    /// alone; whether a .code-workspace file lists a usable folder is left to the probe, which reports it in the dialog.
+    /// </summary>
+    public static bool CanProbe(string path) => File.Exists(path) ? IsWorkspaceFile(path) || IsSolutionFile(path) : Directory.Exists(path);
+
+    private static bool IsWorkspaceFile(string path) => Path.GetExtension(path).Equals(".code-workspace", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSolutionFile(string path) =>
+        Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) || Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The first local folder a <c>.code-workspace</c> file lists, which VS Code treats as the workspace's primary folder.

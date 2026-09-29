@@ -120,6 +120,21 @@ public class WorkspaceProbeTests : IDisposable
     }
 
     [Fact]
+    public void CanProbe_takes_an_existing_folder_code_workspace_or_solution_and_nothing_else()
+    {
+        WorkspaceProbe.CanProbe(_root).ShouldBeTrue();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "MyApp.code-workspace")).ShouldBeTrue();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "MyApp.slnx")).ShouldBeTrue();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "Legacy.sln")).ShouldBeTrue();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "LEGACY.SLN")).ShouldBeTrue("Windows paths and extensions ignore case");
+
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "CLAUDE.md")).ShouldBeFalse();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "missing.code-workspace")).ShouldBeFalse();
+        WorkspaceProbe.CanProbe(Path.Combine(_root, "missing")).ShouldBeFalse();
+        WorkspaceProbe.CanProbe(string.Empty).ShouldBeFalse();
+    }
+
+    [Fact]
     public void ParseWorktreeList_skips_the_main_root_and_handles_detached_entries()
     {
         const string porcelain = "worktree C:/repo/app\nHEAD 111\nbranch refs/heads/main\n\nworktree C:/repo/app-a\nHEAD 222\nbranch refs/heads/a\n\nworktree C:/repo/app-b\nHEAD 333\ndetached\n\n";

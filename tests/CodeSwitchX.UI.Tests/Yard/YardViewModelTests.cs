@@ -463,4 +463,49 @@ public class YardViewModelTests : IDisposable
 
         yard.CurrentGitRefresh.IsCompleted.ShouldBeTrue("a round that cannot read the tiles ends, so the next one can run");
     }
+
+    [Theory]
+    [InlineData("Shop.code-workspace")]
+    [InlineData("Shop.sln")]
+    [InlineData("Shop.slnx")]
+    [InlineData("")]
+    public void A_single_dropped_workspace_file_solution_or_folder_is_taken_as_the_path_to_add(string name)
+    {
+        var folder = Repo("shop");
+        var path = Path.Combine(folder, name);
+        if (name.Length > 0)
+        {
+            File.WriteAllText(path, "{}");
+        }
+
+        YardViewModel.DroppedWorkspacePath([path]).ShouldBe(path);
+    }
+
+    [Fact]
+    public void A_drop_the_add_workspace_dialog_cannot_detect_is_refused()
+    {
+        var folder = Repo("shop");
+        var readme = Path.Combine(folder, "README.md");
+        var workspaceFile = Path.Combine(folder, "Shop.code-workspace");
+        File.WriteAllText(readme, "# shop");
+        File.WriteAllText(workspaceFile, "{}");
+
+        YardViewModel.DroppedWorkspacePath([readme]).ShouldBeNull("only what the dialog detects is accepted");
+        YardViewModel.DroppedWorkspacePath([Path.Combine(folder, "gone.code-workspace")]).ShouldBeNull();
+        YardViewModel.DroppedWorkspacePath([workspaceFile, folder]).ShouldBeNull("the dialog adds one workspace at a time");
+        YardViewModel.DroppedWorkspacePath([]).ShouldBeNull();
+        YardViewModel.DroppedWorkspacePath(null).ShouldBeNull("the drag carries no files, text say");
+    }
+
+    [Fact]
+    public void Add_workspace_asks_for_an_empty_dialog_and_a_drop_for_one_with_the_dropped_path()
+    {
+        var requested = new List<string?>();
+        _yard.AddWorkspaceRequested += path => requested.Add(path);
+
+        _yard.AddWorkspaceCommand.Execute(null);
+        _yard.AddWorkspaceFrom(@"c:\repo\shop\Shop.code-workspace");
+
+        requested.ShouldBe([null, @"c:\repo\shop\Shop.code-workspace"]);
+    }
 }

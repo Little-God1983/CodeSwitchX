@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private readonly ILogger<WindowLocationWatcher> _watcherLogger;
     private WindowLocationWatcher? _locationWatcher;
     private System.Windows.Threading.DispatcherTimer? _livenessTimer;
+    private bool _addWorkspaceOpen;
 
     public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, Func<AddWorkspaceViewModel> addWorkspaceFactory,
         ILogger<WindowLocationWatcher> watcherLogger)
@@ -33,22 +34,44 @@ public partial class MainWindow : Window
         _watcherLogger = watcherLogger;
         DataContext = shell;
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
-        shell.Yard.AddWorkspaceRequested += () => _ = ShowAddWorkspaceAsync();
+        shell.Yard.AddWorkspaceRequested += path => _ = ShowAddWorkspaceAsync(path);
     }
 
-    private async Task ShowAddWorkspaceAsync()
+    /// <summary>
+    /// Opens the Add workspace dialog, detecting <paramref name="path"/> at once when one was dropped on the Yard. One dialog
+    /// at a time: the dialog is modal, but a drop or a click can arrive while the tracks load, before it is shown.
+    /// </summary>
+    private async Task ShowAddWorkspaceAsync(string? path)
     {
+        if (_addWorkspaceOpen)
+        {
+            return;
+        }
+
+        _addWorkspaceOpen = true;
         try
         {
             var viewModel = _addWorkspaceFactory();
             await viewModel.LoadAsync(CancellationToken.None);
             var dialog = new AddWorkspaceWindow(viewModel) { Owner = this };
+            if (path is not null)
+            {
+                viewModel.InputPath = path;
+                viewModel.ProbeCommand.Execute(null);
+                // The drag came from another window, Explorer say, which still has the focus.
+                Activate();
+            }
+
             dialog.ShowDialog();
         }
         catch (Exception ex)
         {
             // Fire-and-forget from the Yard's button: a failed track load left the dialog unopened without a line anywhere.
             Serilog.Log.Error(ex, "Opening the Add workspace dialog failed");
+        }
+        finally
+        {
+            _addWorkspaceOpen = false;
         }
     }
 
