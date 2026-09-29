@@ -145,7 +145,7 @@ public class HostManagerTests
         _manager.WindowDestroyed(999);
         _manager.Get(_workspace.Id)!.State.ShouldBe(HostState.Running, "another window was destroyed");
 
-        _docker.IsAlive(500).Returns(false);
+        // Windows reports the destruction while it is still under way, when IsWindow may still say yes.
         _manager.WindowDestroyed(500);
 
         _manager.Get(_workspace.Id)!.State.ShouldBe(HostState.Stopped);

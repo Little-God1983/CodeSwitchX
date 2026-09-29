@@ -282,7 +282,6 @@ public class ShellViewModelTests
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
         await _h.Shell.EnterCabAsync(_h.App.Id);
 
-        _h.Docker.IsAlive(500).Returns(false);
         _h.Host.WindowDestroyed(500);
 
         _h.Shell.Mode.ShouldBe(ShellMode.Yard);
@@ -300,7 +299,6 @@ public class ShellViewModelTests
         _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
         await _h.Shell.EnterCabAsync(shop.Id);
 
-        _h.Docker.IsAlive(500).Returns(false);
         _h.Host.WindowDestroyed(500);
 
         _h.Shell.Mode.ShouldBe(ShellMode.Cab);

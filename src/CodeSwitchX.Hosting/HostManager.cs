@@ -493,15 +493,17 @@ public sealed class HostManager : IDisposable
 
     /// <summary>
     /// Called from the WinEvent watcher when a window is destroyed: a hosted one closed by the user is known at once, where
-    /// <see cref="PollLiveness"/> would find it only on its next round.
+    /// <see cref="PollLiveness"/> would find it only on its next round. The event is taken at its word: Windows sends it
+    /// while the destruction is still under way, and IsWindow, asked then, may still say yes.
     /// </summary>
     public void WindowDestroyed(nint hwnd)
     {
         lock (_gate)
         {
-            if (_hosted.Values.Any(h => h.State == HostState.Running && h.Hwnd == hwnd))
+            foreach (var hosted in _hosted.Values.Where(h => h.State == HostState.Running && h.Hwnd == hwnd).ToList())
             {
-                PollLiveness();
+                hosted.Visible = false;
+                Transition(hosted, HostState.Stopped, "VS Code window closed");
             }
         }
     }
