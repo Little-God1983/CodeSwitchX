@@ -52,10 +52,64 @@ public class WorkspaceProbeTests : IDisposable
     [Fact]
     public async Task A_code_workspace_file_is_kept_as_the_launch_target()
     {
+        File.WriteAllText(Path.Combine(_root, "MyApp.code-workspace"), """{ "folders": [ { "path": "." } ] }""");
+
         var result = await _probe.ProbeAsync(Path.Combine(_root, "MyApp.code-workspace"), CancellationToken.None);
 
         result.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
         result.WorkspaceFile.ShouldBe(Path.Combine(_root, "MyApp.code-workspace"));
+    }
+
+    [Fact]
+    public async Task A_code_workspace_file_outside_its_folders_takes_the_first_listed_folder_as_root()
+    {
+        // A multi-root workspace often sits next to its repositories: the folder holding the file is not a repository,
+        // and as the root it would claim every chat under it.
+        var parent = Path.GetDirectoryName(_root)!;
+        Directory.CreateDirectory(Path.Combine(parent, "Other"));
+        var file = Path.Combine(parent, "Full.code-workspace");
+        File.WriteAllText(file, """
+            {
+                // VS Code writes JSON with comments and trailing commas
+                "folders": [
+                    { "path": "MyApp" },
+                    { "path": "Other" },
+                ],
+            }
+            """);
+
+        var result = await _probe.ProbeAsync(file, CancellationToken.None);
+
+        result.RootPath.ShouldBe(PathNormalizer.Canonical(_root));
+        result.SuggestedName.ShouldBe("Full", "VS Code titles the window after the workspace file");
+        result.WorkspaceFile.ShouldBe(file);
+        result.IsGitRepository.ShouldBeTrue();
+        result.SolutionFiles.Select(Path.GetFileName).ShouldBe(["Legacy.sln", "MyApp.slnx"], ignoreOrder: true);
+        result.HasClaudeMd.ShouldBeTrue();
+        result.Worktrees.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_code_workspace_folder_may_be_an_absolute_path_or_a_file_uri()
+    {
+        var file = Path.Combine(Path.GetDirectoryName(_root)!, "Abs.code-workspace");
+        File.WriteAllText(file, $$"""{ "folders": [ { "path": {{System.Text.Json.JsonSerializer.Serialize(_root)}} } ] }""");
+        (await _probe.ProbeAsync(file, CancellationToken.None)).RootPath.ShouldBe(PathNormalizer.Canonical(_root));
+
+        File.WriteAllText(file, $$"""{ "folders": [ { "uri": "{{new Uri(_root).AbsoluteUri}}" } ] }""");
+        (await _probe.ProbeAsync(file, CancellationToken.None)).RootPath.ShouldBe(PathNormalizer.Canonical(_root));
+    }
+
+    [Fact]
+    public async Task A_code_workspace_file_without_a_local_folder_throws_a_clear_argument_error()
+    {
+        var file = Path.Combine(_root, "Empty.code-workspace");
+        foreach (var content in new[] { "{}", """{ "folders": [] }""", """{ "folders": [ { "uri": "vscode-remote://ssh-remote+box/src" } ] }""", "not json" })
+        {
+            File.WriteAllText(file, content);
+            var ex = await Should.ThrowAsync<ArgumentException>(() => _probe.ProbeAsync(file, CancellationToken.None));
+            ex.Message.ShouldContain("Empty.code-workspace");
+        }
     }
 
     [Fact]

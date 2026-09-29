@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CodeSwitchX.Core.Paths;
 
 namespace CodeSwitchX.Core.Workspaces;
@@ -33,6 +34,7 @@ public sealed class WorkspaceProbe
         // offline network path blocks File.Exists for about 20 s. Task.Yield would come back to the UI thread.
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         string root;
+        string? name = null;
         string? workspaceFile = null;
         if (File.Exists(input))
         {
@@ -40,13 +42,17 @@ public sealed class WorkspaceProbe
             if (extension.Equals(".code-workspace", StringComparison.OrdinalIgnoreCase))
             {
                 workspaceFile = Path.GetFullPath(input);
+                root = FirstFolderOf(workspaceFile);
+                name = Path.GetFileNameWithoutExtension(workspaceFile);
             }
-            else if (!extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+            else if (extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase))
+            {
+                root = Path.GetDirectoryName(Path.GetFullPath(input))!;
+            }
+            else
             {
                 throw new ArgumentException("Pick a folder, a .code-workspace file, or a .sln/.slnx solution.", nameof(input));
             }
-
-            root = Path.GetDirectoryName(Path.GetFullPath(input))!;
         }
         else if (Directory.Exists(input))
         {
@@ -66,13 +72,54 @@ public sealed class WorkspaceProbe
 
         return new WorkspaceProbeResult(
             canonicalRoot,
-            Path.GetFileName(root.TrimEnd('\\', '/')),
+            name ?? Path.GetFileName(root.TrimEnd('\\', '/')),
             workspaceFile,
             git.IsRepository,
             git.Branch,
             solutions,
             File.Exists(Path.Combine(root, "CLAUDE.md")),
             worktrees);
+    }
+
+    /// <summary>
+    /// The first local folder a <c>.code-workspace</c> file lists, which VS Code treats as the workspace's primary folder.
+    /// The folder holding the file is not the root: a multi-root workspace often sits next to its repositories.
+    /// </summary>
+    private static string FirstFolderOf(string workspaceFile)
+    {
+        var baseDirectory = Path.GetDirectoryName(workspaceFile)!;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(workspaceFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("folders", out var folders)
+                && folders.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var folder in folders.EnumerateArray().Where(f => f.ValueKind == JsonValueKind.Object))
+                {
+                    string? path = null;
+                    if (folder.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
+                    {
+                        path = Path.GetFullPath(Path.Combine(baseDirectory, p.GetString()!));
+                    }
+                    else if (folder.TryGetProperty("uri", out var u) && u.ValueKind == JsonValueKind.String
+                        && Uri.TryCreate(u.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
+                    {
+                        path = uri.LocalPath;
+                    }
+
+                    if (path is not null)
+                    {
+                        return Directory.Exists(path) ? path : throw new DirectoryNotFoundException($"'{path}', the first folder of {workspaceFile}, does not exist.");
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        throw new ArgumentException($"{workspaceFile} lists no local folder to use as the workspace root.", nameof(workspaceFile));
     }
 
     /// <summary>
