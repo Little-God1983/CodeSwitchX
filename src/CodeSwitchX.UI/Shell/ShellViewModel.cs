@@ -47,8 +47,8 @@ public sealed partial class ShellViewModel : ObservableObject
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
 
-    /// <summary>The window title: the only place on screen that tells a stable build from a Debug build.</summary>
-    public string Title { get; } = $"CodeSwitchX {AppVersion.Current}";
+    /// <summary>The window title: the only place on screen that tells a stable build from a Debug build of the same version.</summary>
+    public string Title { get; } = $"CodeSwitchX {AppVersion.Display}";
 
     public YardViewModel Yard { get; }
     public CabViewModel Cab { get; }
