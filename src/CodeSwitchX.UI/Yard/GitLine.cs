@@ -11,7 +11,13 @@ public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount)
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);
 
-    public string Text => Folder is null ? Branch ?? "no git" : $"{Folder} · {Branch ?? "no git"}";
+    public string BranchText => Branch ?? "no git";
+
+    /// <summary>Between the folder's name and the branch; empty on a tile with a single line.</summary>
+    public string Separator => Folder is null ? string.Empty : " · ";
+
+    /// <summary>The whole line, untrimmed: the tooltip, and what the tests read.</summary>
+    public string Text => Folder + Separator + BranchText;
 
     public string? GitStateLabel => Label(DirtyCount);
 

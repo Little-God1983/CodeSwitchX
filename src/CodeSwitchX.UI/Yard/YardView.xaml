@@ -38,10 +38,21 @@
     <!-- one repository's line: branch (named after its folder when a tile has several), then the git state pill:
          green when clean, amber with uncommitted changes, none when git could not tell -->
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
-      <StackPanel Orientation="Horizontal" Margin="0,1">
-        <TextBlock Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" Opacity="0.75" />
-        <TextBlock Text="{Binding Text}" ToolTip="{Binding Text}" MaxWidth="190" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Opacity="0.75" />
-        <Border CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
+      <!-- left-aligned, so the star column is only as wide as the branch and the pill follows it; a long branch is
+           trimmed to what is left, and a long folder name to a part of the line, so neither hides the other -->
+      <Grid Margin="0,1" HorizontalAlignment="Left" ToolTip="{Binding Text}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0" Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" Opacity="0.75" />
+        <TextBlock Grid.Column="1" Text="{Binding Folder}" MaxWidth="120" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Opacity="0.75" />
+        <TextBlock Grid.Column="2" Text="{Binding Separator}" VerticalAlignment="Center" Opacity="0.75" />
+        <TextBlock Grid.Column="3" Text="{Binding BranchText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Opacity="0.75" />
+        <Border Grid.Column="4" CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
           <Border.Style>
             <Style TargetType="Border">
               <Setter Property="Background" Value="#26F59E0B" />
@@ -70,7 +81,7 @@
             </TextBlock.Style>
           </TextBlock>
         </Border>
-      </StackPanel>
+      </Grid>
     </DataTemplate>
 
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
