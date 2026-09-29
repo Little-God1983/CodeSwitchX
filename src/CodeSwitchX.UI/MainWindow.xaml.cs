@@ -6,6 +6,7 @@ using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Workspaces;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI;
 
@@ -16,10 +17,12 @@ public partial class MainWindow : Window
     private readonly TrayIconService _tray;
     private readonly HostManager _host;
     private readonly Func<AddWorkspaceViewModel> _addWorkspaceFactory;
+    private readonly ILogger<WindowLocationWatcher> _watcherLogger;
     private WindowLocationWatcher? _locationWatcher;
     private System.Windows.Threading.DispatcherTimer? _livenessTimer;
 
-    public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, Func<AddWorkspaceViewModel> addWorkspaceFactory)
+    public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, Func<AddWorkspaceViewModel> addWorkspaceFactory,
+        ILogger<WindowLocationWatcher> watcherLogger)
     {
         InitializeComponent();
         _shell = shell;
@@ -27,6 +30,7 @@ public partial class MainWindow : Window
         _tray = tray;
         _host = host;
         _addWorkspaceFactory = addWorkspaceFactory;
+        _watcherLogger = watcherLogger;
         DataContext = shell;
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += () => _ = ShowAddWorkspaceAsync();
@@ -59,7 +63,7 @@ public partial class MainWindow : Window
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         _hotkeys.Attach(hwnd, _shell);
         _tray.Attach(this, _shell);
-        _locationWatcher = new WindowLocationWatcher();
+        _locationWatcher = new WindowLocationWatcher(_watcherLogger);
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);
         _livenessTimer = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(2), System.Windows.Threading.DispatcherPriority.Background,
             (_, _) => _host.PollLiveness(), Dispatcher);

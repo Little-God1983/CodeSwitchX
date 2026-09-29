@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using CodeSwitchX.Core;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +23,8 @@ public sealed class HiddenWindowSweep : IHostedService
         // A clean-up: whatever goes wrong here must not stop CodeSwitchX from starting.
         try
         {
-            // Until a single instance is enforced (L8), the windows a running instance hides are not left over.
+            // A second start ends before this runs (SingleInstance); this guards a start that went on without the claim.
+            // Only an instance in this session can have hidden this session's windows.
             if (_anotherInstanceRuns())
             {
                 _logger.LogInformation("Another CodeSwitchX is running: the hidden VS Code windows are left to it");
@@ -42,20 +43,5 @@ public sealed class HiddenWindowSweep : IHostedService
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private static bool AnotherInstanceRuns()
-    {
-        using var self = Process.GetCurrentProcess();
-        var namesakes = Process.GetProcessesByName(self.ProcessName);
-        try
-        {
-            return namesakes.Any(p => p.Id != self.Id);
-        }
-        finally
-        {
-            foreach (var process in namesakes)
-            {
-                process.Dispose();
-            }
-        }
-    }
+    private static bool AnotherInstanceRuns() => ProcessNamesakes.InThisSession().Count > 0;
 }

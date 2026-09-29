@@ -1,18 +1,36 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using CodeSwitchX.Core.Workspaces;
 
 namespace CodeSwitchX.Hosting.VsCode;
 
 public sealed class VsCodeLauncher : IVsCodeLauncher
 {
-    private readonly string? _executable;
+    private readonly Func<string?> _locate;
+    private string? _executable;
 
-    public VsCodeLauncher(string? executable = null)
+    /// <param name="locate">Where VS Code is; <see cref="VsCodeLocator.FindExecutable()"/> by default, a fixed path in tests.</param>
+    public VsCodeLauncher(Func<string?>? locate = null)
     {
-        _executable = executable ?? VsCodeLocator.FindExecutable();
+        _locate = locate ?? VsCodeLocator.FindExecutable;
     }
 
-    public string? Executable => _executable;
+    /// <summary>
+    /// The VS Code executable, checked on disk: located again when it was not found before or the path found then is gone,
+    /// since this launcher lives as long as CodeSwitchX and VS Code may be installed or moved meanwhile.
+    /// </summary>
+    private bool TryLocate([NotNullWhen(true)] out string? executable)
+    {
+        if (_executable is not null && File.Exists(_executable))
+        {
+            executable = _executable;
+            return true;
+        }
+
+        _executable = _locate();
+        executable = _executable;
+        return executable is not null && File.Exists(executable);
+    }
 
     /// <summary>
     /// The arguments one by one: <see cref="ProcessStartInfo.ArgumentList"/> quotes each for Windows' parser, where a
@@ -47,14 +65,22 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
             return new LaunchResult(false, null, $"{target} was not found. It may have been moved or renamed, or its drive is not connected.");
         }
 
-        if (_executable is null || !File.Exists(_executable))
+        if (!TryLocate(out var executable))
         {
-            return new LaunchResult(false, null, $"VS Code executable not found ({_executable ?? "no candidate"}). Set {VsCodeLocator.OverrideVariable}.");
+            return new LaunchResult(false, null, $"VS Code executable not found ({executable ?? "no candidate"}). Set {VsCodeLocator.OverrideVariable}.");
+        }
+
+        // Windows are found by the process name Code and a title that says Visual Studio Code: another build (Insiders,
+        // VSCodium) would launch, and then every open would time out without a word about why. The bin\code.cmd shim is
+        // resolved to its Code.exe by the locator.
+        if (!string.Equals(Path.GetFileName(executable), VsCodeWindowMatcher.ProcessName + ".exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return new LaunchResult(false, null, $"{executable} is not Code.exe. Point {VsCodeLocator.OverrideVariable} at Code.exe, or at the bin\\code.cmd next to it; Insiders and VSCodium builds are not supported yet.");
         }
 
         try
         {
-            var info = new ProcessStartInfo(_executable)
+            var info = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
