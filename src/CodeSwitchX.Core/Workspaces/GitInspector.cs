@@ -95,6 +95,22 @@ public sealed class GitInspector
         return string.IsNullOrEmpty(hash) ? null : hash;
     }
 
+    /// <summary>
+    /// Whether git records a linked worktree for the repository (a folder under <c>.git\worktrees</c>): only then is a
+    /// <c>git worktree list</c> worth a process. Reads the disk; call it off the UI thread.
+    /// </summary>
+    public bool HasLinkedWorktrees(string root)
+    {
+        var gitDir = ResolveGitDir(root, _profileDirectory);
+        if (gitDir is null)
+        {
+            return false;
+        }
+
+        var worktrees = Path.Combine(gitDir, "worktrees");
+        return Directory.Exists(worktrees) && Directory.EnumerateDirectories(worktrees).Any();
+    }
+
     /// <summary>Runs git through the configured runner (a real process by default, a fake in tests).</summary>
     public Task<string?> RunAsync(string workingDirectory, string arguments, CancellationToken ct) => _runGit(workingDirectory, arguments, ct);
 

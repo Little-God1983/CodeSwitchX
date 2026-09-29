@@ -56,21 +56,38 @@
             <Style.Triggers>
               <DataTrigger Binding="{Binding NeedsAttention}" Value="True">
                 <Setter Property="BorderBrush" Value="#F59E0B" />
-                <DataTrigger.EnterActions>
-                  <BeginStoryboard x:Name="Pulse">
-                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                      <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.55" Duration="0:0:0.7" />
-                    </Storyboard>
-                  </BeginStoryboard>
-                </DataTrigger.EnterActions>
-                <DataTrigger.ExitActions>
-                  <StopStoryboard BeginStoryboardName="Pulse" />
-                </DataTrigger.ExitActions>
               </DataTrigger>
             </Style.Triggers>
           </Style>
         </Border.Style>
-        <StackPanel>
+        <Grid>
+          <!--
+            The pulse (spec: the border pulses) is a dark border laid over the tile's amber one, fading in and out so the amber goes dim and bright,
+            so the tile's text stays readable. It animates its own Opacity: an animation of the outer border's brush
+            colour failed at startup, when the tile is built with a chat already waiting and the brush is not there yet.
+          -->
+          <Border Margin="-14" CornerRadius="10" BorderThickness="2" BorderBrush="Black" IsHitTestVisible="False">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Setter Property="Opacity" Value="0" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding NeedsAttention}" Value="True">
+                    <DataTrigger.EnterActions>
+                      <BeginStoryboard x:Name="Pulse">
+                        <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                          <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="0.6" Duration="0:0:0.7" />
+                        </Storyboard>
+                      </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions>
+                      <StopStoryboard BeginStoryboardName="Pulse" />
+                    </DataTrigger.ExitActions>
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+          </Border>
+          <StackPanel>
           <DockPanel>
             <TextBlock DockPanel.Dock="Right" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
                        Text="{Binding HostState, Converter={StaticResource HostStateText}}" />
@@ -107,7 +124,8 @@
               </Style>
             </TextBlock.Style>
           </TextBlock>
-        </StackPanel>
+          </StackPanel>
+        </Grid>
       </Border>
     </DataTemplate>
   </UserControl.Resources>

@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Settings;
 using NSubstitute;
@@ -54,13 +55,50 @@ public class PerformanceBarViewModelTests
         var bar = _h.Shell.PerformanceBar;
         await bar.InitializeAsync(CancellationToken.None);
         var now = _h.Time.GetUtcNow();
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
 
-        _h.Engine.Apply(new HookEvent { SessionId = "a", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now });
-        _h.Engine.Apply(new HookEvent { SessionId = "b", EventName = "Notification", Signal = SessionSignal.Notification, At = now });
-        _h.Engine.Apply(new HookEvent { SessionId = "c", EventName = "SessionEnd", Signal = SessionSignal.SessionEnd, At = now });
+        _h.Engine.Apply(new HookEvent { SessionId = "a", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "b", EventName = "Notification", Signal = SessionSignal.Notification, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "c", EventName = "SessionEnd", Signal = SessionSignal.SessionEnd, At = now, Cwd = _h.App.RootPath });
 
         bar.ActiveSessions.ShouldBe(2);
         bar.WaitingSessions.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Active_chats_are_the_live_rows_of_the_yard_not_stale_ones_or_chats_on_no_tile()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        var now = _h.Time.GetUtcNow();
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+        _h.Engine.Apply(new HookEvent { SessionId = "on-tile", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = _h.App.RootPath });
+        _h.Engine.Apply(new HookEvent { SessionId = "elsewhere", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = now, Cwd = @"c:\notes" });
+        _h.Engine.Restore([new SessionSnapshot { SessionId = "old", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddDays(-1), LastEventAt = now.AddDays(-1), StateSince = now.AddHours(-23) }]);
+
+        bar.RecountSessions();
+
+        bar.ActiveSessions.ShouldBe(1, "a Stale chat and a chat on no tile are not rows on the Yard, and the count grew over the 24 h restore window");
+    }
+
+    [Fact]
+    public async Task Stale_rows_still_on_a_tile_count_and_a_waiting_chat_on_no_tile_counts_nowhere()
+    {
+        // A tile keeps a Stale row for 30 minutes; "active" must match those rows, and "waiting" must not name a chat no tile shows.
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        var now = _h.Time.GetUtcNow();
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+        _h.Engine.Restore([
+            new SessionSnapshot { SessionId = "shown", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddHours(-2), LastEventAt = now.AddHours(-1), StateSince = now.AddMinutes(-10) },
+            new SessionSnapshot { SessionId = "gone", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddHours(-3), LastEventAt = now.AddHours(-2), StateSince = now.AddMinutes(-40) },
+        ]);
+        _h.Engine.Apply(new HookEvent { SessionId = "elsewhere", EventName = "Notification", Signal = SessionSignal.Notification, At = now, Cwd = @"c:\notes" });
+
+        bar.RecountSessions();
+
+        bar.ActiveSessions.ShouldBe(1, "the Stale row of ten minutes is still on the tile, the one of forty is not");
+        bar.WaitingSessions.ShouldBe(0, "a waiting chat on no tile is shown nowhere");
     }
 
     [Fact]

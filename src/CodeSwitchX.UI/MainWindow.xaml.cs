@@ -38,10 +38,18 @@ public partial class MainWindow : Window
 
     private async Task ShowAddWorkspaceAsync()
     {
-        var viewModel = _addWorkspaceFactory();
-        await viewModel.LoadAsync(CancellationToken.None);
-        var dialog = new AddWorkspaceWindow(viewModel) { Owner = this };
-        dialog.ShowDialog();
+        try
+        {
+            var viewModel = _addWorkspaceFactory();
+            await viewModel.LoadAsync(CancellationToken.None);
+            var dialog = new AddWorkspaceWindow(viewModel) { Owner = this };
+            dialog.ShowDialog();
+        }
+        catch (Exception ex)
+        {
+            // Fire-and-forget from the Yard's button: a failed track load left the dialog unopened without a line anywhere.
+            Serilog.Log.Error(ex, "Opening the Add workspace dialog failed");
+        }
     }
 
     /// <summary>Mouse "back" button (XButton1) returns to the Yard, as the spec asks.</summary>

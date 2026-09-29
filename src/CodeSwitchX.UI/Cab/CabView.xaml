@@ -11,10 +11,11 @@
     <DockPanel Grid.Row="0" Background="#1F2937" LastChildFill="True">
       <Button DockPanel.Dock="Left" Content="&#x2190; Yard" Command="{Binding BackCommand}" Padding="10,0" BorderThickness="0" Background="Transparent" Foreground="White"
               ToolTip="Back to the Yard (Ctrl+Alt+Y)" />
-      <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTile.Name}" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,16,0" />
-      <TextBlock DockPanel.Dock="Right" Foreground="#FCD34D" VerticalAlignment="Center" Margin="12,0"
-                 Text="{Binding DataContext.StatusMessage, RelativeSource={RelativeSource AncestorType=Window}}" />
-      <ItemsControl ItemsSource="{Binding Pips}" VerticalAlignment="Center">
+      <TextBlock DockPanel.Dock="Left" Text="{Binding ActiveTile.Name}" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Margin="8,0,8,0" />
+      <!-- Its own VS Code's state: closed by the user, the Cab is empty and this is the only word about why. -->
+      <TextBlock DockPanel.Dock="Left" Foreground="#9CA3AF" FontSize="11" VerticalAlignment="Center" Margin="0,0,16,0"
+                 Text="{Binding ActiveTile.HostState, Converter={StaticResource HostStateText}}" />
+      <ItemsControl DockPanel.Dock="Right" ItemsSource="{Binding Pips}" VerticalAlignment="Center">
         <ItemsControl.ItemsPanel>
           <ItemsPanelTemplate>
             <StackPanel Orientation="Horizontal" />
@@ -43,6 +44,10 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+      <!-- Last, so the pips keep their room and a long error is cut with an ellipsis; the tooltip has all of it. -->
+      <TextBlock Foreground="#FCD34D" VerticalAlignment="Center" Margin="12,0" TextTrimming="CharacterEllipsis"
+                 Text="{Binding DataContext.StatusMessage, RelativeSource={RelativeSource AncestorType=Window}}"
+                 ToolTip="{Binding DataContext.StatusMessage, RelativeSource={RelativeSource AncestorType=Window}}" />
     </DockPanel>
 
     <Border x:Name="HostArea" Grid.Row="1" Background="#111827">

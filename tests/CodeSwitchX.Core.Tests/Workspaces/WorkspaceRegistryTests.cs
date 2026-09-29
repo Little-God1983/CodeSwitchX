@@ -54,6 +54,65 @@ public class WorkspaceRegistryTests
     }
 
     [Fact]
+    public async Task Update_worktrees_saves_and_reloads_only_when_the_set_git_lists_differs()
+    {
+        var workspace = new Workspace { Name = "App", RootPath = @"C:\Repo\App", Worktrees = { new Worktree { Path = @"C:\Repo\App-wt", Branch = "wt" } } };
+        var kept = workspace.Worktrees[0].Id;
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:\Repo\App-wt", "wt")], CancellationToken.None)).ShouldBeFalse("nothing changed");
+        await _store.DidNotReceive().ReplaceWorktreesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<Worktree>>(), Arg.Any<CancellationToken>());
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:/Repo/App-wt/", "wt"), new WorktreeInfo(@"C:\Repo\App-hotfix", "hotfix")], CancellationToken.None)).ShouldBeTrue();
+
+        await _store.Received(1).ReplaceWorktreesAsync(workspace.Id, Arg.Is<IReadOnlyList<Worktree>>(w => w.Count == 2), Arg.Any<CancellationToken>());
+        workspace.Worktrees.Select(w => w.Path).ShouldBe([@"C:\Repo\App-wt", @"C:\Repo\App-hotfix"]);
+        workspace.Worktrees[0].Id.ShouldBe(kept, "a worktree that stays keeps its row");
+        workspace.Worktrees.ShouldAllBe(w => w.WorkspaceId == workspace.Id);
+        _resolver.Resolve(@"C:\Repo\App-hotfix\src").ShouldBe(workspace.Id);
+        _messages.OfType<WorkspaceRootsChanged>().ShouldNotBeEmpty();
+
+        (await _registry.UpdateWorktreesAsync(workspace, [new WorktreeInfo(@"C:\Repo\App-hotfix", "hotfix")], CancellationToken.None)).ShouldBeTrue("a removed worktree stops being a child root");
+        _resolver.Resolve(@"C:\Repo\App-wt\src").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_worktree_save_that_fails_is_tried_again_at_the_next_refresh()
+    {
+        // The in-memory set changed before the save, so after a failed save the next refresh saw nothing to do.
+        var workspace = new Workspace { Name = "App", RootPath = @"C:\Repo\App", Worktrees = { new Worktree { Path = @"C:\Repo\App-wt", Branch = "wt" } } };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
+        _store.ReplaceWorktreesAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<Worktree>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new IOException("database is locked")), _ => Task.CompletedTask);
+        WorktreeInfo[] found = [new(@"C:\Repo\App-wt", "wt"), new(@"C:\Repo\App-hotfix", "hotfix")];
+
+        await Should.ThrowAsync<IOException>(() => _registry.UpdateWorktreesAsync(workspace, found, CancellationToken.None));
+        workspace.Worktrees.Select(w => w.Path).ShouldBe([@"C:\Repo\App-wt"], "what is not saved is not known");
+
+        (await _registry.UpdateWorktreesAsync(workspace, found, CancellationToken.None)).ShouldBeTrue("the next refresh saves it");
+        workspace.Worktrees.Select(w => w.Path).ShouldBe([@"C:\Repo\App-wt", @"C:\Repo\App-hotfix"]);
+        _resolver.Resolve(@"C:\Repo\App-hotfix\src").ShouldBe(workspace.Id);
+    }
+
+    [Fact]
+    public async Task Reloads_that_overlap_leave_the_newest_list_in_the_resolver()
+    {
+        // A background worktree refresh reloads at the same time as an unregister: the older list must not land last.
+        var x = new Workspace { Name = "X", RootPath = @"C:\Repo\X" };
+        var y = new Workspace { Name = "Y", RootPath = @"C:\Repo\Y" };
+        var staleRead = new TaskCompletionSource<IReadOnlyList<Workspace>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(_ => staleRead.Task, _ => Task.FromResult<IReadOnlyList<Workspace>>([x]));
+
+        var refresh = _registry.UpdateWorktreesAsync(x, [new WorktreeInfo(@"C:\Repo\X-wt", "wt")], CancellationToken.None); // waits in its read
+        var unregister = _registry.UnregisterAsync(y.Id, CancellationToken.None);
+        staleRead.SetResult([x, y]); // the read that started first answers last
+        await Task.WhenAll(refresh, unregister).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _resolver.Resolve(@"C:\Repo\Y\src").ShouldBeNull("Y was unregistered; the older list must not put it back");
+        _resolver.Resolve(@"C:\Repo\X-wt\src").ShouldBe(x.Id);
+    }
+
+    [Fact]
     public async Task Unregister_removes_and_reloads()
     {
         var id = Guid.NewGuid();

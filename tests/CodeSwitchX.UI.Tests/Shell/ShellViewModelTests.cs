@@ -1,7 +1,9 @@
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
+using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Shell;
 using NSubstitute;
 
@@ -227,6 +229,102 @@ public class ShellViewModelTests
         _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Stopped);
         _h.Shell.ActiveWorkspaceId.ShouldBe(shop.Id);
         _h.Shell.StatusMessage.ShouldBeNull("App's error does not belong in Shop's strip");
+    }
+
+    [Fact]
+    public async Task Unregistering_the_active_workspace_clears_the_cab_and_returns_to_the_yard()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Bus.Publish(new WorkspaceUnregistered(_h.App.Id));
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.ActiveWorkspaceId.ShouldBeNull("Ctrl+Alt+Y would otherwise bring the shell forward and do nothing");
+        _h.Shell.Cab.ActiveTile.ShouldBeNull();
+        _h.Shell.Cab.Pips.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Unregistering_the_workspace_being_opened_makes_that_open_stale()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Windows.TopLevelWindows().Returns([]);
+        using var launchMayEnd = new ManualResetEventSlim();
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(_ =>
+        {
+            launchMayEnd.Wait(TimeSpan.FromSeconds(10));
+            return new LaunchResult(false, null, "code not found");
+        });
+
+        var open = _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Bus.Publish(new WorkspaceUnregistered(_h.App.Id)); // the shell is back on the Yard
+        launchMayEnd.Set();
+        await open;
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.StatusMessage.ShouldBeNull("the error belongs to a workspace that is gone");
+    }
+
+    [Fact]
+    public async Task Unregistering_a_workspace_that_is_not_active_removes_its_pip()
+    {
+        var shop = AddShopWithItsWindowOpen();
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _h.General.Id };
+        _h.Workspaces.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_h.App, shop, cli]));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(shop.Id);
+        _h.Shell.Cab.Pips.Select(p => p.Name).ShouldBe(["App", "Cli"]);
+
+        _h.Bus.Publish(new WorkspaceUnregistered(cli.Id));
+
+        _h.Shell.Cab.Pips.Select(p => p.Name).ShouldBe(["App"], "a pip for a gone workspace switches to nothing");
+        _h.Shell.ActiveWorkspaceId.ShouldBe(shop.Id);
+    }
+
+    [Fact]
+    public async Task A_failed_open_that_ends_as_the_user_retries_does_not_write_its_error_over_the_retry()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Windows.TopLevelWindows().Returns([]);
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(false, null, "code not found"));
+        var ui = new QueuedSynchronizationContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(ui);
+        try
+        {
+            var first = _h.Shell.EnterCabAsync(_h.App.Id);
+            SpinWait.SpinUntil(() => ui.Pending > 0, TimeSpan.FromSeconds(5)).ShouldBeTrue("the open has failed and its report waits for the UI thread");
+            var retry = _h.Shell.EnterCabAsync(_h.App.Id); // the click lands first: a new open is running
+            _h.Shell.StatusMessage.ShouldBeNull();
+
+            ui.RunOne(TimeSpan.FromSeconds(5)); // now the first open's continuation reports "code not found"
+
+            _h.Shell.StatusMessage.ShouldBeNull("the retry is running; the error of the open before it is stale");
+            ui.RunUntil(() => first.IsCompleted && retry.IsCompleted, TimeSpan.FromSeconds(5));
+            await first;
+            await retry;
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    [Fact]
+    public async Task The_yard_learns_from_the_installer_whether_the_hooks_are_installed()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Yard.HooksInstalled.ShouldBeFalse();
+        _h.Shell.Settings.RelayExecutable = Path.Combine(AppContext.BaseDirectory, "relay", "csx-hook.exe");
+
+        _h.Shell.Settings.InstallHooksCommand.Execute(null);
+
+        _h.Shell.Settings.HookState.ShouldBe(HookInstallState.Installed, _h.Shell.Settings.LastMessage);
+        _h.Shell.Yard.HooksInstalled.ShouldBeTrue("the banner must go when Install hooks is clicked, not when a chat happens to send a hook");
     }
 
     [Fact]

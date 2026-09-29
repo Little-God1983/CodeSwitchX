@@ -5,6 +5,7 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CodeSwitchX.UI.Telemetry;
@@ -17,6 +18,7 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     private readonly IEventBus _bus;
     private readonly IUiDispatcher _ui;
     private readonly ISettingsStore _settings;
+    private readonly TimeProvider _time;
     private readonly List<IDisposable> _subscriptions = [];
     private long? _budget;
 
@@ -30,13 +32,14 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     [ObservableProperty] private double[] _rateNormalized = new double[TelemetryService.RateMinutes];
     [ObservableProperty] private bool _isExpanded = true;
 
-    public PerformanceBarViewModel(TelemetryService telemetry, SessionEngine engine, IEventBus bus, IUiDispatcher ui, ISettingsStore settings)
+    public PerformanceBarViewModel(TelemetryService telemetry, SessionEngine engine, IEventBus bus, IUiDispatcher ui, ISettingsStore settings, TimeProvider time)
     {
         _telemetry = telemetry;
         _engine = engine;
         _bus = bus;
         _ui = ui;
         _settings = settings;
+        _time = time;
     }
 
     public async Task InitializeAsync(CancellationToken ct)
@@ -71,9 +74,13 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
 
     public void RecountSessions()
     {
-        var snapshots = _engine.Snapshots;
-        ActiveSessions = snapshots.Count(s => SessionStateMachine.IsLive(s.State));
-        WaitingSessions = snapshots.Count(s => SessionStateMachine.NeedsUser(s.State));
+        // The rows on the Yard: a chat on no tile (its cwd outside every workspace) is shown nowhere, and a Stale chat stays
+        // on its tile for the stale row lifetime; counted without that, the number grew over the 24 h restore window and
+        // matched nothing on screen.
+        var now = _time.GetUtcNow();
+        var shown = _engine.Snapshots.Where(s => s.WorkspaceId is not null).ToList();
+        ActiveSessions = shown.Count(s => SessionStateMachine.IsLive(s.State) && (s.State != SessionState.Stale || now - s.StateSince < WorkspaceTileViewModel.StaleRowLifetime));
+        WaitingSessions = shown.Count(s => SessionStateMachine.NeedsUser(s.State));
     }
 
     public void Dispose()

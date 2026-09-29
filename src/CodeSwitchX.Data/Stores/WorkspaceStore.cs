@@ -72,6 +72,28 @@ public sealed class WorkspaceStore : IWorkspaceStore
         await db.SaveChangesAsync(ct);
     }
 
+    public async Task ReplaceWorktreesAsync(Guid workspaceId, IReadOnlyList<Worktree> worktrees, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var existing = await db.Worktrees.Where(t => t.WorkspaceId == workspaceId).ToListAsync(ct);
+        db.Worktrees.RemoveRange(existing.Where(t => worktrees.All(n => n.Id != t.Id)));
+        foreach (var worktree in worktrees)
+        {
+            var current = existing.FirstOrDefault(t => t.Id == worktree.Id);
+            if (current is null)
+            {
+                db.Worktrees.Add(new Worktree { Id = worktree.Id, WorkspaceId = workspaceId, Path = worktree.Path, Branch = worktree.Branch });
+            }
+            else
+            {
+                current.Path = worktree.Path;
+                current.Branch = worktree.Branch;
+            }
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task RemoveAsync(Guid workspaceId, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);

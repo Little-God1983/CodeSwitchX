@@ -29,6 +29,22 @@ public sealed partial class CabViewModel : ObservableObject
         }
     }
 
+    /// <summary>No workspace to show: the strip names nothing and offers no pips.</summary>
+    public void Clear()
+    {
+        ActiveTile = null;
+        Pips.Clear();
+    }
+
+    /// <summary>A workspace that is gone offers no pip: clicking one would switch to nothing.</summary>
+    public void RemovePip(Guid workspaceId)
+    {
+        foreach (var pip in Pips.Where(p => p.Id == workspaceId).ToList())
+        {
+            Pips.Remove(pip);
+        }
+    }
+
     [RelayCommand]
     private void Back() => BackRequested?.Invoke();
 
