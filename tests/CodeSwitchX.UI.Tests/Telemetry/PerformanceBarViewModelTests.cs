@@ -90,7 +90,7 @@ public class PerformanceBarViewModelTests
         var now = _h.Time.GetUtcNow();
         _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
         _h.Engine.Restore([
-            new SessionSnapshot { SessionId = "shown", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddHours(-2), LastEventAt = now.AddHours(-1), StateSince = now.AddMinutes(-10) },
+            new SessionSnapshot { SessionId = "shown", WorkspaceId = _h.App.Id, State = SessionState.Stale, Title = "fix the build", StartedAt = now.AddHours(-2), LastEventAt = now.AddHours(-1), StateSince = now.AddMinutes(-10) },
             new SessionSnapshot { SessionId = "gone", WorkspaceId = _h.App.Id, State = SessionState.Stale, StartedAt = now.AddHours(-3), LastEventAt = now.AddHours(-2), StateSince = now.AddMinutes(-40) },
         ]);
         _h.Engine.Apply(new HookEvent { SessionId = "elsewhere", EventName = "Notification", Signal = SessionSignal.Notification, At = now, Cwd = @"c:\notes" });
@@ -99,6 +99,32 @@ public class PerformanceBarViewModelTests
 
         bar.ActiveSessions.ShouldBe(1, "the Stale row of ten minutes is still on the tile, the one of forty is not");
         bar.WaitingSessions.ShouldBe(0, "a waiting chat on no tile is shown nowhere");
+    }
+
+    [Fact]
+    public async Task A_session_that_is_no_chat_yet_counts_nowhere()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        var yard = _h.Shell.Yard;
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+        await yard.InitializeAsync(CancellationToken.None);
+        await bar.InitializeAsync(CancellationToken.None);
+        yard.NeedsMeFirst = true;
+
+        _h.Engine.Apply(new HookEvent { SessionId = "ghost", EventName = "SessionStart", Signal = SessionSignal.SessionStart, At = _h.Time.GetUtcNow(), Cwd = _h.App.RootPath });
+
+        var tile = yard.FindTile(_h.App.Id)!;
+        tile.Chats.ShouldBeEmpty();
+        tile.NeedsAttention.ShouldBeFalse();
+        tile.AttentionRank.ShouldBe(2);
+        bar.ActiveSessions.ShouldBe(0, "an idle session that was never prompted is not a chat yet");
+        bar.WaitingSessions.ShouldBe(0);
+
+        _h.Engine.Apply(new HookEvent { SessionId = "ghost", EventName = "UserPromptSubmit", Signal = SessionSignal.PromptSubmit, At = _h.Time.GetUtcNow(), Cwd = _h.App.RootPath });
+
+        tile.Chats.ShouldHaveSingleItem();
+        tile.AttentionRank.ShouldBe(1);
+        bar.ActiveSessions.ShouldBe(1, "the prompt makes it a chat");
     }
 
     [Fact]

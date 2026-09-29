@@ -20,4 +20,22 @@ public class SessionRecordTests
 
         SessionRecord.FromSnapshot(snapshot).ToSnapshot().LatestContext.ShouldBe(snapshot.LatestContext);
     }
+
+    [Fact]
+    public void Each_fact_that_shows_a_chat_held_a_conversation_survives_the_record()
+    {
+        var bare = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Ended,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch,
+            StateSince = DateTimeOffset.UnixEpoch,
+        };
+
+        SessionRecord.FromSnapshot(bare).ToSnapshot().HeldConversation.ShouldBeFalse();
+        SessionRecord.FromSnapshot(bare with { Title = "fix the build" }).ToSnapshot().HeldConversation.ShouldBeTrue();
+        SessionRecord.FromSnapshot(bare with { LatestContext = new TokenUsage(10, 20, 0, 0, 0) }).ToSnapshot().HeldConversation.ShouldBeTrue();
+        SessionRecord.FromSnapshot(bare with { LastToolName = "Bash" }).ToSnapshot().HeldConversation.ShouldBeTrue();
+    }
 }

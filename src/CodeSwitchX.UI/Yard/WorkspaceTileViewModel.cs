@@ -40,8 +40,19 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
     public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;
 
+    /// <summary>
+    /// Shows or updates the chat's row. A session that is no chat (<see cref="SessionSnapshot.ShowsAsChat"/>) gets no row,
+    /// and loses the one it had when it goes back to idling or ends without ever having held a conversation, rather than
+    /// lingering for <see cref="EndedRowLifetime"/>. Claude Code opens and closes such a session each time a VS Code window loads.
+    /// </summary>
     public void Upsert(SessionSnapshot snapshot, PricingTable pricing)
     {
+        if (!snapshot.ShowsAsChat)
+        {
+            Remove(snapshot.SessionId);
+            return;
+        }
+
         var row = Chats.FirstOrDefault(c => c.SessionId == snapshot.SessionId);
         if (row is null)
         {
