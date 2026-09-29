@@ -93,16 +93,54 @@ function Get-OtherAppProcess {
 
 # Closes CodeSwitchX the way its own window does, never by force: on the way out it hands every hosted
 # VS Code window back to the desktop, and a killed process would leave those windows cloaked until the
-# next start sweeps them up. Accepts a Win32_Process (from Get-CimInstance). Returns $false when the
-# process is still running after the timeout - a modal dialog open, or a hang - so the caller can say so.
+# next start sweeps them up. Accepts a Win32_Process (from Get-CimInstance). Returns 'closed', or why not:
+# 'nowindow' when there is no main window to close (still starting, or a second start handing over to
+# the first), 'timeout' when the window took the close but the process still runs - a modal dialog open,
+# or a hang.
 function Stop-AppProcess {
     param($Process, [int]$TimeoutSeconds = 20)
     $proc = Get-Process -Id $Process.ProcessId -ErrorAction SilentlyContinue
-    if (-not $proc) { return $true }
-    # WM_CLOSE to the main window; CodeSwitchX never hides it, so a running instance always has one.
-    [void]$proc.CloseMainWindow()
-    if ($proc.WaitForExit($TimeoutSeconds * 1000)) { return $true }
-    return $false
+    if (-not $proc) { return 'closed' }
+    # WM_CLOSE to the main window. CodeSwitchX never hides it, so an instance that has finished starting has one.
+    if (-not $proc.CloseMainWindow()) {
+        if ($proc.HasExited) { return 'closed' }
+        return 'nowindow'
+    }
+    if ($proc.WaitForExit($TimeoutSeconds * 1000)) { return 'closed' }
+    return 'timeout'
+}
+
+# What to tell the user when Stop-AppProcess did not close a process.
+function Get-StopFailureHints {
+    param([string]$Result)
+    $killed = "It is not killed on purpose: a killed CodeSwitchX leaves its hosted VS Code windows hidden until its next start."
+    if ($Result -eq 'nowindow') {
+        return @("It has no window to close - it may still be starting. Wait a moment and run this again, or close it from its tray icon.", $killed)
+    }
+    return @("It did not close in time - a dialog may be open in it. Close CodeSwitchX by hand, then run this again.", $killed)
+}
+
+# git with this script's error handling switched off for the call. Windows PowerShell 5.1, which the .cmd
+# wrappers fall back to, turns a native command's stderr into an error record, and under
+# $ErrorActionPreference = 'Stop' that ends the script with a stack trace. -Quiet drops stderr; without
+# it the user sees git's own message. Check $LASTEXITCODE afterwards.
+function Invoke-Git {
+    param([string[]]$Arguments, [switch]$Quiet)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Quiet) { & git -C $RepoRoot @Arguments 2>$null }
+        else        { & git -C $RepoRoot @Arguments }
+    }
+    finally { $ErrorActionPreference = $previous }
+}
+
+# The short commit of HEAD, or '' when git is missing or this is no checkout.
+function Get-HeadCommit {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return '' }
+    $commit = "$(Invoke-Git @('rev-parse', '--short', 'HEAD') -Quiet)".Trim()
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return $commit
 }
 
 # A Start Menu entry the user can pin to the taskbar with a right-click. Pinning itself
@@ -149,14 +187,12 @@ function Test-OurInstall {
 function Write-InstallMarker {
     param([string]$InstallDir, [string]$Version = '', [switch]$Complete)
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $commit = ''
-    try { $commit = "$(git -C $RepoRoot rev-parse --short HEAD 2>$null)".Trim() } catch { }
     [ordered]@{
         app         = $AppName
         version     = $Version
         complete    = [bool]$Complete
         installedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-        commit      = $commit
+        commit      = Get-HeadCommit
         note        = 'Written by scripts/build.ps1. Without this file the scripts refuse to clean this folder.'
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $InstallDir $InstallMarkerName) -Encoding UTF8
 }
@@ -262,7 +298,7 @@ function Assert-ReleaseReady {
         Fail "git is not on your PATH." @("The stable build commits and pushes the version bump, so it needs git.")
     }
 
-    $branch = "$(git -C $RepoRoot rev-parse --abbrev-ref HEAD)".Trim()
+    $branch = "$(Invoke-Git @('rev-parse', '--abbrev-ref', 'HEAD') -Quiet)".Trim()
     if ($LASTEXITCODE -ne 0 -or -not $branch) {
         Fail "$RepoRoot is not a git checkout."
     }
@@ -271,14 +307,14 @@ function Assert-ReleaseReady {
             "Stable builds are only made from $ReleaseBranch, so the version bump lands where every later build sees it.",
             "Merge the branch, then:  git checkout $ReleaseBranch; git pull",
             "To try this branch's build, give it a folder of its own outside $DefaultInstallRoot - nothing is bumped or pushed:",
-            "  .\scripts\build.ps1 -InstallDir 'E:\Builds\$AppName-test' -NoShortcut"
+            "  .\scripts\build.ps1 -InstallDir 'E:\Builds\$AppName-test'"
         )
     }
 
     # Untracked files count too: the SDK compiles every *.cs under src\ whether git knows it or
     # not, so a new file that was never added would go into a build stamped with a commit that
     # does not contain it. bin\, obj\ and the like are ignored, so they never show up here.
-    $dirty = @(git -C $RepoRoot status --porcelain)
+    $dirty = @(Invoke-Git @('status', '--porcelain') -Quiet)
     if ($dirty.Count -gt 0) {
         Fail "The working tree has uncommitted or untracked files." @(
             @("A stable build has to match a commit on $ReleaseBranch. Commit, stash, ignore or delete these first:") +
@@ -287,14 +323,14 @@ function Assert-ReleaseReady {
     }
 
     Write-Note "fetching origin/$ReleaseBranch"
-    git -C $RepoRoot fetch --quiet origin $ReleaseBranch
+    Invoke-Git @('fetch', '--quiet', 'origin', $ReleaseBranch)
     if ($LASTEXITCODE -ne 0) {
         Fail "git fetch failed." @("Check your network and GitHub login, then run this script again.")
     }
 
     # Both directions. Behind means the build would not be of what is on origin; ahead means the
     # push at the end would carry commits onto $ReleaseBranch that never went through a PR.
-    $counts = "$(git -C $RepoRoot rev-list --left-right --count "HEAD...origin/$ReleaseBranch")".Trim()
+    $counts = "$(Invoke-Git @('rev-list', '--left-right', '--count', "HEAD...origin/$ReleaseBranch") -Quiet)".Trim()
     if ($LASTEXITCODE -ne 0 -or -not ($counts -match '^(\d+)\s+(\d+)$')) {
         Fail "Could not compare $ReleaseBranch with origin/$ReleaseBranch." @("Does the remote 'origin' have a '$ReleaseBranch' branch?")
     }
@@ -316,7 +352,7 @@ function Assert-ReleaseReady {
 # succeeded, so a broken build never moves the number.
 function Push-VersionBump {
     param([string]$Version)
-    git -C $RepoRoot commit --quiet -m "chore: bump version to $Version" -- Directory.Build.props
+    Invoke-Git @('commit', '--quiet', '-m', "chore: bump version to $Version", '--', 'Directory.Build.props')
     if ($LASTEXITCODE -ne 0) {
         Fail "The build is done, but committing the version bump failed." @(
             "Directory.Build.props already says $Version. Commit and push it by hand:",
@@ -325,7 +361,7 @@ function Push-VersionBump {
     }
     # The freshness check ran before a publish that takes minutes; the likeliest reason a push
     # fails now is that origin moved meanwhile, and a plain retry would be rejected the same way.
-    git -C $RepoRoot push --quiet origin $ReleaseBranch
+    Invoke-Git @('push', '--quiet', 'origin', $ReleaseBranch)
     if ($LASTEXITCODE -ne 0) {
         Fail "The build is done and the bump to $Version is committed, but the push was rejected." @(
             "If origin/$ReleaseBranch moved while the build ran:  git pull --rebase origin $ReleaseBranch; git push origin $ReleaseBranch",

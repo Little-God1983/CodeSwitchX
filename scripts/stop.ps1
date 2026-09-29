@@ -55,13 +55,9 @@ if ($running.Count -eq 0) {
 
 foreach ($proc in $running) {
     Write-Step "Closing PID $($proc.ProcessId) ($($proc.ExecutablePath))"
-    if (Stop-AppProcess $proc) { Write-Ok "closed" }
-    else {
-        Fail "PID $($proc.ProcessId) did not close." @(
-            "A dialog may be open in it. Close it there, or end it from Task Manager -",
-            "the next start of CodeSwitchX shows any VS Code window a killed one left hidden."
-        )
-    }
+    $result = Stop-AppProcess $proc
+    if ($result -eq 'closed') { Write-Ok "closed" }
+    else { Fail "PID $($proc.ProcessId) did not close." (Get-StopFailureHints $result) }
 }
 
 Write-Host ""

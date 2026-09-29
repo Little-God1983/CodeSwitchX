@@ -80,24 +80,35 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
 
         try
         {
-            var info = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Directory.Exists(workspace.RootPath) ? workspace.RootPath : null,
-            };
-            foreach (var argument in BuildArguments(workspace))
-            {
-                info.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(info);
+            using var process = Process.Start(BuildStartInfo(executable, workspace));
             return new LaunchResult(true, process?.Id, null);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
             return new LaunchResult(false, null, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// CodeSwitchX's own environment without ELECTRON_RUN_AS_NODE. A VS Code terminal or extension host (a Claude Code
+    /// session) sets it, a CodeSwitchX started from there inherits it, and a Code.exe started with it runs as plain Node
+    /// and exits with code 9, without a window.
+    /// </summary>
+    internal static ProcessStartInfo BuildStartInfo(string executable, Workspace workspace)
+    {
+        var info = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Directory.Exists(workspace.RootPath) ? workspace.RootPath : null,
+        };
+        foreach (var argument in BuildArguments(workspace))
+        {
+            info.ArgumentList.Add(argument);
+        }
+
+        info.Environment.Remove("ELECTRON_RUN_AS_NODE");
+        return info;
     }
 
     private static string Target(Workspace workspace) => workspace.WorkspaceFile is { Length: > 0 } file ? file : workspace.RootPath;

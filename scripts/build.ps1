@@ -8,10 +8,10 @@
     fixed path the Start Menu entry and any taskbar pin open - and then commits the bump and pushes
     main. Older versions stay beside the new one; delete them by hand when you like.
 
-    A running stable CodeSwitchX is closed first, the way its own window closes, so it hands its
-    hosted VS Code windows back to the desktop. CodeSwitchX runs one instance per user, so the old
-    one would otherwise keep answering every start. If it was running, the new version is started
-    once the build is done.
+    A running stable CodeSwitchX is closed once the new version is published, the way its own window
+    closes, so it hands its hosted VS Code windows back to the desktop. CodeSwitchX runs one instance
+    per user, so the old one would otherwise keep answering every start. If it was running, the new
+    version is started straight away. A build that fails leaves the running one alone.
 
     That only happens from a clean main that is level with origin. On any other branch the script
     stops before building anything; give it -InstallDir for a build that goes somewhere else.
@@ -27,17 +27,18 @@
 
 .PARAMETER InstallDir
     A folder of your own for the build instead of a versioned one. Nothing is bumped, committed
-    or pushed, and any branch is fine - this is the way to try a feature branch's build. The
-    build is stamped <current version>-oneoff.<commit> so it cannot be mistaken for a stable one.
-    Must be outside the repo and outside the stable root, and must be empty or a folder this
-    script published into before - a folder holding anything else is refused untouched.
+    or pushed, no Start Menu shortcut is written, and any branch is fine - this is the way to try a
+    feature branch's build. The build is stamped <current version>-oneoff.<commit> so it cannot be
+    mistaken for a stable one. Must be outside the repo and outside the stable root, and must be
+    empty or a folder this script published into before - a folder holding anything else is
+    refused untouched.
 
 .PARAMETER Clean
     With -InstallDir: wipe that folder before publishing. Only ever a folder carrying our install
     marker. A versioned folder always starts empty, so the switch has nothing to do there.
 
 .PARAMETER NoShortcut
-    Skip the Start Menu shortcut. For a test publish somewhere other than the real install.
+    Leave the Start Menu shortcut as it is. A one-off -InstallDir build never writes it.
 
 .EXAMPLE
     .\scripts\build.ps1
@@ -48,8 +49,8 @@
     0.1.0.4 -> 0.2.0, for an actual release rather than another build of one.
 
 .EXAMPLE
-    .\scripts\build.ps1 -InstallDir E:\Builds\CodeSwitchX-test -NoShortcut
-    Try this branch's build without touching the stable versions or the repo.
+    .\scripts\build.ps1 -InstallDir E:\Builds\CodeSwitchX-test
+    Try this branch's build without touching the stable versions, the Start Menu or the repo.
 #>
 [CmdletBinding()]
 param(
@@ -67,7 +68,7 @@ if (-not $InstallRoot) { $InstallRoot = $DefaultInstallRoot }
 $InstallRoot = Resolve-FullPath $InstallRoot
 
 # Two ways in: no -InstallDir means the next stable version, with everything that entails; an
-# -InstallDir is a one-off build that leaves the repo alone.
+# -InstallDir is a one-off build that leaves the repo and the Start Menu alone.
 $stable = -not $InstallDir
 if (-not $stable) { $InstallDir = Resolve-FullPath $InstallDir }
 
@@ -104,10 +105,11 @@ if ($stable) {
 else {
     # Stamped so Explorer's Product version or a log line can never pass this off as the stable build
     # of the same number. FileVersion stays numeric, as Windows requires.
-    $commit = "$(git -C $RepoRoot rev-parse --short HEAD 2>$null)".Trim()
+    $commit = Get-HeadCommit
     if (-not $commit) { $commit = 'nogit' }
     $version = "$current-oneoff.$commit"
     Write-Ok "version $version"
+    if ($NoShortcut) { Write-Note "-NoShortcut is implied: a one-off build never writes the Start Menu shortcut" }
 }
 
 # An install folder inside the repo gets swept up by the next build, and each build then copies the
@@ -126,7 +128,7 @@ if (-not $stable -and ((Test-PathUnder $InstallDir $InstallRoot -OrEqual) -or (T
     Fail "-InstallDir must be outside the stable root ($InstallRoot)." @(
         "That folder holds the stable versions, which only build.ps1 without -InstallDir makes, from main.",
         "Put a one-off build somewhere else, for example:",
-        "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test' -NoShortcut"
+        "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test'"
     )
 }
 
@@ -137,34 +139,34 @@ if ((Test-DirectoryHasContent $InstallDir) -and -not (Test-OurInstall $InstallDi
     Fail "$InstallDir already holds files that are not a CodeSwitchX install." @(
         "Not one of them was touched.",
         "Move that folder out of the way, or give the build a folder of its own:",
-        "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test' -NoShortcut"
+        "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test'"
     )
 }
 
-# --- close the running app ---------------------------------------------------------------
-# A stable build closes every version running from the root: CodeSwitchX is one instance per user,
-# so a start of the new version would only bring the old one forward. A one-off build only closes
-# what runs from its own folder, since that is what locks the files it overwrites.
-$running = if ($stable) { Get-AppProcess -AnyVersion -InstallRoot $InstallRoot } else { Get-AppProcess $InstallDir }
-$restart = $running.Count -gt 0
-if ($running.Count -gt 0) {
+# Closes each process this build replaces; a failure stops the script with what to do about it. On
+# success the caller starts the new build again, so nobody is left without CodeSwitchX.
+function Close-RunningApp {
+    param([object[]]$Running, [string[]]$ExtraHints = @())
+    if ($Running.Count -eq 0) { return }
     Write-Step "Closing the running CodeSwitchX"
-    foreach ($proc in $running) {
-        if (Stop-AppProcess $proc) { Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))" }
-        else {
-            Fail "PID $($proc.ProcessId) did not close." @(
-                "A dialog may be open in it. Close CodeSwitchX by hand, then run this script again.",
-                "It is not killed on purpose: a killed CodeSwitchX leaves its hosted VS Code windows hidden."
-            )
-        }
+    foreach ($proc in $Running) {
+        $result = Stop-AppProcess $proc
+        if ($result -eq 'closed') { Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))" }
+        else { Fail "PID $($proc.ProcessId) did not close." (@(Get-StopFailureHints $result) + $ExtraHints) }
     }
 }
 
-if ($stable) {
-    foreach ($other in (Get-OtherAppProcess -InstallRoot $InstallRoot)) {
-        Write-Warn "another CodeSwitchX runs from $($other.ExecutablePath) (PID $($other.ProcessId)) - left alone"
-        Write-Note "while it runs, starting the new version only brings that one forward"
-    }
+# --- close a one-off build's running app ---------------------------------------------------
+# A one-off build overwrites its folder in place, so whatever runs from there has to go before the
+# clean and the publish can touch its files. A stable build publishes into a new folder nothing has
+# locked, and closes the running version only once the new one is ready (below).
+$running = @()
+$buildFailedHints = @("Scroll up for the first error - warnings count as errors here (Directory.Build.props).")
+if ($stable) { $buildFailedHints += "Directory.Build.props is untouched, still $current." }
+if (-not $stable) {
+    $running = @(Get-AppProcess $InstallDir)
+    Close-RunningApp $running
+    if ($running.Count -gt 0) { $buildFailedHints += "The CodeSwitchX that ran from $InstallDir was closed for this build; its files may now be half replaced." }
 }
 
 # --- clean -------------------------------------------------------------------------------
@@ -202,8 +204,6 @@ Write-InstallMarker -InstallDir $InstallDir -Version $version
 # PowerShell unwraps a one-element array from an `if`, and splatting a plain string with @ hands
 # MSBuild the characters one by one - so the array is built explicitly rather than cast.
 $versionArgs = @("-p:Version=$version")
-$buildFailedHints = @("Scroll up for the first error - warnings count as errors here (Directory.Build.props).")
-if ($stable) { $buildFailedHints += "Directory.Build.props is untouched, still $current." }
 
 Write-Step "Publishing Release build"
 Write-Note "warnings are errors in this repo, so a warning will stop the build"
@@ -216,7 +216,7 @@ if ($LASTEXITCODE -ne 0) {
 
 foreach ($required in @($AppExeName, $RelayRelativePath)) {
     if (-not (Test-Path -LiteralPath (Join-Path $InstallDir $required))) {
-        Fail "The build reported success but $required is missing from $InstallDir."
+        Fail "The build reported success but $required is missing from $InstallDir." $buildFailedHints
     }
 }
 Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete
@@ -225,9 +225,20 @@ Write-Ok "published to $InstallDir"
 # --- make it the current version ------------------------------------------------------------
 # The fixed path E:\StableVersion\CodeSwitchX is what the Start Menu entry and any taskbar pin open.
 # Pointing it at the new folder is what makes this build "current" without every pin on the machine
-# having to change.
+# having to change. The running version is closed first: it may have been started through that very
+# path, and it is only closed now that there is a complete build to start in its place.
 $shortcutDir = $InstallDir
 if ($stable) {
+    $running = @(Get-AppProcess -AnyVersion -InstallRoot $InstallRoot)
+    Close-RunningApp $running @(
+        "$version is published in $InstallDir but not made current, and the version is not bumped.",
+        "Run the build again once it is closed; it rebuilds $version."
+    )
+    foreach ($other in (Get-OtherAppProcess -InstallRoot $InstallRoot)) {
+        Write-Warn "another CodeSwitchX runs from $($other.ExecutablePath) (PID $($other.ProcessId)) - left alone"
+        Write-Note "while it runs, starting the new version only brings that one forward"
+    }
+
     Write-Step "Making $version the current version"
     if (Set-CurrentLink -InstallRoot $InstallRoot -Target $InstallDir) {
         $shortcutDir = Get-CurrentLinkPath $InstallRoot
@@ -236,18 +247,33 @@ if ($stable) {
     else {
         Write-Warn "no current link; the shortcut will point at $InstallDir directly, and a taskbar pin made earlier still opens the old build"
     }
-}
 
-if ($NoShortcut) {
-    Write-Ok "no Start Menu shortcut, as asked"
-    if ($stable -and $shortcutDir -eq $InstallDir) {
-        Write-Warn "the existing Start Menu shortcut still opens the previous build"
+    if ($NoShortcut) {
+        Write-Ok "Start Menu shortcut left as it is, as asked"
+        if ($shortcutDir -eq $InstallDir) {
+            Write-Warn "the existing Start Menu shortcut still opens the previous build"
+        }
+    }
+    else {
+        $linkPath = Write-StartMenuShortcut $shortcutDir
+        Write-Ok "Start Menu shortcut at $linkPath"
+        Write-Note "right-click it in the Start Menu and choose 'Pin to taskbar'"
     }
 }
-else {
-    $linkPath = Write-StartMenuShortcut $shortcutDir
-    Write-Ok "Start Menu shortcut at $linkPath"
-    Write-Note "right-click it in the Start Menu and choose 'Pin to taskbar'"
+
+# --- start it again ---------------------------------------------------------------------------
+# Only when this script closed it, and before the version is recorded, so a rejected push cannot
+# leave anyone without CodeSwitchX. Started through the shell, which hands the app none of this
+# script's handles: with them it held the output pipe of a piped run open, and whoever read it
+# waited until CodeSwitchX exited.
+$exePath = Join-Path $shortcutDir $AppExeName
+if ($running.Count -gt 0) {
+    Write-Step "Starting CodeSwitchX $version"
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo $exePath
+    $startInfo.WorkingDirectory = $shortcutDir
+    $startInfo.UseShellExecute  = $true
+    $started = [System.Diagnostics.Process]::Start($startInfo)
+    Write-Ok "started PID $($started.Id)"
 }
 
 # --- record the version -------------------------------------------------------------------
@@ -259,30 +285,13 @@ if ($stable) {
     Write-Ok "committed and pushed to origin/$ReleaseBranch"
 }
 
-# --- start it again ---------------------------------------------------------------------------
-# Only when this script closed it. A VS Code extension host (a Claude Code session, say) passes
-# ELECTRON_RUN_AS_NODE down, and every Code.exe CodeSwitchX starts would inherit it and run as plain
-# Node, without a window - so the variable goes from this script's environment, which ends here.
-# Started through the shell, which hands the app none of this script's handles: with them it held
-# the output pipe of a piped run open, and whoever read it waited until CodeSwitchX exited.
-$exePath = Join-Path $shortcutDir $AppExeName
-if ($restart) {
-    Write-Step "Starting CodeSwitchX $version"
-    Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo $exePath
-    $startInfo.WorkingDirectory = $shortcutDir
-    $startInfo.UseShellExecute  = $true
-    $started = [System.Diagnostics.Process]::Start($startInfo)
-    Write-Ok "started PID $($started.Id)"
-}
-
 # --- done ----------------------------------------------------------------------------------
 Write-Host ""
 if ($stable) { Write-Host "  Build complete - CodeSwitchX $version" -ForegroundColor Green }
 else         { Write-Host "  Build complete." -ForegroundColor Green }
-if (-not $restart) {
-    if ($NoShortcut) { Write-Host "  Start it: " -NoNewline }
-    else             { Write-Host "  Start it from the Start Menu (CodeSwitchX), or: " -NoNewline }
+if ($running.Count -eq 0) {
+    if ($stable -and -not $NoShortcut) { Write-Host "  Start it from the Start Menu (CodeSwitchX), or: " -NoNewline }
+    else                               { Write-Host "  Start it: " -NoNewline }
     Write-Host $exePath -ForegroundColor White
 }
 Write-Note "if Settings then reports the Claude Code hooks as outdated, install them again there"

@@ -5,7 +5,10 @@
     <AssemblyName>CodeSwitchX</AssemblyName>
     <RootNamespace>CodeSwitchX.UI</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- The exe's icon: Explorer, the Start Menu shortcut and the taskbar take it from here, and so does the window, which sets none of its own. -->
+    <!--
+      The exe's icon: Explorer, the Start Menu shortcut and the taskbar take it from here, and so does the window, which sets none of its
+      own. It is a Win32 resource of CodeSwitchX.dll as well, where the tray reads it at its own size (TrayIconService).
+    -->
     <ApplicationIcon>Assets\CodeSwitchX.ico</ApplicationIcon>
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
@@ -32,10 +35,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
-  </ItemGroup>
-  <ItemGroup>
-    <!-- The tray reads the same icon from the assembly (TrayIconService), so it needs no pack URI and no running Application. -->
-    <EmbeddedResource Include="Assets\CodeSwitchX.ico" LogicalName="CodeSwitchX.ico" />
   </ItemGroup>
   <!--
     The relay's files come from the folder the project reference was built into (RelayTargetPath), in the build output and

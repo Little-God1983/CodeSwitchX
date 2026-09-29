@@ -36,6 +36,28 @@ public class VsCodeLauncherTests
     }
 
     [Fact]
+    public void VS_Code_starts_without_the_electron_variable_that_would_run_it_as_plain_node()
+    {
+        // A VS Code terminal or extension host (a Claude Code session) sets ELECTRON_RUN_AS_NODE=1. A CodeSwitchX started
+        // from there passed it on, and every Code.exe it opened ran as Node and exited with code 9, without a window.
+        var before = Environment.GetEnvironmentVariable(ElectronRunAsNode);
+        Environment.SetEnvironmentVariable(ElectronRunAsNode, "1");
+        try
+        {
+            var info = VsCodeLauncher.BuildStartInfo(@"C:\VS Code\Code.exe", new Workspace { Name = "App", RootPath = @"c:\repo\app" });
+
+            info.Environment.ShouldNotContainKey(ElectronRunAsNode);
+            info.Environment.ShouldContainKey("PATH", "only the one variable goes; VS Code needs the rest of the environment");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(ElectronRunAsNode, before);
+        }
+    }
+
+    private const string ElectronRunAsNode = "ELECTRON_RUN_AS_NODE";
+
+    [Fact]
     public void Launch_without_an_executable_reports_an_error_instead_of_throwing()
     {
         var launcher = new VsCodeLauncher(() => @"C:\definitely\missing\Code.exe");
