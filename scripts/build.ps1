@@ -262,14 +262,16 @@ if ($stable) {
 # --- start it again ---------------------------------------------------------------------------
 # Only when this script closed it. A VS Code extension host (a Claude Code session, say) passes
 # ELECTRON_RUN_AS_NODE down, and every Code.exe CodeSwitchX starts would inherit it and run as plain
-# Node, without a window - so the variable is taken out of the new process's environment.
+# Node, without a window - so the variable goes from this script's environment, which ends here.
+# Started through the shell, which hands the app none of this script's handles: with them it held
+# the output pipe of a piped run open, and whoever read it waited until CodeSwitchX exited.
 $exePath = Join-Path $shortcutDir $AppExeName
 if ($restart) {
     Write-Step "Starting CodeSwitchX $version"
+    Remove-Item Env:\ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo $exePath
     $startInfo.WorkingDirectory = $shortcutDir
-    $startInfo.UseShellExecute  = $false
-    [void]$startInfo.Environment.Remove('ELECTRON_RUN_AS_NODE')
+    $startInfo.UseShellExecute  = $true
     $started = [System.Diagnostics.Process]::Start($startInfo)
     Write-Ok "started PID $($started.Id)"
 }
