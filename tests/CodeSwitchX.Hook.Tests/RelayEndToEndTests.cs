@@ -73,9 +73,9 @@ public class RelayEndToEndTests : IAsyncLifetime
     [Fact]
     public async Task Relay_treats_an_endpoint_written_before_its_owner_process_started_as_stale()
     {
-        // The PID of a crashed instance, reused by this process: the descriptor says its owner wrote it before this process existed.
+        // The PID of a crashed instance, reused by this process: the descriptor carries the crashed owner's start time, not this process's.
         var descriptor = EndpointDescriptor.TryRead(_paths.EndpointFile)!;
-        (descriptor with { StartedAtUtc = descriptor.StartedAtUtc.AddDays(-1) }).Write(_paths.EndpointFile);
+        (descriptor with { OwnerStartedAtUtc = descriptor.OwnerStartedAtUtc.AddDays(-1) }).Write(_paths.EndpointFile);
 
         var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"reused","hook_event_name":"Stop"}"""), _paths.Root);
 

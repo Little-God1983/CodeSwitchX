@@ -272,6 +272,7 @@ public sealed class ClaudeHookInstaller
         try
         {
             ReadHookEntries(settings);
+            _ = settings.ToJsonString(WriteOptions);
         }
         catch (ArgumentException ex)
         {
@@ -279,15 +280,10 @@ public sealed class ClaudeHookInstaller
             // is never read and is written back as it was.
             throw new HookInstallException($"{_paths.SettingsFile} repeats a key where CodeSwitchX edits it: {ex.Message}", ex);
         }
-
-        try
-        {
-            _ = settings.ToJsonString(WriteOptions);
-        }
         catch (InvalidOperationException ex)
         {
-            // A lone surrogate escape (half an emoji) anywhere in the file: it cannot be written back, and reading an entry that
-            // holds one throws, which failed the status and with it the start.
+            // A lone surrogate escape (half an emoji) anywhere in the file, in a key or a value: the key throws when its object
+            // is first read, the value when the file is written back; either failed the status and with it the start.
             throw new HookInstallException($"{_paths.SettingsFile} holds an escape sequence that cannot be read: {ex.Message}", ex);
         }
 

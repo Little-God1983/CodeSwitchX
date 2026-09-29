@@ -74,6 +74,8 @@ public class EventApiServiceTests : IAsyncLifetime
         descriptor.Port.ShouldBeGreaterThan(0);
         descriptor.PipeName.ShouldBe(_pipeName);
         descriptor.Pid.ShouldBe(Environment.ProcessId);
+        // The relay tells this process from one that reused its PID by the start time both read from the kernel.
+        descriptor.OwnerStartedAtUtc.ShouldBe(System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(), TimeSpan.FromSeconds(1));
     }
 
     [Fact]

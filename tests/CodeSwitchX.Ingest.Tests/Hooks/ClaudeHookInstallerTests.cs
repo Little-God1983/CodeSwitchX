@@ -139,6 +139,20 @@ public class ClaudeHookInstallerTests : IDisposable
     }
 
     [Fact]
+    public void A_lone_surrogate_escape_in_a_key_of_settings_json_is_refused_with_a_message_not_an_exception()
+    {
+        // The key is read when the object is first touched, which happens before the file is serialised back.
+        var content = """{"\ud83d note":1,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify.exe"}]}]}}""";
+        WriteSettings(content);
+
+        var status = _installer.GetStatus(Exe);
+        status.State.ShouldBe(HookInstallState.Unreadable);
+        status.Problem.ShouldNotBeNullOrWhiteSpace();
+        Should.Throw<HookInstallException>(() => _installer.Install(Exe));
+        File.ReadAllText(_paths.SettingsFile).ShouldBe(content);
+    }
+
+    [Fact]
     public void Uninstall_without_a_settings_file_creates_none()
     {
         var result = _installer.Uninstall();

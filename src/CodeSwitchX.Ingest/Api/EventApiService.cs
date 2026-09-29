@@ -100,7 +100,8 @@ public sealed class EventApiService : IHostedService
             .Select(a => Uri.TryCreate(a, UriKind.Absolute, out var uri) && uri.Scheme.StartsWith("http", StringComparison.OrdinalIgnoreCase) && uri.Host != "pipe" ? uri.Port : 0)
             .FirstOrDefault(p => p > 0);
 
-        Endpoint = new EndpointDescriptor(_options.EnableNamedPipe ? _options.PipeName : string.Empty, port, Environment.ProcessId, _time.GetUtcNow());
+        Endpoint = new EndpointDescriptor(_options.EnableNamedPipe ? _options.PipeName : string.Empty, port, Environment.ProcessId, _time.GetUtcNow(),
+            EndpointDescriptor.CurrentProcessStartedAtUtc());
         Endpoint.Write(_paths.EndpointFile);
         _logger.LogInformation("Event API listening on pipe {Pipe} and port {Port}", Endpoint.PipeName, Endpoint.Port);
     }

@@ -59,12 +59,12 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
         _vm.HookState.ShouldBe(HookInstallState.NotInstalled);
 
-        _vm.InstallHooksCommand.Execute(null);
+        await _vm.InstallHooksCommand.ExecuteAsync(null);
         _vm.HookState.ShouldBe(HookInstallState.Installed);
         _vm.HookStatusText.ShouldContain($"{ClaudeHookInstaller.Events.Length} of {ClaudeHookInstaller.Events.Length}");
         File.Exists(_claude.SettingsFile).ShouldBeTrue();
 
-        _vm.RemoveHooksCommand.Execute(null);
+        await _vm.RemoveHooksCommand.ExecuteAsync(null);
         _vm.HookState.ShouldBe(HookInstallState.NotInstalled);
     }
 
@@ -154,10 +154,27 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Install_hooks_returns_to_the_ui_thread_before_a_locked_settings_json_is_given_up()
+    {
+        // The installer retries the replace for about half a second while another process holds the file; the click must not freeze the window for it.
+        await _vm.LoadAsync(CancellationToken.None);
+        Directory.CreateDirectory(_claude.ClaudeDirectory);
+        File.WriteAllText(_claude.SettingsFile, "{}");
+        using var holder = new FileStream(_claude.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.Read); // readable, not replaceable
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        var install = _vm.InstallHooksCommand.ExecuteAsync(null);
+
+        sw.ElapsedMilliseconds.ShouldBeLessThan(200, "the retries run off the calling thread");
+        await install.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        _vm.LastMessage.ShouldNotBeNull(_vm.HookStatusText).ShouldContain("Cannot write");
+    }
+
+    [Fact]
     public async Task A_partial_install_names_the_missing_events_and_says_to_install_again()
     {
         await _vm.LoadAsync(CancellationToken.None);
-        _vm.InstallHooksCommand.Execute(null);
+        await _vm.InstallHooksCommand.ExecuteAsync(null);
         var settings = JsonNode.Parse(File.ReadAllText(_claude.SettingsFile))!.AsObject();
         settings["hooks"]!.AsObject().Remove("StopFailure");
         File.WriteAllText(_claude.SettingsFile, settings.ToJsonString());
@@ -174,7 +191,7 @@ public class SettingsViewModelTests : IDisposable
     {
         // Since L6 an entry at the same path in the old shell form is Outdated too, so "a different csx-hook.exe" was not always true.
         await _vm.LoadAsync(CancellationToken.None);
-        _vm.InstallHooksCommand.Execute(null);
+        await _vm.InstallHooksCommand.ExecuteAsync(null);
         var settings = JsonNode.Parse(File.ReadAllText(_claude.SettingsFile))!.AsObject();
         settings["hooks"]!["Stop"]![0]!["hooks"]![0] = new JsonObject { ["type"] = "command", ["command"] = $"\"{_vm.RelayExecutable}\" Stop", ["timeout"] = 5 };
         File.WriteAllText(_claude.SettingsFile, settings.ToJsonString());
@@ -205,7 +222,7 @@ public class SettingsViewModelTests : IDisposable
         File.WriteAllText(_claude.SettingsFile, "{ broken");
         await _vm.LoadAsync(CancellationToken.None);
 
-        _vm.InstallHooksCommand.Execute(null);
+        await _vm.InstallHooksCommand.ExecuteAsync(null);
 
         _vm.LastMessage.ShouldNotBeNull().ShouldContain("not valid JSON");
         File.ReadAllText(_claude.SettingsFile).ShouldBe("{ broken");

@@ -152,23 +152,9 @@ public static class HookEnvelopeParser
         _ => (null, false),
     };
 
-    /// <summary>The string property, or null when it is missing, not a string, or holds a lone surrogate escape that cannot be read.</summary>
-    private static string? GetString(JsonElement element, string name)
-    {
-        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        try
-        {
-            return value.GetString();
-        }
-        catch (InvalidOperationException)
-        {
-            return null; // half an emoji: the field is lost, the event is not
-        }
-    }
+    /// <summary>The string property, or null when it is missing, not a string, or holds a lone surrogate escape (<see cref="JsonStrings.TryRead"/>).</summary>
+    private static string? GetString(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? JsonStrings.TryRead(value) : null;
 
     private static int? GetInt(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i)

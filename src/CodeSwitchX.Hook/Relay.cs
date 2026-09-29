@@ -3,7 +3,6 @@ using System.IO.Pipes;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace CodeSwitchX.Hook;
 
@@ -13,9 +12,12 @@ namespace CodeSwitchX.Hook;
 /// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
 /// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
-internal static partial class Relay
+internal static class Relay
 {
     internal const int ConnectTimeoutMs = 150;
+
+    /// <summary>The kernel gives both sides the same process start time; this covers the rounding of a serialised one.</summary>
+    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(1);
     internal const int TotalTimeoutMs = 1000;
     internal const int MaxStdinBytes = 16 * 1024 * 1024;
 
@@ -35,7 +37,7 @@ internal static partial class Relay
         {
             var eventName = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) ? args[0] : "Unknown";
             var endpoint = ReadEndpoint(Path.Combine(dataDirectory, "endpoint.json"));
-            if (endpoint is null || !OwnerIsAlive(endpoint.Pid, endpoint.StartedAtUtc))
+            if (endpoint is null || !OwnerIsAlive(endpoint))
             {
                 // A stale endpoint.json (crash, kill, missed shutdown) must not cost every hook a connect timeout.
                 return 0;
@@ -81,25 +83,26 @@ internal static partial class Relay
 
     /// <summary>
     /// Whether the process that wrote the descriptor still runs. A PID is reused after a crash, so the process holding it
-    /// counts only if it started no later than the descriptor was written; a descriptor without a time is trusted by the PID.
+    /// is also told by its start time, which the writer read from the kernel as this does: no clock and no write time enter
+    /// it. A descriptor without a start time is trusted by the PID.
     /// </summary>
-    internal static bool OwnerIsAlive(int pid, string? startedAtUtc)
+    internal static bool OwnerIsAlive(EndpointInfo endpoint)
     {
-        if (pid <= 0)
+        if (endpoint.Pid <= 0)
         {
             return true; // unknown owner (hand-written endpoint file): trust it
         }
 
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            using var process = System.Diagnostics.Process.GetProcessById(endpoint.Pid);
             if (process.HasExited)
             {
                 return false;
             }
 
-            return !DateTimeOffset.TryParse(startedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var written)
-                || process.StartTime.ToUniversalTime() <= written.UtcDateTime;
+            return !DateTimeOffset.TryParse(endpoint.OwnerStartedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var started)
+                || (process.StartTime.ToUniversalTime() - started.UtcDateTime).Duration() <= StartTimeTolerance;
         }
         catch (ArgumentException)
         {
@@ -170,18 +173,7 @@ internal static partial class Relay
             {
                 using (document)
                 {
-                    if (document.RootElement.ValueKind == JsonValueKind.Object)
-                    {
-                        WriteTrimmedObject(writer, document.RootElement);
-                    }
-                    else if (LoneSurrogateEscape().IsMatch(payload))
-                    {
-                        writer.WriteStringValue(Truncate(payload));
-                    }
-                    else
-                    {
-                        document.RootElement.WriteTo(writer);
-                    }
+                    WriteValue(writer, document.RootElement, top: true);
                 }
             }
             else
@@ -195,33 +187,55 @@ internal static partial class Relay
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
-    private static void WriteTrimmedObject(Utf8JsonWriter writer, JsonElement obj)
+    /// <summary>
+    /// Writes the value with every string cut and read through <see cref="StringOf"/>, so half an emoji anywhere in it, in
+    /// a name or a value, cannot lose the event. At the top level a nested object or array above the size cap is left out.
+    /// </summary>
+    private static void WriteValue(Utf8JsonWriter writer, JsonElement element, bool top)
     {
-        writer.WriteStartObject();
-        foreach (var property in obj.EnumerateObject())
+        switch (element.ValueKind)
         {
-            switch (property.Value.ValueKind)
-            {
-                case JsonValueKind.String:
-                    writer.WriteString(property.Name, Truncate(StringOf(property.Value)));
-                    break;
-                case JsonValueKind.Object or JsonValueKind.Array:
-                    // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size. One that holds
-                    // a lone surrogate escape cannot be written at all.
-                    var raw = property.Value.GetRawText();
-                    if (raw.Length <= MaxNestedBytes && !LoneSurrogateEscape().IsMatch(raw))
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    string name;
+                    try
                     {
-                        property.WriteTo(writer);
+                        name = property.Name;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue; // a key with half an emoji: nothing the engine reads
                     }
 
-                    break;
-                default:
-                    property.WriteTo(writer);
-                    break;
-            }
-        }
+                    if (top && property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array && property.Value.GetRawText().Length > MaxNestedBytes)
+                    {
+                        continue; // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size.
+                    }
 
-        writer.WriteEndObject();
+                    writer.WritePropertyName(name);
+                    WriteValue(writer, property.Value, top: false);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteValue(writer, item, top: false);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(Truncate(StringOf(element)));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     /// <summary>
@@ -236,14 +250,68 @@ internal static partial class Relay
         }
         catch (InvalidOperationException)
         {
-            using var repaired = JsonDocument.Parse(LoneSurrogateEscape().Replace(element.GetRawText(), @"\uFFFD"));
-            return repaired.RootElement.GetString() ?? string.Empty;
+            return Unescape(element.GetRawText());
         }
     }
 
-    /// <summary>A \uD800-\uDBFF escape not followed by a \uDC00-\uDFFF one, or such a low one not preceded by a high one.</summary>
-    [GeneratedRegex(@"\\u[dD][89abAB][0-9a-fA-F]{2}(?!\\u[dD][c-fC-F][0-9a-fA-F]{2})|(?<!\\u[dD][89abAB][0-9a-fA-F]{2})\\u[dD][c-fC-F][0-9a-fA-F]{2}")]
-    private static partial Regex LoneSurrogateEscape();
+    /// <summary>
+    /// Decodes a JSON string token (quotes included, escapes valid: the document parsed) by hand, pairing surrogate escapes
+    /// as the reader does and reading a lone one as U+FFFD. An escaped backslash followed by "u" is text, not an escape.
+    /// </summary>
+    private static string Unescape(string raw)
+    {
+        var text = new StringBuilder(raw.Length);
+        var end = raw.Length - 1;
+        for (var i = 1; i < end; i++)
+        {
+            var c = raw[i];
+            if (c != '\\')
+            {
+                text.Append(c);
+                continue;
+            }
+
+            var escape = raw[++i];
+            switch (escape)
+            {
+                case 'u':
+                    var code = (char)int.Parse(raw.AsSpan(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                    i += 4;
+                    if (char.IsHighSurrogate(code) && i + 6 < end + 1 && raw[i + 1] == '\\' && raw[i + 2] == 'u'
+                        && char.IsLowSurrogate((char)int.Parse(raw.AsSpan(i + 3, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture)))
+                    {
+                        text.Append(code).Append((char)int.Parse(raw.AsSpan(i + 3, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                        i += 6;
+                    }
+                    else
+                    {
+                        text.Append(char.IsSurrogate(code) ? '\uFFFD' : code);
+                    }
+
+                    break;
+                case 'n':
+                    text.Append('\n');
+                    break;
+                case 't':
+                    text.Append('\t');
+                    break;
+                case 'r':
+                    text.Append('\r');
+                    break;
+                case 'b':
+                    text.Append('\b');
+                    break;
+                case 'f':
+                    text.Append('\f');
+                    break;
+                default:
+                    text.Append(escape); // \" \\ \/
+                    break;
+            }
+        }
+
+        return text.ToString();
+    }
 
     private static string Truncate(string value)
     {

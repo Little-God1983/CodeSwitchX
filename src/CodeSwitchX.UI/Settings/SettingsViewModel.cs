@@ -89,12 +89,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         };
     }
 
+    /// <summary>Off the UI thread: the installer retries the file replace for about half a second while another process holds settings.json.</summary>
     [RelayCommand]
-    private void InstallHooks()
+    private async Task InstallHooksAsync()
     {
+        var relay = RelayExecutable;
         try
         {
-            var result = _installer.Install(RelayExecutable);
+            var result = await Task.Run(() => _installer.Install(relay));
             LastMessage = result.Changed
                 ? $"Hooks written to {SettingsFile}" + (result.BackupFile is null ? string.Empty : $" (backup: {Path.GetFileName(result.BackupFile)})")
                 : "Hooks were already up to date.";
@@ -108,11 +110,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RemoveHooks()
+    private async Task RemoveHooksAsync()
     {
         try
         {
-            var result = _installer.Uninstall();
+            var result = await Task.Run(_installer.Uninstall);
             LastMessage = result.Changed ? "CodeSwitchX hooks removed." : "No CodeSwitchX hooks were present.";
         }
         catch (HookInstallException ex)

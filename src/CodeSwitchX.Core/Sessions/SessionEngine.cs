@@ -27,8 +27,8 @@ public sealed class SessionEngine : IDisposable
     private readonly Lock _gate = new();
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.Ordinal);
 
-    /// <summary>Per chat, the tool uses whose PreToolUse has no PostToolUse yet, oldest first: which agent a nameless prompt belongs to.</summary>
-    private readonly Dictionary<string, List<(string? Agent, string? ToolUseId)>> _openTools = new(StringComparer.Ordinal);
+    /// <summary>Per chat, what its agents are up to (see <see cref="Agents"/>); a chat without an entry is treated as before agents were told apart.</summary>
+    private readonly Dictionary<string, Agents> _agents = new(StringComparer.Ordinal);
     private const int OpenToolsKept = 32;
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _sweepTimer;
@@ -127,7 +127,7 @@ public sealed class SessionEngine : IDisposable
             var s = previous ?? NewSession(e.SessionId, e.At);
 
             var state = s.State;
-            var signal = SignalOfLocked(e, s, out var waitingAgent);
+            var signal = SignalOfLocked(e, s);
             // idle_prompt reports a quiet minute. Activity within the quiet window means it raced the next prompt (each relay
             // may take up to a second to land) and describes the turn before, which has already ended.
             var staleIdlePrompt = signal == SessionSignal.IdlePrompt && e.At - s.LastEventAt < _options.InferredIdleAfter;
@@ -162,96 +162,154 @@ public sealed class SessionEngine : IDisposable
                 Inferred = false,
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
-                WaitingAgentId = state == SessionState.Waiting ? waitingAgent : null,
                 ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
             });
         }
     }
 
     /// <summary>
-    /// The signal an event carries once the chat's agents are told apart. Sub-agents run tools while the parent's turn goes on,
-    /// and while a parallel sub-agent's permission prompt waits, so a tool use ends a Waiting only when it comes from the
-    /// agent whose prompt the chat waits for; that agent's own stop ends it too, as the parent's turn goes on without it. The
-    /// chat's prompt, stop, end and idle prompt end it whoever waited. A PermissionRequest names its agent; the permission_prompt
-    /// Notification names none and is pinned on the agent of the latest tool use still open, or keeps the agent a
-    /// PermissionRequest named before it.
+    /// The signal an event carries once the chat's agents are told apart (<see cref="Agents"/>). Sub-agents run tools while
+    /// the parent's turn goes on, and while another agent's permission prompt waits, so the chat waits for a set of agents:
+    /// a PermissionRequest adds the agent it names (none: the main agent); a Notification adds the agent it names, or for a
+    /// nameless permission_prompt, the agent of the latest tool use still open unless a prompt already waits (it restates
+    /// that one), and for any other nameless dialog the main agent. A tool use by a waiting agent takes it out of the set,
+    /// and so does its SubagentStop; the Waiting ends when the set is empty, as Working, or as Idle when the main turn ended
+    /// meanwhile. A tool use by any other agent leaves the Waiting alone. The main turn's stop or idle prompt takes the main
+    /// agent out and ends the Waiting unless a sub-agent still waits; a new prompt takes the main agent out and works on.
+    /// Without a set (a restored Waiting, an inferred one) the first tool use ends it, as before.
     /// </summary>
-    private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s, out string? waitingAgent)
+    private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s)
     {
-        var open = TrackOpenToolsLocked(e);
-        waitingAgent = s.State == SessionState.Waiting ? s.WaitingAgentId : null;
-        if (e.Signal == SessionSignal.Notification)
-        {
-            waitingAgent = e.AgentId ?? (s.State == SessionState.Waiting ? s.WaitingAgentId : open.Count > 0 ? open[^1].Agent : null);
-            return e.Signal;
-        }
-
-        if (s.State != SessionState.Waiting)
-        {
-            return e.Signal;
-        }
-
-        if (e.Signal == SessionSignal.ToolUse && !string.Equals(e.AgentId, s.WaitingAgentId, StringComparison.Ordinal))
-        {
-            return null; // another agent of the chat: the prompt still waits
-        }
-
-        if (e.EventName == "SubagentStop" && s.WaitingAgentId is not null && s.WaitingAgentId == e.AgentId)
-        {
-            return SessionSignal.ToolUse; // the waiting agent stopped (its prompt denied): the parent's turn goes on
-        }
-
-        return e.Signal;
-    }
-
-    private List<(string? Agent, string? ToolUseId)> TrackOpenToolsLocked(HookEvent e)
-    {
-        if (!_openTools.TryGetValue(e.SessionId, out var open))
-        {
-            open = [];
-        }
-
+        var agents = _agents.GetValueOrDefault(e.SessionId) ?? new Agents();
+        var agent = Agents.Key(e.AgentId);
+        var signal = e.Signal;
         switch (e.EventName)
         {
             case "PreToolUse":
-                open.Add((e.AgentId, e.ToolUseId));
-                if (open.Count > OpenToolsKept)
+                agents.Open.Add((agent, e.ToolUseId));
+                if (agents.Open.Count > OpenToolsKept)
                 {
-                    open.RemoveAt(0);
+                    agents.Open.RemoveAt(0);
                 }
 
                 break;
             case "PostToolUse":
-                var index = open.FindLastIndex(t => t.ToolUseId is not null && t.ToolUseId == e.ToolUseId);
+                var index = agents.Open.FindLastIndex(t => t.ToolUseId is not null && t.ToolUseId == e.ToolUseId);
                 if (index < 0)
                 {
-                    index = open.FindLastIndex(t => t.Agent == e.AgentId);
+                    index = agents.Open.FindLastIndex(t => t.Agent == agent);
                 }
 
                 if (index >= 0)
                 {
-                    open.RemoveAt(index);
+                    agents.Open.RemoveAt(index);
                 }
 
                 break;
             case "SubagentStop":
-                open.RemoveAll(t => t.Agent == e.AgentId);
-                break;
-            case "UserPromptSubmit" or "Stop" or "StopFailure" or "SessionEnd":
-                open.Clear();
+                agents.Open.RemoveAll(t => t.Agent == agent);
+                if (agents.Waiting.Remove(agent) && s.State == SessionState.Waiting && agents.Waiting.Count == 0)
+                {
+                    signal = Released(agents); // the waiting agent stopped (its prompt denied): nobody waits
+                }
+
                 break;
         }
 
-        if (open.Count == 0)
+        switch (signal)
         {
-            _openTools.Remove(e.SessionId);
+            case SessionSignal.Notification:
+                if (WaitingAgentOf(e, agents) is { } waiting)
+                {
+                    agents.Waiting.Add(waiting);
+                }
+
+                break;
+            case SessionSignal.ToolUse when s.State == SessionState.Waiting && agents.Waiting.Count > 0:
+                signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents);
+                break;
+            case SessionSignal.ToolUse:
+                agents.Waiting.Remove(agent);
+                break;
+            case SessionSignal.Stop or SessionSignal.IdlePrompt:
+                agents.Waiting.Remove(Agents.Main);
+                agents.Open.RemoveAll(t => t.Agent == Agents.Main);
+                if (s.State == SessionState.Waiting && agents.Waiting.Count > 0)
+                {
+                    agents.TurnEnded = true; // a background sub-agent's prompt still blocks it
+                    signal = null;
+                }
+                else
+                {
+                    agents.TurnEnded = false;
+                }
+
+                break;
+            case SessionSignal.PromptSubmit:
+                agents.Waiting.Remove(Agents.Main);
+                agents.Open.RemoveAll(t => t.Agent == Agents.Main);
+                agents.TurnEnded = false;
+                break;
+            case SessionSignal.SessionStart or SessionSignal.SessionEnd:
+                agents = new Agents();
+                break;
+        }
+
+        if (agents.Idle)
+        {
+            _agents.Remove(e.SessionId);
         }
         else
         {
-            _openTools[e.SessionId] = open;
+            _agents[e.SessionId] = agents;
         }
 
-        return open;
+        return signal;
+    }
+
+    /// <summary>The agent a prompt waits for, or null for a permission_prompt that restates a prompt already waited for.</summary>
+    private static string? WaitingAgentOf(HookEvent e, Agents agents)
+    {
+        if (e.EventName == "PermissionRequest" || e.AgentId is not null)
+        {
+            return Agents.Key(e.AgentId);
+        }
+
+        if (!string.Equals(e.NotificationType, "permission_prompt", StringComparison.OrdinalIgnoreCase))
+        {
+            return Agents.Main; // a dialog in the chat itself: the main agent's next own event ends it
+        }
+
+        // The Notification names no agent and comes 6 s after the prompt opened: the prompt belongs to a tool use still open.
+        return agents.Waiting.Count > 0 ? null : agents.Open.Count > 0 ? agents.Open[^1].Agent : Agents.Main;
+    }
+
+    /// <summary>Nobody waits any more: the parent's turn goes on, or is over when it ended while the prompt was open.</summary>
+    private static SessionSignal Released(Agents agents)
+    {
+        var ended = agents.TurnEnded;
+        agents.TurnEnded = false;
+        return ended ? SessionSignal.Stop : SessionSignal.ToolUse;
+    }
+
+    /// <summary>
+    /// What a chat's agents are up to, kept only while a chat has hooks in this run: the tool uses whose PreToolUse has no
+    /// PostToolUse yet, the agents whose prompt waits for the user, and whether the main turn ended meanwhile. Not persisted.
+    /// </summary>
+    private sealed class Agents
+    {
+        /// <summary>The main agent's key; sub-agents are keyed by their agent_id.</summary>
+        public const string Main = "";
+
+        public List<(string Agent, string? ToolUseId)> Open { get; } = [];
+
+        public HashSet<string> Waiting { get; } = new(StringComparer.Ordinal);
+
+        public bool TurnEnded { get; set; }
+
+        public bool Idle => Open.Count == 0 && Waiting.Count == 0 && !TurnEnded;
+
+        public static string Key(string? agentId) => agentId ?? Main;
     }
 
     public void Apply(TranscriptUpdate u)

@@ -716,14 +716,86 @@ public class SessionEngineTests
     }
 
     [Fact]
-    public void A_stop_ends_the_waiting_whichever_agent_waited()
+    public void A_stop_ends_the_waiting_of_the_main_agent()
     {
-        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
-        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { ToolUseId = "t1" });
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Bash") with { ToolUseId = "t1" });
         _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
 
         _engine.Apply(Hook("Stop", SessionSignal.Stop));
 
         _engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void The_main_agents_permission_request_is_the_main_agents_even_while_a_sub_agents_tool_is_open()
+    {
+        // A PermissionRequest without agent_id comes from the main agent; it must not be pinned on the sub-agent whose tool happens to be open.
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Edit") with { ToolUseId = "t1" });
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "b", ToolUseId = "tB" }); // B's long tool is the latest open one
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Edit") with { ToolUseId = "t1" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "b", ToolUseId = "tB" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "B's tool result is not the answer to the main agent's prompt");
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Edit") with { ToolUseId = "t1" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the main agent's own tool ran: the prompt was answered");
+    }
+
+    [Fact]
+    public void Two_sub_agents_prompts_keep_the_chat_waiting_until_both_are_answered()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Write") with { AgentId = "b", ToolUseId = "tB" });
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Write") with { AgentId = "b", ToolUseId = "tB" });
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Write") with { AgentId = "b", ToolUseId = "tB" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "A's prompt is still open");
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void After_a_restart_the_waiting_sub_agents_own_tool_use_ends_the_waiting_as_before()
+    {
+        // Which agent waits is not persisted: a restored Waiting ends on the first tool use, whoever sends it.
+        var old = _time.GetUtcNow().AddMinutes(-2);
+        _engine.Restore([new SessionSnapshot { SessionId = "s1", State = SessionState.Waiting, StartedAt = old, LastEventAt = old, StateSince = old, ClaudePid = 77 }]);
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void An_agent_needs_input_notification_is_the_main_agents_and_its_next_tool_use_ends_it()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "b", ToolUseId = "tB" });
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "agent_needs_input" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Read") with { ToolUseId = "t2" });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the dialog was in the main chat; its next own event ends the Waiting");
+    }
+
+    [Fact]
+    public void A_stop_of_the_main_turn_keeps_the_chat_waiting_for_a_background_sub_agents_prompt()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "the background agent's prompt still blocks it");
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "the prompt is answered and the main turn had already ended");
     }
 }
