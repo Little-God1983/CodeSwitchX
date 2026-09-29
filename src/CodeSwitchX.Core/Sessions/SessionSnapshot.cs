@@ -29,4 +29,11 @@ public sealed record SessionSnapshot
     public long Version { get; init; }
     public int? ClaudePid { get; init; }
     public TokenUsage LatestContext { get; init; }
+
+    /// <summary>
+    /// Whether anything was ever said in this session: a prompt gives it a title, a reply leaves token usage, a tool use
+    /// names its tool. Claude Code starts and quits without a prompt whenever a VS Code window loads, and such a session
+    /// has none of these. All three are persisted, so a real chat restored after a restart still counts.
+    /// </summary>
+    public bool HeldConversation => Title is not null || LatestContext != TokenUsage.Zero || LastToolName is not null;
 }

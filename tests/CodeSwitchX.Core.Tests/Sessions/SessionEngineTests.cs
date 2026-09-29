@@ -77,6 +77,35 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void A_session_that_starts_and_ends_without_a_prompt_never_held_a_conversation()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Apply(Hook("SessionEnd", SessionSignal.SessionEnd));
+
+        var snapshot = _engine.Get("s1")!;
+        snapshot.State.ShouldBe(SessionState.Ended);
+        snapshot.HeldConversation.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_prompt_a_reply_or_a_tool_use_each_show_the_session_held_a_conversation()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "prompt"));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "prompt", prompt: "fix the build"));
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "reply"));
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "reply", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LatestContext = new TokenUsage(10, 20, 30, 40, 0),
+        });
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "tool"));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, session: "tool", tool: "Bash"));
+
+        _engine.Get("prompt")!.HeldConversation.ShouldBeTrue();
+        _engine.Get("reply")!.HeldConversation.ShouldBeTrue();
+        _engine.Get("tool")!.HeldConversation.ShouldBeTrue();
+    }
+
+    [Fact]
     public void Unknown_event_is_recorded_but_does_not_change_state()
     {
         _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));

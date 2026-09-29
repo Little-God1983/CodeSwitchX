@@ -142,6 +142,39 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_session_that_ends_without_a_prompt_or_a_reply_leaves_the_tile_at_once()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var app = _yard.FindTile(_app.Id)!;
+
+        _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+        app.Chats.ShouldHaveSingleItem("a Claude panel that just opened waits for its first prompt");
+
+        _engine.Apply(Hook("s1", "SessionEnd", SessionSignal.SessionEnd, @"c:\repo\app"));
+        app.Chats.ShouldBeEmpty("a session that never held a conversation is not a chat");
+        app.AttentionRank.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Ended_sessions_restored_at_startup_are_shown_only_if_they_held_a_conversation()
+    {
+        var ghost = Snapshot("ghost", _app.Id, SessionState.Ended) with { Title = null };
+        _engine.Restore(
+        [
+            ghost,
+            Snapshot("titled", _app.Id, SessionState.Ended),
+            ghost with { SessionId = "replied", LatestContext = new TokenUsage(10, 20, 0, 0, 0) },
+            ghost with { SessionId = "tooled", LastToolName = "Bash" },
+            ghost with { SessionId = "errored", State = SessionState.Errored },
+        ]);
+
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.FindTile(_app.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["titled", "replied", "tooled"], ignoreOrder: true);
+    }
+
+    [Fact]
     public async Task Registered_and_unregistered_workspaces_update_the_groups()
     {
         await _yard.InitializeAsync(CancellationToken.None);
