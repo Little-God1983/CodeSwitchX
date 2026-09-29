@@ -12,26 +12,5 @@
     <infra:EnumEqualsToVisibilityConverter x:Key="EnumVisible" />
     <infra:NullToCollapsedConverter x:Key="NullToCollapsed" />
     <BooleanToVisibilityConverter x:Key="BoolVisible" />
-    <DrawingImage x:Key="AppIcon">
-      <DrawingImage.Drawing>
-        <DrawingGroup>
-          <GeometryDrawing Brush="#1F2937">
-            <GeometryDrawing.Geometry>
-              <RectangleGeometry Rect="0,0,32,32" RadiusX="6" RadiusY="6" />
-            </GeometryDrawing.Geometry>
-          </GeometryDrawing>
-          <GeometryDrawing Brush="#F59E0B">
-            <GeometryDrawing.Geometry>
-              <EllipseGeometry Center="10,16" RadiusX="4" RadiusY="4" />
-            </GeometryDrawing.Geometry>
-          </GeometryDrawing>
-          <GeometryDrawing Brush="#22C55E">
-            <GeometryDrawing.Geometry>
-              <EllipseGeometry Center="22,16" RadiusX="4" RadiusY="4" />
-            </GeometryDrawing.Geometry>
-          </GeometryDrawing>
-        </DrawingGroup>
-      </DrawingImage.Drawing>
-    </DrawingImage>
   </Application.Resources>
 </Application>
