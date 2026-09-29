@@ -30,26 +30,33 @@ public sealed class SnapWindowDocker : IWindowDocker
         _isInMoveLoop = isInMoveLoop;
     }
 
+    /// <summary>
+    /// Moves the window to the rect in its normal state. A maximized window is shown by the move, hidden or not: the one
+    /// move of a hidden window is the Cab's, which shows it right after.
+    /// </summary>
     public void MoveTo(nint hwnd, ScreenRect rect)
     {
         var h = new HWND(hwnd);
-        if (PInvoke.IsIconic(h))
+        var minimized = PInvoke.IsIconic(h);
+        if (minimized || PInvoke.IsZoomed(h))
         {
             // A minimized window keeps a restore rectangle, and SW_RESTORE showed it there (another monitor, say) before the
             // move landed. The placement sets that rectangle while the window is minimized: a hidden one stays hidden and comes
             // back there once it is uncloaked and moved again, a visible one is restored there without activation.
-            // SetWindowPlacement is synchronous; it is the one way to set that rectangle, and a minimized window is rare here.
+            // A maximized window stays maximized when moved, laid over its whole monitor, the shell's Yard button included; the
+            // placement is also what takes it out of that state (checked on screen with VS Code: while hidden, it does not).
+            // SetWindowPlacement is synchronous; it is the one way to do either.
             var placement = new WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<WINDOWPLACEMENT>() };
             var visible = PInvoke.IsWindowVisible(h);
             if (PInvoke.GetWindowPlacement(h, ref placement))
             {
                 placement.rcNormalPosition = new RECT { left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom };
-                placement.showCmd = visible ? SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE : SHOW_WINDOW_CMD.SW_HIDE;
+                placement.showCmd = visible || !minimized ? SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE : SHOW_WINDOW_CMD.SW_HIDE;
                 placement.flags = 0;
                 PInvoke.SetWindowPlacement(h, in placement);
             }
 
-            if (!visible)
+            if (minimized && !visible)
             {
                 return;
             }
