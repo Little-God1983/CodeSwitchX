@@ -11,6 +11,8 @@ SetWindowPos
 ShowWindow
 ShowWindowAsync
 IsIconic
+GetWindowPlacement
+SetWindowPlacement
 SetForegroundWindow
 SetWinEventHook
 UnhookWinEvent

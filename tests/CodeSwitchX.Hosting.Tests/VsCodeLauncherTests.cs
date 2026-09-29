@@ -38,7 +38,7 @@ public class VsCodeLauncherTests
     [Fact]
     public void Launch_without_an_executable_reports_an_error_instead_of_throwing()
     {
-        var launcher = new VsCodeLauncher(executable: @"C:\definitely\missing\Code.exe");
+        var launcher = new VsCodeLauncher(() => @"C:\definitely\missing\Code.exe");
 
         var result = launcher.Launch(new Workspace { Name = "App", RootPath = AppContext.BaseDirectory });
 
@@ -51,7 +51,7 @@ public class VsCodeLauncherTests
     {
         // VS Code opens a missing command-line path as a new file whose tab, and so the title, carries the folder's
         // name: the window would be adopted as the workspace, and saving it would write a file where the folder was.
-        var launcher = new VsCodeLauncher(executable: typeof(VsCodeLauncher).Assembly.Location);
+        var launcher = new VsCodeLauncher(() => typeof(VsCodeLauncher).Assembly.Location);
         var missing = Path.Combine(Path.GetTempPath(), "codeswitchx-missing-" + Guid.NewGuid().ToString("N"));
 
         var folder = launcher.Launch(new Workspace { Name = "App", RootPath = missing });
@@ -73,7 +73,7 @@ public class VsCodeLauncherTests
         {
             var insiders = Path.Combine(dir.FullName, "Code - Insiders.exe");
             File.WriteAllBytes(insiders, []);
-            var launcher = new VsCodeLauncher(executable: insiders);
+            var launcher = new VsCodeLauncher(() => insiders);
 
             var result = launcher.Launch(new Workspace { Name = "App", RootPath = AppContext.BaseDirectory });
 

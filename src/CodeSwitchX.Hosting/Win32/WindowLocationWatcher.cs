@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -28,8 +27,9 @@ public sealed class WindowLocationWatcher : IDisposable
         _hook = setHook(_callback);
         if (_hook == default)
         {
-            // Nothing else would say why a window dragged out of the Cab is never put back.
-            logger?.LogWarning("SetWinEventHook failed (error {Error}); VS Code windows dragged out of the Cab are not snapped back", Marshal.GetLastSystemError());
+            // Nothing else would say why a window dragged out of the Cab is never put back. No error code: SetWinEventHook
+            // sets none the runtime keeps, so a code read here could be another call's.
+            logger?.LogWarning("SetWinEventHook was refused; VS Code windows dragged out of the Cab are not snapped back");
         }
     }
 

@@ -44,6 +44,86 @@ public class SnapWindowDockerTests
     }
 
     [Fact]
+    public void A_minimized_hidden_window_is_moved_where_it_will_be_restored_and_not_shown_by_the_move()
+    {
+        // SW_RESTORE on a hidden minimized window showed it at its old restore rectangle, possibly on another monitor, before
+        // the move landed. The move sets the restore rectangle instead; the show is Uncloak's, and the next move restores it there.
+        using var window = new ProbeWindow(minimizedAndHidden: true);
+        var docker = new SnapWindowDocker();
+        var rect = ScreenRect.FromSize(10, 20, 300, 200);
+
+        docker.MoveTo(window.Hwnd, rect);
+        ProbeWindow.Pump();
+        IsWindowVisible(window.Hwnd).ShouldBeFalse("the move must not show a hidden window");
+        var placement = new WindowPlacement { Length = (uint)Marshal.SizeOf<WindowPlacement>() };
+        GetWindowPlacement(window.Hwnd, ref placement);
+        (placement.NormalPosition.Left, placement.NormalPosition.Top).ShouldBe((rect.Left, rect.Top), "the restore rectangle is where the Cab is");
+
+        docker.Uncloak(window.Hwnd);
+        ProbeWindow.Pump(); // VS Code gets to the show, as it does before the Cab's next dock
+        docker.MoveTo(window.Hwnd, rect);
+        ProbeWindow.Pump();
+
+        IsWindowVisible(window.Hwnd).ShouldBeTrue();
+        IsIconic(window.Hwnd).ShouldBeFalse();
+        GetWindowRect(window.Hwnd, out var shown);
+        (shown.Left, shown.Top, shown.Right, shown.Bottom).ShouldBe((rect.Left, rect.Top, rect.Right, rect.Bottom));
+    }
+
+    /// <summary>
+    /// A window on its own thread, which pumps its messages all the time like a VS Code that is not stalled: a move of a
+    /// minimized window sends to that thread synchronously. <see cref="Pump"/> gives the thread time for what was posted.
+    /// </summary>
+    private sealed class ProbeWindow : IDisposable
+    {
+        private readonly Thread _owner;
+        private volatile bool _closing;
+
+        public ProbeWindow(bool minimizedAndHidden)
+        {
+            using var created = new ManualResetEventSlim();
+            _owner = new Thread(() =>
+            {
+                Hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "STATIC", "CodeSwitchX placement probe", WS_POPUP | WS_VISIBLE,
+                    -20000, -20000, 200, 100, 0, 0, 0, 0);
+                if (minimizedAndHidden)
+                {
+                    ShowWindow(Hwnd, SW_MINIMIZE);
+                    ShowWindow(Hwnd, SW_HIDE);
+                }
+
+                created.Set();
+                while (!_closing)
+                {
+                    while (PeekMessageW(out var msg, 0, 0, 0, PM_REMOVE))
+                    {
+                        TranslateMessage(msg);
+                        DispatchMessageW(msg);
+                    }
+
+                    Thread.Sleep(1);
+                }
+
+                DestroyWindow(Hwnd);
+            });
+            _owner.Start();
+            created.Wait(TestContext.Current.CancellationToken);
+            Hwnd.ShouldNotBe(nint.Zero);
+        }
+
+        public nint Hwnd { get; private set; }
+
+        /// <summary>Long enough for the posted shows and moves to be processed by the thread above.</summary>
+        public static void Pump() => Thread.Sleep(150);
+
+        public void Dispose()
+        {
+            _closing = true;
+            _owner.Join();
+        }
+    }
+
+    [Fact]
     public void A_window_of_the_same_elevation_is_within_reach_and_a_closed_one_is_not_reported_as_out_of_it()
     {
         var hwnd = CreateWindowExW(0, "STATIC", "CodeSwitchX reach probe", 0, 0, 0, 10, 10, 0, 0, 0, 0);
@@ -60,6 +140,47 @@ public class SnapWindowDockerTests
     private const uint WS_EX_TOOLWINDOW = 0x00000080;
     private const uint WS_EX_NOACTIVATE = 0x08000000;
     private const uint PM_REMOVE = 0x0001;
+    private const int SW_HIDE = 0;
+    private const int SW_MINIMIZE = 6;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point
+    {
+        public int X, Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowPlacement
+    {
+        public uint Length;
+        public uint Flags;
+        public uint ShowCmd;
+        public Point MinPosition;
+        public Point MaxPosition;
+        public Rect NormalPosition;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(nint hwnd, int cmd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsIconic(nint hwnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hwnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowPlacement(nint hwnd, ref WindowPlacement placement);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Msg

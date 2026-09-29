@@ -742,6 +742,43 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task Dock_shows_a_window_adopted_from_the_desktop_in_the_cab_the_first_time()
+    {
+        // The Cab's rectangle arrives before the shell raises the window: the first dock must do what ShowInCab does, or the
+        // window stays behind the shell with the other desktop windows still there.
+        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")]);
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+        hosted.Visible.ShouldBeTrue();
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+
+        _manager.Dock(_workspace.Id, rect);
+
+        _docker.Received(1).MoveTo(700, rect);
+        _docker.Received(1).BringToFront(700);
+        hosted.TargetRect.ShouldBe(rect);
+    }
+
+    [Fact]
+    public async Task A_hidden_window_that_vs_code_brought_forward_to_answer_counts_as_visible_when_adopted()
+    {
+        // The window was hidden when the windows were listed before the launch; VS Code showed it to answer. Adopted from the
+        // old listing it would count as hidden, and HideAll would leave it on the desktop.
+        _windows.ForegroundWindow().Returns((nint)700);
+        WindowInfo[] before = [new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code") { IsVisible = false }, new(701, 30, "Chrome_WidgetWin_1", "Other.cs - app - Visual Studio Code")];
+        WindowInfo[] after = [new(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code"), before[1]];
+        _windows.TopLevelWindows().Returns(before, after);
+        _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
+        _windows.ProcessName(1234).Returns((string?)null);
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
+        hosted.Hwnd.ShouldBe((nint)700);
+        hosted.Visible.ShouldBeTrue("VS Code brought it forward, so it is on the desktop now");
+
+        _manager.HideAll();
+
+        _docker.Received(1).Cloak(700);
+    }
+
+    [Fact]
     public async Task ShowInCab_moves_the_window_into_the_cab_before_it_shows_it()
     {
         // A fresh window is hidden where VS Code opened it, possibly on another monitor: shown first, it drew a frame there.

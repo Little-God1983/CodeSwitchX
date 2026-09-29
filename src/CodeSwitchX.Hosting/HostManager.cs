@@ -203,8 +203,10 @@ public sealed class HostManager : IDisposable
 
             // The window in front counts only once VS Code has answered, and only when it is in front on two polls in
             // a row: a window the user switches to meanwhile is no answer.
+            // Taken from the current listing, not the one before the launch: VS Code may have shown the window to answer.
             var inFront = existing.Count > 0 && HasAnswered(launch, before, windows) && _windows.ForegroundWindow() is var foreground
-                ? existing.FirstOrDefault(w => w.Hwnd == foreground)
+                && existing.Any(w => w.Hwnd == foreground)
+                ? windows.FirstOrDefault(w => w.Hwnd == foreground)
                 : null;
             if (inFront is not null && inFront.Hwnd == inFrontBefore?.Hwnd)
             {
@@ -338,9 +340,9 @@ public sealed class HostManager : IDisposable
     }
 
     /// <summary>
-    /// Follows the Cab area while the window is already showing: a move only, no z-order change, so resizing or
-    /// dragging the shell never pulls VS Code over other windows or steals focus. A window that is not visible yet is
-    /// shown as by <see cref="ShowInCab"/>.
+    /// Follows the Cab area while the window is already showing in it: a move only, no z-order change, so resizing or
+    /// dragging the shell never pulls VS Code over other windows or steals focus. A window that is not visible, or that
+    /// was never docked (adopted as it was on the desktop, so visible but behind the shell), is shown as by <see cref="ShowInCab"/>.
     /// </summary>
     public void Dock(Guid workspaceId, ScreenRect rect)
     {
@@ -351,7 +353,7 @@ public sealed class HostManager : IDisposable
                 return;
             }
 
-            if (!target.Visible)
+            if (!target.Visible || target.TargetRect is null)
             {
                 ShowInCabLocked(target, rect);
                 return;

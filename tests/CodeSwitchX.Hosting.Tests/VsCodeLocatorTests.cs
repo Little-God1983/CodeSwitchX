@@ -33,6 +33,18 @@ public class VsCodeLocatorTests
     }
 
     [Fact]
+    public void An_override_pointing_at_code_cmd_resolves_to_the_sibling_Code_exe()
+    {
+        // The CLI shim in bin\ launches the real Code.exe, whose windows are matched by process name and title, so it worked as
+        // an override before Launch started checking the file name.
+        var exe = VsCodeLocator.FindExecutable(
+            path => path is @"C:\VSCode\bin\code.cmd" or @"C:\VSCode\Code.exe",
+            name => name == "CODESWITCHX_VSCODE_EXE" ? @"C:\VSCode\bin\code.cmd" : null);
+
+        exe.ShouldBe(@"C:\VSCode\Code.exe");
+    }
+
+    [Fact]
     public void Nothing_found_returns_null()
     {
         VsCodeLocator.FindExecutable(_ => false, _ => null).ShouldBeNull();

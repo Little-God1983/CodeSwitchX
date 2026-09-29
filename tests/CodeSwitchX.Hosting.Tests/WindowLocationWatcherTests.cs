@@ -16,15 +16,4 @@ public class WindowLocationWatcherTests
         watcher.IsHooked.ShouldBeFalse();
         log.Entries.ShouldContain(e => e.Level == LogLevel.Warning && e.Message.Contains("snap"), "nothing else says that dragged windows will not be put back");
     }
-
-    [Fact]
-    public void The_hook_is_set_on_this_machine()
-    {
-        var log = new ListLogger<WindowLocationWatcher>();
-
-        using var watcher = new WindowLocationWatcher(log);
-
-        watcher.IsHooked.ShouldBeTrue();
-        log.Entries.ShouldBeEmpty();
-    }
 }

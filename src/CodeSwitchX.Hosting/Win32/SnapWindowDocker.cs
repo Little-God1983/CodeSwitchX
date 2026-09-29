@@ -21,7 +21,24 @@ public sealed class SnapWindowDocker : IWindowDocker
         var h = new HWND(hwnd);
         if (PInvoke.IsIconic(h))
         {
-            PInvoke.ShowWindowAsync(h, SHOW_WINDOW_CMD.SW_RESTORE);
+            // A minimized window keeps a restore rectangle, and SW_RESTORE showed it there (another monitor, say) before the
+            // move landed. The placement sets that rectangle while the window is minimized: a hidden one stays hidden and comes
+            // back there once it is uncloaked and moved again, a visible one is restored there without activation.
+            // SetWindowPlacement is synchronous; it is the one way to set that rectangle, and a minimized window is rare here.
+            var placement = new WINDOWPLACEMENT { length = (uint)Marshal.SizeOf<WINDOWPLACEMENT>() };
+            var visible = PInvoke.IsWindowVisible(h);
+            if (PInvoke.GetWindowPlacement(h, ref placement))
+            {
+                placement.rcNormalPosition = new RECT { left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom };
+                placement.showCmd = visible ? SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE : SHOW_WINDOW_CMD.SW_HIDE;
+                placement.flags = 0;
+                PInvoke.SetWindowPlacement(h, in placement);
+            }
+
+            if (!visible)
+            {
+                return;
+            }
         }
 
         PInvoke.SetWindowPos(h, HWND.Null, rect.Left, rect.Top, rect.Width, rect.Height,
