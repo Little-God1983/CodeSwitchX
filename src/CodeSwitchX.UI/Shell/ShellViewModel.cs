@@ -152,7 +152,7 @@ public sealed partial class ShellViewModel : ObservableObject
 
         try
         {
-            var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None, () => CabRectWaitingFor(workspaceId));
+            var hosted = await _host.OpenAsync(tile.Workspace, CancellationToken.None);
             if (hosted.State != HostState.Running)
             {
                 ReportFor(attempt, hosted.Error ?? "VS Code did not start.");
@@ -172,11 +172,18 @@ public sealed partial class ShellViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Where a new VS Code window of the workspace goes as it appears: the Cab, while it shows that workspace and can show
-    /// VS Code (the rule of <see cref="RaiseHostedWindow()"/>). Asked from the host's discovery, whenever a window comes.
+    /// Tells the host where a new VS Code window of the active workspace goes as it appears: the Cab, while it can show
+    /// VS Code (the rule of <see cref="RaiseHostedWindow()"/>). Told on every change of any part of that rule, not asked:
+    /// the host's discovery runs on another thread.
     /// </summary>
-    private ScreenRect? CabRectWaitingFor(Guid workspaceId) =>
-        !_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId ? Cab.LastHostRect : null;
+    private void TellHostWhereTheCabWaits() =>
+        _host.WaitInCab(!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect
+            ? (id, rect)
+            : null);
+
+    partial void OnModeChanged(ShellMode value) => TellHostWhereTheCabWaits();
+
+    partial void OnActiveWorkspaceIdChanged(Guid? value) => TellHostWhereTheCabWaits();
 
     /// <summary>
     /// The status strip belongs to the latest open: one the user has moved on from, to another workspace or to a retry of
@@ -246,6 +253,7 @@ public sealed partial class ShellViewModel : ObservableObject
         }
 
         _shellMinimized = minimized;
+        TellHostWhereTheCabWaits();
         if (Mode != ShellMode.Cab)
         {
             return;
@@ -286,6 +294,7 @@ public sealed partial class ShellViewModel : ObservableObject
         }
 
         Cab.LastHostRect = rect;
+        TellHostWhereTheCabWaits();
         if (Mode == ShellMode.Cab && ActiveWorkspaceId is { } id)
         {
             _host.Dock(id, rect);

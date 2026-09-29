@@ -187,7 +187,8 @@ public class HostManagerTests
         // monitor, for a second before it jumped into the Cab.
         UntitledWindowAppearsThenNamesTheFolder();
 
-        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None, placement: () => Cab);
+        _manager.WaitInCab((_workspace.Id, Cab));
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
 
         hosted.State.ShouldBe(HostState.Running);
         _docker.Received().MoveTo(500, Cab);
@@ -212,7 +213,8 @@ public class HostManagerTests
         // Back on the Yard, a window placed in the Cab's area would stand over the tiles.
         UntitledWindowAppearsThenNamesTheFolder();
 
-        await _manager.OpenAsync(_workspace, CancellationToken.None, placement: () => null);
+        _manager.WaitInCab((Guid.NewGuid(), Cab)); // the Cab waits for another workspace's window
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
 
         _docker.DidNotReceive().MoveTo(Arg.Any<nint>(), Arg.Any<ScreenRect>());
         _docker.Received(1).Cloak(500);
@@ -224,7 +226,8 @@ public class HostManagerTests
         // The user opened another VS Code window by hand while this one was starting.
         UntitledWindowAppearsThenNamesTheFolder(folder: "notes");
 
-        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None, placement: () => Cab);
+        _manager.WaitInCab((_workspace.Id, Cab));
+        var hosted = await _manager.OpenAsync(_workspace, CancellationToken.None);
 
         hosted.State.ShouldBe(HostState.Stopped);
         Received.InOrder(() =>
@@ -241,7 +244,8 @@ public class HostManagerTests
         _windows.TopLevelWindows().Returns([mine], [mine, new WindowInfo(500, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")]);
         _launcher.Launch(_workspace).Returns(new LaunchResult(true, 1234, null));
 
-        await _manager.OpenAsync(_workspace, CancellationToken.None, placement: () => Cab);
+        _manager.WaitInCab((_workspace.Id, Cab));
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
 
         _docker.DidNotReceive().MoveTo(600, Arg.Any<ScreenRect>());
     }
@@ -261,7 +265,8 @@ public class HostManagerTests
         _launcher.Launch(_workspace).Returns(_ => { launched.SetResult(); return new LaunchResult(true, 1234, null); });
 
         var (manager, cts) = ManagerThatWaitsForTheWindow();
-        var open = manager.OpenAsync(_workspace, cts.Token, placement: () => Cab);
+        manager.WaitInCab((_workspace.Id, Cab));
+        var open = manager.OpenAsync(_workspace, cts.Token);
         await launched.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         manager.WindowAppeared(500);
 
@@ -281,7 +286,8 @@ public class HostManagerTests
         var launched = new TaskCompletionSource();
         _launcher.Launch(_workspace).Returns(_ => { launched.SetResult(); return new LaunchResult(true, 1234, null); });
         var (manager, cts) = ManagerThatWaitsForTheWindow();
-        var open = manager.OpenAsync(_workspace, cts.Token, placement: () => Cab);
+        manager.WaitInCab((_workspace.Id, Cab));
+        var open = manager.OpenAsync(_workspace, cts.Token);
         await launched.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         manager.WindowAppeared(500);
         _docker.ClearReceivedCalls();
@@ -293,6 +299,149 @@ public class HostManagerTests
         _docker.GetRect(500).Returns(Cab);
         manager.SnapBack(500);
         _docker.Received(1).MoveTo(500, Cab);
+        await cts.CancelAsync();
+        await open;
+    }
+
+    private static readonly ScreenRect WhereVsCodePutIt = ScreenRect.FromSize(-2000, 100, 1800, 1100);
+
+    /// <summary>
+    /// Launches and waits in the Cab until the test says what Windows reports; the listing stays empty until
+    /// <paramref name="titled"/> is set, so only <see cref="HostManager.WindowAppeared"/> places windows.
+    /// </summary>
+    private async Task<(HostManager Manager, CancellationTokenSource Cancel, Task<HostedWorkspace> Open)> OpenWaitingInTheCab(
+        Func<IReadOnlyList<WindowInfo>> listing, bool waitInCab = true)
+    {
+        _windows.TopLevelWindows().Returns(_ => listing());
+        _docker.GetRect(Arg.Any<nint>()).Returns(WhereVsCodePutIt);
+        var launched = new TaskCompletionSource();
+        _launcher.Launch(_workspace).Returns(_ => { launched.TrySetResult(); return new LaunchResult(true, 1234, null); });
+        var (manager, cts) = ManagerThatWaitsForTheWindow();
+        if (waitInCab)
+        {
+            manager.WaitInCab((_workspace.Id, Cab));
+        }
+
+        var open = manager.OpenAsync(_workspace, cts.Token);
+        await launched.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        return (manager, cts, open);
+    }
+
+    private void Untitled(nint hwnd) => _windows.Describe(hwnd).Returns(new WindowInfo(hwnd, 30, "Chrome_WidgetWin_1", "Visual Studio Code"));
+
+    [Fact]
+    public async Task A_placed_window_goes_back_when_the_user_leaves_the_cab_and_is_hidden_once_it_is_known()
+    {
+        // Left at the Cab's rect, it stood over the Yard; adopted as shown, it stayed there uncloaked.
+        IReadOnlyList<WindowInfo> listing = [];
+        Untitled(500);
+        var (manager, _, open) = await OpenWaitingInTheCab(() => listing);
+        manager.WindowAppeared(500);
+        _docker.Received(1).MoveTo(500, Cab);
+
+        manager.HideAll(); // BackToYard
+        _docker.Received(1).MoveTo(500, WhereVsCodePutIt);
+
+        listing = [new WindowInfo(500, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")];
+        var hosted = await open.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        hosted.State.ShouldBe(HostState.Running);
+        _docker.Received(1).Cloak(500);
+        hosted.Visible.ShouldBeFalse();
+        _docker.Received(1).MoveTo(500, Cab);
+    }
+
+    [Fact]
+    public async Task A_placed_window_goes_back_where_it_was_when_the_open_is_cancelled()
+    {
+        Untitled(500);
+        var (manager, cts, open) = await OpenWaitingInTheCab(() => []);
+        manager.WindowAppeared(500);
+
+        await cts.CancelAsync();
+        (await open).State.ShouldBe(HostState.Stopped);
+
+        Received.InOrder(() =>
+        {
+            _docker.MoveTo(500, Cab);
+            _docker.MoveTo(500, WhereVsCodePutIt);
+        });
+    }
+
+    [Fact]
+    public async Task When_two_new_windows_come_none_stays_in_the_cab_until_a_title_tells_them_apart()
+    {
+        // VS Code restoring the windows of its last session: the one created last need not be the workspace's.
+        Untitled(500);
+        Untitled(501);
+        Untitled(502);
+        var (manager, cts, open) = await OpenWaitingInTheCab(() => []);
+
+        manager.WindowAppeared(500);
+        manager.WindowAppeared(501);
+        manager.WindowAppeared(502);
+        manager.WindowAppeared(500);
+
+        Received.InOrder(() =>
+        {
+            _docker.MoveTo(500, Cab);
+            _docker.MoveTo(500, WhereVsCodePutIt);
+        });
+        _docker.DidNotReceive().MoveTo(501, Arg.Any<ScreenRect>());
+        _docker.DidNotReceive().MoveTo(502, Arg.Any<ScreenRect>());
+        _docker.Received(1).MoveTo(500, Cab);
+        await cts.CancelAsync();
+        await open;
+    }
+
+    [Fact]
+    public async Task A_window_that_is_no_vs_code_window_or_is_owned_by_one_is_not_placed()
+    {
+        _windows.Describe(500).Returns(new WindowInfo(500, 31, "Chrome_WidgetWin_1", "Slack"));
+        _windows.ProcessName(31).Returns("slack");
+        _windows.Describe(501).Returns((WindowInfo?)null); // an owned window, or one already gone
+        var (manager, cts, open) = await OpenWaitingInTheCab(() => []);
+
+        manager.WindowAppeared(500);
+        manager.WindowAppeared(501);
+
+        _docker.DidNotReceive().MoveTo(Arg.Any<nint>(), Arg.Any<ScreenRect>());
+        await cts.CancelAsync();
+        await open;
+    }
+
+    [Fact]
+    public async Task No_window_is_placed_while_another_workspace_s_vs_code_is_on_its_way_too()
+    {
+        // An auto-start launched the other workspace a moment before the tile was clicked: the untitled window may be its.
+        var other = new Workspace { Name = "Notes", RootPath = @"c:\repo\notes" };
+        var otherLaunched = new TaskCompletionSource();
+        _launcher.Launch(other).Returns(_ => { otherLaunched.TrySetResult(); return new LaunchResult(true, 1235, null); });
+        Untitled(500);
+        var (manager, cts, open) = await OpenWaitingInTheCab(() => [], waitInCab: false);
+        var otherOpen = manager.OpenAsync(other, cts.Token);
+        await otherLaunched.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        manager.WaitInCab((_workspace.Id, Cab));
+
+        manager.WindowAppeared(500);
+
+        _docker.DidNotReceive().MoveTo(Arg.Any<nint>(), Arg.Any<ScreenRect>());
+        await cts.CancelAsync();
+        await open;
+        await otherOpen;
+    }
+
+    [Fact]
+    public async Task A_placed_window_follows_the_cab_when_the_shell_moves_before_the_window_is_known()
+    {
+        Untitled(500);
+        var (manager, cts, open) = await OpenWaitingInTheCab(() => []);
+        manager.WindowAppeared(500);
+        var moved = ScreenRect.FromSize(100, 128, 1400, 800);
+
+        manager.WaitInCab((_workspace.Id, moved));
+
+        _docker.Received(1).MoveTo(500, moved);
         await cts.CancelAsync();
         await open;
     }

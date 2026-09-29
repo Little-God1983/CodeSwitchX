@@ -53,6 +53,38 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task Going_back_to_the_yard_while_a_new_window_waits_in_the_cab_puts_it_back_and_hides_it_once_known()
+    {
+        // The window stood in the Cab's area over the Yard, and once its title came it was adopted as shown and stayed there.
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var rect = ScreenRect.FromSize(0, 28, 1600, 900);
+        var whereVsCodePutIt = ScreenRect.FromSize(-2000, 100, 1800, 1100);
+        _h.Shell.Cab.LastHostRect = rect;
+        IReadOnlyList<WindowInfo> listing = [];
+        _h.Windows.TopLevelWindows().Returns(_ => listing);
+        _h.Windows.Describe(500).Returns(new WindowInfo(500, 30, "Chrome_WidgetWin_1", "Visual Studio Code"));
+        _h.Docker.GetRect(500).Returns(whereVsCodePutIt);
+        var launched = new TaskCompletionSource();
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(_ => { launched.TrySetResult(); return new LaunchResult(true, 1, null); });
+
+        var enter = _h.Shell.EnterCabAsync(_h.App.Id);
+        await launched.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        _h.Host.WindowAppeared(500);
+        _h.Docker.Received(1).MoveTo(500, rect);
+
+        _h.Shell.BackToYard();
+        listing = [new WindowInfo(500, 30, "Chrome_WidgetWin_1", "Program.cs - app - Visual Studio Code")];
+        await enter;
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Host.Get(_h.App.Id)!.State.ShouldBe(HostState.Running);
+        _h.Docker.Received(1).MoveTo(500, whereVsCodePutIt);
+        _h.Docker.Received(1).Cloak(500);
+        _h.Host.Get(_h.App.Id)!.Visible.ShouldBeFalse();
+        _h.Docker.Received(1).MoveTo(500, rect);
+    }
+
+    [Fact]
     public async Task EnterCab_reports_launch_problems_in_the_status_message()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
