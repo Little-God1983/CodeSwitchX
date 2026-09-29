@@ -16,6 +16,20 @@ public sealed class UsageStore : IUsageStore
 
     public Task UpsertCursorsAsync(IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default) => CommitAsync([], cursors, [], ct);
 
+    public async Task RemoveCursorsAsync(IReadOnlyCollection<string> paths, CancellationToken ct = default)
+    {
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        // One JSON parameter (see ApplySeenMessagesAsync): the first scan after an upgrade removes the cursors of every
+        // transcript Claude Code's cleanup deleted since cursors were first stored, more than SQLite takes parameters.
+        var gone = paths.ToArray();
+        await db.TranscriptCursors.Where(c => EF.Parameter(gone).Contains(c.Path)).ExecuteDeleteAsync(ct);
+    }
+
     /// <summary>
     /// One DbContext, one SaveChanges: EF Core wraps it in a single SQLite transaction, so a transcript cursor never
     /// advances without the usage it covers, usage is never counted twice because its cursor was lost, and a message
@@ -117,12 +131,15 @@ public sealed class UsageStore : IUsageStore
                 row.ByteOffset = cursor.ByteOffset;
                 row.LastWriteUtc = cursor.LastWriteUtc;
                 row.SessionId = cursor.SessionId;
+                row.Title = cursor.Title;
+                row.TitleSource = cursor.TitleSource;
             }
             else
             {
                 var added = new TranscriptCursor
                 {
                     Path = cursor.Path, ByteOffset = cursor.ByteOffset, LastWriteUtc = cursor.LastWriteUtc, SessionId = cursor.SessionId,
+                    Title = cursor.Title, TitleSource = cursor.TitleSource,
                 };
                 db.TranscriptCursors.Add(added);
                 existing[cursor.Path] = added;

@@ -13,5 +13,9 @@ public sealed record UserLine(string Type, DateTimeOffset? Timestamp, string? Se
 public sealed record SummaryLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, string Title)
     : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 
+/// <summary>A name the user gave the chat with <c>/rename</c> in Claude Code; a later one replaces an earlier one.</summary>
+public sealed record CustomTitleLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, string Title)
+    : TranscriptLine(Type, Timestamp, SessionId, Cwd);
+
 public sealed record OtherLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd)
     : TranscriptLine(Type, Timestamp, SessionId, Cwd);

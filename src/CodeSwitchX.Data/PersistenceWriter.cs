@@ -67,6 +67,7 @@ public sealed class PersistenceWriter : BackgroundService
                 Enqueue(m.Update);
             }
         }));
+        _subscriptions.Add(_bus.Subscribe<TranscriptsForgotten>(Enqueue));
     }
 
     public override Task StartAsync(CancellationToken cancellationToken)
@@ -156,6 +157,12 @@ public sealed class PersistenceWriter : BackgroundService
             batch.Sessions.Clear();
             await _sessions.AppendEventsAsync(batch.Events.ToArray(), ct).ConfigureAwait(false);
             batch.Events.Clear();
+            if (batch.ForgottenCursors.Count > 0)
+            {
+                await _usage.RemoveCursorsAsync(batch.ForgottenCursors.ToArray(), ct).ConfigureAwait(false);
+                batch.ForgottenCursors.Clear();
+            }
+
             await _usage.CommitAsync(batch.Buckets.Values.ToArray(), batch.Cursors.Values.ToArray(), batch.MessageIds.ToArray(), ct).ConfigureAwait(false);
             batch.Buckets.Clear();
             batch.Cursors.Clear();
@@ -238,7 +245,8 @@ public sealed class PersistenceWriter : BackgroundService
 
     /// <summary>
     /// Records collapsed for one write: latest snapshot per session, every hook event, usage per minute bucket,
-    /// latest cursor per file, and the message ids the usage came from.
+    /// latest cursor per file, the message ids the usage came from, and the files whose cursors are to be removed.
+    /// The order on the bus decides between a cursor and a forget for the same file: the later one stands.
     /// </summary>
     private sealed class Batch
     {
@@ -247,8 +255,9 @@ public sealed class PersistenceWriter : BackgroundService
         public Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket> Buckets { get; } = [];
         public Dictionary<string, TranscriptCursor> Cursors { get; } = new(StringComparer.Ordinal);
         public HashSet<string> MessageIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ForgottenCursors { get; } = new(StringComparer.Ordinal);
 
-        public int Count => Sessions.Count + Events.Count + Buckets.Count + Cursors.Count + MessageIds.Count;
+        public int Count => Sessions.Count + Events.Count + Buckets.Count + Cursors.Count + MessageIds.Count + ForgottenCursors.Count;
         public bool IsEmpty => Count == 0;
 
         public void Add(object item, bool storePayloads)
@@ -288,9 +297,18 @@ public sealed class PersistenceWriter : BackgroundService
                     if (update.Cursor is { } cursor)
                     {
                         Cursors[cursor.Path] = cursor;
+                        ForgottenCursors.Remove(cursor.Path); // the file is back (its folder renamed away and back)
                     }
 
                     MessageIds.UnionWith(update.MessageIds);
+                    break;
+                case TranscriptsForgotten forgotten:
+                    foreach (var path in forgotten.Paths)
+                    {
+                        Cursors.Remove(path); // queued before the file went; written, it would outlive the row's removal
+                        ForgottenCursors.Add(path);
+                    }
+
                     break;
             }
         }

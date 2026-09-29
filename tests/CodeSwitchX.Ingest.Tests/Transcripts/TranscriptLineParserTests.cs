@@ -119,4 +119,20 @@ public class TranscriptLineParserTests
         parsed.IsInterrupt.ShouldBeTrue();
         parsed.IsMeta.ShouldBeTrue();
     }
+
+    [Fact]
+    public void A_custom_title_line_carries_the_name_given_with_rename_in_Claude_Code()
+    {
+        var parsed = TranscriptLineParser.TryParse("""{"type":"custom-title","customTitle":"Build work","sessionId":"s1"}""")
+            .ShouldBeOfType<CustomTitleLine>();
+
+        parsed.Title.ShouldBe("Build work");
+        parsed.SessionId.ShouldBe("s1");
+    }
+
+    [Fact]
+    public void A_custom_title_line_without_a_name_is_not_a_title()
+    {
+        TranscriptLineParser.TryParse("""{"type":"custom-title","customTitle":"","sessionId":"s1"}""").ShouldBeOfType<OtherLine>();
+    }
 }

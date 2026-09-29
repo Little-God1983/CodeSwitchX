@@ -34,6 +34,13 @@ public sealed class TranscriptIndexer : BackgroundService
     private volatile bool _watching;
     private volatile bool _dirty = true;
 
+    /// <summary>Whether the next scan asks the file system about every file instead of trusting the enumeration (see <see cref="Index"/>).</summary>
+    private volatile bool _refreshAll = true;
+
+    /// <summary>Files a scan did not enumerate but found in place; looked for again once a minute, not on every scan. Touched only under <see cref="_scanGate"/>.</summary>
+    private readonly HashSet<string> _parked = new(StringComparer.Ordinal);
+    private DateTimeOffset _parkedLookedAt = DateTimeOffset.MinValue;
+
     /// <summary>Claude Code records API errors as assistant lines with this model and zero usage; they carry no model, context or tokens.</summary>
     internal const string SyntheticModel = "<synthetic>";
 
@@ -87,6 +94,7 @@ public sealed class TranscriptIndexer : BackgroundService
                     StartWatcher();
                     stale?.Dispose();
                     watcherStartedAt = _time.GetUtcNow();
+                    _refreshAll = true;
                     _dirty = true;
                 }
 
@@ -150,11 +158,12 @@ public sealed class TranscriptIndexer : BackgroundService
                 return;
             }
 
-            List<string> files;
+            List<FileInfo> files;
             try
             {
-                // Materialise first: Claude Code's cleanupPeriodDays can delete a project folder mid-enumeration.
-                files = Directory.EnumerateFiles(_claude.ProjectsDirectory, "*.jsonl",
+                // Materialise first: Claude Code's cleanupPeriodDays can delete a project folder mid-enumeration. The entries
+                // bring each file's size and write time along; asking the file system again per file doubled a scan's cost.
+                files = new DirectoryInfo(_claude.ProjectsDirectory).EnumerateFiles("*.jsonl",
                     new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true }).ToList();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -164,16 +173,96 @@ public sealed class TranscriptIndexer : BackgroundService
                 return;
             }
 
-            foreach (var path in files)
+            // Without a watcher every scan is the only way to notice a write; with one, the minute refresh bounds what an
+            // event that never came (see Index) can hide, as the second look per file did before.
+            var refreshAll = _refreshAll || !_watching;
+            _refreshAll = false;
+            var found = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var file in files)
             {
                 ct.ThrowIfCancellationRequested();
-                ProcessFile(path);
+                found.Add(ProcessFile(file, refreshAll));
             }
+
+            ForgetGone(found);
         }
         finally
         {
             _scanGate.Release();
         }
+    }
+
+    /// <summary>
+    /// Forgets the transcripts a scan no longer finds: Claude Code's cleanupPeriodDays deletes old transcripts, and without
+    /// this every start loads every cursor ever stored. The rows go through the writer (<see cref="TranscriptsForgotten"/>),
+    /// in order with the cursors it still holds for the same files, so none is written back after its row went. A missing
+    /// file is looked for in its folder's listing: a folder that cannot be listed (the enumeration skipped it, see
+    /// IgnoreInaccessible) keeps its cursors, or its files would be read from the start, and their usage counted again,
+    /// once it opens. A file found in place though the scan did not enumerate it (such a folder, or a projects folder
+    /// that is no longer the configured one) is parked and looked for again once a minute, not on every scan.
+    /// </summary>
+    private void ForgetGone(HashSet<string> found)
+    {
+        var now = _time.GetUtcNow();
+        var lookAtParked = now - _parkedLookedAt >= _options.WatcherRefreshInterval;
+        var missing = _files.Keys.Where(key => !found.Contains(key) && (lookAtParked || !_parked.Contains(key))).ToList();
+        if (missing.Count == 0)
+        {
+            return;
+        }
+
+        if (lookAtParked)
+        {
+            _parkedLookedAt = now;
+            _parked.Clear();
+        }
+
+        var gone = new List<string>();
+        foreach (var folder in missing.GroupBy(key => Path.GetDirectoryName(key) ?? string.Empty, StringComparer.Ordinal))
+        {
+            HashSet<string> present;
+            try
+            {
+                present = Directory.EnumerateFiles(folder.Key, "*.jsonl").Select(PathNormalizer.Normalize).ToHashSet(StringComparer.Ordinal);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                gone.AddRange(folder);
+                continue;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                _logger.LogDebug(ex, "Cannot look into {Folder}; its transcripts keep their cursors", folder.Key);
+                _parked.UnionWith(folder);
+                continue;
+            }
+
+            foreach (var key in folder)
+            {
+                if (present.Contains(key))
+                {
+                    _parked.Add(key);
+                }
+                else
+                {
+                    gone.Add(key);
+                }
+            }
+        }
+
+        if (gone.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var key in gone)
+        {
+            _files.Remove(key);
+            _retries.Remove(key);
+        }
+
+        _bus.Publish(new TranscriptsForgotten(gone));
+        _logger.LogInformation("Forgot {Count} transcripts that no longer exist", gone.Count);
     }
 
     /// <summary>Reads again the files an earlier pass could not, once their next attempt is due. Nothing else is touched.</summary>
@@ -186,7 +275,7 @@ public sealed class TranscriptIndexer : BackgroundService
             foreach (var retry in _retries.Values.Where(r => r.DueAt <= now).ToList())
             {
                 ct.ThrowIfCancellationRequested();
-                ProcessFile(retry.Path);
+                ProcessFile(new FileInfo(retry.Path), refresh: false);
             }
         }
         finally
@@ -221,35 +310,56 @@ public sealed class TranscriptIndexer : BackgroundService
             _messages.Remember(id);
         }
 
+        var readAgain = 0;
         foreach (var cursor in cursors)
         {
+            // The CursorTitles migration marks a cursor from before titles were stored with a prompt source and no title:
+            // the lines behind its offset were read without a look at their title lines (a /rename name among them), so the
+            // file is read again from the start, as after a rewrite, which counts no usage twice.
+            var beforeTitles = cursor.Title is null && cursor.TitleSource == TitleSource.Prompt;
+            readAgain += beforeTitles ? 1 : 0;
             _files[cursor.Path] = new FileState
             {
-                Offset = cursor.ByteOffset,
+                Offset = beforeTitles ? 0 : cursor.ByteOffset,
+                CountedUntil = beforeTitles ? cursor.LastWriteUtc : null,
                 LastWriteUtc = cursor.LastWriteUtc,
                 SessionId = cursor.SessionId,
-                TitleFound = true,
+                Title = cursor.Title,
+                TitleSource = cursor.TitleSource,
+                // The chat engine may not have shown it (the chat was historical, or the app was closed before its next
+                // live update): it goes out again with the first live update after the restart.
+                UndeliveredTitle = cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
             };
+        }
+
+        if (readAgain > 0)
+        {
+            _logger.LogInformation("Reading {Count} transcripts again for the titles stored since this version", readAgain);
         }
 
         _cursorsLoaded = true;
         return true;
     }
 
-    /// <summary>Never throws: a file that cannot be read or indexed now is tried again by itself, later, not by a scan of everything.</summary>
-    private void ProcessFile(string path)
+    /// <summary>
+    /// Never throws: a file that cannot be read or indexed now is tried again by itself, later, not by a scan of everything.
+    /// Returns the file's key.
+    /// </summary>
+    private string ProcessFile(FileInfo file, bool refresh)
     {
-        var key = PathNormalizer.Normalize(path);
+        var key = PathNormalizer.Normalize(file.FullName);
         try
         {
-            Index(path, key);
+            Index(file, key, refresh);
             _retries.Remove(key);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            ScheduleRetry(key, path, ex);
+            ScheduleRetry(key, file.FullName, ex);
         }
+
+        return key;
     }
 
     private void ScheduleRetry(string key, string path, Exception ex)
@@ -269,13 +379,26 @@ public sealed class TranscriptIndexer : BackgroundService
         }
     }
 
-    private void Index(string path, string key)
+    /// <param name="info">From the scan's enumeration, with its size and write time, or fresh for a retry.</param>
+    /// <param name="refresh">Ask the file system about this file whatever the enumeration says.</param>
+    private void Index(FileInfo info, string key, bool refresh)
     {
-        var info = new FileInfo(path);
+        if (refresh || _time.GetUtcNow() - info.LastWriteTimeUtc <= _options.HistoryWindow)
+        {
+            // Windows reports a write through a handle still open only once it reaches the disk: until then the folder entry
+            // the enumeration reads shows the old size and the old write time, and the watcher says nothing either. Asking the
+            // file itself shows the write. The few files written within the history window are asked on every scan, every
+            // file once a minute (the watcher refresh) and on every scan without a watcher; the thousands of old ones are
+            // trusted in between, which is what makes a scan cheap.
+            info.Refresh();
+        }
+
         if (!info.Exists)
         {
             return;
         }
+
+        var path = info.FullName;
 
         if (!_files.TryGetValue(key, out var state))
         {
@@ -311,7 +434,11 @@ public sealed class TranscriptIndexer : BackgroundService
         state.Offset = tail.NewOffset;
         state.LastWriteUtc = lastWriteUtc;
 
-        var cursor = new TranscriptCursor { Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId };
+        var cursor = new TranscriptCursor
+        {
+            Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
+            Title = state.Title, TitleSource = state.TitleSource,
+        };
         _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
 
@@ -319,7 +446,6 @@ public sealed class TranscriptIndexer : BackgroundService
     {
         var usage = new List<UsageDelta>();
         string? newTitle = null;
-        var summaryTitle = false;
         string? cwd = null;
         string? model = null;
         DateTimeOffset? lastActivity = null;
@@ -327,6 +453,19 @@ public sealed class TranscriptIndexer : BackgroundService
         var pendingToolUse = state.PendingToolUse;
         var interrupted = state.CarriedInterrupt;
         var newMessageIds = new List<string>();
+
+        // Claude Code's own order: a /rename name, then the generated title, then the first prompt. A title from a lower
+        // source never replaces one from a higher (the first prompt stays until a title arrives, the first generated title
+        // wins over later copies of it); only another /rename replaces a /rename name.
+        void Offer(string? candidate, TitleSource source)
+        {
+            if (candidate is not null && (source > state.TitleSource
+                || (source == TitleSource.Custom && !string.Equals(candidate, state.Title, StringComparison.Ordinal))))
+            {
+                newTitle = state.Title = candidate;
+                state.TitleSource = source;
+            }
+        }
 
         foreach (var raw in lines)
         {
@@ -395,20 +534,28 @@ public sealed class TranscriptIndexer : BackgroundService
                     {
                         interrupted = false;
                         pendingToolUse = false;
-                        if (!state.TitleFound && !summaryTitle && newTitle is null)
+                        if (!subagent)
                         {
-                            newTitle = ChatTitle.FromPrompt(user.Text);
+                            Offer(ChatTitle.FromPrompt(user.Text), TitleSource.Prompt); // a sub-agent's prompt is no chat title
                         }
                     }
 
                     break;
 
-                case SummaryLine summary:
-                    if (!state.HasSummary)
+                case SummaryLine summary when !subagent:
+                    Offer(ChatTitle.FromPrompt(summary.Title), TitleSource.Generated);
+                    break;
+
+                case CustomTitleLine custom when !subagent:
+                    var name = ChatTitle.FromPrompt(custom.Title);
+                    if (state.SkipCustomUntilCurrent)
                     {
-                        newTitle = ChatTitle.FromPrompt(summary.Title);
-                        summaryTitle = true;
-                        state.HasSummary = true;
+                        // A re-read after a rewrite: the names before the current one were seen, and the current one is kept.
+                        state.SkipCustomUntilCurrent = !string.Equals(name, state.Title, StringComparison.Ordinal);
+                    }
+                    else
+                    {
+                        Offer(name, TitleSource.Custom);
                     }
 
                     break;
@@ -417,9 +564,9 @@ public sealed class TranscriptIndexer : BackgroundService
 
         state.PendingToolUse = pendingToolUse;
         state.CarriedInterrupt = partial && interrupted;
-        if (newTitle is not null)
+        if (!partial)
         {
-            state.TitleFound = true;
+            state.SkipCustomUntilCurrent = false; // the whole file was read again: a current name no longer in it is kept, later names count
         }
 
         // The chat engine drops a historical update of a chat it does not show, title and all, so a title found while the
@@ -513,6 +660,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 if (error is InternalBufferOverflowException)
                 {
                     _logger.LogWarning(error, "Transcript watcher missed events; scanning everything");
+                    _refreshAll = true;
                 }
                 else
                 {
@@ -550,12 +698,20 @@ public sealed class TranscriptIndexer : BackgroundService
         public long Offset { get; set; }
         public DateTimeOffset LastWriteUtc { get; set; }
         public string? SessionId { get; set; }
-        public bool TitleFound { get; set; }
-        public bool HasSummary { get; set; }
+
+        /// <summary>The chat's title as far as the file is read, and where it came from; both travel with the cursor.</summary>
+        public string? Title { get; set; }
+        public TitleSource TitleSource { get; set; }
         public bool PendingToolUse { get; set; }
 
         /// <summary>An interrupt that ended a pass cut short by the byte cap, reported with the pass that reaches the end.</summary>
         public bool CarriedInterrupt { get; set; }
+
+        /// <summary>
+        /// Reading the file again after a rewrite: the /rename names up to the current one were seen and are not offered
+        /// again, whatever pass of the re-read they fall into; from the current one on, a different name is a new rename.
+        /// </summary>
+        public bool SkipCustomUntilCurrent { get; set; }
 
         /// <summary>The title found while the transcript was historical, until a live update carries it.</summary>
         public string? UndeliveredTitle { get; set; }
@@ -571,7 +727,8 @@ public sealed class TranscriptIndexer : BackgroundService
 
         /// <summary>
         /// The file was rewritten: read it again from the start. The usage it held is not counted again, even when the message
-        /// id memory no longer holds its ids (it keeps only the newest). Its title was already found and is not sent again.
+        /// id memory no longer holds its ids (it keeps only the newest). Its title was already found and is not sent again:
+        /// the lines read again offer nothing above its source, and its /rename names nothing up to the current one.
         /// </summary>
         public void Reset()
         {
@@ -579,6 +736,7 @@ public sealed class TranscriptIndexer : BackgroundService
             PendingToolUse = false;
             CarriedInterrupt = false;
             CountedUntil = LastCountedAt;
+            SkipCustomUntilCurrent = TitleSource == TitleSource.Custom;
         }
     }
 

@@ -8,6 +8,9 @@ public interface IUsageStore
     Task<IReadOnlyList<TranscriptCursor>> GetCursorsAsync(CancellationToken ct = default);
     Task UpsertCursorsAsync(IReadOnlyCollection<TranscriptCursor> cursors, CancellationToken ct = default);
 
+    /// <summary>Forgets the cursors of transcripts that no longer exist; a path without a cursor is ignored.</summary>
+    Task RemoveCursorsAsync(IReadOnlyCollection<string> paths, CancellationToken ct = default);
+
     /// <summary>
     /// Writes usage deltas, transcript cursors and the ids of the assistant messages the usage came from in one
     /// transaction, so a cursor never advances past usage that was not saved and a saved message is never counted again.
