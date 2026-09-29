@@ -36,4 +36,12 @@ public sealed record SessionSnapshot
     /// has none of these. All three are persisted, so a real chat restored after a restart still counts.
     /// </summary>
     public bool HeldConversation => Title is not null || LatestContext != TokenUsage.Zero || LastToolName is not null;
+
+    /// <summary>
+    /// Whether the session is a chat the Yard shows and counts: once it held a conversation, or while it works or waits for
+    /// the user. A session that only sits there (Starting, Idle, Stale) or is over without ever having held one is no chat
+    /// yet: Claude Code starts one each time a VS Code window loads, and quits it again seconds or a minute later without a
+    /// prompt. A prompt makes it Working at once, so a chat typed into a fresh panel shows before its reply.
+    /// </summary>
+    public bool ShowsAsChat => HeldConversation || State is SessionState.Working or SessionState.Waiting;
 }

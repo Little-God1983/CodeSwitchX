@@ -142,18 +142,70 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_session_that_ends_without_a_prompt_or_a_reply_leaves_the_tile_at_once()
+    public async Task A_session_that_starts_and_ends_without_a_prompt_never_gets_a_row()
     {
         _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
         await _yard.InitializeAsync(CancellationToken.None);
         var app = _yard.FindTile(_app.Id)!;
 
         _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
-        app.Chats.ShouldHaveSingleItem("a Claude panel that just opened waits for its first prompt");
+        app.Chats.ShouldBeEmpty("an idle session that was never prompted is not a chat yet");
+
+        // The second of the two sessions a VS Code window starts lived up to 77 s in the user's database.
+        _time.Advance(TimeSpan.FromSeconds(77));
+        _yard.Tick(_time.GetUtcNow());
+        app.Chats.ShouldBeEmpty();
 
         _engine.Apply(Hook("s1", "SessionEnd", SessionSignal.SessionEnd, @"c:\repo\app"));
         app.Chats.ShouldBeEmpty("a session that never held a conversation is not a chat");
         app.AttentionRank.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_prompt_typed_into_a_fresh_panel_gives_the_session_its_row_at_once()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var app = _yard.FindTile(_app.Id)!;
+        _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app") with { Prompt = "fix the build" });
+
+        var row = app.Chats.ShouldHaveSingleItem("the prompt shows the chat before its reply");
+        row.State.ShouldBe(SessionState.Working);
+        row.Title.ShouldBe("fix the build");
+        app.AttentionRank.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_chat_that_held_a_conversation_keeps_its_row_when_it_goes_idle()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var app = _yard.FindTile(_app.Id)!;
+        _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app") with { Prompt = "fix the build" });
+
+        _engine.Apply(Hook("s1", "Stop", SessionSignal.Stop, @"c:\repo\app"));
+
+        app.Chats.ShouldHaveSingleItem().State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public async Task A_session_that_waited_for_the_user_without_a_conversation_loses_its_row_when_it_idles_again()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var app = _yard.FindTile(_app.Id)!;
+        _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+
+        _engine.Apply(Hook("s1", "Notification", SessionSignal.Notification, @"c:\repo\app"));
+        app.Chats.ShouldHaveSingleItem("a chat that needs the user shows, prompted or not");
+        app.NeedsAttention.ShouldBeTrue();
+
+        _engine.Apply(Hook("s1", "Stop", SessionSignal.Stop, @"c:\repo\app"));
+        app.Chats.ShouldBeEmpty();
+        app.NeedsAttention.ShouldBeFalse();
     }
 
     [Fact]

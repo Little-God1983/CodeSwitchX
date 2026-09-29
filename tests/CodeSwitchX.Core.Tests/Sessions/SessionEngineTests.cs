@@ -106,6 +106,35 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void A_started_session_is_no_chat_until_a_prompt_makes_it_one_and_it_stays_one_after_its_turn()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Get("s1")!.ShowsAsChat.ShouldBeFalse("an idle session that was never prompted is not a chat yet");
+
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        var prompted = _engine.Get("s1")!;
+        prompted.State.ShouldBe(SessionState.Working);
+        prompted.ShowsAsChat.ShouldBeTrue("the prompt makes it Working before any reply, whatever the prompt said");
+
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "fix the build"));
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        var done = _engine.Get("s1")!;
+        done.State.ShouldBe(SessionState.Idle);
+        done.ShowsAsChat.ShouldBeTrue("the prompt gave it a title");
+    }
+
+    [Fact]
+    public void A_session_waiting_for_the_user_is_a_chat_until_it_idles_again_without_having_held_a_conversation()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Apply(Hook("Notification", SessionSignal.Notification));
+        _engine.Get("s1")!.ShowsAsChat.ShouldBeTrue();
+
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        _engine.Get("s1")!.ShowsAsChat.ShouldBeFalse();
+    }
+
+    [Fact]
     public void Unknown_event_is_recorded_but_does_not_change_state()
     {
         _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));

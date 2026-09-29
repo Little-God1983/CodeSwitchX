@@ -76,9 +76,9 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     {
         // The rows on the Yard: a chat on no tile (its cwd outside every workspace) is shown nowhere, and a Stale chat stays
         // on its tile for the stale row lifetime; counted without that, the number grew over the 24 h restore window and
-        // matched nothing on screen.
+        // matched nothing on screen. A session that is no chat yet (a VS Code window's prompt-less one) has no row either.
         var now = _time.GetUtcNow();
-        var shown = _engine.Snapshots.Where(s => s.WorkspaceId is not null).ToList();
+        var shown = _engine.Snapshots.Where(s => s.WorkspaceId is not null && s.ShowsAsChat).ToList();
         ActiveSessions = shown.Count(s => SessionStateMachine.IsLive(s.State) && (s.State != SessionState.Stale || now - s.StateSince < WorkspaceTileViewModel.StaleRowLifetime));
         WaitingSessions = shown.Count(s => SessionStateMachine.NeedsUser(s.State));
     }

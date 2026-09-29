@@ -41,13 +41,13 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;
 
     /// <summary>
-    /// Shows or updates the chat's row. A session that is over without ever having held a conversation is no chat (Claude
-    /// Code opens and closes one each time a VS Code window loads), so its row goes rather than lingering for
-    /// <see cref="EndedRowLifetime"/>; while it runs it stays shown, a panel waiting for its first prompt.
+    /// Shows or updates the chat's row. A session that is no chat (<see cref="SessionSnapshot.ShowsAsChat"/>) gets no row,
+    /// and loses the one it had when it goes back to idling or ends without ever having held a conversation, rather than
+    /// lingering for <see cref="EndedRowLifetime"/>. Claude Code opens and closes such a session each time a VS Code window loads.
     /// </summary>
     public void Upsert(SessionSnapshot snapshot, PricingTable pricing)
     {
-        if (!SessionStateMachine.IsLive(snapshot.State) && !snapshot.HeldConversation)
+        if (!snapshot.ShowsAsChat)
         {
             Remove(snapshot.SessionId);
             return;
