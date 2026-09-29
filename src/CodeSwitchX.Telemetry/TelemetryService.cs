@@ -19,11 +19,20 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
     private readonly ILogger<TelemetryService> _logger;
+    /// <summary>Guards the buckets, the pricing and the order in which snapshots land; never held while a handler runs.</summary>
     private readonly Lock _gate = new();
+    /// <summary>Guards who publishes; held only for the check, not while the bus calls the handlers.</summary>
+    private readonly Lock _publishGate = new();
+    private readonly SemaphoreSlim _reloads = new(1, 1);
     private readonly Dictionary<(string SessionId, string Model, DateTimeOffset Minute), UsageBucket> _buckets = [];
     private IDisposable? _subscription;
     private ITimer? _refreshTimer;
     private UsageAggregator _aggregator = new(PricingTable.Default);
+    private long _tickets;
+    private long _landed;
+    private bool _publishing;
+    private bool _publishAgain;
+    private volatile TelemetrySnapshot _current;
 
     public TelemetryService(IUsageStore usage, ISettingsStore settings, IEventBus bus, TimeProvider time, ILogger<TelemetryService> logger)
     {
@@ -32,11 +41,11 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
         _bus = bus;
         _time = time;
         _logger = logger;
-        Current = TelemetrySnapshot.Empty(time.GetUtcNow());
+        _current = TelemetrySnapshot.Empty(time.GetUtcNow());
     }
 
     public PricingTable Pricing { get; private set; } = PricingTable.Default;
-    public TelemetrySnapshot Current { get; private set; }
+    public TelemetrySnapshot Current => _current;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -71,11 +80,27 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
 
     private async Task ReloadPricingAsync(CancellationToken ct, bool publish)
     {
-        // The database holds only the user's own rules, each overriding the shipped default for its model.
-        var rules = await _settings.GetPricingAsync(ct).ConfigureAwait(false);
-        Pricing = new PricingTable(DefaultPricing.Rules.Concat(rules));
-        _aggregator = new UsageAggregator(Pricing);
-        Recompute(publish);
+        // One reload at a time, read and swap together: two overlapping reloads would otherwise swap in the order their
+        // reads returned, and the older rules could land last.
+        await _reloads.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // The database holds only the user's own rules, each overriding the shipped default for its model.
+            var rules = await _settings.GetPricingAsync(ct).ConfigureAwait(false);
+            Work work;
+            lock (_gate)
+            {
+                Pricing = new PricingTable(DefaultPricing.Rules.Concat(rules));
+                _aggregator = new UsageAggregator(Pricing);
+                work = TakeLocked();
+            }
+
+            Land(work, publish);
+        }
+        finally
+        {
+            _reloads.Release();
+        }
     }
 
     private void OnTranscriptUpdated(TranscriptUpdated message)
@@ -85,6 +110,7 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
             return;
         }
 
+        Work work;
         lock (_gate)
         {
             foreach (var delta in message.Update.Usage)
@@ -102,35 +128,104 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
                 bucket.CacheWrite += delta.Tokens.CacheWrite;
                 bucket.CacheRead += delta.Tokens.CacheRead;
             }
+
+            work = TakeLocked();
         }
 
-        Recompute(publish: true);
+        Land(work, publish: true);
     }
 
     private void Recompute(bool publish)
     {
-        var now = _time.GetUtcNow();
-        UsageBucket[] buckets;
+        Work work;
         lock (_gate)
         {
-            var cutoff = now - History;
-            foreach (var stale in _buckets.Where(kv => kv.Key.Minute < cutoff).Select(kv => kv.Key).ToList())
-            {
-                _buckets.Remove(stale);
-            }
-
-            buckets = _buckets.Values.ToArray();
+            work = TakeLocked();
         }
 
-        Current = new TelemetrySnapshot(
-            _aggregator.Today(buckets, now, _time.LocalTimeZone),
-            _aggregator.Window(buckets, now, TimeSpan.FromHours(5)),
-            _aggregator.RateSeries(buckets, now, RateMinutes),
-            now);
+        Land(work, publish);
+    }
+
+    /// <summary>A copy of the buckets with the ticket that orders it against the copies other recomputes took.</summary>
+    private readonly record struct Work(long Ticket, UsageBucket[] Buckets, UsageAggregator Aggregator, DateTimeOffset Now);
+
+    /// <summary>
+    /// Under the lock, in the same critical section as the change that calls for the recompute: drops the buckets older
+    /// than a week and hands out the copy to sum. The ticket comes with the copy, so a copy taken later has the higher one.
+    /// </summary>
+    private Work TakeLocked()
+    {
+        var now = _time.GetUtcNow();
+        var cutoff = now - History;
+        foreach (var stale in _buckets.Where(kv => kv.Key.Minute < cutoff).Select(kv => kv.Key).ToList())
+        {
+            _buckets.Remove(stale);
+        }
+
+        return new Work(++_tickets, _buckets.Values.ToArray(), _aggregator, now);
+    }
+
+    /// <summary>
+    /// Sums the copy outside the lock (a week of buckets, three passes) and lands the snapshot unless a copy taken later
+    /// has landed meanwhile: the minute timer and a transcript update can recompute at the same time, and the older copy
+    /// must not become the current snapshot, or Today, the 5 h window and the sparkline would miss the newest usage until
+    /// the next update or tick.
+    /// </summary>
+    private void Land(Work work, bool publish)
+    {
+        var snapshot = new TelemetrySnapshot(
+            work.Aggregator.Today(work.Buckets, work.Now, _time.LocalTimeZone),
+            work.Aggregator.Window(work.Buckets, work.Now, TimeSpan.FromHours(5)),
+            work.Aggregator.RateSeries(work.Buckets, work.Now, RateMinutes),
+            work.Now);
+        lock (_gate)
+        {
+            if (work.Ticket < _landed)
+            {
+                return;
+            }
+
+            _landed = work.Ticket;
+            _current = snapshot;
+        }
 
         if (publish)
         {
-            _bus.Publish(new TelemetryUpdated(Current));
+            PublishCurrent();
+        }
+    }
+
+    /// <summary>
+    /// One thread publishes at a time, outside every lock, so a handler of the snapshot (the bar's UI marshal) holds no
+    /// transcript update back and can take the telemetry lock itself. A snapshot that lands while a publish runs is not
+    /// waited for: the publishing thread sends the current snapshot once more before it leaves, so the newest comes last.
+    /// </summary>
+    private void PublishCurrent()
+    {
+        lock (_publishGate)
+        {
+            if (_publishing)
+            {
+                _publishAgain = true;
+                return;
+            }
+
+            _publishing = true;
+        }
+
+        while (true)
+        {
+            _bus.Publish(new TelemetryUpdated(_current));
+            lock (_publishGate)
+            {
+                if (!_publishAgain)
+                {
+                    _publishing = false;
+                    return;
+                }
+
+                _publishAgain = false;
+            }
         }
     }
 
@@ -138,5 +233,6 @@ public sealed class TelemetryService : IHostedService, IDisposable, IPricingProv
     {
         _refreshTimer?.Dispose();
         _subscription?.Dispose();
+        _reloads.Dispose();
     }
 }

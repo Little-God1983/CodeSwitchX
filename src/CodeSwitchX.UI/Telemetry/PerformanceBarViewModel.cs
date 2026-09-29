@@ -57,7 +57,8 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     public void Apply(TelemetrySnapshot snapshot)
     {
         TokensTodayText = TokenFormat.Compact(snapshot.Today.Tokens.Total);
-        CostTodayText = string.Create(CultureInfo.InvariantCulture, $"${snapshot.Today.Cost:0.00} est.");
+        CostTodayText = string.Create(CultureInfo.InvariantCulture, $"${snapshot.Today.Cost:0.00} est.")
+            + (snapshot.Today.Unpriced ? " incl. unpriced" : string.Empty);
 
         var fiveHour = snapshot.FiveHours.Tokens.Total;
         HasBudget = _budget is > 0;
