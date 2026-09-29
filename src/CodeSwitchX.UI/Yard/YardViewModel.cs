@@ -32,7 +32,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _tickTimer;
     private ITimer? _gitTimer;
     private Task _gitRefresh = Task.CompletedTask;
+    private bool _gitRefreshRunning;
     private bool _gitRefreshAgain;
+
+    /// <summary>How long a git round waits for the UI thread to hand over the tiles; a thread that never answers (the dispatcher has shut down) must not keep every later round from running.</summary>
+    internal TimeSpan UiTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>The git round that runs, or the last one; tests await it.</summary>
+    internal Task CurrentGitRefresh => _gitRefresh;
 
     [ObservableProperty] private bool _needsMeFirst;
     [ObservableProperty] private bool _hooksInferredOnly;
@@ -97,8 +104,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
-        // Posted to the UI thread so the tile collections are only ever enumerated there.
-        _gitTimer = _time.CreateTimer(_ => _ui.Post(() => _ = RefreshGitAsync(CancellationToken.None)), null, TimeSpan.Zero, GitRefreshInterval);
+        _ = RefreshGitAsync(CancellationToken.None);
+        // The tick asks for nothing while a round runs: a round longer than the interval would otherwise repeat back to back.
+        _gitTimer = _time.CreateTimer(_ => _ = RequestGitRefresh(CancellationToken.None, again: false), null, GitRefreshInterval, GitRefreshInterval);
     }
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
@@ -133,20 +141,24 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Refreshes every tile's git facts and the worktrees of every repository workspace. One refresh runs at a time; one
-    /// asked for while it runs (a workspace added meanwhile) makes it run once more when it ends, and the task returned
-    /// to either caller ends with that. A tile whose check fails is logged, and the others go on.
+    /// Refreshes every tile's git facts and the worktrees of every repository workspace. One round runs at a time; a
+    /// refresh asked for while one runs (a workspace added meanwhile, the Refresh command) makes it run once more when it
+    /// ends, and the task returned to either caller ends with that. A tile whose check fails is logged, and the others go on.
     /// </summary>
-    public Task RefreshGitAsync(CancellationToken ct)
+    public Task RefreshGitAsync(CancellationToken ct) => RequestGitRefresh(ct, again: true);
+
+    /// <summary>Whether a round runs and whether another was asked for are decided under one lock, so a request never falls between a round's last look and its end.</summary>
+    private Task RequestGitRefresh(CancellationToken ct, bool again)
     {
         lock (_gitGate)
         {
-            if (!_gitRefresh.IsCompleted)
+            if (_gitRefreshRunning)
             {
-                _gitRefreshAgain = true;
+                _gitRefreshAgain |= again;
                 return _gitRefresh;
             }
 
+            _gitRefreshRunning = true;
             _gitRefreshAgain = false;
             _gitRefresh = RefreshGitLoopAsync(ct);
             return _gitRefresh;
@@ -155,21 +167,39 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     private async Task RefreshGitLoopAsync(CancellationToken ct)
     {
-        do
+        try
         {
-            foreach (var tile in await TilesOnUiThreadAsync().ConfigureAwait(false))
+            do
             {
-                try
+                foreach (var tile in await TilesOnUiThreadAsync().ConfigureAwait(false))
                 {
-                    await RefreshGitAsync(tile, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex, "Git refresh of {Root} failed", tile.RootPath);
+                    try
+                    {
+                        await RefreshGitAsync(tile, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "Git refresh of {Root} failed", tile.RootPath);
+                    }
                 }
             }
+            while (AnotherRefreshWasAskedFor());
         }
-        while (AnotherRefreshWasAskedFor());
+        catch (Exception ex)
+        {
+            lock (_gitGate)
+            {
+                _gitRefreshRunning = false;
+                _gitRefreshAgain = false;
+            }
+
+            if (ex is OperationCanceledException)
+            {
+                throw;
+            }
+
+            _logger.LogWarning(ex, "The git refresh round ended early");
+        }
     }
 
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, CancellationToken ct)
@@ -181,13 +211,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.DirtyCount = info.DirtyCount;
         });
 
-        if (!info.IsRepository)
+        // A worktree added next to the repository after the registration is a child root from here on, so the chat started
+        // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
+        // The process runs only where git records a linked worktree, or one is registered and may have been removed.
+        if (!info.IsRepository || (tile.Workspace.Worktrees.Count == 0 && !_git.HasLinkedWorktrees(tile.RootPath)))
         {
             return;
         }
 
-        // A worktree added next to the repository after the registration is a child root from here on, so the chat started
-        // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
         var porcelain = await _git.RunAsync(tile.RootPath, "worktree list --porcelain", ct).ConfigureAwait(false);
         if (porcelain is not null)
         {
@@ -195,22 +226,38 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>True to run once more; otherwise the round is over, decided in the same critical section, so no request is lost.</summary>
     private bool AnotherRefreshWasAskedFor()
     {
         lock (_gitGate)
         {
-            var again = _gitRefreshAgain;
-            _gitRefreshAgain = false;
-            return again;
+            if (_gitRefreshAgain)
+            {
+                _gitRefreshAgain = false;
+                return true;
+            }
+
+            _gitRefreshRunning = false;
+            return false;
         }
     }
 
-    /// <summary>The tiles as of now, read on the UI thread, which alone enumerates the tile collections.</summary>
-    private Task<List<WorkspaceTileViewModel>> TilesOnUiThreadAsync()
+    /// <summary>The tiles as of now, read on the UI thread, which alone enumerates the tile collections; waits for it at most <see cref="UiTimeout"/>.</summary>
+    private async Task<List<WorkspaceTileViewModel>> TilesOnUiThreadAsync()
     {
         var tiles = new TaskCompletionSource<List<WorkspaceTileViewModel>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ui.Post(() => tiles.SetResult(Tiles.ToList()));
-        return tiles.Task;
+        _ui.Post(() =>
+        {
+            try
+            {
+                tiles.SetResult(Tiles.ToList());
+            }
+            catch (Exception ex)
+            {
+                tiles.TrySetException(ex);
+            }
+        });
+        return await tiles.Task.WaitAsync(UiTimeout).ConfigureAwait(false);
     }
 
     [RelayCommand]

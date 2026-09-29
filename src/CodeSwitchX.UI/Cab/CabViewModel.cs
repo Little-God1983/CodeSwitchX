@@ -36,6 +36,15 @@ public sealed partial class CabViewModel : ObservableObject
         Pips.Clear();
     }
 
+    /// <summary>A workspace that is gone offers no pip: clicking one would switch to nothing.</summary>
+    public void RemovePip(Guid workspaceId)
+    {
+        foreach (var pip in Pips.Where(p => p.Id == workspaceId).ToList())
+        {
+            Pips.Remove(pip);
+        }
+    }
+
     [RelayCommand]
     private void Back() => BackRequested?.Invoke();
 

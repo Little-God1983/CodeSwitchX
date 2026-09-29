@@ -62,7 +62,7 @@ public sealed class ShellTestHarness
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), paths, claude, NullLogger<SettingsViewModel>.Instance);
-        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings);
+        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
         Shell = new ShellViewModel(yard, cab, settings, bar, Host, NullLogger<ShellViewModel>.Instance);
     }
 

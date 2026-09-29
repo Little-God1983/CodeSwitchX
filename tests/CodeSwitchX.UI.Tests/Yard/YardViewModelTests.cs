@@ -5,6 +5,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.Tests;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -60,11 +61,19 @@ public class YardViewModelTests : IDisposable
     }
 
     /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger.</summary>
-    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null)
+    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null)
     {
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
-        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, new ImmediateDispatcher(), _time, logger ?? NullLogger<YardViewModel>.Instance);
+        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, ui ?? new ImmediateDispatcher(), _time, logger ?? NullLogger<YardViewModel>.Instance);
+    }
+
+    /// <summary>A UI thread that never gets to what is posted: the dispatcher has shut down, say.</summary>
+    private sealed class DroppingDispatcher : IUiDispatcher
+    {
+        public void Post(Action action)
+        {
+        }
     }
 
     private SessionSnapshot Snapshot(string id, Guid workspaceId, SessionState state) => new()
@@ -363,6 +372,7 @@ public class YardViewModelTests : IDisposable
     {
         var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
         var hotfix = Path.Combine(_tempRoot, "app-hotfix");
+        Directory.CreateDirectory(Path.Combine(app.RootPath, ".git", "worktrees", "app-hotfix")); // git's record of a linked worktree
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
         _resolver.SetRoots(WorkspaceResolver.RootsOf([app]));
         var yard = Yard((_, args, _) => Task.FromResult<string?>(args.StartsWith("worktree list", StringComparison.Ordinal)
@@ -372,13 +382,85 @@ public class YardViewModelTests : IDisposable
 
         await yard.RefreshGitAsync(CancellationToken.None);
 
-        await _store.Received(1).UpdateAsync(app, Arg.Any<CancellationToken>());
+        await _store.Received(1).ReplaceWorktreesAsync(app.Id, Arg.Any<IReadOnlyList<Worktree>>(), Arg.Any<CancellationToken>());
         var worktree = app.Worktrees.ShouldHaveSingleItem();
         worktree.Path.ShouldBe(hotfix);
         worktree.Branch.ShouldBe("hotfix");
         _resolver.Resolve(Path.Combine(hotfix, "src")).ShouldBe(app.Id, "a chat started in the new worktree moves onto App's tile");
 
         await yard.RefreshGitAsync(CancellationToken.None);
-        await _store.Received(1).UpdateAsync(app, Arg.Any<CancellationToken>()); // the same set again: nothing saved
+        await _store.Received(1).ReplaceWorktreesAsync(app.Id, Arg.Any<IReadOnlyList<Worktree>>(), Arg.Any<CancellationToken>()); // the same set again: nothing saved
+    }
+
+    [Fact]
+    public async Task No_worktree_process_runs_for_a_repository_without_linked_worktrees()
+    {
+        // git worktree list is a process per repository per round; git records linked worktrees under .git\worktrees, so
+        // a repository without that folder, and without worktrees registered, needs none.
+        var plain = new Workspace { Name = "Plain", RootPath = Repo("plain"), TrackId = _general.Id };
+        var linked = new Workspace { Name = "Linked", RootPath = Repo("linked"), TrackId = _general.Id };
+        Directory.CreateDirectory(Path.Combine(linked.RootPath, ".git", "worktrees", "feature"));
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([plain, linked]));
+        var listed = new List<string>();
+        var yard = Yard((dir, args, _) =>
+        {
+            if (args.StartsWith("worktree list", StringComparison.Ordinal))
+            {
+                lock (listed)
+                {
+                    listed.Add(dir);
+                }
+            }
+
+            return Task.FromResult<string?>(string.Empty);
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        listed.ShouldNotBeEmpty();
+        listed.ShouldAllBe(dir => dir == linked.RootPath, "the round the start ran and this one both list Linked alone");
+    }
+
+    [Fact]
+    public async Task The_timers_tick_does_not_queue_another_round_while_one_still_runs()
+    {
+        // A round longer than the interval would otherwise repeat back to back, with git processes running all the time.
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var statusMayEnd = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var statusCalls = 0;
+        var yard = Yard((_, args, _) =>
+        {
+            if (!args.StartsWith("status", StringComparison.Ordinal))
+            {
+                return Task.FromResult<string?>(string.Empty);
+            }
+
+            Interlocked.Increment(ref statusCalls);
+            return statusMayEnd.Task;
+        });
+        await yard.InitializeAsync(CancellationToken.None); // the first round starts and waits in git status
+        _time.Advance(YardViewModel.GitRefreshInterval); // a tick while it runs
+        _time.Advance(YardViewModel.GitRefreshInterval); // and another
+
+        statusMayEnd.SetResult(string.Empty);
+        await yard.CurrentGitRefresh.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        statusCalls.ShouldBe(1, "the ticks that found a round running are dropped; the next tick after it ends runs the next round");
+    }
+
+    [Fact]
+    public async Task A_ui_thread_that_never_answers_does_not_stop_every_later_refresh()
+    {
+        var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([app]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty), ui: new DroppingDispatcher());
+        yard.UiTimeout = TimeSpan.FromMilliseconds(100);
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        yard.CurrentGitRefresh.IsCompleted.ShouldBeTrue("a round that cannot read the tiles ends, so the next one can run");
     }
 }

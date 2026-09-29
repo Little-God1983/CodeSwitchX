@@ -73,14 +73,19 @@ public sealed partial class ShellViewModel : ObservableObject
     /// <summary>Installed, or Partial (every installed event reaches us); Outdated entries point elsewhere and reach nobody.</summary>
     private static bool HooksReachUs(HookInstallState state) => state is HookInstallState.Installed or HookInstallState.Partial;
 
-    /// <summary>The Cab cannot show a workspace that is gone: the strip's name, the pips and the jump target are cleared, and the Yard is shown.</summary>
+    /// <summary>
+    /// The Cab cannot show a workspace that is gone: its pip goes whichever workspace is active; when it is the active one,
+    /// the strip's name, the pips and the jump target are cleared, an open of it still running reports nowhere, and the Yard is shown.
+    /// </summary>
     private void OnTileRemoved(Guid workspaceId)
     {
+        Cab.RemovePip(workspaceId);
         if (ActiveWorkspaceId != workspaceId)
         {
             return;
         }
 
+        _openAttempt++;
         ActiveWorkspaceId = null;
         StatusMessage = null;
         Cab.Clear();

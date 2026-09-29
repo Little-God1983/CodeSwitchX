@@ -52,9 +52,11 @@ public partial class App : Application
         {
             paths.EnsureCreated();
         }
-        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            // Before the log exists, a message box is the only place this can be said; without it CodeSwitchX just ended.
+            // Before the log exists and before any handler is attached, a message box is the only place this can be said;
+            // without it CodeSwitchX just ended. Whatever the cause (a redirected, malformed LOCALAPPDATA included), all
+            // that is done with it is to say so and exit.
             MessageBox.Show($"CodeSwitchX cannot create its data folder:\n\n{paths.Root}\n\n{ex.Message}", "CodeSwitchX", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
             return;

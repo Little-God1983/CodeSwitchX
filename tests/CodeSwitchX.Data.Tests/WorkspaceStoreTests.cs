@@ -54,6 +54,27 @@ public class WorkspaceStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Replacing_the_worktrees_changes_only_the_worktree_rows()
+    {
+        // The git refresh holds the workspace as loaded at startup; saving that whole object would write stale scalars back.
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        var kept = new Worktree { Path = @"c:\repo\app-wt", Branch = "wt" };
+        var workspace = new Workspace { Name = "App", RootPath = @"c:\repo\app", TrackId = track.Id, Worktrees = { kept, new Worktree { Path = @"c:\repo\app-old", Branch = "old" } } };
+        await _store.AddAsync(workspace, TestContext.Current.CancellationToken);
+        await _store.UpdateAsync(new Workspace { Id = workspace.Id, Name = "Renamed", RootPath = workspace.RootPath, TrackId = track.Id, AutoStart = true, Worktrees = workspace.Worktrees }, TestContext.Current.CancellationToken);
+
+        await _store.ReplaceWorktreesAsync(workspace.Id,
+            [new Worktree { Id = kept.Id, WorkspaceId = workspace.Id, Path = kept.Path, Branch = "wt2" }, new Worktree { WorkspaceId = workspace.Id, Path = @"c:\repo\app-hotfix", Branch = "hotfix" }],
+            TestContext.Current.CancellationToken);
+
+        var loaded = (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        loaded.Name.ShouldBe("Renamed");
+        loaded.AutoStart.ShouldBeTrue();
+        loaded.Worktrees.Select(w => (w.Path, w.Branch)).ShouldBe([(@"c:\repo\app-wt", "wt2"), (@"c:\repo\app-hotfix", "hotfix")], ignoreOrder: true);
+        loaded.Worktrees.Single(w => w.Path == @"c:\repo\app-wt").Id.ShouldBe(kept.Id);
+    }
+
+    [Fact]
     public async Task Adding_a_second_workspace_with_the_same_root_throws()
     {
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];

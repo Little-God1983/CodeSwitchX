@@ -248,6 +248,44 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task Unregistering_the_workspace_being_opened_makes_that_open_stale()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Windows.TopLevelWindows().Returns([]);
+        using var launchMayEnd = new ManualResetEventSlim();
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(_ =>
+        {
+            launchMayEnd.Wait(TimeSpan.FromSeconds(10));
+            return new LaunchResult(false, null, "code not found");
+        });
+
+        var open = _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Bus.Publish(new WorkspaceUnregistered(_h.App.Id)); // the shell is back on the Yard
+        launchMayEnd.Set();
+        await open;
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.StatusMessage.ShouldBeNull("the error belongs to a workspace that is gone");
+    }
+
+    [Fact]
+    public async Task Unregistering_a_workspace_that_is_not_active_removes_its_pip()
+    {
+        var shop = AddShopWithItsWindowOpen();
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _h.General.Id };
+        _h.Workspaces.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_h.App, shop, cli]));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(shop.Id);
+        _h.Shell.Cab.Pips.Select(p => p.Name).ShouldBe(["App", "Cli"]);
+
+        _h.Bus.Publish(new WorkspaceUnregistered(cli.Id));
+
+        _h.Shell.Cab.Pips.Select(p => p.Name).ShouldBe(["App"], "a pip for a gone workspace switches to nothing");
+        _h.Shell.ActiveWorkspaceId.ShouldBe(shop.Id);
+    }
+
+    [Fact]
     public async Task A_failed_open_that_ends_as_the_user_retries_does_not_write_its_error_over_the_retry()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

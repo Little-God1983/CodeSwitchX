@@ -11,6 +11,9 @@ public sealed class WorkspaceRegistry
     private readonly WorkspaceResolver _resolver;
     private readonly IEventBus _bus;
 
+    /// <summary>One reload at a time: the git refresh reloads from a background thread while the user registers or unregisters, and the older read must not set the roots last.</summary>
+    private readonly SemaphoreSlim _reloads = new(1, 1);
+
     public WorkspaceRegistry(IWorkspaceStore store, WorkspaceResolver resolver, IEventBus bus)
     {
         _store = store;
@@ -20,10 +23,18 @@ public sealed class WorkspaceRegistry
 
     public async Task<IReadOnlyList<Workspace>> LoadAsync(CancellationToken ct)
     {
-        var workspaces = await _store.GetAllAsync(ct).ConfigureAwait(false);
-        _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
-        _bus.Publish(new WorkspaceRootsChanged());
-        return workspaces;
+        await _reloads.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var workspaces = await _store.GetAllAsync(ct).ConfigureAwait(false);
+            _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
+            _bus.Publish(new WorkspaceRootsChanged());
+            return workspaces;
+        }
+        finally
+        {
+            _reloads.Release();
+        }
     }
 
     public async Task RegisterAsync(Workspace workspace, CancellationToken ct)
@@ -47,9 +58,11 @@ public sealed class WorkspaceRegistry
 
     /// <summary>
     /// Replaces the workspace's worktrees with the ones git lists now, when they differ: a worktree added after the
-    /// registration becomes a child root, a removed one stops being one, and a moved branch is noted. Saved and reloaded
-    /// like a registration, so the engine re-maps chats at once. A worktree that stays keeps its row. Returns whether
-    /// anything changed.
+    /// registration becomes a child root, a removed one stops being one, and a moved branch is noted. Only the worktree
+    /// rows are saved (the workspace object may be older than the row), then the roots are reloaded like after a
+    /// registration, so the engine re-maps chats at once. A worktree that stays keeps its row. The object changes only
+    /// once the save went through: what is not saved is not known, so a failed save is tried again at the next refresh.
+    /// Returns whether anything changed.
     /// </summary>
     public async Task<bool> UpdateWorktreesAsync(Workspace workspace, IReadOnlyList<WorktreeInfo> found, CancellationToken ct)
     {
@@ -62,10 +75,7 @@ public sealed class WorkspaceRegistry
             if (current.Remove(PathNormalizer.Normalize(path), out var existing))
             {
                 changed |= existing.Path != path || existing.Branch != info.Branch;
-                existing.WorkspaceId = workspace.Id;
-                existing.Path = path;
-                existing.Branch = info.Branch;
-                next.Add(existing);
+                next.Add(new Worktree { Id = existing.Id, WorkspaceId = workspace.Id, Path = path, Branch = info.Branch });
             }
             else
             {
@@ -80,8 +90,8 @@ public sealed class WorkspaceRegistry
             return false;
         }
 
+        await _store.ReplaceWorktreesAsync(workspace.Id, next, ct).ConfigureAwait(false);
         workspace.Worktrees = next;
-        await _store.UpdateAsync(workspace, ct).ConfigureAwait(false);
         await LoadAsync(ct).ConfigureAwait(false);
         return true;
     }
