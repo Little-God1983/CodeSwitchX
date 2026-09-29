@@ -1,3 +1,4 @@
+using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
@@ -22,6 +23,14 @@ public class ShellViewModelTests
         _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
         _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(true, 1, null));
         return shop;
+    }
+
+    [Fact]
+    public void The_window_title_names_the_build()
+    {
+        // The only place that tells a stable build from a Debug build on screen; what the version reads is AppVersionTests' business.
+        _h.Shell.Title.ShouldStartWith("CodeSwitchX ");
+        _h.Shell.Title.Length.ShouldBeGreaterThan("CodeSwitchX ".Length, "the version follows");
     }
 
     [Fact]
