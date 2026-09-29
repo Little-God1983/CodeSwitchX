@@ -11,10 +11,14 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <!--
-      Every review PR requires a warning-free rebuild; the build enforces it, together with the .editorconfig rules that carry a
-      warning severity (docs/review/decisions.md, #34). An SDK update that brings new warnings breaks the build until they are fixed.
+      Every review PR requires a warning-free rebuild; the build enforces it, for the compiler, the analyzers, the .editorconfig
+      rules that carry a warning severity, and MSBuild's own warnings (docs/review/decisions.md, #34). An SDK update that brings
+      new warnings breaks the build until they are fixed. A NuGet advisory (NU1901 to NU1904) stays a warning: it arrives
+      without a change to the code and must not break every branch until a package moves.
     -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
 </Project>

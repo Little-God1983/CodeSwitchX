@@ -13,7 +13,13 @@
     <ProjectReference Include="..\CodeSwitchX.Ingest\CodeSwitchX.Ingest.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Telemetry\CodeSwitchX.Telemetry.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Hosting\CodeSwitchX.Hosting.csproj" />
-    <ProjectReference Include="..\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <!--
+      The relay is referenced for build order and for its output path only (OutputItemType), and rides along as its own
+      program in relay\csx-hook.exe. It stays framework-dependent whatever the app's publish asks for: a runtime identifier or
+      SelfContained passed to the app would otherwise build it self-contained, into a win-x64 folder and without an apphost.
+    -->
+    <ProjectReference Include="..\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" ReferenceOutputAssembly="false" Private="false"
+                      OutputItemType="RelayTargetPath" UndefineProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishAot" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="H.NotifyIcon.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
@@ -26,29 +32,35 @@
     <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
   </ItemGroup>
   <!--
-    The relay is referenced for build order only (ReferenceOutputAssembly="false") and rides along as its own program in
-    relay\csx-hook.exe, in the build output and in a publish alike. Its folder is asked of the project rather than assumed, so a
-    runtime identifier (a win-x64 subfolder) does not leave the copy empty.
+    The relay's files come from the folder the project reference was built into (RelayTargetPath), in the build output and
+    in a publish alike. A publish that gives the app no shared runtime cannot carry a framework-dependent relay, so it is
+    refused; an empty relay folder is refused too, so the missing csx-hook.exe of #34 cannot come back unnoticed.
   -->
-  <Target Name="CollectRelay">
-    <MSBuild Projects="..\CodeSwitchX.Hook\CodeSwitchX.Hook.csproj" Targets="GetTargetPath">
-      <Output TaskParameter="TargetOutputs" ItemName="RelayTargetPath" />
-    </MSBuild>
+  <Target Name="CollectRelay" DependsOnTargets="ResolveProjectReferences">
     <PropertyGroup>
       <RelayDirectory>@(RelayTargetPath->'%(RootDir)%(Directory)')</RelayDirectory>
     </PropertyGroup>
     <ItemGroup>
       <RelayFiles Include="$(RelayDirectory)csx-hook.*" />
     </ItemGroup>
+    <Error Condition="'$(SelfContained)' == 'true'"
+           Text="A self-contained publish of CodeSwitchX is not supported: the relay (csx-hook.exe) is framework-dependent until the Native AOT build tools are installed (see docs/review/decisions.md), and a self-contained app does not bring the runtime it needs." />
+    <Error Condition="!Exists('$(RelayDirectory)csx-hook.exe')"
+           Text="The relay was not built where expected ($(RelayDirectory)csx-hook.exe); relay\csx-hook.exe would be missing next to CodeSwitchX.exe." />
   </Target>
-  <Target Name="CopyRelay" AfterTargets="Build" DependsOnTargets="CollectRelay">
-    <Copy SourceFiles="@(RelayFiles)" DestinationFolder="$(OutDir)relay" SkipUnchangedFiles="true" />
+  <!-- Inside the core build, so the copies are recorded as FileWrites and a clean removes them. -->
+  <Target Name="CopyRelay" AfterTargets="CopyFilesToOutputDirectory" DependsOnTargets="CollectRelay">
+    <Copy SourceFiles="@(RelayFiles)" DestinationFolder="$(OutDir)relay" SkipUnchangedFiles="true">
+      <Output TaskParameter="CopiedFiles" ItemName="FileWrites" />
+    </Copy>
   </Target>
   <Target Name="PublishRelay" AfterTargets="ComputeResolvedFilesToPublishList" DependsOnTargets="CollectRelay">
     <ItemGroup>
       <ResolvedFileToPublish Include="@(RelayFiles)">
         <RelativePath>relay\%(Filename)%(Extension)</RelativePath>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <!-- Its own program: a single-file publish must leave it on disk, where Claude Code runs it. -->
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
       </ResolvedFileToPublish>
     </ItemGroup>
   </Target>

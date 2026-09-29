@@ -20,6 +20,7 @@ csharp_prefer_braces = true:warning
 dotnet_style_qualification_for_field = false:suggestion
 csharp_style_prefer_primary_constructors = false:suggestion
 
-# EF Core writes migrations with block-scoped namespaces; they are generated and stay as written.
+# EF Core writes migrations with block-scoped namespaces and they stay as written; every other rule applies to them,
+# since their bodies are edited by hand (custom SQL, data fixes).
 [src/CodeSwitchX.Data/Migrations/*.cs]
-generated_code = true
+dotnet_diagnostic.IDE0161.severity = none
