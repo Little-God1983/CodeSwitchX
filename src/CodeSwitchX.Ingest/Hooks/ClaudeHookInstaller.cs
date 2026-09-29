@@ -15,9 +15,18 @@ public sealed class ClaudeHookInstaller
     public const string Marker = "csx-hook";
     public const int TimeoutSeconds = 5;
 
+    /// <summary>How many <c>settings.json.csx-backup-*</c> files stay next to settings.json; older ones go when a save makes a new one.</summary>
+    public const int BackupsKept = 5;
+    private const string TempSuffix = ".csx-tmp";
+    private const string BackupSuffix = ".csx-backup-";
+
+    /// <summary>
+    /// The spec's eight events, StopFailure (a turn that ends on an API error) and PermissionRequest, which fires the moment a
+    /// permission prompt opens; the permission_prompt Notification follows 6 s later, and not at all when it is answered sooner.
+    /// </summary>
     public static readonly string[] Events =
     [
-        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "Stop", "StopFailure", "SubagentStop", "SessionEnd",
+        "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure", "SubagentStop", "SessionEnd",
     ];
 
     private static readonly JsonSerializerOptions WriteOptions = new()
@@ -131,44 +140,60 @@ public sealed class ClaudeHookInstaller
         var settings = Load();
         var before = settings.ToJsonString(WriteOptions);
 
-        if (settings["hooks"] is JsonObject hooks)
+        if (settings["hooks"] is not JsonObject hooks || RemoveOurs(hooks) == 0)
         {
-            foreach (var eventName in hooks.Select(kv => kv.Key).ToList())
+            // Nothing of ours: the file stays as it is, so a missing one is not created and a foreign empty "hooks" stays.
+            return new HookInstallResult(false, null);
+        }
+
+        if (hooks.Count == 0)
+        {
+            settings.Remove("hooks");
+        }
+
+        return Save(settings, before);
+    }
+
+    /// <summary>Removes our entries, and the groups and events only they filled; a group or event that was empty before is not ours to drop.</summary>
+    private static int RemoveOurs(JsonObject hooks)
+    {
+        var removed = 0;
+        foreach (var eventName in hooks.Select(kv => kv.Key).ToList())
+        {
+            if (hooks[eventName] is not JsonArray groups)
             {
-                if (hooks[eventName] is not JsonArray groups)
+                continue;
+            }
+
+            var emptied = false;
+            foreach (var group in groups.OfType<JsonObject>().ToList())
+            {
+                if (group["hooks"] is not JsonArray entries)
                 {
                     continue;
                 }
 
-                foreach (var group in groups.OfType<JsonObject>().ToList())
+                var ours = entries.OfType<JsonObject>().Where(IsOurs).ToList();
+                foreach (var entry in ours)
                 {
-                    if (group["hooks"] is JsonArray entries)
-                    {
-                        foreach (var entry in entries.OfType<JsonObject>().Where(IsOurs).ToList())
-                        {
-                            entries.Remove(entry);
-                        }
-
-                        if (entries.Count == 0)
-                        {
-                            groups.Remove(group);
-                        }
-                    }
+                    entries.Remove(entry);
                 }
 
-                if (groups.Count == 0)
+                removed += ours.Count;
+                if (ours.Count > 0 && entries.Count == 0)
                 {
-                    hooks.Remove(eventName);
+                    groups.Remove(group);
+                    emptied = true;
                 }
             }
 
-            if (hooks.Count == 0)
+            if (emptied && groups.Count == 0)
             {
-                settings.Remove("hooks");
+                hooks.Remove(eventName);
             }
         }
 
-        return Save(settings, before);
+        return removed;
     }
 
     private static IEnumerable<JsonObject> OurHooks(JsonObject settings, string eventName)
@@ -247,12 +272,19 @@ public sealed class ClaudeHookInstaller
         try
         {
             ReadHookEntries(settings);
+            _ = settings.ToJsonString(WriteOptions);
         }
         catch (ArgumentException ex)
         {
             // Claude Code keeps the last of a repeated key. Only the parts the installer reads must not repeat one; the rest
             // is never read and is written back as it was.
             throw new HookInstallException($"{_paths.SettingsFile} repeats a key where CodeSwitchX edits it: {ex.Message}", ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // A lone surrogate escape (half an emoji) anywhere in the file, in a key or a value: the key throws when its object
+            // is first read, the value when the file is written back; either failed the status and with it the start.
+            throw new HookInstallException($"{_paths.SettingsFile} holds an escape sequence that cannot be read: {ex.Message}", ex);
         }
 
         return settings;
@@ -289,25 +321,24 @@ public sealed class ClaudeHookInstaller
             return new HookInstallResult(false, null);
         }
 
+        // A linked settings.json (dotfiles setups) is written where it points, so the link stays and its repository sees the change.
+        var target = LinkTarget(_paths.SettingsFile);
         string? backup = null;
-        var tmp = _paths.SettingsFile + ".csx-tmp";
         try
         {
             Directory.CreateDirectory(_paths.ClaudeDirectory);
             if (File.Exists(_paths.SettingsFile))
             {
-                backup = $"{_paths.SettingsFile}.csx-backup-{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}";
+                backup = $"{_paths.SettingsFile}{BackupSuffix}{DateTime.UtcNow:yyyyMMdd-HHmmss-fff}";
                 File.Copy(_paths.SettingsFile, backup, overwrite: true);
             }
 
-            File.WriteAllText(tmp, after + Environment.NewLine);
-            File.Move(tmp, _paths.SettingsFile, overwrite: true);
+            AtomicFile.Replace(target, after + Environment.NewLine, TempSuffix);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Read-only, locked by an editor or by Claude Code writing it: settings.json itself is unchanged, so neither the
-            // temporary file nor the backup of it is kept.
-            TryDelete(tmp);
+            // Read-only, locked by an editor or by Claude Code writing it: settings.json itself is unchanged, so the backup of
+            // it is not kept either (the temporary file is already gone).
             if (backup is not null)
             {
                 TryDelete(backup);
@@ -316,8 +347,41 @@ public sealed class ClaudeHookInstaller
             throw new HookInstallException($"Cannot write {_paths.SettingsFile}: {ex.Message}", ex);
         }
 
+        PruneBackups();
         _logger.LogInformation("Updated {File} (backup: {Backup})", _paths.SettingsFile, backup ?? "none");
         return new HookInstallResult(true, backup);
+    }
+
+    /// <summary>The file a symbolic link finally points to, or the path itself.</summary>
+    private static string LinkTarget(string file)
+    {
+        try
+        {
+            return new FileInfo(file).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return file;
+        }
+    }
+
+    /// <summary>The newest <see cref="BackupsKept"/> backups stay; their names carry the time, so they sort by age.</summary>
+    private void PruneBackups()
+    {
+        string[] backups;
+        try
+        {
+            backups = Directory.GetFiles(_paths.ClaudeDirectory, Path.GetFileName(_paths.SettingsFile) + BackupSuffix + "*");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        foreach (var old in backups.OrderByDescending(f => f, StringComparer.Ordinal).Skip(BackupsKept))
+        {
+            TryDelete(old);
+        }
     }
 
     private static void TryDelete(string file)

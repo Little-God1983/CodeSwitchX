@@ -74,6 +74,8 @@ public class EventApiServiceTests : IAsyncLifetime
         descriptor.Port.ShouldBeGreaterThan(0);
         descriptor.PipeName.ShouldBe(_pipeName);
         descriptor.Pid.ShouldBe(Environment.ProcessId);
+        // The relay tells this process from one that reused its PID by the start time both read from the kernel.
+        descriptor.OwnerStartedAtUtc.ShouldBe(System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(), TimeSpan.FromSeconds(1));
     }
 
     [Fact]
@@ -125,6 +127,18 @@ public class EventApiServiceTests : IAsyncLifetime
 
         (await client.SendAsync(Post("{\"nope\":true}", _token), TestContext.Current.CancellationToken)).StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         (await client.GetAsync("health", TestContext.Current.CancellationToken)).StatusCode.ShouldBe(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task A_body_over_the_limit_is_refused_and_nothing_is_published()
+    {
+        using var client = Loopback();
+        var body = """{"event":"Stop","payload":{"session_id":"s1","hook_event_name":"Stop","big":""" + "\"" + new string('x', 1024 * 1024) + "\"}}";
+
+        var response = await client.SendAsync(Post(body, _token), TestContext.Current.CancellationToken);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.RequestEntityTooLarge);
+        _received.ShouldBeEmpty();
     }
 
     [Fact]

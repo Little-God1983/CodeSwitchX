@@ -17,6 +17,9 @@ public sealed record HookEvent
     public string? TranscriptPath { get; init; }
     public string? ToolName { get; init; }
     public string? ToolUseId { get; init; }
+
+    /// <summary>The sub-agent the event comes from; null for the chat's main agent. Sub-agents send hooks with the parent's session id.</summary>
+    public string? AgentId { get; init; }
     public string? NotificationType { get; init; }
     public string? Message { get; init; }
     public string? Prompt { get; init; }

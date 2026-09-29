@@ -19,10 +19,14 @@ public static class HookEnvelopeParser
         "permission_prompt",
         "elicitation_dialog",
         "elicitation_url_dialog", // the same MCP elicitation, waiting for the user to open a link
+        "agent_needs_input", // an in-session dialog, or an agent blocked in the background-agents view; the chat's next own event ends it
     };
 
-    /// <summary>Notification types that carry no state: the chat is neither working nor waiting because of them.</summary>
-    private static readonly HashSet<string> InformationalNotifications = new(StringComparer.OrdinalIgnoreCase) { "auth_success" };
+    /// <summary>
+    /// Notification types that carry no state: the chat is neither working nor waiting because of them. A worker of an agent
+    /// team is a chat of its own with its own hooks, so its permission prompt turns its own row amber, not the lead's.
+    /// </summary>
+    private static readonly HashSet<string> InformationalNotifications = new(StringComparer.OrdinalIgnoreCase) { "auth_success", "worker_permission_prompt" };
 
     public static HookEvent? Parse(string json, DateTimeOffset receivedAt)
     {
@@ -108,6 +112,7 @@ public static class HookEnvelopeParser
                 TranscriptPath = GetString(payload, "transcript_path"),
                 ToolName = GetString(payload, "tool_name"),
                 ToolUseId = GetString(payload, "tool_use_id"),
+                AgentId = GetString(payload, "agent_id"),
                 NotificationType = notificationType,
                 Message = GetString(payload, "message") ?? GetString(payload, "title"),
                 Prompt = GetString(payload, "prompt"),
@@ -147,10 +152,9 @@ public static class HookEnvelopeParser
         _ => (null, false),
     };
 
+    /// <summary>The string property, or null when it is missing, not a string, or holds a lone surrogate escape (<see cref="JsonStrings.TryRead"/>).</summary>
     private static string? GetString(JsonElement element, string name) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? JsonStrings.TryRead(value) : null;
 
     private static int? GetInt(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var i)

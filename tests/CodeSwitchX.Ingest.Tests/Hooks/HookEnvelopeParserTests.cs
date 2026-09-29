@@ -75,6 +75,8 @@ public class HookEnvelopeParserTests
     [InlineData("idle_prompt", SessionSignal.IdlePrompt)]
     [InlineData("Idle_Prompt", SessionSignal.IdlePrompt)]
     [InlineData("auth_success", null)]
+    [InlineData("agent_needs_input", SessionSignal.Notification)] // an in-session dialog, or an agent blocked in the background-agents view
+    [InlineData("worker_permission_prompt", null)] // an agent-team worker waits in its own chat, which has its own hooks
     [InlineData("future_type", null)]
     public void Only_notifications_that_need_the_user_mean_waiting(string? type, SessionSignal? expected)
     {
@@ -163,6 +165,7 @@ public class HookEnvelopeParserTests
     [InlineData("SubagentStop", """{"session_id":"abc","hook_event_name":"SubagentStop"}""", true)]
     [InlineData("SessionStart", """{"session_id":"abc","hook_event_name":"SessionStart","source":"compact"}""", true)]
     [InlineData("Notification", """{"session_id":"abc","hook_event_name":"Notification","notification_type":"auth_success"}""", true)]
+    [InlineData("Notification", """{"session_id":"abc","hook_event_name":"Notification","notification_type":"worker_permission_prompt"}""", true)]
     [InlineData("Notification", """{"session_id":"abc","hook_event_name":"Notification","notification_type":"plan_approval_prompt"}""", false)] // a type nobody mapped may mean Waiting: worth a line
     [InlineData("SomethingNew", """{"session_id":"abc","hook_event_name":"SomethingNew"}""", false)]
     public void An_event_left_without_a_signal_on_purpose_is_marked_so_the_engine_does_not_log_it_as_unknown(string eventName, string payload, bool informational)
@@ -171,5 +174,26 @@ public class HookEnvelopeParserTests
 
         e.Signal.ShouldBeNull();
         e.Informational.ShouldBe(informational);
+    }
+
+    [Fact]
+    public void A_lone_surrogate_escape_drops_that_field_not_the_event()
+    {
+        // Half an emoji in a bare payload: GetString threw, and the API answered 500 instead of taking the event.
+        var e = HookEnvelopeParser.Parse("""{"session_id":"abc","hook_event_name":"Notification","message":"a\ud83db"}""", Received).ShouldNotBeNull();
+
+        e.SessionId.ShouldBe("abc");
+        e.Signal.ShouldBe(SessionSignal.Notification);
+        e.Message.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_sub_agents_event_carries_its_agent_id()
+    {
+        var sub = HookEnvelopeParser.Parse(Envelope("PreToolUse", """{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"toolu_2","agent_id":"agent_7"}"""), Received)!;
+        var main = HookEnvelopeParser.Parse(Envelope("PreToolUse", """{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"Read","tool_use_id":"toolu_3"}"""), Received)!;
+
+        sub.AgentId.ShouldBe("agent_7");
+        main.AgentId.ShouldBeNull();
     }
 }

@@ -82,19 +82,21 @@ public sealed partial class SettingsViewModel : ObservableObject
         HookStatusText = status.State switch
         {
             HookInstallState.Installed => $"Installed ({status.InstalledEvents.Count} of {ClaudeHookInstaller.Events.Length} events)",
-            HookInstallState.Partial => $"Partial: missing {string.Join(", ", status.MissingEvents)}",
-            HookInstallState.Outdated => "Installed, but pointing at a different csx-hook.exe. Reinstall to update the path.",
+            HookInstallState.Partial => $"Partial: missing {string.Join(", ", status.MissingEvents)}. Install again to add {(status.MissingEvents.Count == 1 ? "it" : "them")}.",
+            HookInstallState.Outdated => "Installed, but the entries are out of date (an older path or form). Install again to update them.",
             HookInstallState.Unreadable => $"Unknown: {status.Problem}",
             _ => "Not installed. Tile states fall back to transcript inference.",
         };
     }
 
+    /// <summary>Off the UI thread: the installer retries the file replace for about half a second while another process holds settings.json.</summary>
     [RelayCommand]
-    private void InstallHooks()
+    private async Task InstallHooksAsync()
     {
+        var relay = RelayExecutable;
         try
         {
-            var result = _installer.Install(RelayExecutable);
+            var result = await Task.Run(() => _installer.Install(relay));
             LastMessage = result.Changed
                 ? $"Hooks written to {SettingsFile}" + (result.BackupFile is null ? string.Empty : $" (backup: {Path.GetFileName(result.BackupFile)})")
                 : "Hooks were already up to date.";
@@ -108,11 +110,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RemoveHooks()
+    private async Task RemoveHooksAsync()
     {
         try
         {
-            var result = _installer.Uninstall();
+            var result = await Task.Run(_installer.Uninstall);
             LastMessage = result.Changed ? "CodeSwitchX hooks removed." : "No CodeSwitchX hooks were present.";
         }
         catch (HookInstallException ex)

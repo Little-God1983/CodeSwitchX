@@ -138,26 +138,7 @@ public static class TranscriptLineParser
     private static string? GetString(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? ReadString(value) : null;
 
-    /// <summary>
-    /// Null for anything but a string, and for text .NET cannot hold: JSON.stringify writes half of a surrogate pair (a string
-    /// cut inside an emoji) as an escape, which is valid JSON, and <see cref="JsonElement.GetString"/> throws on it.
-    /// </summary>
-    private static string? ReadString(JsonElement value)
-    {
-        if (value.ValueKind != JsonValueKind.String)
-        {
-            return null;
-        }
-
-        try
-        {
-            return value.GetString();
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
+    private static string? ReadString(JsonElement value) => JsonStrings.TryRead(value);
 
     private static long GetLong(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var l) ? l : 0;

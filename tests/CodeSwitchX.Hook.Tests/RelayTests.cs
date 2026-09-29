@@ -75,7 +75,7 @@ public class RelayTests : IDisposable
         listener.Start();
         var deadPort = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
-        File.WriteAllText(Path.Combine(_dir, "endpoint.json"), $$"""{"pipeName":"csx-nonexistent-{{Guid.NewGuid():N}}","port":{{deadPort}},"pid":{{Environment.ProcessId}},"startedAtUtc":"2026-09-23T10:00:00Z"}""");
+        File.WriteAllText(Path.Combine(_dir, "endpoint.json"), $$"""{"pipeName":"csx-nonexistent-{{Guid.NewGuid():N}}","port":{{deadPort}},"pid":{{Environment.ProcessId}},"startedAtUtc":"{{DateTimeOffset.UtcNow:O}}"}""");
         File.WriteAllText(Path.Combine(_dir, "token"), new string('a', 64));
         var sw = Stopwatch.StartNew();
 
@@ -108,5 +108,90 @@ public class RelayTests : IDisposable
         trimmed.GetProperty("prompt").GetString()!.Length.ShouldBeLessThanOrEqualTo(Relay.MaxStringChars);
         trimmed.GetProperty("tool_response").GetString()!.Length.ShouldBeLessThanOrEqualTo(Relay.MaxStringChars);
         trimmed.TryGetProperty("tool_input", out _).ShouldBeFalse("nested values above the size cap are dropped");
+    }
+
+    [Fact]
+    public void The_owner_is_alive_only_when_its_process_is_the_one_whose_start_time_the_descriptor_carries()
+    {
+        // A PID is reused after a crash: the process that holds it now has another start time than the one that wrote endpoint.json.
+        var start = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+        Relay.OwnerIsAlive(new EndpointInfo { Pid = Environment.ProcessId, OwnerStartedAtUtc = start.ToString("O") }).ShouldBeTrue();
+        Relay.OwnerIsAlive(new EndpointInfo { Pid = Environment.ProcessId, OwnerStartedAtUtc = start.AddDays(-1).ToString("O") }).ShouldBeFalse("another process wrote the descriptor");
+        Relay.OwnerIsAlive(new EndpointInfo { Pid = Environment.ProcessId }).ShouldBeTrue("a hand-written descriptor without a start time is trusted by the PID as before");
+    }
+
+    [Fact]
+    public void A_clock_stepped_back_after_the_start_does_not_disown_the_running_instance()
+    {
+        // The descriptor's own write time is no measure: time sync can step the clock back between the start and the write.
+        var start = System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime();
+        var endpoint = new EndpointInfo { Pid = Environment.ProcessId, StartedAtUtc = start.AddHours(-1).ToString("O"), OwnerStartedAtUtc = start.ToString("O") };
+
+        Relay.OwnerIsAlive(endpoint).ShouldBeTrue("the owner's process start time, read from the kernel by both sides, is what tells the processes apart");
+    }
+
+    [Fact]
+    public void Envelope_replaces_a_lone_surrogate_escape_instead_of_dropping_the_event()
+    {
+        // Half an emoji, cut by whoever wrote the payload: the writer refused it, and the whole event was lost.
+        var json = Relay.BuildEnvelope("Notification", """{"session_id":"s1","message":"a\ud83db"}""", DateTimeOffset.UtcNow, 1, []);
+
+        using var doc = JsonDocument.Parse(json);
+        var payload = doc.RootElement.GetProperty("payload");
+        payload.GetProperty("session_id").GetString().ShouldBe("s1");
+        payload.GetProperty("message").GetString().ShouldBe("a\uFFFDb");
+    }
+
+    [Fact]
+    public void A_nested_value_with_a_literal_backslash_u_text_is_kept()
+    {
+        // Source code in a tool input: the two characters \ u followed by D83D are text, not an escape of half an emoji.
+        var json = Relay.BuildEnvelope("PreToolUse", """{"session_id":"s1","tool_input":{"code":"x = \"\\uD83D\""}}""", DateTimeOffset.UtcNow, 1, []);
+
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("payload").GetProperty("tool_input").GetProperty("code").GetString().ShouldBe("x = \"\\uD83D\"");
+    }
+
+    [Fact]
+    public void A_lone_low_surrogate_after_a_literal_backslash_u_text_is_replaced_not_paired_with_it()
+    {
+        var json = Relay.BuildEnvelope("Notification", """{"session_id":"s1","message":"x\\uD83D\ude00y"}""", DateTimeOffset.UtcNow, 1, []);
+
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("payload").GetProperty("message").GetString().ShouldBe("x\\uD83D\uFFFDy");
+    }
+
+    [Fact]
+    public void A_property_named_with_a_lone_surrogate_is_dropped_and_the_event_kept()
+    {
+        var json = Relay.BuildEnvelope("Notification", """{"session_id":"s1","\ud83d":"v","message":"m"}""", DateTimeOffset.UtcNow, 1, []);
+
+        using var doc = JsonDocument.Parse(json);
+        var payload = doc.RootElement.GetProperty("payload");
+        payload.GetProperty("session_id").GetString().ShouldBe("s1");
+        payload.GetProperty("message").GetString().ShouldBe("m");
+    }
+
+    [Fact]
+    public async Task A_server_that_accepts_and_never_answers_costs_at_most_the_total_budget()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        try
+        {
+            File.WriteAllText(Path.Combine(_dir, "endpoint.json"), $$"""{"pipeName":"","port":{{port}},"pid":{{Environment.ProcessId}},"startedAtUtc":"{{DateTimeOffset.UtcNow:O}}"}""");
+            File.WriteAllText(Path.Combine(_dir, "token"), new string('a', 64));
+            var sw = Stopwatch.StartNew();
+
+            var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"s1"}"""), _dir);
+
+            code.ShouldBe(0);
+            sw.ElapsedMilliseconds.ShouldBeLessThan(Relay.TotalTimeoutMs + 500, "the connection is accepted and the request never answered; the total budget must end it");
+        }
+        finally
+        {
+            listener.Stop();
+        }
     }
 }

@@ -15,4 +15,8 @@ internal sealed class EndpointInfo
 
     [JsonPropertyName("startedAtUtc")]
     public string? StartedAtUtc { get; set; }
+
+    /// <summary>The owner's process start time as the kernel reports it; the relay compares it with the process that holds the PID now.</summary>
+    [JsonPropertyName("ownerStartedAtUtc")]
+    public string? OwnerStartedAtUtc { get; set; }
 }

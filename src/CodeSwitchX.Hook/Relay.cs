@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Pipes;
 using System.Net.Http.Headers;
 using System.Text;
@@ -14,6 +15,9 @@ namespace CodeSwitchX.Hook;
 internal static class Relay
 {
     internal const int ConnectTimeoutMs = 150;
+
+    /// <summary>The kernel gives both sides the same process start time; this covers the rounding of a serialised one.</summary>
+    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(1);
     internal const int TotalTimeoutMs = 1000;
     internal const int MaxStdinBytes = 16 * 1024 * 1024;
 
@@ -33,7 +37,7 @@ internal static class Relay
         {
             var eventName = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) ? args[0] : "Unknown";
             var endpoint = ReadEndpoint(Path.Combine(dataDirectory, "endpoint.json"));
-            if (endpoint is null || !OwnerIsAlive(endpoint.Pid))
+            if (endpoint is null || !OwnerIsAlive(endpoint))
             {
                 // A stale endpoint.json (crash, kill, missed shutdown) must not cost every hook a connect timeout.
                 return 0;
@@ -77,17 +81,28 @@ internal static class Relay
         }
     }
 
-    internal static bool OwnerIsAlive(int pid)
+    /// <summary>
+    /// Whether the process that wrote the descriptor still runs. A PID is reused after a crash, so the process holding it
+    /// is also told by its start time, which the writer read from the kernel as this does: no clock and no write time enter
+    /// it. A descriptor without a start time is trusted by the PID.
+    /// </summary>
+    internal static bool OwnerIsAlive(EndpointInfo endpoint)
     {
-        if (pid <= 0)
+        if (endpoint.Pid <= 0)
         {
             return true; // unknown owner (hand-written endpoint file): trust it
         }
 
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(pid);
-            return !process.HasExited;
+            using var process = System.Diagnostics.Process.GetProcessById(endpoint.Pid);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            return !DateTimeOffset.TryParse(endpoint.OwnerStartedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var started)
+                || (process.StartTime.ToUniversalTime() - started.UtcDateTime).Duration() <= StartTimeTolerance;
         }
         catch (ArgumentException)
         {
@@ -158,14 +173,7 @@ internal static class Relay
             {
                 using (document)
                 {
-                    if (document.RootElement.ValueKind == JsonValueKind.Object)
-                    {
-                        WriteTrimmedObject(writer, document.RootElement);
-                    }
-                    else
-                    {
-                        document.RootElement.WriteTo(writer);
-                    }
+                    WriteValue(writer, document.RootElement, top: true);
                 }
             }
             else
@@ -179,26 +187,130 @@ internal static class Relay
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
-    private static void WriteTrimmedObject(Utf8JsonWriter writer, JsonElement obj)
+    /// <summary>
+    /// Writes the value with every string cut and read through <see cref="StringOf"/>, so half an emoji anywhere in it, in
+    /// a name or a value, cannot lose the event. At the top level a nested object or array above the size cap is left out.
+    /// </summary>
+    private static void WriteValue(Utf8JsonWriter writer, JsonElement element, bool top)
     {
-        writer.WriteStartObject();
-        foreach (var property in obj.EnumerateObject())
+        switch (element.ValueKind)
         {
-            switch (property.Value.ValueKind)
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    string name;
+                    try
+                    {
+                        name = property.Name;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue; // a key with half an emoji: nothing the engine reads
+                    }
+
+                    if (top && property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array && property.Value.GetRawText().Length > MaxNestedBytes)
+                    {
+                        continue; // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size.
+                    }
+
+                    writer.WritePropertyName(name);
+                    WriteValue(writer, property.Value, top: false);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteValue(writer, item, top: false);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(Truncate(StringOf(element)));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The element's string. A lone surrogate escape (half an emoji, cut by whoever wrote the payload) cannot be read, and the
+    /// writer refuses it; it becomes U+FFFD, so the ids and names around it still reach the engine.
+    /// </summary>
+    private static string StringOf(JsonElement element)
+    {
+        try
+        {
+            return element.GetString() ?? string.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            return Unescape(element.GetRawText());
+        }
+    }
+
+    /// <summary>
+    /// Decodes a JSON string token (quotes included, escapes valid: the document parsed) by hand, pairing surrogate escapes
+    /// as the reader does and reading a lone one as U+FFFD. An escaped backslash followed by "u" is text, not an escape.
+    /// </summary>
+    private static string Unescape(string raw)
+    {
+        var text = new StringBuilder(raw.Length);
+        var end = raw.Length - 1;
+        for (var i = 1; i < end; i++)
+        {
+            var c = raw[i];
+            if (c != '\\')
             {
-                case JsonValueKind.String:
-                    writer.WriteString(property.Name, Truncate(property.Value.GetString() ?? string.Empty));
+                text.Append(c);
+                continue;
+            }
+
+            var escape = raw[++i];
+            switch (escape)
+            {
+                case 'u':
+                    var code = (char)int.Parse(raw.AsSpan(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                    i += 4;
+                    if (char.IsHighSurrogate(code) && i + 6 < end + 1 && raw[i + 1] == '\\' && raw[i + 2] == 'u'
+                        && char.IsLowSurrogate((char)int.Parse(raw.AsSpan(i + 3, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture)))
+                    {
+                        text.Append(code).Append((char)int.Parse(raw.AsSpan(i + 3, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                        i += 6;
+                    }
+                    else
+                    {
+                        text.Append(char.IsSurrogate(code) ? '\uFFFD' : code);
+                    }
+
                     break;
-                case JsonValueKind.Object or JsonValueKind.Array when property.Value.GetRawText().Length > MaxNestedBytes:
-                    // tool_input / tool_response bodies: nothing the status engine needs, and the bulk of the size.
+                case 'n':
+                    text.Append('\n');
+                    break;
+                case 't':
+                    text.Append('\t');
+                    break;
+                case 'r':
+                    text.Append('\r');
+                    break;
+                case 'b':
+                    text.Append('\b');
+                    break;
+                case 'f':
+                    text.Append('\f');
                     break;
                 default:
-                    property.WriteTo(writer);
+                    text.Append(escape); // \" \\ \/
                     break;
             }
         }
 
-        writer.WriteEndObject();
+        return text.ToString();
     }
 
     private static string Truncate(string value)
