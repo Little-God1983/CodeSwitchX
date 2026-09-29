@@ -19,6 +19,7 @@ UnhookWinEvent
 SendNotifyMessage
 WM_CANCELMODE
 EVENT_SYSTEM_MOVESIZESTART
+GetGUIThreadInfo
 DwmRegisterThumbnail
 DwmUnregisterThumbnail
 DwmUpdateThumbnailProperties
@@ -34,5 +35,3 @@ DWM_TNP_OPACITY
 DWM_TNP_SOURCECLIENTAREAONLY
 HWND_TOP
 GetForegroundWindow
-GetAsyncKeyState
-GetSystemMetrics

@@ -14,18 +14,21 @@ public sealed class WindowLocationWatcher : IDisposable
 {
     private const int ObjIdWindow = 0;
     private readonly WINEVENTPROC _callback;
+    private readonly Action<HWINEVENTHOOK> _unhook;
     private readonly HWINEVENTHOOK _locationHook;
     private readonly HWINEVENTHOOK _moveSizeHook;
 
     public WindowLocationWatcher(ILogger<WindowLocationWatcher>? logger = null)
-        : this(logger, (eventId, callback) => PInvoke.SetWinEventHook(eventId, eventId,
-            HMODULE.Null, callback, 0, 0, PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS))
+        : this(logger,
+            (eventId, callback) => PInvoke.SetWinEventHook(eventId, eventId, HMODULE.Null, callback, 0, 0, PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS),
+            hook => PInvoke.UnhookWinEvent(hook))
     {
     }
 
-    internal WindowLocationWatcher(ILogger? logger, Func<uint, WINEVENTPROC, HWINEVENTHOOK> setHook)
+    internal WindowLocationWatcher(ILogger? logger, Func<uint, WINEVENTPROC, HWINEVENTHOOK> setHook, Action<HWINEVENTHOOK> unhook)
     {
         _callback = OnWinEvent;
+        _unhook = unhook;
         _locationHook = setHook(PInvoke.EVENT_OBJECT_LOCATIONCHANGE, _callback);
         if (_locationHook == default)
         {
@@ -38,7 +41,7 @@ public sealed class WindowLocationWatcher : IDisposable
         _moveSizeHook = setHook(PInvoke.EVENT_SYSTEM_MOVESIZESTART, _callback);
         if (_moveSizeHook == default)
         {
-            logger?.LogWarning("SetWinEventHook was refused; a VS Code window docked in the Cab can be dragged away");
+            logger?.LogWarning("SetWinEventHook was refused; drags of a docked VS Code window are not refused and fight the snap-back");
         }
     }
 
@@ -61,7 +64,7 @@ public sealed class WindowLocationWatcher : IDisposable
         {
             MoveSizeStarted?.Invoke((nint)hwnd.Value);
         }
-        else
+        else if (eventId == PInvoke.EVENT_OBJECT_LOCATIONCHANGE)
         {
             Moved?.Invoke((nint)hwnd.Value);
         }
@@ -71,12 +74,12 @@ public sealed class WindowLocationWatcher : IDisposable
     {
         if (_locationHook != default)
         {
-            PInvoke.UnhookWinEvent(_locationHook);
+            _unhook(_locationHook);
         }
 
         if (_moveSizeHook != default)
         {
-            PInvoke.UnhookWinEvent(_moveSizeHook);
+            _unhook(_moveSizeHook);
         }
     }
 }

@@ -671,32 +671,7 @@ public class HostManagerTests
     }
 
     [Fact]
-    public async Task SnapBack_keeps_following_while_the_user_holds_a_drag_still()
-    {
-        // With the mouse held still, the move loop puts the window back under the cursor after every snap: the same
-        // place again and again, as a tiling window manager would, but it is the user, and the last snap-back must win.
-        var (manager, _) = ManagerWithFakeTime();
-        _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);
-        await manager.OpenAsync(_workspace, CancellationToken.None);
-        var cab = ScreenRect.FromSize(0, 28, 1600, 900);
-        manager.ShowInCab(_workspace.Id, cab);
-        _docker.GetRect(700).Returns(ScreenRect.FromSize(300, 200, 1600, 900));
-        _docker.IsPrimaryButtonDown().Returns(true);
-        _docker.ClearReceivedCalls();
-
-        for (var i = 0; i < 20; i++)
-        {
-            manager.SnapBack(700);
-        }
-
-        _docker.IsPrimaryButtonDown().Returns(false);
-        manager.SnapBack(700);
-
-        _docker.Received(21).MoveTo(700, cab);
-    }
-
-    [Fact]
-    public async Task SnapBack_follows_a_drag_and_a_window_moved_away_now_and_then()
+    public async Task SnapBack_follows_a_window_moved_to_new_places_and_one_moved_away_now_and_then()
     {
         var (manager, time) = ManagerWithFakeTime();
         _windows.TopLevelWindows().Returns([new WindowInfo(700, 30, "Chrome_WidgetWin_1", "app - Visual Studio Code")]);

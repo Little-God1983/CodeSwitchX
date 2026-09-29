@@ -423,7 +423,7 @@ public sealed class HostManager : IDisposable
     {
         lock (_gate)
         {
-            if (_hosted.Values.Any(h => h.Hwnd == hwnd && h.Visible && h.TargetRect is not null))
+            if (DockedLocked(hwnd) is not null)
             {
                 _docker.CancelMoveSize(hwnd);
             }
@@ -432,16 +432,16 @@ public sealed class HostManager : IDisposable
 
     /// <summary>
     /// Called from the WinEvent watcher: put a docked window back if something moved it (a maximize, a Win+arrow, the
-    /// step of a drag that landed before <see cref="RefuseMoveSize"/>). Something that puts the window back in its own
-    /// place after every snap (a tiling window manager, a second CodeSwitchX) would move it to and fro for ever, so
-    /// after <see cref="SnapBackLimit"/> quick snap-backs from the same place the window is left there until the next
-    /// dock. A drag reaches a new place every time and is always followed.
+    /// step of a drag that landed before <see cref="RefuseMoveSize"/>, a drag while Windows refused that hook).
+    /// Something that puts the window back in its own place after every snap (a tiling window manager, a second
+    /// CodeSwitchX) would move it to and fro for ever, so after <see cref="SnapBackLimit"/> quick snap-backs from the
+    /// same place the window is left there until the next dock. A move to a new place is always followed.
     /// </summary>
     public void SnapBack(nint hwnd)
     {
         lock (_gate)
         {
-            var hosted = _hosted.Values.FirstOrDefault(h => h.Hwnd == hwnd && h.Visible && h.TargetRect is not null);
+            var hosted = DockedLocked(hwnd);
             if (hosted is null || hosted.SnapBackSuspended)
             {
                 return;
@@ -453,20 +453,15 @@ public sealed class HostManager : IDisposable
                 return;
             }
 
-            // While the user holds the mouse button, the move loop puts the window back under the cursor after every
-            // snap, the same place each time: that is a drag, not a fight. It is not counted, and the last snap wins.
-            if (!_docker.IsPrimaryButtonDown())
+            var now = _time.GetUtcNow();
+            var repeat = current == hosted.SnapBackFrom && now - hosted.LastSnapBackAt < SnapBackRepeatWindow;
+            hosted.SnapBackRepeats = repeat ? hosted.SnapBackRepeats + 1 : 1;
+            hosted.SnapBackFrom = current;
+            hosted.LastSnapBackAt = now;
+            if (hosted.SnapBackSuspended)
             {
-                var now = _time.GetUtcNow();
-                var repeat = current == hosted.SnapBackFrom && now - hosted.LastSnapBackAt < SnapBackRepeatWindow;
-                hosted.SnapBackRepeats = repeat ? hosted.SnapBackRepeats + 1 : 1;
-                hosted.SnapBackFrom = current;
-                hosted.LastSnapBackAt = now;
-                if (hosted.SnapBackSuspended)
-                {
-                    _logger.LogWarning("Stopped snapping VS Code window {Hwnd} back until the next dock: something keeps moving it to {Rect}", hwnd, current);
-                    return;
-                }
+                _logger.LogWarning("Stopped snapping VS Code window {Hwnd} back until the next dock: something keeps moving it to {Rect}", hwnd, current);
+                return;
             }
 
             _docker.MoveTo(hwnd, hosted.TargetRect!.Value);
@@ -527,6 +522,10 @@ public sealed class HostManager : IDisposable
 
     private bool IsTrackedLocked(HostedWorkspace hosted) =>
         _hosted.TryGetValue(hosted.WorkspaceId, out var tracked) && ReferenceEquals(tracked, hosted);
+
+    /// <summary>The workspace whose window this is, while that window is shown in the Cab and has a place to be kept in.</summary>
+    private HostedWorkspace? DockedLocked(nint hwnd) =>
+        _hosted.Values.FirstOrDefault(h => h.Hwnd == hwnd && h.Visible && h.TargetRect is not null);
 
     /// <summary>
     /// The windows no other workspace hosts. A hosted window counts as its host's only while its title still names

@@ -79,12 +79,19 @@ public class SnapWindowDockerTests
         private readonly Thread _owner;
         private readonly System.Collections.Concurrent.ConcurrentBag<uint> _received = [];
         private readonly WndProc _subclass;
+        private readonly ManualResetEventSlim _pumping = new(initialState: true);
         private nint _originalProc;
         private volatile bool _closing;
 
-        public ProbeWindow(bool minimizedAndHidden)
+        /// <param name="paused">Created with its pump held: nothing sent or posted to it is processed until <see cref="Resume"/>.</param>
+        public ProbeWindow(bool minimizedAndHidden, bool paused = false)
         {
             _subclass = OnMessage;
+            if (paused)
+            {
+                _pumping.Reset();
+            }
+
             using var created = new ManualResetEventSlim();
             _owner = new Thread(() =>
             {
@@ -98,6 +105,7 @@ public class SnapWindowDockerTests
                 }
 
                 created.Set();
+                _pumping.Wait();
                 while (!_closing)
                 {
                     while (PeekMessageW(out var msg, 0, 0, 0, PM_REMOVE))
@@ -121,6 +129,9 @@ public class SnapWindowDockerTests
         /// <summary>True once the window's own thread has seen the message.</summary>
         public bool Received(uint message) => _received.Contains(message);
 
+        /// <summary>Lets a window created paused pump its messages.</summary>
+        public void Resume() => _pumping.Set();
+
         private nint OnMessage(nint hwnd, uint message, nint wParam, nint lParam)
         {
             _received.Add(message);
@@ -133,24 +144,54 @@ public class SnapWindowDockerTests
         public void Dispose()
         {
             _closing = true;
+            _pumping.Set();
             _owner.Join();
+            _pumping.Dispose();
         }
     }
 
     [Fact]
-    public void CancelMoveSize_delivers_WM_CANCELMODE_to_the_window_without_waiting_for_it()
+    public void CancelMoveSize_delivers_WM_CANCELMODE_to_a_window_being_dragged_without_waiting_for_it()
     {
         // WM_CANCELMODE ends the move loop DefWindowProc runs while the user drags a window by its frame (checked on
         // screen: a caption drag with it sent at EVENT_SYSTEM_MOVESIZESTART moved the window by nothing). It must go
         // the asynchronous way: a stalled VS Code would otherwise hold the WPF thread, from a WinEvent callback.
+        using var window = new ProbeWindow(minimizedAndHidden: false, paused: true);
+        var docker = new SnapWindowDocker(null, isInMoveLoop: _ => true);
+
+        docker.CancelMoveSize(window.Hwnd);
+        window.Received(WM_CANCELMODE).ShouldBeFalse("the window has not pumped yet, so a synchronous send would have blocked here");
+        window.Resume();
+        ProbeWindow.Pump();
+
+        window.Received(WM_CANCELMODE).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void CancelMoveSize_leaves_a_window_alone_that_is_not_being_dragged_any_more()
+    {
+        // The request arrives through the WPF thread's queue: by then a click on the title bar has begun and ended its
+        // loop, and a cancel would end whatever the user does next in the editor (a selection, a tab drag).
         using var window = new ProbeWindow(minimizedAndHidden: false);
         var docker = new SnapWindowDocker();
 
         docker.CancelMoveSize(window.Hwnd);
-        window.Received(WM_CANCELMODE).ShouldBeFalse("the message must not be delivered synchronously on this thread");
         ProbeWindow.Pump();
 
-        window.Received(WM_CANCELMODE).ShouldBeTrue();
+        window.Received(WM_CANCELMODE).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_cancel_that_Windows_refuses_is_logged_because_the_drag_then_fights_the_snap_back()
+    {
+        var log = new CodeSwitchX.Tests.ListLogger<SnapWindowDocker>();
+        var hwnd = CreateWindowExW(0, "STATIC", "CodeSwitchX cancel probe", 0, 0, 0, 10, 10, 0, 0, 0, 0);
+        DestroyWindow(hwnd);
+        var docker = new SnapWindowDocker(log, isInMoveLoop: _ => true);
+
+        docker.CancelMoveSize(hwnd);
+
+        log.Entries.ShouldContain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning && e.Message.Contains("refused to end the drag"));
     }
 
     [Fact]
