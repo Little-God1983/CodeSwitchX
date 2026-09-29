@@ -21,11 +21,10 @@ public sealed class TrayIconService
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItem("Exit", () => Application.Current.Shutdown()));
 
-        // H.NotifyIcon's IconSource only accepts URI-backed bitmaps; the app icon is a vector DrawingImage, so build the GDI icon ourselves.
         _icon = new TaskbarIcon
         {
             ToolTipText = "CodeSwitchX",
-            Icon = IconRenderer.ToIcon(window.Icon, 32),
+            Icon = LoadAppIcon(),
             ContextMenu = menu,
         };
         _icon.TrayLeftMouseDown += (_, _) => WindowActivation.BringUp(window);
@@ -38,6 +37,15 @@ public sealed class TrayIconService
     {
         _icon?.Dispose();
         _icon = null;
+    }
+
+    // The exe's own icon, embedded once more so it loads without a pack URI. The 32-pixel frame, which the tray scales down
+    // at 100 % and uses as it is at 200 %.
+    private static System.Drawing.Icon LoadAppIcon()
+    {
+        using var stream = typeof(TrayIconService).Assembly.GetManifestResourceStream("CodeSwitchX.ico")
+            ?? throw new InvalidOperationException("The CodeSwitchX.ico resource is missing from the UI assembly.");
+        return new System.Drawing.Icon(stream, 32, 32);
     }
 
     private static MenuItem MenuItem(string header, Action action)

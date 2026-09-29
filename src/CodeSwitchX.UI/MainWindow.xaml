@@ -10,8 +10,7 @@
         xmlns:telemetry="clr-namespace:CodeSwitchX.UI.Telemetry"
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance shell:ShellViewModel}"
-        Title="CodeSwitchX" Width="1400" Height="900" MinWidth="900" MinHeight="600"
-        Icon="{StaticResource AppIcon}">
+        Title="CodeSwitchX" Width="1400" Height="900" MinWidth="900" MinHeight="600">
   <Grid>
     <Grid.RowDefinitions>
       <RowDefinition Height="*" />

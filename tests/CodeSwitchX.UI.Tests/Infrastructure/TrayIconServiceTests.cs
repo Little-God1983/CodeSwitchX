@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Windows;
-using System.Windows.Media;
 using CodeSwitchX.UI.Infrastructure;
 
 namespace CodeSwitchX.UI.Tests.Infrastructure;
@@ -16,8 +15,7 @@ public class TrayIconServiceTests
         {
             await StaThread.RunAsync(() =>
             {
-                var icon = new DrawingImage(new GeometryDrawing(Brushes.Orange, null, new RectangleGeometry(new Rect(0, 0, 32, 32))));
-                var window = new Window { Icon = icon, ShowInTaskbar = false, ShowActivated = false };
+                var window = new Window { ShowInTaskbar = false, ShowActivated = false };
                 var tray = new TrayIconService();
                 tray.Attach(window, shell);
                 tray.Detach();
