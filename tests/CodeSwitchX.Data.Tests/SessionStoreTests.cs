@@ -26,7 +26,7 @@ public class SessionStoreTests : IAsyncLifetime
         StateSince = lastEvent,
         Title = "Title " + id,
         Model = "claude-sonnet-5",
-        LatestContext = new TokenUsage(1, 2, 3, 4),
+        LatestContext = new TokenUsage(1, 2, 3, 4, 0),
     };
 
     [Fact]
@@ -40,7 +40,7 @@ public class SessionStoreTests : IAsyncLifetime
         var record = records.ShouldHaveSingleItem();
         record.State.ShouldBe(SessionState.Idle);
         record.LastEventAt.ShouldBe(_now.AddMinutes(1));
-        record.ToSnapshot().LatestContext.ShouldBe(new TokenUsage(1, 2, 3, 4));
+        record.ToSnapshot().LatestContext.ShouldBe(new TokenUsage(1, 2, 3, 4, 0));
     }
 
     /// <summary>A chat quiet for longer than the restore window is not restored, so when it becomes active again the engine starts it over.</summary>

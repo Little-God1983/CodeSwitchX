@@ -83,9 +83,9 @@ public class TranscriptIndexerTests : IDisposable
         update.Cwd.ShouldBe(@"C:\Repo\App");
         update.Model.ShouldBe("claude-sonnet-5");
         update.Usage.Count.ShouldBe(2, "msg_1 appears twice but counts once");
-        update.Usage[0].Tokens.ShouldBe(new TokenUsage(100, 20, 500, 3000));
-        update.Usage[1].Tokens.ShouldBe(new TokenUsage(50, 5, 0, 3600));
-        update.LatestContext.ShouldBe(new TokenUsage(50, 5, 0, 3600));
+        update.Usage[0].Tokens.ShouldBe(new TokenUsage(100, 20, 500, 3000, 0));
+        update.Usage[1].Tokens.ShouldBe(new TokenUsage(50, 5, 0, 3600, 0));
+        update.LatestContext.ShouldBe(new TokenUsage(50, 5, 0, 3600, 0));
         update.LastActivityAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 8, TimeSpan.Zero));
     }
 
@@ -244,7 +244,7 @@ public class TranscriptIndexerTests : IDisposable
         subagent.Model.ShouldBeNull("a sub-agent may run a different model; the parent's context bar must keep the parent's");
         subagent.LatestContext.ShouldBeNull();
         subagent.Cursor.ShouldNotBeNull().Title.ShouldBeNull("a sub-agent's prompt is no chat title, so the cursor stores none");
-        subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9));
+        subagent.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(9, 9, 9, 9, 0));
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public class TranscriptIndexerTests : IDisposable
         await _indexer.ScanAsync(CancellationToken.None);
 
         var update = _updates.ShouldHaveSingleItem();
-        update.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(100, 20, 500, 3000));
+        update.Usage.ShouldHaveSingleItem().Tokens.ShouldBe(new TokenUsage(100, 20, 500, 3000, 0));
         update.MessageIds.ShouldBe(["msg_new"], "only ids first seen in this pass travel to the store, in the transaction that saves their usage");
     }
 
@@ -318,7 +318,7 @@ public class TranscriptIndexerTests : IDisposable
 
         var update = _updates.ShouldHaveSingleItem();
         update.Model.ShouldBe("claude-sonnet-5");
-        update.LatestContext.ShouldBe(new TokenUsage(100, 20, 500, 3000));
+        update.LatestContext.ShouldBe(new TokenUsage(100, 20, 500, 3000, 0));
         update.Usage.ShouldHaveSingleItem();
     }
 

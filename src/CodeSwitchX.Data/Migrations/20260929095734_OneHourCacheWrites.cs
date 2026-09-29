@@ -28,13 +28,7 @@ namespace CodeSwitchX.Data.Migrations
                 name: "CacheWrite1hPerM",
                 table: "PricingRules",
                 type: "REAL",
-                nullable: false,
-                defaultValue: 0.0);
-
-            // A rule stored before this column existed priced every cache write at its 5-minute rate; at Anthropic's list
-            // prices a 1-hour write is 2x input. Nothing has written a rule of the user's own yet, so this sets the rate the
-            // shipped rules carry rather than leaving such writes free.
-            migrationBuilder.Sql("UPDATE \"PricingRules\" SET \"CacheWrite1hPerM\" = \"InputPerM\" * 2;");
+                nullable: true);
         }
 
         /// <inheritdoc />

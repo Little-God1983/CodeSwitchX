@@ -26,7 +26,7 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<double>("CacheReadPerM")
                         .HasColumnType("REAL");
 
-                    b.Property<double>("CacheWrite1hPerM")
+                    b.Property<double?>("CacheWrite1hPerM")
                         .HasColumnType("REAL");
 
                     b.Property<double>("CacheWritePerM")

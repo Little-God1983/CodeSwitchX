@@ -10,7 +10,11 @@ public sealed class PricingRule
     /// <summary>Writes to the 5-minute cache.</summary>
     public decimal CacheWritePerM { get; set; }
     public decimal CacheReadPerM { get; set; }
-    /// <summary>Writes to the 1-hour cache (2x input at Anthropic's list prices, against 1.25x for the 5-minute cache).</summary>
-    public decimal CacheWrite1hPerM { get; set; }
+    /// <summary>
+    /// Writes to the 1-hour cache (2x input at Anthropic's list prices, against 1.25x for the 5-minute cache). Null in a rule
+    /// that never set it: the estimator then takes twice the rule's input, so such writes are never free and a change of the
+    /// multiplier reaches every stored rule.
+    /// </summary>
+    public decimal? CacheWrite1hPerM { get; set; }
     public long ContextWindow { get; set; } = 200_000;
 }

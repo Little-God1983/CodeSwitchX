@@ -80,9 +80,9 @@ public class UsageStoreTests : IAsyncLifetime
         var bucket = new UsageBucket { SessionId = "s1", Model = "m", MinuteUtc = _minute, Input = 1, Output = 2, CacheWrite = 3, CacheRead = 4 };
 
         bucket.Add(new UsageBucket { Input = 10, Output = 20, CacheWrite = 30, CacheRead = 40 });
-        bucket.Add(new CodeSwitchX.Core.Sessions.TokenUsage(100, 200, 300, 400));
+        bucket.Add(new CodeSwitchX.Core.Sessions.TokenUsage(100, 200, 300, 400, CacheWrite1h: 500));
 
-        bucket.Tokens.ShouldBe(new CodeSwitchX.Core.Sessions.TokenUsage(111, 222, 333, 444));
+        bucket.Tokens.ShouldBe(new CodeSwitchX.Core.Sessions.TokenUsage(111, 222, 333, 444, CacheWrite1h: 500));
     }
 
     [Fact]

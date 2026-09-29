@@ -83,7 +83,7 @@ public class TelemetryServiceTests
         _bus.Publish(new TranscriptUpdated(new TranscriptUpdate
         {
             SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(),
-            Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500_000, 100_000, 0, 0))],
+            Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500_000, 100_000, 0, 0, 0))],
         }));
 
         published.ShouldNotBeNull();
@@ -120,7 +120,7 @@ public class TelemetryServiceTests
                 SessionId = "s1",
                 TranscriptPath = "p",
                 ObservedAt = _time.GetUtcNow(),
-                Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500, 0, 0, 0))],
+                Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500, 0, 0, 0, 0))],
             })));
             updateWentThrough = update.Wait(TimeSpan.FromSeconds(10));
         });
@@ -230,7 +230,7 @@ public class TelemetryServiceTests
                 SessionId = "s1",
                 TranscriptPath = "p",
                 ObservedAt = _time.GetUtcNow(),
-                Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500, 0, 0, 0))],
+                Usage = [new UsageDelta("claude-sonnet-5", _time.GetUtcNow(), new TokenUsage(500, 0, 0, 0, 0))],
             })));
             updateWentThrough = update.Wait(TimeSpan.FromSeconds(10));
         };

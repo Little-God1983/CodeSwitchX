@@ -1,8 +1,11 @@
 namespace CodeSwitchX.Core.Sessions;
 
 /// <param name="CacheWrite">Tokens written to the 5-minute cache.</param>
-/// <param name="CacheWrite1h">Tokens written to the 1-hour cache, priced at their own rate; a cache write like the others otherwise.</param>
-public readonly record struct TokenUsage(long Input, long Output, long CacheWrite, long CacheRead, long CacheWrite1h = 0)
+/// <param name="CacheWrite1h">
+/// Tokens written to the 1-hour cache, priced at their own rate; a cache write like the others otherwise. Not optional, so
+/// the compiler finds every place that builds a usage from parts and would leave these writes out.
+/// </param>
+public readonly record struct TokenUsage(long Input, long Output, long CacheWrite, long CacheRead, long CacheWrite1h)
 {
     public static TokenUsage Zero => default;
 

@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CodeSwitchX.Data.Migrations
 {
     [DbContext(typeof(CodeSwitchXDbContext))]
-    [Migration("20260929094207_OneHourCacheWrites")]
+    [Migration("20260929095734_OneHourCacheWrites")]
     partial class OneHourCacheWrites
     {
         /// <inheritdoc />
@@ -29,7 +29,7 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<double>("CacheReadPerM")
                         .HasColumnType("REAL");
 
-                    b.Property<double>("CacheWrite1hPerM")
+                    b.Property<double?>("CacheWrite1hPerM")
                         .HasColumnType("REAL");
 
                     b.Property<double>("CacheWritePerM")

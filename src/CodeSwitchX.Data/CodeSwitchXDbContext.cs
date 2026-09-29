@@ -27,6 +27,7 @@ public sealed class CodeSwitchXDbContext : DbContext
         configurationBuilder.Properties<DateTimeOffset>().HaveConversion<UtcTicksConverter>();
         configurationBuilder.Properties<DateTimeOffset?>().HaveConversion<UtcTicksConverter>();
         configurationBuilder.Properties<decimal>().HaveConversion<double>();
+        configurationBuilder.Properties<decimal?>().HaveConversion<double?>();
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
