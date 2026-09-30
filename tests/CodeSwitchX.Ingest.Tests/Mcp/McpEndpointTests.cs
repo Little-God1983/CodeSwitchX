@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Api;
 using CodeSwitchX.Ingest.Mcp;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,7 +38,7 @@ public sealed class McpEndpointTests : IAsyncLifetime
         Directory.Delete(_paths.Root, recursive: true);
     }
 
-    private Uri Url => new($"http://127.0.0.1:{_api.Endpoint!.Port}{McpConfigFile.Route}");
+    private Uri Url => new($"http://127.0.0.1:{_api.Endpoint!.Port}{YardMcp.Route}");
 
     private Task<McpClient> ConnectAsync(string token) => McpClient.CreateAsync(new HttpClientTransport(new HttpClientTransportOptions
     {
@@ -110,7 +111,7 @@ public sealed class McpEndpointTests : IAsyncLifetime
     {
         using var config = JsonDocument.Parse(File.ReadAllText(_paths.McpConfigFile));
 
-        var server = config.RootElement.GetProperty("mcpServers").GetProperty(McpConfigFile.ServerName);
+        var server = config.RootElement.GetProperty("mcpServers").GetProperty(YardMcp.ServerName);
         server.GetProperty("type").GetString().ShouldBe("http");
         server.GetProperty("url").GetString().ShouldBe(Url.ToString());
         server.GetProperty("headers").GetProperty("Authorization").GetString().ShouldBe($"Bearer {_token}");

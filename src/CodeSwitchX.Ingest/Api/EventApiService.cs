@@ -17,7 +17,7 @@ namespace CodeSwitchX.Ingest.Api;
 /// <summary>
 /// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus. Given the Yard, it also
 /// serves the read-only MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), on the loopback port under
-/// <see cref="McpConfigFile.Route"/>, behind the same token, and writes <c>mcp.json</c> for Claude Code to find them.
+/// <see cref="YardMcp.Route"/>, behind the same token, and writes <c>mcp.json</c> for Claude Code to find them.
 /// </summary>
 public sealed class EventApiService : IHostedService
 {
@@ -90,7 +90,7 @@ public sealed class EventApiService : IHostedService
         // Before routing picks an endpoint: the MCP tools answer only with the token, like /events.
         app.Use(async (context, next) =>
         {
-            if (context.Request.Path.StartsWithSegments(McpConfigFile.Route) && !IsAuthorized(context, token))
+            if (context.Request.Path.StartsWithSegments(YardMcp.Route) && !IsAuthorized(context, token))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
@@ -123,7 +123,7 @@ public sealed class EventApiService : IHostedService
 
         if (_yard is not null)
         {
-            app.MapMcp(McpConfigFile.Route);
+            app.MapMcp(YardMcp.Route);
         }
 
         await app.StartAsync(cancellationToken);

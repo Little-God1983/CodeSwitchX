@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Api;
 
 namespace CodeSwitchX.Ingest.Mcp;
@@ -11,22 +12,16 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// </summary>
 public static class McpConfigFile
 {
-    /// <summary>The server's name in the file; Claude Code calls its tools <c>mcp__codeswitchx__…</c>.</summary>
-    public const string ServerName = "codeswitchx";
-
-    /// <summary>Where the server listens under the loopback port.</summary>
-    public const string Route = "/mcp";
-
     public static void Write(string file, int port, string token)
     {
         var config = new JsonObject
         {
             ["mcpServers"] = new JsonObject
             {
-                [ServerName] = new JsonObject
+                [YardMcp.ServerName] = new JsonObject
                 {
                     ["type"] = "http",
-                    ["url"] = $"http://127.0.0.1:{port}{Route}",
+                    ["url"] = $"http://127.0.0.1:{port}{YardMcp.Route}",
                     ["headers"] = new JsonObject { ["Authorization"] = $"Bearer {token}" },
                 },
             },
