@@ -3,6 +3,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Yard;
@@ -33,12 +34,13 @@ public sealed partial class ShellViewModel : ObservableObject
     private int _openAttempt;
 
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
-        HostManager host, ILogger<ShellViewModel> logger)
+        RavenPanelViewModel raven, HostManager host, ILogger<ShellViewModel> logger)
     {
         Yard = yard;
         Cab = cab;
         Settings = settings;
         PerformanceBar = performanceBar;
+        Raven = raven;
         _host = host;
         _logger = logger;
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
@@ -55,6 +57,7 @@ public sealed partial class ShellViewModel : ObservableObject
     public CabViewModel Cab { get; }
     public SettingsViewModel Settings { get; }
     public PerformanceBarViewModel PerformanceBar { get; }
+    public RavenPanelViewModel Raven { get; }
 
     public async Task InitializeAsync(CancellationToken ct)
     {
@@ -82,6 +85,23 @@ public sealed partial class ShellViewModel : ObservableObject
                 Settings.TileScale = Yard.TileScale;
             }
         };
+        // The same for the Raven panel: it owns its open state and microphone choice, the settings store them. Only the
+        // user's choice is stored, never a fallback to the default, so the choice comes back when its device does.
+        Raven.IsOpen = Settings.RavenPanelOpen;
+        Raven.PreferredMicrophone = Settings.RavenMicrophone;
+        _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
+        Raven.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RavenPanelViewModel.IsOpen))
+            {
+                Settings.RavenPanelOpen = Raven.IsOpen;
+            }
+            else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicrophone))
+            {
+                Settings.RavenMicrophone = Raven.PreferredMicrophone;
+            }
+        };
+        Raven.ScheduleWarmUp();
         _ = AutoStartAsync();
     }
 

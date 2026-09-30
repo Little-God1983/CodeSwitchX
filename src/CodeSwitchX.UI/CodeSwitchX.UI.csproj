@@ -18,6 +18,7 @@
     <ProjectReference Include="..\CodeSwitchX.Ingest\CodeSwitchX.Ingest.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Telemetry\CodeSwitchX.Telemetry.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Hosting\CodeSwitchX.Hosting.csproj" />
+    <ProjectReference Include="..\CodeSwitchX.Voice\CodeSwitchX.Voice.csproj" />
     <!--
       The relay is referenced for build order and for its output path only (OutputItemType), and rides along as its own
       program in relay\csx-hook.exe. It stays framework-dependent whatever the app's publish asks for: a runtime identifier or

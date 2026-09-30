@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.Voice.Audio;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -116,6 +117,60 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.TileScale.ShouldBe(1.25);
+    }
+
+    [Fact]
+    public async Task The_raven_panel_state_is_loaded_and_saved()
+    {
+        _store.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenPanelOpen.ShouldBeFalse();
+
+        _vm.RavenPanelOpen = true;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.RavenPanelOpen, true, Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenPanelOpen, false, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_missing_raven_panel_setting_means_open()
+    {
+        _store.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(null));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenPanelOpen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_raven_microphone_is_loaded_and_saved()
+    {
+        var headset = new MicrophoneDevice("{id}", "Headset");
+        var desk = new MicrophoneDevice("{desk}", "Desk mic");
+        _store.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(headset));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenMicrophone.ShouldBe(headset);
+
+        _vm.RavenMicrophone = desk;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.RavenMicrophone, desk, Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, headset, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Unreadable_raven_settings_fall_back_to_an_open_panel_and_no_microphone_without_losing_the_other_settings()
+    {
+        _store.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromException<bool?>(new System.Text.Json.JsonException("not a bool")));
+        _store.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromException<MicrophoneDevice?>(new System.Text.Json.JsonException("not a device")));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenPanelOpen.ShouldBeTrue();
+        _vm.RavenMicrophone.ShouldBeNull();
+        _vm.LastMessage.ShouldBeNull();
+        _vm.FiveHourBudgetTokens.ShouldBe(5_000_000);
     }
 
     /// <summary>Bounded: a queued save that never finishes must fail this test, not hang the run.</summary>

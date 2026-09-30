@@ -5,6 +5,7 @@ using Path = System.IO.Path;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.Voice.Audio;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -32,6 +33,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The Yard's tile size as stored; the Yard owns it (see <see cref="Yard.YardViewModel.TileScale"/>).</summary>
     [ObservableProperty] private double _tileScale = 1;
+
+    /// <summary>Whether the Raven panel is open or folded to its rail, as stored; the panel owns it (see <see cref="Raven.RavenPanelViewModel.IsOpen"/>).</summary>
+    [ObservableProperty] private bool _ravenPanelOpen = true;
+
+    /// <summary>The microphone Raven records from, as stored; the panel owns the choice and falls back when it is gone.</summary>
+    [ObservableProperty] private MicrophoneDevice? _ravenMicrophone;
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, AppPaths paths, ClaudeCodePaths claude,
         ILogger<SettingsViewModel> logger)
@@ -61,7 +68,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
             // the writer's flag rather than reading the row again, which could disagree with what the writer does.
-            TileScale = await LoadTileScaleAsync(ct);
+            TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
+            RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
+            RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
@@ -150,25 +159,29 @@ public sealed partial class SettingsViewModel : ObservableObject
         BudgetChanged?.Invoke(value);
     }
 
+    /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
+    partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
+
     /// <summary>
-    /// In a try of its own: a stored value that is not a number (edited by hand) leaves the tiles at their normal size
-    /// without a message in the Settings view, and a failure reading the other settings does not lose the size.
+    /// In a try of its own: a stored value of the wrong shape (edited by hand) reads as missing, without a message in the
+    /// Settings view and without losing the settings read after it.
     /// </summary>
-    private async Task<double> LoadTileScaleAsync(CancellationToken ct)
+    private async Task<T?> LoadOrDefaultAsync<T>(string key, string what, CancellationToken ct)
     {
         try
         {
-            return await _settings.GetAsync<double?>(SettingKeys.TileScale, ct) ?? 1;
+            return await _settings.GetAsync<T>(key, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Reading the tile size failed; the tiles keep their normal size");
-            return 1;
+            _logger.LogWarning(ex, "Reading {Setting} failed; its default applies", what);
+            return default;
         }
     }
 
-    /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
-    partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
+    partial void OnRavenPanelOpenChanged(bool value) => Persist(SettingKeys.RavenPanelOpen, value);
+
+    partial void OnRavenMicrophoneChanged(MicrophoneDevice? value) => Persist(SettingKeys.RavenMicrophone, value);
 
     partial void OnRelayExecutableChanged(string value)
     {

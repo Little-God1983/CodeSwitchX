@@ -57,7 +57,10 @@ public sealed class Win32WindowEnumerator : IWindowEnumerator
         }
     }
 
-    public unsafe nint ForegroundWindow() => (nint)PInvoke.GetForegroundWindow().Value;
+    public nint ForegroundWindow() => Foreground();
+
+    /// <summary>The window the user works in now (GetForegroundWindow); 0 when there is none. The one place it is read.</summary>
+    public static unsafe nint Foreground() => (nint)PInvoke.GetForegroundWindow().Value;
 
     private static string ClassNameOf(HWND hwnd)
     {

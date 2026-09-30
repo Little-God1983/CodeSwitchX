@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeSwitchX.Voice.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The sample the warm-up decodes; see WarmUpSpeech.cs. -->
+    <EmbeddedResource Include="Dictation\WarmUpSpeech.pcm" LogicalName="CodeSwitchX.Voice.WarmUpSpeech.pcm" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="NAudio.Core" />
+    <PackageReference Include="NAudio.Wasapi" />
+    <PackageReference Include="Whisper.net" />
+    <!-- Two runtimes, and Whisper.net's default RuntimeLibraryOrder already prefers Vulkan over Cpu, so no code
+         picks between them: Vulkan loads when its native library can load, Cpu is the automatic fallback when it cannot.
+         That fallback covers the native library only. Once a backend is chosen it is fixed for the process.
+         Vulkan rather than Cuda12 on purpose: the Cuda12 package has no native code for Blackwell (sm_120). -->
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" />
+    <PackageReference Include="Whisper.net.Runtime" />
+  </ItemGroup>
+</Project>

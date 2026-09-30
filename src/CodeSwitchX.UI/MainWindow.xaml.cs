@@ -70,6 +70,14 @@ public partial class MainWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         _hotkeys.Attach(hwnd, _shell);
+        foreach (var binding in _hotkeys.FailedBindings)
+        {
+            if (HotkeyService.RavenFailureNote(binding) is { } note)
+            {
+                _shell.Raven.Note(note);
+            }
+        }
+
         _tray.Attach(this, _shell);
         _locationWatcher = new WindowLocationWatcher(_watcherLogger);
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);

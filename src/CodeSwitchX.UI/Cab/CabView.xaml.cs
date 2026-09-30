@@ -16,6 +16,9 @@ public partial class CabView : UserControl
         Loaded += (_, _) => Attach();
         Unloaded += (_, _) => Detach();
         IsVisibleChanged += (_, _) => Publish();
+        // The Raven panel sits left of the host area in the same row, so its folding, unfolding or resizing changes the
+        // host area's width and raises this; the panel needs no hook of its own. No per-frame LayoutUpdated hook: that ran
+        // Publish on every layout pass in the window, an animation's included.
         HostArea.SizeChanged += (_, _) => Publish();
     }
 

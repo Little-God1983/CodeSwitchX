@@ -6,4 +6,6 @@ public static class SettingKeys
     public const string FiveHourBudgetTokens = "telemetry.fiveHourBudgetTokens";
     public const string RelayExecutable = "hooks.relayExecutable";
     public const string TileScale = "yard.tileScale";
+    public const string RavenPanelOpen = "raven.panelOpen";
+    public const string RavenMicrophone = "raven.microphone";
 }

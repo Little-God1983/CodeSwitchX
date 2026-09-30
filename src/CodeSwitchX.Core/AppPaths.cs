@@ -19,10 +19,12 @@ public sealed class AppPaths
     public string TokenFile => Path.Combine(Root, "token");
     public string EndpointFile => Path.Combine(Root, "endpoint.json");
     public string LogsDirectory => Path.Combine(Root, "logs");
+    public string ModelsDirectory => Path.Combine(Root, "models");
 
     public void EnsureCreated()
     {
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(LogsDirectory);
+        Directory.CreateDirectory(ModelsDirectory);
     }
 }

@@ -12,5 +12,6 @@
     <infra:EnumEqualsToVisibilityConverter x:Key="EnumVisible" />
     <infra:NullToCollapsedConverter x:Key="NullToCollapsed" />
     <BooleanToVisibilityConverter x:Key="BoolVisible" />
+    <infra:TrueToCollapsedConverter x:Key="BoolCollapsed" />
   </Application.Resources>
 </Application>
