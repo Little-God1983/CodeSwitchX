@@ -1,4 +1,5 @@
 using NSubstitute;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -35,9 +36,9 @@ public sealed class RavenPanelViewModelTests
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(result);
 
-    private RavenPanelViewModel NewVm()
+    private RavenPanelViewModel NewVm(IUiDispatcher? dispatcher = null)
     {
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, new ImmediateDispatcher(), _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher ?? new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance);
         vm.RefreshMicrophones();
         return vm;
@@ -101,6 +102,7 @@ public sealed class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Listening);
         Speak();
         vm.PressMic();
+        await WithinAsync(vm.PendingStop);
 
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
@@ -213,6 +215,7 @@ public sealed class RavenPanelViewModelTests
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
         vm.Log.Last().Text.ShouldContain("Headset");
         vm.State.ShouldBe(RavenState.Idle);
+        await WithinAsync(vm.PendingStop);
         _recorder.Received(1).Stop();
         await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
 
@@ -403,7 +406,7 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_recording_stops_by_itself_after_two_minutes()
+    public async Task A_recording_stops_by_itself_after_two_minutes()
     {
         var vm = NewVm();
         vm.PressMic();
@@ -412,6 +415,7 @@ public sealed class RavenPanelViewModelTests
         _time.Advance(TimeSpan.FromSeconds(119));
         vm.State.ShouldBe(RavenState.Listening);
         _time.Advance(TimeSpan.FromSeconds(1));
+        await WithinAsync(vm.PendingStop);
 
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.You);
@@ -704,5 +708,217 @@ public sealed class RavenPanelViewModelTests
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
 
         vm.Log.Last().Text.ShouldBe("Headset is not available any more.");
+    }
+
+    // Audiosrv stopping or restarting raises bursts of device notifications, render devices included; each one lists
+    // the devices again and fails the same way.
+    [Fact]
+    public void Windows_audio_failing_again_and_again_warns_once_and_says_when_it_is_back()
+    {
+        Exception? failure = null;
+        _catalog.List().Returns(_ => failure is null ? [Headset, Desk] : throw failure);
+        var vm = NewVm();
+        failure = new System.Runtime.InteropServices.COMException("The audio service is not running.");
+
+        for (var i = 0; i < 3; i++)
+        {
+            _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        }
+
+        vm.Log.Count(l => l.Kind == RavenLogKind.Warning).ShouldBe(1);
+        vm.Log.Single().Text.ShouldBe("Windows audio is not available: The audio service is not running.");
+
+        failure = null;
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.Log.Select(l => l.Text).ShouldBe(["Windows audio is not available: The audio service is not running.", "Windows audio is back."]);
+        vm.Microphones.ShouldBe([Headset, Desk]);
+
+        failure = new System.Runtime.InteropServices.COMException("stopped again");
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.Log.Last().Text.ShouldBe("Windows audio is not available: stopped again", "a new failure after a recovery is news");
+    }
+
+    [Fact]
+    public void The_only_microphone_unplugged_says_none_is_left_and_its_return_says_so_too()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone = Desk;
+        _catalog.List().Returns([]);
+        _catalog.Default().Returns((MicrophoneDevice?)null);
+
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.SelectedMicrophone.ShouldBeNull();
+        vm.PreferredMicrophone.ShouldBe(Desk);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
+        vm.Log.Single().Text.ShouldBe("Desk mic is gone. No microphone is connected.");
+
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty); // still nothing
+        vm.Log.Count.ShouldBe(1);
+
+        _catalog.List().Returns([Desk]);
+        _catalog.Default().Returns(Desk);
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.SelectedMicrophone.ShouldBe(Desk);
+        vm.Log.Select(l => l.Text).ShouldBe(["Desk mic is gone. No microphone is connected.", "Using Desk mic again."]);
+    }
+
+    [Fact]
+    public void The_fallback_microphone_unplugged_too_says_none_is_left()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone = Desk;
+        _catalog.List().Returns([Headset]);
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        _catalog.List().Returns([]);
+        _catalog.Default().Returns((MicrophoneDevice?)null);
+
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.Log.Select(l => l.Text).ShouldBe(["Desk mic is gone. Using Headset.", "Headset is gone. No microphone is connected."]);
+    }
+
+    // Stopping waits for the capture thread (up to 2 s), copies and resamples up to two minutes of audio and disposes
+    // the capture: none of that on the UI thread, and the panel says it is transcribing while it happens.
+    [Fact]
+    public async Task A_slow_stop_runs_off_the_calling_thread_while_the_panel_already_says_transcribing()
+    {
+        using var hold = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource();
+        RavenPanelViewModel? vm = null;
+        RavenState? stateDuringStop = null;
+        _recorder.Stop().Returns(_ =>
+        {
+            stateDuringStop = vm!.State;
+            entered.TrySetResult();
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
+        });
+        vm = NewVm();
+        vm.PressMic();
+        Speak();
+        _time.Advance(Hold);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var release = vm.ReleaseMicAsync();
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        release.IsCompleted.ShouldBeFalse();
+        vm.State.ShouldBe(RavenState.Transcribing);
+        vm.Caption.ShouldBe("Transcribing…");
+        await WithinAsync(entered.Task);
+        stateDuringStop.ShouldBe(RavenState.Transcribing);
+
+        hold.Set();
+        await WithinAsync(release);
+
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Log.Last().Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    [Fact]
+    public async Task A_slow_stop_after_a_capture_failure_does_not_hold_up_the_caller_either()
+    {
+        using var hold = new ManualResetEventSlim();
+        _recorder.Stop().Returns(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return new RecordedClip([], TimeSpan.Zero);
+        });
+        var vm = NewVm();
+        vm.PressMic();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.PressMic();
+        _recorder.Received(1).Start(Arg.Any<string>()); // a press while the old capture is still stopping is ignored
+
+        hold.Set();
+        await WithinAsync(vm.PendingStop);
+        vm.PressMic();
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    // 1.6 GB in 80 KB reads is some twenty thousand reports: only a new whole percent goes to the UI thread.
+    [Fact]
+    public async Task Download_progress_is_posted_to_the_ui_thread_only_when_the_percent_changes()
+    {
+        _models.IsPresent.Returns(false);
+        var dispatcher = new CountingDispatcher();
+        var postsDuringDownload = 0;
+        RavenPanelViewModel? vm = null;
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            var progress = call.Arg<IProgress<double>?>()!;
+            var before = dispatcher.Posts;
+            for (var i = 0; i < 1000; i++)
+            {
+                progress.Report(0.5 + i / 1_000_000.0);
+            }
+
+            postsDuringDownload = dispatcher.Posts - before;
+            vm!.Log[0].Text.ShouldBe("Downloading the speech model (1.6 GB)… 50%");
+            return Task.CompletedTask;
+        });
+        vm = NewVm(dispatcher);
+
+        await HoldAsync(vm);
+
+        postsDuringDownload.ShouldBe(1);
+    }
+
+    // Reading every .code-workspace file takes time: it runs while the user talks, not between release and Whisper.
+    [Fact]
+    public async Task The_vocabulary_is_fetched_when_the_recording_starts_not_after_the_release()
+    {
+        var fetched = new TaskCompletionSource();
+        var words = new DictationVocabulary(["Diffusion Nexus"], []);
+        _vocabulary.GetAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            fetched.TrySetResult();
+            return Task.FromResult(words);
+        });
+        var vm = NewVm();
+
+        vm.PressMic();
+        await WithinAsync(fetched.Task);
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync();
+
+        await _vocabulary.Received(1).GetAsync(Arg.Any<CancellationToken>());
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), words, false, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_vocabulary_that_cannot_be_read_does_not_stop_the_transcription()
+    {
+        _vocabulary.GetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<DictationVocabulary>(new IOException("network drive gone")));
+        var vm = NewVm();
+
+        await HoldAsync(vm);
+
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), DictationVocabulary.Empty, false, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Runs posts inline, like <see cref="ImmediateDispatcher"/>, and counts them.</summary>
+    private sealed class CountingDispatcher : IUiDispatcher
+    {
+        private int _posts;
+
+        public int Posts => Volatile.Read(ref _posts);
+
+        public void Post(Action action)
+        {
+            Interlocked.Increment(ref _posts);
+            action();
+        }
     }
 }

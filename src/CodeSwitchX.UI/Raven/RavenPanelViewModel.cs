@@ -39,7 +39,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _silentWarned;
     private bool _refreshing;
     private bool _fellBack;
+    private bool _audioFailed;
     private long _recordingId;
+    private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
 
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IUiDispatcher dispatcher, TimeProvider time,
@@ -92,6 +94,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public ObservableCollection<RavenLogEntry> Log { get; } = [];
 
+    /// <summary>
+    /// The stop in progress, if any: the recorder's Stop runs off the UI thread, and a press waits for it to finish
+    /// (the recorder holds one capture at a time). Completed when nothing is stopping.
+    /// </summary>
+    internal Task PendingStop { get; private set; } = Task.CompletedTask;
+
     /// <summary>Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded.</summary>
     public void RefreshMicrophones()
     {
@@ -106,10 +114,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // A stopped Windows audio service makes the enumeration throw (a COMException). The app still starts; the
             // panel says why it has no microphones. The stored choice stays for when the service is back.
+            // Audiosrv stopping raises bursts of device notifications, each failing the same way: one warning per outage.
             _logger.LogWarning(ex, "Could not list the microphones");
             ClearMicrophones();
-            AddEntry(RavenLogKind.Warning, $"Windows audio is not available: {ex.Message}");
+            if (!_audioFailed)
+            {
+                _audioFailed = true;
+                AddEntry(RavenLogKind.Warning, $"Windows audio is not available: {ex.Message}");
+            }
+
             return;
+        }
+
+        if (_audioFailed)
+        {
+            _audioFailed = false;
+            AddEntry(RavenLogKind.Note, "Windows audio is back.");
         }
 
         var previous = SelectedMicrophone;
@@ -133,12 +153,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _refreshing = false;
         }
 
-        if (preferred is null || choice.Device is null || Equals(previous, choice.Device))
+        if (preferred is null || Equals(previous, choice.Device))
         {
             return;
         }
 
-        if (choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault)
+        if (choice.Device is null)
+        {
+            // previous is not null here: the microphone in use went, and nothing is left to fall back to.
+            _fellBack = true;
+            AddEntry(RavenLogKind.Note, $"{previous!.Name} is gone. No microphone is connected.");
+        }
+        else if (choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault)
         {
             _fellBack = true;
             AddEntry(RavenLogKind.Note, $"{preferred.Name} is gone. Using {choice.Device.Name}.");
@@ -198,7 +224,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Button mouse-down or hotkey down.</summary>
     public void PressMic()
     {
-        if (State == RavenState.Transcribing)
+        if (State == RavenState.Transcribing || !PendingStop.IsCompleted)
         {
             return;
         }
@@ -209,7 +235,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 StartRecording();
                 break;
             case PushToTalkAction.Stop:
-                _ = StopAsync();
+                _ = BeginStop();
                 break;
         }
     }
@@ -217,7 +243,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Button mouse-up or hotkey up; completes once a stopped recording has been transcribed.</summary>
     public Task ReleaseMicAsync()
     {
-        return _gesture.Release() == PushToTalkAction.Stop ? StopAsync() : Task.CompletedTask;
+        return _gesture.Release() == PushToTalkAction.Stop ? BeginStop() : Task.CompletedTask;
+    }
+
+    private Task BeginStop()
+    {
+        if (State != RavenState.Listening)
+        {
+            return Task.CompletedTask;
+        }
+
+        var stop = StopAsync();
+        PendingStop = stop;
+        return stop;
     }
 
     [RelayCommand]
@@ -263,6 +301,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         State = RavenState.Listening;
         Caption = "Listening…";
         WarmUpInBackground();
+        _vocabularyFetch = Task.Run(FetchVocabularyAsync);
 
         var id = ++_recordingId;
         _limitTimer?.Dispose();
@@ -277,7 +316,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _gesture.Reset();
-        _ = StopAsync();
+        _ = BeginStop();
     }
 
     private void OnBlock(CapturedBlock block)
@@ -303,7 +342,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             AddEntry(RavenLogKind.Warning, WarningFor(error.Kind, _recordingMic));
             StopLimitTimer();
-            _recorder.Stop();
+            PendingStop = ReleaseCaptureAsync();
             ReturnToIdle();
             _gesture.Reset();
         }
@@ -311,19 +350,32 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         RefreshMicrophones();
     }
 
+    /// <summary>The dead capture is still stopped and disposed, off the UI thread; its clip is dropped.</summary>
+    private async Task ReleaseCaptureAsync()
+    {
+        try
+        {
+            await Task.Run(_recorder.Stop);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Stopping the failed capture failed");
+        }
+    }
+
+    /// <summary>
+    /// Says so first, then stops: the recorder's Stop waits for the capture thread (up to 2 s), resamples up to two
+    /// minutes of audio and disposes the capture, which runs off the UI thread while the panel shows "Transcribing…".
+    /// The awaits resume on the UI thread (its synchronisation context), where the log and the state live.
+    /// </summary>
     private async Task StopAsync()
     {
-        if (State != RavenState.Listening)
-        {
-            return;
-        }
-
         StopLimitTimer();
-        var clip = _recorder.Stop();
         State = RavenState.Transcribing;
         Caption = "Transcribing…";
         try
         {
+            var clip = await Task.Run(_recorder.Stop);
             if (clip.Length < MinimumClip)
             {
                 return;
@@ -340,7 +392,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            var words = await _vocabulary.GetAsync(CancellationToken.None);
+            var words = await _vocabularyFetch;
             var result = await _dictation.TranscribeAsync(clip.Samples16k, words, live: false, CancellationToken.None);
             var text = result.Text.Trim();
             if (text.Length > 0)
@@ -367,21 +419,26 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>Never faults: without the workspace names Whisper still transcribes, it only spells them worse.</summary>
+    private async Task<DictationVocabulary> FetchVocabularyAsync()
+    {
+        try
+        {
+            return await _vocabulary.GetAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read the workspace names for the dictation vocabulary");
+            return DictationVocabulary.Empty;
+        }
+    }
+
     private async Task<bool> DownloadModelAsync()
     {
         const string Prefix = "Downloading the speech model (1.6 GB)… ";
         Caption = "Downloading the speech model…";
         var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
-        var last = 0;
-        var progress = new PostedProgress(_dispatcher, value =>
-        {
-            var percent = (int)Math.Clamp(value * 100, 0, 100);
-            if (percent != last)
-            {
-                last = percent;
-                entry.Text = $"{Prefix}{percent}%";
-            }
-        });
+        var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{Prefix}{percent}%");
 
         try
         {
@@ -428,9 +485,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _ => $"{mic?.Name ?? "The microphone"} could not be opened. Another app may be using it exclusively.",
     };
 
-    /// <summary>Reports on the UI thread, whatever thread the download runs on.</summary>
-    private sealed class PostedProgress(IUiDispatcher dispatcher, Action<double> onValue) : IProgress<double>
+    /// <summary>
+    /// Whole percents on the UI thread, whatever thread the download reports on. The percent is worked out on the
+    /// reporting thread and posted only when it changes: 1.6 GB in 80 KB reads is some twenty thousand reports for a
+    /// hundred changes of the text. Starts at 0, the percent the entry already shows.
+    /// </summary>
+    private sealed class PostedPercent(IUiDispatcher dispatcher, Action<int> onPercent) : IProgress<double>
     {
-        public void Report(double value) => dispatcher.Post(() => onValue(value));
+        private int _last;
+
+        public void Report(double value)
+        {
+            var percent = (int)Math.Clamp(value * 100, 0, 100);
+            if (Interlocked.Exchange(ref _last, percent) != percent)
+            {
+                dispatcher.Post(() => onPercent(percent));
+            }
+        }
     }
 }

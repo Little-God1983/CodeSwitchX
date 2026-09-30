@@ -13,7 +13,7 @@ public sealed record DictationVocabulary(
     public static readonly DictationVocabulary Empty = new([], []);
 }
 
-/// <summary>Implemented by the host project. Called once per clip, so a fresh read of wherever
+/// <summary>Implemented by the host project. Called once per recording, as it starts, so a fresh read of wherever
 /// the host keeps its lists is fine.</summary>
 public interface IDictationVocabularyProvider
 {
