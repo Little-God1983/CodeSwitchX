@@ -73,7 +73,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
         Value(arguments, "--permission-mode").ShouldBe("dontAsk");
         Value(arguments, "--mcp-config").ShouldBe(_paths.McpConfigFile);
         arguments.ShouldContain("--strict-mcp-config");
-        Value(arguments, "--setting-sources").ShouldBe("", "no user settings, so no hooks fire for the brain's turns");
+        Value(arguments, "--settings").ShouldBe("""{"disableAllHooks":true}""", "no hook fires for the brain's turns");
+        arguments.ShouldNotContain("--setting-sources", "the user's other settings (a proxy, an API key helper) are kept");
         arguments.ShouldContain("--no-session-persistence");
         Value(arguments, "--model").ShouldBe(BrainSettings.DefaultModel);
         Value(arguments, "--system-prompt").ShouldBe(BrainSettings.SystemPrompt);
@@ -209,7 +210,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
         var first = await AskAsync("One");
         var second = await AskAsync("Two");
 
-        first[0].ShouldBe(new BrainNotice("Raven cannot see the Yard: its tools did not connect (failed). Its answers can only guess.", true));
+        first[0].ShouldBe(new BrainNotice(
+            "Raven cannot see the Yard: its tools did not connect (failed). Its answers can only guess. Raven tries again with the next question.", true));
         second.OfType<BrainNotice>().ShouldBeEmpty();
     }
 
@@ -229,6 +231,52 @@ public sealed class ClaudeCliBrainTests : IDisposable
         }
 
         warnings.ShouldBe([2, 5]);
+    }
+
+    [Fact]
+    public async Task Tools_that_failed_to_connect_get_a_new_process_a_few_times_in_a_row()
+    {
+        _launcher.Answer = _ => [StreamJson.Init("failed"), StreamJson.Text("Hm."), StreamJson.Result("Hm.")];
+
+        for (var turn = 1; turn <= 5; turn++)
+        {
+            await AskAsync($"Turn {turn}");
+        }
+
+        _launcher.Started.Count.ShouldBe(1 + ClaudeCliBrain.MaxYardRetries, "the server may really be down: no new process for every turn");
+        _launcher.Started.Take(ClaudeCliBrain.MaxYardRetries).ShouldAllBe(s => s.Process.Disposed);
+    }
+
+    [Fact]
+    public async Task Tools_that_connect_on_a_new_process_reset_the_retries()
+    {
+        var statuses = new Queue<string>(["failed", "connected", "failed", "failed", "failed"]);
+        _launcher.Answer = _ => [StreamJson.Init(statuses.Dequeue()), StreamJson.Result("Hm.")];
+
+        for (var turn = 1; turn <= 5; turn++)
+        {
+            await AskAsync($"Turn {turn}");
+        }
+
+        // 1 failed -> 2 connected (kept) -> 3 failed -> 4 failed -> 5 failed and kept: two retries after the reset.
+        _launcher.Started.Count.ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task A_question_after_a_quiet_spell_starts_a_new_conversation_without_a_word()
+    {
+        await AskAsync("One");
+        _time.Advance(ClaudeCliBrain.QuietReset - TimeSpan.FromSeconds(1));
+        await AskAsync("Two");
+        _launcher.Started.Count.ShouldBe(1, "a question within the spell carries on the conversation");
+
+        _time.Advance(ClaudeCliBrain.QuietReset);
+        var next = await AskAsync("Three");
+
+        _launcher.Started.Count.ShouldBe(2);
+        _launcher.Started[0].Process.Disposed.ShouldBeTrue();
+        next.OfType<BrainNotice>().ShouldBeEmpty();
+        Reply(next).ShouldBe("Hi.");
     }
 
     [Fact]

@@ -29,6 +29,8 @@ public sealed class BrainSettings
         + "The user speaks German or English, and their words reach you through speech recognition, so a name may be misheard "
         + "or split into words: always look a workspace or project name up with find_workspace before you say it does not exist. "
         + "For what needs the user or is waiting on them, use list_chats with the filter needs_me. "
+        + "The Yard changes all the time: chats start, finish and wait. Never answer from an earlier tool result in this "
+        + "conversation; call the tools again for every question. "
         + "Always answer in English, whatever language the user spoke. Keep it short: one to three sentences, plain text, no "
         + "markdown, no lists unless asked, no chat ids. Name chats by their title and workspace. Say what you found, not how "
         + "you looked. If the tools cannot answer a question, say so in one sentence.";

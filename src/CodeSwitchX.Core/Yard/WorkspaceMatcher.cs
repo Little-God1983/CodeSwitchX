@@ -106,8 +106,10 @@ public static class WorkspaceMatcher
             return 0.7 + (0.2 * (similarity - Threshold) / (1 - Threshold));
         }
 
-        // Every word said is in the name, in any order: "installer nexus" for DiffusionNexus.Installer.SDK.
-        return words.Count > 1 && words.All(w => w.Length >= 3 && name.Contains(w, StringComparison.Ordinal)) ? Threshold : 0;
+        // Every word said is in the name, in any order: "installer nexus" for DiffusionNexus.Installer.SDK. Words under three
+        // letters ("of", "ui") are left out rather than let fail the rule: they are in almost any name, or in none.
+        var kept = words.Where(w => w.Length >= 3).ToList();
+        return kept.Count > 1 && kept.All(w => name.Contains(w, StringComparison.Ordinal)) ? Threshold : 0;
     }
 
     /// <summary>Lower case, letters and digits only.</summary>

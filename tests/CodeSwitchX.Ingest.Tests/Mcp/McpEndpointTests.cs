@@ -127,11 +127,12 @@ public sealed class McpEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_config_file_that_cannot_be_written_leaves_the_hook_pipe_running()
+    public async Task A_config_file_that_cannot_be_written_leaves_the_hook_pipe_running_and_the_stale_one_gone()
     {
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-mcp-" + Guid.NewGuid().ToString("N")));
         paths.EnsureCreated();
-        Directory.CreateDirectory(paths.McpConfigFile); // a folder in its place: every write fails
+        File.WriteAllText(paths.McpConfigFile, """{"mcpServers":{"codeswitchx":{"url":"http://127.0.0.1:1/mcp"}}}"""); // an earlier run's
+        Directory.CreateDirectory(paths.McpConfigFile + ".tmp"); // a folder where the new file is written first: the write fails
         var api = new EventApiService(paths, new EventBus(NullLogger<EventBus>.Instance), new AccessTokenStore(paths), TimeProvider.System,
             NullLoggerFactory.Instance, new EventApiOptions { PipeName = "csx-test-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, _yard);
         try
@@ -139,7 +140,7 @@ public sealed class McpEndpointTests : IAsyncLifetime
             await api.StartAsync(CancellationToken.None);
 
             api.Endpoint.ShouldNotBeNull().Port.ShouldBeGreaterThan(0);
-            File.Exists(paths.McpConfigFile).ShouldBeFalse();
+            File.Exists(paths.McpConfigFile).ShouldBeFalse("the brain must not call the earlier run's address");
         }
         finally
         {

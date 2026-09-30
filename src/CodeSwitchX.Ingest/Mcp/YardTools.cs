@@ -35,15 +35,15 @@ public sealed class YardTools(IYardDirectory yard)
         [Description("The name as the user said it, e.g. \"Diffusion Nexus\".")] string query, CancellationToken cancellationToken)
     {
         var (workspaces, chats) = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        return WorkspaceMatcher.Find(query, workspaces)
+        return WorkspaceMatcher.Find(query ?? "", workspaces)
             .Select(m => new WorkspaceMatchView(m.MatchedName, Math.Round(m.Score, 2), WorkspaceView.Of(m.Workspace, chats)))
             .ToList();
     }
 
     [McpServerTool(Name = "list_chats", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Lists the Claude Code chats the Yard shows: title, workspace, state, how long it has been in it, model, last tool "
-        + "and how full its context is. \"needs you\" means the chat is waiting for the user: a question, a permission, or its "
-        + "turn is over.")]
+        + "and how full its context is. \"needs you\" means the chat is stopped on the user: a question to answer or something "
+        + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me.")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
@@ -51,6 +51,8 @@ public sealed class YardTools(IYardDirectory yard)
         string? workspace = null,
         CancellationToken cancellationToken = default)
     {
+        // An argument sent as JSON null is bound as null, not as the default.
+        filter ??= "all";
         var byName = !string.IsNullOrWhiteSpace(workspace);
         var (workspaces, chats) = byName
             ? await ReadAsync(cancellationToken).ConfigureAwait(false)
@@ -85,7 +87,7 @@ public sealed class YardTools(IYardDirectory yard)
     public async Task<ChatDetailView> GetChat(
         [Description("The chat's id from list_chats; its first 8 characters are enough.")] string id, CancellationToken cancellationToken)
     {
-        var key = id.Trim();
+        var key = (id ?? "").Trim();
         var chats = await yard.ChatsAsync(cancellationToken).ConfigureAwait(false);
         var found = chats.Where(c => c.Id.StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
         return found switch
@@ -110,7 +112,7 @@ public sealed class YardTools(IYardDirectory yard)
     {
         _ when chat.NeedsYou => "needs you",
         SessionState.Working => "working",
-        SessionState.Idle => "idle",
+        SessionState.Idle => "idle, its turn is over",
         SessionState.Starting => "starting",
         SessionState.Stale => "quiet for a long time",
         SessionState.Ended => "ended",

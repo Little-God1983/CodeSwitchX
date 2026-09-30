@@ -59,6 +59,14 @@ public sealed class WorkspaceMatcherTests
         match.MatchedName.ShouldBe("DiffusionNexus.Installer.SDK");
     }
 
+    [Theory]
+    [InlineData("installer of nexus")]
+    [InlineData("nexus installer ui")]
+    public void Short_words_among_the_words_said_are_left_out_not_counted_against(string query)
+    {
+        WorkspaceMatcher.Find(query, Yard).ShouldHaveSingleItem().MatchedName.ShouldBe("DiffusionNexus.Installer.SDK");
+    }
+
     [Fact]
     public void A_folder_is_found_by_its_own_name_when_the_workspace_file_names_it_differently()
     {

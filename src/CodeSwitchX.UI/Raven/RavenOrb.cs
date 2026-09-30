@@ -180,7 +180,8 @@ public sealed class RavenOrb : FrameworkElement
         var target = State == RavenState.Listening ? Math.Clamp(Level, 0, 1) : 0;
         _shownLevel += (target - _shownLevel) * (1 - Math.Pow(1 - 0.18, dt * 60));
 
-        if (State == RavenState.Idle && now - _lastDraw < IdleFrame)
+        // Thinking moves as calmly as the idle breath, and may last minutes in a background window: the same frame rate.
+        if (State is RavenState.Idle or RavenState.Thinking && now - _lastDraw < IdleFrame)
         {
             return;
         }

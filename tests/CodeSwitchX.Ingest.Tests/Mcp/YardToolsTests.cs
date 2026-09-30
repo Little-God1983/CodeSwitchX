@@ -81,6 +81,23 @@ public sealed class YardToolsTests
     }
 
     [Fact]
+    public async Task Arguments_sent_as_null_count_as_left_out()
+    {
+        (await Tools.ListChats(null!, null, CancellationToken.None)).Count.ShouldBe(3);
+        (await Tools.FindWorkspace(null!, CancellationToken.None)).ShouldBeEmpty();
+        await Should.ThrowAsync<McpException>(() => Tools.GetChat(null!, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_chat_whose_turn_is_over_is_idle_and_not_waiting_on_the_user()
+    {
+        var chats = await Tools.ListChats("all", cancellationToken: CancellationToken.None);
+
+        chats.Single(c => c.Title == "Installer icons").State.ShouldBe("idle, its turn is over");
+        (await Tools.ListChats("needs_me", cancellationToken: CancellationToken.None)).ShouldNotContain(c => c.Title == "Installer icons");
+    }
+
+    [Fact]
     public async Task An_unknown_filter_is_refused_with_the_ones_that_work()
     {
         var error = await Should.ThrowAsync<McpException>(() => Tools.ListChats("busy", cancellationToken: CancellationToken.None));

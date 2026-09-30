@@ -10,14 +10,28 @@ namespace CodeSwitchX.Conductor;
 /// Raven's brain on Claude Code: one long-lived <c>claude -p</c> that takes the turns as stream-json on its standard input,
 /// so the conversation carries on from turn to turn. It can only look: no built-in tools at all, the Yard's MCP tools
 /// from <c>mcp.json</c> and no others, anything not allowed denied without asking, and a working folder that is no
-/// repository. None of the user's settings are loaded, so their hooks (the Yard's own, RAIVEN's) do not fire for its
-/// turns, and nothing of it is saved as a session. A process that dies is started again for the next turn, which says so;
-/// one whose model no longer is the one set is replaced.
+/// repository. The user's settings are loaded (a proxy, a base URL or an API key helper in them is how some users reach
+/// the API at all), but with every hook turned off, so their hooks (the Yard's own, RAIVEN's) do not fire for its turns;
+/// nothing of it is saved as a session. A process that dies is started again for the next turn, which says so; one whose
+/// model no longer is the one set is replaced, and so is one that could not connect to the Yard (a few times) and one
+/// left quiet for <see cref="QuietReset"/>.
 /// </summary>
 public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 {
     /// <summary>How long a turn waits for the next line before it gives the process up: a tool call into the app takes milliseconds.</summary>
     public static readonly TimeSpan Silence = TimeSpan.FromSeconds(90);
+
+    /// <summary>
+    /// After this long without a question the next one starts a new conversation: the Yard has moved on since the answers
+    /// in it, and a conversation kept all day sends more tokens with every turn.
+    /// </summary>
+    public static readonly TimeSpan QuietReset = TimeSpan.FromMinutes(20);
+
+    /// <summary>How often a process whose Yard tools failed to connect is replaced in a row; Claude Code does not connect again by itself.</summary>
+    internal const int MaxYardRetries = 2;
+
+    /// <summary>Hooks off, everything else of the user's settings kept.</summary>
+    internal const string NoHooks = """{"disableAllHooks":true}""";
 
     /// <summary>Every tool of the Yard's server, and only those.</summary>
     internal const string AllowedTools = "mcp__" + YardMcp.ServerName;
@@ -35,8 +49,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     private IBrainProcess? _process;
     private string? _processModel;
 
-    /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since.</summary>
+    /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since; kept across a restart.</summary>
     private bool _yardWarned;
+
+    /// <summary>Processes replaced in a row because their Yard tools failed; back to 0 once they connect.</summary>
+    private int _yardRetries;
+
+    /// <summary>This turn's process is to be replaced once the turn is over: its Yard tools failed.</summary>
+    private bool _replaceAfterTurn;
+
+    /// <summary>When the last turn ended, or the process started.</summary>
+    private DateTimeOffset _lastTurnAt;
 
     /// <summary>Set once the app disposes the brain: nothing starts a process after that.</summary>
     private volatile bool _disposed;
@@ -57,6 +80,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     public async IAsyncEnumerable<BrainEvent> AskAsync(string text, [EnumeratorCancellation] CancellationToken ct)
     {
+        // Off the caller's thread first, the panel's UI thread: looking for claude.exe, starting it and killing an old
+        // process tree would otherwise run there whenever no turn is queued ahead.
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         await _turns.WaitAsync(ct).ConfigureAwait(false);
         IBrainProcess? process = null;
         var finished = false;
@@ -108,14 +134,21 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     case ClaudeInit init:
                         // Every turn's init says how the tools stand; a failure is told once, and again only after they
                         // were seen working in between. "pending" is no failure: the server is still being connected to.
+                        // A failure replaces the process after the turn, a few times in a row, since Claude Code does not
+                        // connect again by itself.
                         if (YardProblem(init) is not { } problem)
                         {
                             _yardWarned = false;
+                            _yardRetries = 0;
                         }
-                        else if (problem.Length > 0 && !_yardWarned)
+                        else if (problem.Length > 0)
                         {
-                            _yardWarned = true;
-                            yield return new BrainNotice(problem, Warning: true);
+                            _replaceAfterTurn = _yardRetries < MaxYardRetries;
+                            if (!_yardWarned)
+                            {
+                                _yardWarned = true;
+                                yield return new BrainNotice(problem + (_replaceAfterTurn ? " Raven tries again with the next question." : ""), Warning: true);
+                            }
                         }
 
                         break;
@@ -146,6 +179,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 Stop();
             }
 
+            if (_replaceAfterTurn)
+            {
+                _replaceAfterTurn = false;
+                _yardRetries++;
+                Stop();
+            }
+
+            _lastTurnAt = _time.GetUtcNow();
             _turns.Release();
         }
     }
@@ -207,7 +248,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         "--tools", "",
         "--allowedTools", AllowedTools,
         "--permission-mode", "dontAsk",
-        "--setting-sources", "",
+        "--settings", NoHooks,
         "--no-session-persistence",
         "--system-prompt", BrainSettings.SystemPrompt,
     ];
@@ -227,9 +268,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 Lose(running, $"stopped (exit code {running.Exited.Result})");
             }
-            else if (_processModel == model)
+            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset)
             {
                 return null;
+            }
+            else if (_processModel == model)
+            {
+                Stop(); // quiet long enough: a new conversation, without a word about it
             }
             else
             {
@@ -278,7 +323,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         _processModel = model;
-        _yardWarned = false;
+        _lastTurnAt = _time.GetUtcNow();
         _logger.LogInformation("Started Raven's brain: {Claude} with {Model}", claude, model);
         if (_lost is not null)
         {

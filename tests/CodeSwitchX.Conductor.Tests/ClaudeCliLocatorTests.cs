@@ -48,6 +48,30 @@ public sealed class ClaudeCliLocatorTests
     }
 
     [Fact]
+    public void The_newest_one_found_wins_over_an_older_one_found_first()
+    {
+        var extension = Extensions + @"\anthropic.claude-code-2.1.285-win32-x64";
+        var bundled = extension + @"\resources\native-binary\claude.exe";
+        _extensions.Add(extension);
+        _files.UnionWith([@"C:\Tools\claude.exe", bundled]);
+        var versions = new Dictionary<string, Version> { [@"C:\Tools\claude.exe"] = new(2, 1, 260, 0), [bundled] = new(2, 1, 285, 0) };
+
+        var found = new ClaudeCliLocator(@"C:\Tools", Home, _files.Contains, (folder, _) => folder == Extensions ? _extensions : [],
+            exe => versions.GetValueOrDefault(exe)).Find();
+
+        found.ShouldBe(bundled);
+    }
+
+    [Fact]
+    public void Of_equal_versions_or_none_the_first_found_wins()
+    {
+        _files.UnionWith([@"C:\Tools\claude.exe", Native]);
+
+        new ClaudeCliLocator(@"C:\Tools", Home, _files.Contains, (_, _) => [], _ => new Version(2, 1, 285, 0)).Find().ShouldBe(@"C:\Tools\claude.exe");
+        new ClaudeCliLocator(@"C:\Tools", Home, _files.Contains, (_, _) => [], _ => null).Find().ShouldBe(@"C:\Tools\claude.exe");
+    }
+
+    [Fact]
     public void Nowhere_is_null()
     {
         _files.Add(Npm + @"\claude.cmd");
