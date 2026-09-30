@@ -15,6 +15,16 @@ public sealed partial class ChatRowViewModel : ObservableObject
     [ObservableProperty] private bool _inferred;
     [ObservableProperty] private string? _lastToolName;
 
+    /// <summary>
+    /// Set while the app runs the chat because Raven started it: how it runs ("Fable 5.1 · high"), which the row shows by
+    /// its voice marker. Null for every other chat.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsVoice))]
+    private string? _voiceLabel;
+
+    [ObservableProperty] private string? _model;
+
     public ChatRowViewModel(string sessionId)
     {
         SessionId = sessionId;
@@ -23,6 +33,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
     public string SessionId { get; }
     public bool IsLive => SessionStateMachine.IsLive(State);
     public bool NeedsUser => SessionStateMachine.NeedsUser(State);
+    public bool IsVoice => VoiceLabel is not null;
 
     /// <summary>Engine version of the snapshot shown; older snapshots arriving late are ignored.</summary>
     public long Version { get; private set; }
@@ -40,6 +51,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         StateSince = snapshot.StateSince;
         Inferred = snapshot.Inferred;
         LastToolName = snapshot.LastToolName;
+        Model = snapshot.Model;
         ContextFill = ContextFillCalculator.Fill(snapshot.LatestContext, pricing.ContextWindowOf(snapshot.Model));
         Pressure = ContextFillCalculator.Level(ContextFill);
         OnPropertyChanged(nameof(IsLive));

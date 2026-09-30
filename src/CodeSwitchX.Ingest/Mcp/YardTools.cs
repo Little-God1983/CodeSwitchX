@@ -150,16 +150,19 @@ public sealed record WorkspaceView(string Name, string Track, IReadOnlyList<stri
 /// <param name="MatchedName">The name that matched: the workspace's, or one of its folders'.</param>
 public sealed record WorkspaceMatchView(string MatchedName, double Score, WorkspaceView Workspace);
 
-public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context)
+/// <param name="StartedByRaven">Raven started it: it can be told something (send_to_chat) or stopped (stop_chat).</param>
+public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
+    bool StartedByRaven)
 {
     internal static ChatView Of(YardChat chat) => new(
-        chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool, YardTools.Percent(chat.ContextFill));
+        chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool, YardTools.Percent(chat.ContextFill),
+        chat.Voice);
 }
 
 public sealed record ChatDetailView(string Id, string Title, string Workspace, string State, string For, DateTimeOffset Since, string? Model,
-    string? LastTool, string Context, string? LastNotification, string? Folder)
+    string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven)
 {
     internal static ChatDetailView Of(YardChat chat) => new(
         chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
-        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd);
+        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice);
 }

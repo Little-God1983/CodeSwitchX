@@ -83,4 +83,19 @@ public sealed class ClaudeStreamTests
     {
         ClaudeStream.ToolName(name).ShouldBe(tool);
     }
+
+    [Fact]
+    public void The_init_line_says_the_mode_the_chat_runs_in()
+    {
+        ClaudeStream.Read(StreamJson.Init(mode: "default")).ShouldBeOfType<ClaudeInit>().PermissionMode.ShouldBe("default");
+    }
+
+    [Fact]
+    public void A_message_of_the_main_agent_is_the_model_answering_and_a_subagent_s_is_not()
+    {
+        ClaudeStream.IsAssistant(StreamJson.AssistantText("On it.")).ShouldBeTrue();
+        ClaudeStream.IsAssistant(StreamJson.AssistantText("On it.").Replace("\"parent_tool_use_id\":null", "\"parent_tool_use_id\":\"toolu_1\"")).ShouldBeFalse();
+        ClaudeStream.IsAssistant(StreamJson.Result()).ShouldBeFalse();
+        ClaudeStream.IsAssistant("not json").ShouldBeFalse();
+    }
 }

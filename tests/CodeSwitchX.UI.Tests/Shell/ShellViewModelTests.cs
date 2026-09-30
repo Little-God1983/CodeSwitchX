@@ -621,4 +621,21 @@ public class ShellViewModelTests
         _h.Docker.Received(1).Uncloak(500);
         _h.Docker.Received(1).MoveTo(500, rect);
     }
+
+    [Fact]
+    public async Task The_panel_s_chips_show_what_new_chats_run_with_as_Settings_changes()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        (_h.Shell.Raven.ChatModelChip, _h.Shell.Raven.ChatEffortChip).ShouldBe(("Default model", "Default effort"));
+
+        _h.Shell.Settings.RavenChatModel = "Fable";
+        _h.Shell.Settings.RavenChatEffort = "high";
+        (_h.Shell.Raven.ChatModelChip, _h.Shell.Raven.ChatEffortChip).ShouldBe(("Fable 5.1", "high effort"));
+
+        _h.Shell.Settings.RavenModelAliases = "Fable = claude-fable-6-0";
+        _h.Shell.Raven.ChatModelChip.ShouldBe("Fable 6.0");
+
+        _h.Shell.Settings.RavenChatModel = "claude-custom-1";
+        _h.Shell.Raven.ChatModelChip.ShouldBe("Custom 1");
+    }
 }

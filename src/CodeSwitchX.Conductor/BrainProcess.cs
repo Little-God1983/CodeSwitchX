@@ -17,13 +17,18 @@ public interface IBrainProcess : IDisposable
     string ErrorTail { get; }
 
     Task WriteLineAsync(string line, CancellationToken ct);
+
+    /// <summary>Closes standard input: <c>claude -p</c> reading stream-json ends once its turn is over. Never throws.</summary>
+    void CloseInput();
 }
 
 /// <summary>Starts <see cref="IBrainProcess"/>es; the tests start fakes.</summary>
 public interface IBrainProcessLauncher
 {
+    /// <param name="environment">Variables to set on top of the app's environment; a null value leaves one out.</param>
     /// <exception cref="System.ComponentModel.Win32Exception">The executable could not be started.</exception>
-    IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory);
+    IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment = null);
 }
 
 /// <summary>Starts the real process: no window, UTF-8 both ways, the whole tree killed when it is disposed.</summary>
@@ -35,7 +40,8 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
     /// </summary>
     private static readonly string[] Inherited = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"];
 
-    public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory)
+    public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         var start = new ProcessStartInfo(executable)
         {
@@ -57,6 +63,18 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
         foreach (var name in Inherited)
         {
             start.Environment.Remove(name);
+        }
+
+        foreach (var (name, value) in environment ?? new Dictionary<string, string?>())
+        {
+            if (value is null)
+            {
+                start.Environment.Remove(name);
+            }
+            else
+            {
+                start.Environment[name] = value;
+            }
         }
 
         return new BrainProcess(Process.Start(start) ?? throw new InvalidOperationException($"{executable} did not start."));
@@ -97,6 +115,18 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
         {
             await _process.StandardInput.WriteLineAsync(line.AsMemory(), ct).ConfigureAwait(false);
             await _process.StandardInput.FlushAsync(ct).ConfigureAwait(false);
+        }
+
+        public void CloseInput()
+        {
+            try
+            {
+                _process.StandardInput.Close();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Gone already.
+            }
         }
 
         private async Task PumpOutputAsync()

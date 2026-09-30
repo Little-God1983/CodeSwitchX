@@ -31,5 +31,6 @@ public sealed record YardGitLine(string? Folder, string? Branch, string? Changes
 /// <param name="Workspace">The name of the workspace whose tile shows the chat.</param>
 /// <param name="StateFor">How long it has been in its state, as the row shows it ("5m", "1h 02m").</param>
 /// <param name="ContextFill">How full its context window is, 0 to 1.</param>
+/// <param name="Voice">Raven started it, and the app runs it: it can be told something or stopped from here.</param>
 public sealed record YardChat(string Id, string Title, Guid WorkspaceId, string Workspace, SessionState State, bool NeedsYou, DateTimeOffset StateSince,
-    string StateFor, string? Model, string? LastTool, double ContextFill, string? LastNotification, string? Cwd);
+    string StateFor, string? Model, string? LastTool, double ContextFill, string? LastNotification, string? Cwd, bool Voice = false);

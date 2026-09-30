@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
@@ -18,6 +19,7 @@ public class SettingsViewModelTests : IDisposable
     private readonly ISettingsStore _store = Substitute.For<ISettingsStore>();
     private readonly PersistenceWriterOptions _writerOptions = new();
     private readonly BrainSettings _brain = new();
+    private readonly ChatSettings _chats = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -25,7 +27,7 @@ public class SettingsViewModelTests : IDisposable
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
-        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
+        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
     }
 
     public void Dispose()
@@ -389,5 +391,71 @@ public class SettingsViewModelTests : IDisposable
         await FlushAsync();
 
         stored.ShouldBe([1L, 2L], "the value stored last must be the one the view shows");
+    }
+
+    [Fact]
+    public async Task The_chat_defaults_and_model_names_are_loaded_into_the_chats_Raven_starts()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenModelAliases, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Fable = claude-fable-5-2"));
+        _store.GetAsync<string>(SettingKeys.RavenChatModel, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Fable"));
+        _store.GetAsync<string>(SettingKeys.RavenChatEffort, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("high"));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenChatModel, _vm.RavenChatEffort).ShouldBe(("Fable", "high"));
+        _chats.Defaults.ShouldBe(new ChatDefaults("Fable", "high"));
+        _chats.DefaultModelId.ShouldBe("claude-fable-5-2");
+        _vm.ChatModelChoices.ShouldBe([SettingsViewModel.ClaudeDefault, "Fable"]);
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenChatModel, Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Nothing_stored_leaves_model_and_effort_to_Claude_Code()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenChatModel, _vm.RavenChatEffort).ShouldBe((SettingsViewModel.ClaudeDefault, SettingsViewModel.ClaudeDefault));
+        _chats.Defaults.ShouldBe(new ChatDefaults(null, null));
+        _chats.Aliases.ShouldBe(ChatModels.DefaultAliases);
+    }
+
+    [Fact]
+    public async Task Defaults_Raven_sets_by_voice_are_shown_used_and_saved()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.SetChatDefaults(new ChatDefaults("Opus", "max"));
+        await FlushAsync();
+
+        (_vm.RavenChatModel, _vm.RavenChatEffort).ShouldBe(("Opus", "max"));
+        _chats.DefaultModelId.ShouldBe("claude-opus-5-5");
+        await _store.Received().SetAsync(SettingKeys.RavenChatModel, "Opus", Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenChatEffort, "max", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Default_picked_again_is_stored_blank()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenChatEffort = "high";
+
+        _vm.RavenChatEffort = SettingsViewModel.ClaudeDefault;
+        await FlushAsync();
+
+        _chats.Defaults.Effort.ShouldBeNull();
+        await _store.Received().SetAsync(SettingKeys.RavenChatEffort, "", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_edited_name_table_applies_at_once_and_is_saved_as_typed()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenModelAliases = "Fable = claude-fable-6-0\nNova = claude-nova-1";
+        await FlushAsync();
+
+        _chats.Aliases.Select(a => a.Name).ShouldBe(["Fable", "Nova"]);
+        _vm.ChatModelChoices.ShouldBe([SettingsViewModel.ClaudeDefault, "Fable", "Nova"]);
+        await _store.Received().SetAsync(SettingKeys.RavenModelAliases, "Fable = claude-fable-6-0\nNova = claude-nova-1", Arg.Any<CancellationToken>());
     }
 }

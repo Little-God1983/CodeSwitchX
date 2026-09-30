@@ -8,7 +8,7 @@ namespace CodeSwitchX.Conductor;
 
 /// <summary>
 /// Raven's brain on Claude Code: one long-lived <c>claude -p</c> that takes the turns as stream-json on its standard input,
-/// so the conversation carries on from turn to turn. It can only look: no built-in tools at all, the Yard's MCP tools
+/// so the conversation carries on from turn to turn. It works only through the Yard: no built-in tools at all, the Yard's MCP tools
 /// from <c>mcp.json</c> and no others, anything not allowed denied without asking, and a working folder that is no
 /// repository. The user's settings are loaded (a proxy, a base URL or an API key helper in them is how some users reach
 /// the API at all), but with every hook turned off, so their hooks (the Yard's own, RAIVEN's) do not fire for its turns;

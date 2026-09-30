@@ -1,4 +1,5 @@
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
@@ -13,8 +14,11 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Shell;
 
-/// <summary>Owns the Yard/Cab/Settings mode switch and drives the HostManager for the active workspace.</summary>
-public sealed partial class ShellViewModel : ObservableObject
+/// <summary>
+/// Owns the Yard/Cab/Settings mode switch and drives the HostManager for the active workspace. It is also the window
+/// Raven's actions act on (<see cref="IRavenShell"/>).
+/// </summary>
+public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 {
     private readonly HostManager _host;
     private readonly ILogger<ShellViewModel> _logger;
@@ -59,6 +63,9 @@ public sealed partial class ShellViewModel : ObservableObject
     public PerformanceBarViewModel PerformanceBar { get; }
     public RavenPanelViewModel Raven { get; }
 
+    /// <summary>Raven opens a workspace: the window comes forward, from behind other windows or minimised.</summary>
+    public event Action? ForwardRequested;
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         await Yard.InitializeAsync(ct);
@@ -101,8 +108,28 @@ public sealed partial class ShellViewModel : ObservableObject
                 Settings.RavenMicrophone = Raven.PreferredMicrophone;
             }
         };
+        // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.
+        ShowChatDefaults();
+        Settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(SettingsViewModel.RavenChatModel) or nameof(SettingsViewModel.RavenChatEffort)
+                or nameof(SettingsViewModel.RavenModelAliases))
+            {
+                ShowChatDefaults();
+            }
+        };
         Raven.ScheduleWarmUp();
         _ = AutoStartAsync();
+    }
+
+    private void ShowChatDefaults()
+    {
+        var model = Settings.RavenChatModel;
+        var effort = Settings.RavenChatEffort;
+        Raven.ChatModelChip = model == SettingsViewModel.ClaudeDefault
+            ? "Default model"
+            : ChatModels.ResolveModel(model, ChatModels.ParseAliases(Settings.RavenModelAliases)) is { } id ? ChatModels.DisplayName(id) : model;
+        Raven.ChatEffortChip = effort == SettingsViewModel.ClaudeDefault ? "Default effort" : $"{effort} effort";
     }
 
     /// <summary>Installed, or Partial (every installed event reaches us); Outdated entries point elsewhere and reach nobody.</summary>
@@ -226,6 +253,32 @@ public sealed partial class ShellViewModel : ObservableObject
             StatusMessage = message;
         }
     }
+
+    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
+    {
+        if (Yard.FindTile(workspaceId) is null)
+        {
+            return "it is not on the Yard any more.";
+        }
+
+        ForwardRequested?.Invoke();
+        await EnterCabAsync(workspaceId);
+        return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
+    }
+
+    void IRavenShell.ShowYard()
+    {
+        if (Mode != ShellMode.Yard)
+        {
+            BackToYard();
+        }
+    }
+
+    void IRavenShell.SetChatDefaults(ChatDefaults defaults) => Settings.SetChatDefaults(defaults);
+
+    void IRavenShell.MarkVoice(string sessionId, string? label) => Yard.MarkVoice(sessionId, label);
+
+    void IRavenShell.Warn(string text) => Raven.Warn(text);
 
     [RelayCommand]
     public void BackToYard()

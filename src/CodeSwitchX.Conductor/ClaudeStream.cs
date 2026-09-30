@@ -7,7 +7,8 @@ internal abstract record ClaudeLine;
 
 /// <summary><c>system/init</c>, sent at the start of every turn.</summary>
 /// <param name="McpServers">Each MCP server's name and whether it connected ("connected", "failed", "pending").</param>
-internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers) : ClaudeLine;
+/// <param name="PermissionMode">The mode it runs in: "auto" asked for with a model that cannot do it runs as "default".</param>
+internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers, string? PermissionMode = null) : ClaudeLine;
 
 /// <summary>What the line says the brain did.</summary>
 internal sealed record ClaudeEvents(IReadOnlyList<BrainEvent> Events) : ClaudeLine;
@@ -56,6 +57,22 @@ internal static class ClaudeStream
         }
     }
 
+    /// <summary>Whether the line is a message of the main agent's: the model is answering. Never throws.</summary>
+    public static bool IsAssistant(string line)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object && Text(root, "type") == "assistant"
+                && !(root.TryGetProperty("parent_tool_use_id", out var parent) && parent.ValueKind == JsonValueKind.String);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>The tool's own name: Claude Code calls an MCP tool <c>mcp__&lt;server&gt;__&lt;tool&gt;</c>.</summary>
     public static string ToolName(string name)
     {
@@ -82,7 +99,7 @@ internal static class ClaudeStream
             }
         }
 
-        return new ClaudeInit(Text(root, "model"), servers);
+        return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"));
     }
 
     private static ClaudeEvents? Delta(JsonElement root)
