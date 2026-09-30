@@ -359,4 +359,96 @@ public sealed class RavenPanelViewModelTests
         vm.Log.Last().Text.ShouldNotContain("smaller model");
         vm.State.ShouldBe(RavenState.Idle);
     }
+
+    [Fact]
+    public async Task An_empty_transcript_adds_no_entry()
+    {
+        Transcribes(Task.FromResult(new DictationResult("  ", TimeSpan.FromSeconds(2))));
+        var vm = NewVm();
+
+        await HoldAsync(vm);
+
+        vm.Log.ShouldBeEmpty();
+        vm.State.ShouldBe(RavenState.Idle);
+    }
+
+    [Fact]
+    public async Task The_two_minute_timer_is_cancelled_by_a_manual_stop()
+    {
+        var vm = NewVm();
+
+        await HoldAsync(vm);
+        _time.Advance(TimeSpan.FromSeconds(120));
+
+        _recorder.Received(1).Stop();
+        vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_silent_microphone_warning_is_armed_again_for_a_second_recording()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+        for (var i = 0; i < 60; i++)
+        {
+            Block(0f);
+        }
+
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync();
+        vm.PressMic();
+        for (var i = 0; i < 60; i++)
+        {
+            Block(0f);
+        }
+
+        vm.Log.Count(l => l.Text.StartsWith("No sound", StringComparison.Ordinal)).ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_capture_failure_lists_the_microphones_again()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+        _catalog.ClearReceivedCalls();
+
+        _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
+
+        _catalog.Received(1).List();
+    }
+
+    [Fact]
+    public void Starting_a_recording_warms_the_model_up()
+    {
+        var vm = NewVm();
+
+        vm.PressMic();
+
+        _dictation.Received(1).WarmUpAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void A_device_change_with_no_devices_clears_the_selection()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone.ShouldNotBeNull();
+        _catalog.List().Returns([]);
+        _catalog.Default().Returns((MicrophoneDevice?)null);
+
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.SelectedMicrophone.ShouldBeNull();
+        vm.Microphones.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_lost_microphone_warning_has_the_exact_text()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+
+        _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
+
+        vm.Log.Last().Text.ShouldBe("Headset is not available any more.");
+    }
 }
