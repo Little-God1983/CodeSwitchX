@@ -228,7 +228,7 @@ through EF Core with WAL mode on and migrations applied at startup.
 
 | Entity | Key fields | Notes |
 | --- | --- | --- |
-| Workspace | Id, Name, RootPath, WorkspaceFile, TrackId, AccentColor, HostMode (Snap/Web), VsCodeProfile, AutoStart | RootPath unique, normalized lowercase |
+| Workspace | Id, Name, RootPath, WorkspaceFile, TrackId, AccentColor, HostMode (Snap/Web), VsCodeProfile, AutoStart | What VS Code opens is unique, compared ignoring case: the WorkspaceFile when set, else the RootPath folder. RootPath alone is not: a .code-workspace roots at its first folder, which may be a shared repository registered on its own (#66) |
 | Worktree | Id, WorkspaceId, Path, Branch | Child roots for session mapping |
 | Track | Id, Name, SortOrder | Tile groups |
 | Session | Id (Claude session id), WorkspaceId, Title, State, StartedAt, LastEventAt, TranscriptPath, Model | One row per chat |

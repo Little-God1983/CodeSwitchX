@@ -5,7 +5,9 @@ namespace CodeSwitchX.Core.Persistence;
 public interface IWorkspaceStore
 {
     Task<IReadOnlyList<Workspace>> GetAllAsync(CancellationToken ct = default);
-    Task<Workspace?> FindByRootAsync(string normalizedRoot, CancellationToken ct = default);
+
+    /// <summary>The workspace that opens the same thing (see <see cref="Workspace.TargetKey"/>), or null.</summary>
+    Task<Workspace?> FindByTargetAsync(string rootPath, string? workspaceFile, CancellationToken ct = default);
     Task AddAsync(Workspace workspace, CancellationToken ct = default);
     Task UpdateAsync(Workspace workspace, CancellationToken ct = default);
 

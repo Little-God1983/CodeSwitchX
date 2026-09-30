@@ -85,13 +85,40 @@ public class WorkspaceStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FindByRoot_Update_and_Remove_work()
+    public async Task A_code_workspace_may_start_with_a_folder_registered_as_its_own_workspace()
+    {
+        // A shared repository (an installer SDK) is its own workspace and the first folder of the products that use it.
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        await _store.AddAsync(new Workspace { Name = "SDK", RootPath = @"c:\repo\sdk", TrackId = track.Id }, TestContext.Current.CancellationToken);
+
+        await _store.AddAsync(new Workspace { Name = "Installer", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
+        await _store.AddAsync(new Workspace { Name = "Suite", RootPath = @"C:\Repo\SDK", WorkspaceFile = @"c:\repo\suite.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
+
+        (await _store.GetAllAsync(TestContext.Current.CancellationToken)).Select(w => w.Name).ShouldBe(["Installer", "SDK", "Suite"]);
+        (await _store.FindByTargetAsync(@"c:\repo\sdk", null, TestContext.Current.CancellationToken)).ShouldNotBeNull().Name.ShouldBe("SDK");
+        (await _store.FindByTargetAsync(@"c:\repo\sdk", @"C:\Repo\Suite.code-workspace", TestContext.Current.CancellationToken)).ShouldNotBeNull().Name.ShouldBe("Suite");
+        (await _store.FindByTargetAsync(@"c:\repo\sdk", @"c:\repo\other.code-workspace", TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_same_code_workspace_file_cannot_be_registered_twice()
+    {
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        await _store.AddAsync(new Workspace { Name = "A", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
+
+        var ex = await Should.ThrowAsync<DuplicateWorkspaceException>(
+            () => _store.AddAsync(new Workspace { Name = "B", RootPath = @"c:\repo\other", WorkspaceFile = @"C:\Repo\Installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken));
+        ex.Message.ShouldContain("Installer.code-workspace");
+    }
+
+    [Fact]
+    public async Task FindByTarget_Update_and_Remove_work()
     {
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
         var workspace = new Workspace { Name = "A", RootPath = @"c:\repo\app", TrackId = track.Id };
         await _store.AddAsync(workspace, TestContext.Current.CancellationToken);
 
-        (await _store.FindByRootAsync(@"c:\repo\app", TestContext.Current.CancellationToken)).ShouldNotBeNull().Id.ShouldBe(workspace.Id);
+        (await _store.FindByTargetAsync(@"c:\repo\app", null, TestContext.Current.CancellationToken)).ShouldNotBeNull().Id.ShouldBe(workspace.Id);
 
         workspace.Name = "Renamed";
         workspace.Worktrees.Add(new Worktree { Path = @"c:\repo\app-2", Branch = "b2" });
@@ -124,7 +151,7 @@ public class WorkspaceStoreTests : IAsyncLifetime
 
         await Should.ThrowAsync<DuplicateWorkspaceException>(
             () => _store.AddAsync(new Workspace { Name = "B", RootPath = @"c:\repo\app\", TrackId = track.Id }, TestContext.Current.CancellationToken));
-        (await _store.FindByRootAsync(@"c:\repo\app", TestContext.Current.CancellationToken)).ShouldNotBeNull().Name.ShouldBe("A");
+        (await _store.FindByTargetAsync(@"c:\repo\app", null, TestContext.Current.CancellationToken)).ShouldNotBeNull().Name.ShouldBe("A");
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().RootPath.ShouldBe(@"C:\Repo\App", "the stored path keeps its casing");
     }
 }

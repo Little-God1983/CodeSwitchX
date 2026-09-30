@@ -17,11 +17,12 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
 
     /// <summary>
     /// Every workspace root, then every worktree: a folder registered as its own workspace must beat the same
-    /// folder found as another workspace's worktree.
+    /// folder found as another workspace's worktree. Folder workspaces come before <c>.code-workspace</c> ones for the
+    /// same reason: a shared repository registered on its own owns its chats, not every multi-root workspace that starts with it.
     /// </summary>
     public static IEnumerable<WorkspaceRoot> RootsOf(IEnumerable<Workspace> workspaces)
     {
-        var list = workspaces.ToList();
+        var list = workspaces.OrderBy(w => w.WorkspaceFile is { Length: > 0 }).ToList();
         foreach (var workspace in list)
         {
             yield return new WorkspaceRoot(workspace.Id, workspace.RootPath);

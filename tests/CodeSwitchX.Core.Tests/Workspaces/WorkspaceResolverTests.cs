@@ -73,6 +73,26 @@ public class WorkspaceResolverTests
     }
 
     [Fact]
+    public void A_folder_workspace_owns_its_folder_over_a_code_workspace_that_starts_with_it()
+    {
+        var sdk = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var installer = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        // Listed by name, the code-workspace comes first; the folder must still win whatever the order.
+        var workspaces = new[]
+        {
+            new Workspace { Id = installer, Name = "A installer", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = Guid.NewGuid() },
+            new Workspace { Id = sdk, Name = "SDK", RootPath = @"C:\Repo\SDK", TrackId = Guid.NewGuid() },
+        };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(sdk);
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces.Reverse()));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(sdk);
+    }
+
+    [Fact]
     public void RootsOf_includes_worktrees_as_child_roots()
     {
         var workspace = new Workspace

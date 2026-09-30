@@ -189,13 +189,29 @@ public class AddWorkspaceViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
         _vm.InputPath = _root;
         await _vm.ProbeCommand.ExecuteAsync(null);
-        _store.FindByRootAsync(_vm.RootPath, Arg.Any<CancellationToken>()).Returns(Task.FromResult<Workspace?>(new Workspace { Name = "Shop", RootPath = _vm.RootPath }));
+        _store.FindByTargetAsync(_vm.RootPath, null, Arg.Any<CancellationToken>()).Returns(Task.FromResult<Workspace?>(new Workspace { Name = "Shop", RootPath = _vm.RootPath }));
         _vm.NewTrackName = "Clients";
 
         await _vm.SaveCommand.ExecuteAsync(null);
 
         _vm.ErrorMessage.ShouldNotBeNull().ShouldContain("already registered");
         await _store.DidNotReceive().AddTrackAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_code_workspace_that_starts_with_a_registered_folder_is_added()
+    {
+        var file = Path.Combine(Path.GetDirectoryName(_root)!, "Installer.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "Shop" } ] }""");
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.InputPath = file;
+        await _vm.ProbeCommand.ExecuteAsync(null);
+        _store.FindByTargetAsync(_vm.RootPath, null, Arg.Any<CancellationToken>()).Returns(Task.FromResult<Workspace?>(new Workspace { Name = "Shop", RootPath = _vm.RootPath }));
+
+        await _vm.SaveCommand.ExecuteAsync(null);
+
+        _vm.ErrorMessage.ShouldBeNull();
+        await _store.Received(1).AddAsync(Arg.Is<Workspace>(w => w.Name == "Installer" && w.WorkspaceFile == file), Arg.Any<CancellationToken>());
     }
 
     [Fact]

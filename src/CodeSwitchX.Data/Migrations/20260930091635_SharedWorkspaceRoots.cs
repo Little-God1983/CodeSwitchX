@@ -1,0 +1,37 @@
+﻿using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace CodeSwitchX.Data.Migrations
+{
+    /// <inheritdoc />
+    public partial class SharedWorkspaceRoots : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_Workspaces_RootPath",
+                table: "Workspaces");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Workspaces_RootPath",
+                table: "Workspaces",
+                column: "RootPath");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_Workspaces_RootPath",
+                table: "Workspaces");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Workspaces_RootPath",
+                table: "Workspaces",
+                column: "RootPath",
+                unique: true);
+        }
+    }
+}
