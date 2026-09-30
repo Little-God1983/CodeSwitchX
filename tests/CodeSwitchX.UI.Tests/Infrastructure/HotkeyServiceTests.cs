@@ -27,6 +27,31 @@ public class HotkeyServiceTests
         }
     }
 
+    // AltGr reaches RegisterHotKey as Ctrl+Alt, so a Ctrl+Alt hotkey takes AltGr+that key away from every application.
+    // These keys type a character with AltGr on common European layouts (German ² ³ { [ ] } \ @ € µ ~ |, French, Spanish,
+    // Italian, Polish ą ć ę ł ń ó ś ź ż): a Ctrl+Alt hotkey must not use them. Space is allowed: AltGr+Space types
+    // nothing on those layouts.
+    private static readonly uint[] AltGrCharacterKeys =
+    [
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, // digits
+        0x41, 0x43, 0x45, 0x4C, 0x4D, 0x4E, 0x4F, 0x51, 0x53, 0x58, 0x5A, // A C E L M N O Q S X Z
+        0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE, 0xE2, // OEM punctuation, and < > | on the 102nd key
+    ];
+
+    [Fact]
+    public void Ctrl_alt_hotkeys_only_use_keys_that_type_no_altgr_character()
+    {
+        var ctrlAlt = HotkeyService.Bindings
+            .Where(b => (b.Modifiers & ~HotkeyModifiers.NoRepeat) == (HotkeyModifiers.Control | HotkeyModifiers.Alt))
+            .ToList();
+
+        ctrlAlt.Select(b => b.Keys).ShouldBe(["Ctrl+Alt+Y", "Ctrl+Alt+Space", "Ctrl+Alt+J"], ignoreOrder: true);
+        foreach (var binding in ctrlAlt)
+        {
+            AltGrCharacterKeys.ShouldNotContain(binding.VirtualKey, binding.Keys + " would swallow an AltGr character");
+        }
+    }
+
     [Fact]
     public void Toggle_hotkey_stays_ctrl_alt_y()
     {
@@ -36,16 +61,17 @@ public class HotkeyServiceTests
         toggle.Label.ShouldBe("Ctrl+Alt+Y");
     }
 
+    // Ctrl+Shift+Space is VS Code's Trigger Parameter Hints, in the very window CodeSwitchX docks.
     [Fact]
-    public void Push_to_talk_is_ctrl_shift_space_without_autorepeat()
+    public void Push_to_talk_is_ctrl_alt_space_without_autorepeat()
     {
         var talk = HotkeyService.Bindings.Single(b => b.Id == 21);
 
-        talk.Modifiers.ShouldBe(HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat,
+        talk.Modifiers.ShouldBe(HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat,
             "an autorepeat must not press the mic again while the keys are held");
         talk.VirtualKey.ShouldBe(0x20u);
         talk.Label.ShouldBe("Push to talk");
-        talk.Keys.ShouldBe("Ctrl+Shift+Space");
+        talk.Keys.ShouldBe("Ctrl+Alt+Space");
     }
 
     // The chord is defined once: changing it changes the registration and every text that names it.
@@ -80,7 +106,7 @@ public class HotkeyServiceTests
         var talk = HotkeyService.Bindings.Single(b => b.Id == 21);
         var fold = HotkeyService.Bindings.Single(b => b.Id == 22);
 
-        HotkeyService.RavenFailureNote(talk).ShouldBe("Push to talk (Ctrl+Shift+Space) is taken by another app. Use the mic button instead.");
+        HotkeyService.RavenFailureNote(talk).ShouldBe("Push to talk (Ctrl+Alt+Space) is taken by another app. Use the mic button instead.");
         HotkeyService.RavenFailureNote(fold).ShouldBe("Collapse or expand Raven (Ctrl+Alt+J) is taken by another app. Use the arrow button instead.");
         HotkeyService.RavenFailureNote(HotkeyService.Bindings.Single(b => b.Label == "Ctrl+Alt+Y")).ShouldBeNull("not Raven's to explain");
     }
@@ -173,6 +199,33 @@ public class HotkeyServiceTests
         });
 
         raven.Log.ShouldNotContain(l => l.Text == HotkeyService.UnseenReleaseNote);
+        harness.Recorder.Received(1).Stop();
+    }
+
+    // The chord is held while Space, Ctrl and Alt are all down: letting go of any of them ends it. Shift is not part of
+    // it any more and is not watched.
+    [Theory]
+    [InlineData(0x11u)] // Ctrl
+    [InlineData(0x12u)] // Alt
+    [InlineData(0x20u)] // Space
+    public async Task Letting_go_of_any_key_of_the_chord_ends_a_held_push_to_talk(uint letGo)
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+        var released = false;
+
+        await WithHotkeysAsync(harness, vk => !(released && vk == letGo) && vk != 0x10, elevated: false, TimeSpan.Zero, press =>
+        {
+            press();
+            PumpFor(TimeSpan.FromMilliseconds(150));
+            raven.State.ShouldBe(RavenState.Listening, "Ctrl, Alt and Space are held; Shift reading up does not matter");
+
+            harness.Time.Advance(TimeSpan.FromSeconds(1));
+            released = true;
+            PumpUntil(() => raven.State == RavenState.Idle);
+        });
+
         harness.Recorder.Received(1).Stop();
     }
 

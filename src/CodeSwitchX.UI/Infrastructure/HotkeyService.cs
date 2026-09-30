@@ -10,7 +10,7 @@ namespace CodeSwitchX.UI.Infrastructure;
 
 public sealed record HotkeyBinding(int Id, HotkeyModifiers Modifiers, uint VirtualKey, string Label)
 {
-    /// <summary>The chord as the user presses it, such as "Ctrl+Shift+Space".</summary>
+    /// <summary>The chord as the user presses it, such as "Ctrl+Alt+Space".</summary>
     public string Keys
     {
         get
@@ -47,7 +47,9 @@ public sealed record HotkeyBinding(int Id, HotkeyModifiers Modifiers, uint Virtu
 /// AltGr is reported to RegisterHotKey as Ctrl+Alt, so a bare Ctrl+Alt+digit hotkey would swallow AltGr+2/3/7/8/9/0
 /// (² ³ { [ ] }) in every application on German and many other European layouts while CodeSwitchX runs.
 /// <see cref="PushToTalk"/> is Raven's push-to-talk and Ctrl+Alt+J folds its panel; neither brings the shell up, so
-/// talking works while VS Code keeps the focus.
+/// talking works while VS Code keeps the focus. A Ctrl+Alt hotkey is fine where AltGr+that key types nothing: Space
+/// (AltGr+Space types no character on German and the other common European layouts), J and Y. Push-to-talk is not
+/// Ctrl+Shift+Space, which is VS Code's Trigger Parameter Hints in the very window CodeSwitchX docks.
 /// </summary>
 public sealed class HotkeyService
 {
@@ -59,7 +61,11 @@ public sealed class HotkeyService
     private const uint Vk1 = 0x31;
     private const uint VkSpace = 0x20;
     private const uint VkJ = 0x4A;
+    private const uint VkShift = 0x10;
     private const uint VkControl = 0x11;
+    private const uint VkMenu = 0x12;
+    private const uint VkLeftWin = 0x5B;
+    private const uint VkRightWin = 0x5C;
 
     /// <summary>How often a held push-to-talk chord is checked for its release, which no window message reports.</summary>
     private static readonly TimeSpan ReleasePoll = TimeSpan.FromMilliseconds(30);
@@ -78,7 +84,7 @@ public sealed class HotkeyService
     /// limit and counts on no repeat arriving after that).
     /// </summary>
     public static HotkeyBinding PushToTalk { get; } =
-        new(PushToTalkId, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkSpace, "Push to talk");
+        new(PushToTalkId, HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat, VkSpace, "Push to talk");
 
     public static readonly string UnseenReleaseNote =
         $"Push to talk can't see the key being released while an admin window is in front. Press {PushToTalk.Keys} again to stop.";
@@ -252,8 +258,9 @@ public sealed class HotkeyService
     }
 
     /// <summary>
-    /// A hotkey reports its press only. The chord counts as released once its key (Space) or Ctrl is up; a quick tap is
-    /// released within a poll or two, which the panel's gesture reads as a tap that latches the mic on.
+    /// A hotkey reports its press only. The chord counts as released once its key (Space) or any of its modifiers (Ctrl,
+    /// Alt) is up; a quick tap is released within a poll or two, which the panel's gesture reads as a tap that latches
+    /// the mic on.
     /// </summary>
     private void WatchForTalkRelease()
     {
@@ -279,8 +286,16 @@ public sealed class HotkeyService
         _talkRelease.Start();
     }
 
-    private bool IsPushToTalkHeld() =>
-        _isKeyDown(PushToTalk.VirtualKey) && (!PushToTalk.Modifiers.HasFlag(HotkeyModifiers.Control) || _isKeyDown(VkControl));
+    /// <summary>The binding's key and every one of its modifiers are down; modifiers it does not use are not watched.</summary>
+    private bool IsPushToTalkHeld()
+    {
+        var modifiers = PushToTalk.Modifiers;
+        return _isKeyDown(PushToTalk.VirtualKey)
+            && (!modifiers.HasFlag(HotkeyModifiers.Control) || _isKeyDown(VkControl))
+            && (!modifiers.HasFlag(HotkeyModifiers.Alt) || _isKeyDown(VkMenu))
+            && (!modifiers.HasFlag(HotkeyModifiers.Shift) || _isKeyDown(VkShift))
+            && (!modifiers.HasFlag(HotkeyModifiers.Win) || _isKeyDown(VkLeftWin) || _isKeyDown(VkRightWin));
+    }
 
     /// <summary>
     /// A global hotkey is pressed from anywhere, so a hotkey that switches something brings the shell up: a minimised

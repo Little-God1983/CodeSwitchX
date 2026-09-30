@@ -96,7 +96,7 @@ public sealed class RavenPanelViewModelTests
         last.Kind.ShouldBe(RavenLogKind.You);
         last.Text.ShouldBe("Hallo Raven, open Diffusion Nexus");
         vm.State.ShouldBe(RavenState.Idle);
-        vm.Caption.ShouldBe("Hold Ctrl+Shift+Space or the mic button to talk.");
+        vm.Caption.ShouldBe("Hold Ctrl+Alt+Space or the mic button to talk.");
         vm.Level.ShouldBe(0);
     }
 

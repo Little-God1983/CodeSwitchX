@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a collapsible "Raven" column on the left of the CodeSwitchX main window where I hold a mic button (or Ctrl+Shift+Space), speak German or English, and see my words in a log (issue #69).
+**Goal:** Add a collapsible "Raven" column on the left of the CodeSwitchX main window where I hold a mic button (or Ctrl+Alt+Space), speak German or English, and see my words in a log (issue #69).
 
 **Architecture:** A new class library `CodeSwitchX.Voice` holds everything that is not WPF: audio math, microphone capture on NAudio WASAPI, and Whisper dictation ported from ContentAutomatorX. The UI project gets a `Raven` folder with `RavenPanelViewModel`, `RavenPanelView` and an animated `RavenOrb`. The panel sits in a new left column of `MainWindow`. Its open/collapsed state and chosen microphone are persisted through `SettingsViewModel` in the same way as the Yard tile size (#65). Global hotkeys go through the existing `HotkeyService`.
 
@@ -19,7 +19,7 @@
 - Whisper runs with language `"auto"`, because the user mixes German and English. ContentAutomatorX runs with `"en"`; do not copy that default.
 - Model: `LargeV3Turbo`, file `ggml-large-v3-turbo.bin`, stored in `%LOCALAPPDATA%\CodeSwitchX\models` (`AppPaths.ModelsDirectory`).
 - Clips shorter than 500 ms are dropped, because Whisper makes up words on silence. Recording stops by itself at 120 s.
-- Hotkeys: Ctrl+Shift+Space is push-to-talk: hold to talk, or a quick tap latches it on. Ctrl+Alt+J collapses/expands the panel. Both are global, registered through `HotkeyService`.
+- Hotkeys: Ctrl+Alt+Space is push-to-talk (not Ctrl+Shift+Space, which is VS Code's Trigger Parameter Hints): hold to talk, or a quick tap latches it on. Ctrl+Alt+J collapses/expands the panel. Both are global, registered through `HotkeyService`.
 - Panel widths: 320 px open and 58 px collapsed. The collapsed rail keeps a mini orb and the mic button.
 - Colors, following the existing views: mic live / recording `#EF4444`, working/transcribing amber `#F59E0B`, voice accent (orb) `#62D0E8`, surfaces `#111827` / `#1F2937`, text `#D1D5DB` / `#9CA3AF`.
 - The user-facing name is "Raven". Code and UI copy never say "Jarvis".
@@ -33,7 +33,7 @@
 1. **The selected microphone is unplugged while I hold the button.** The recording stops and the state returns to Idle. The log explains what happened and the picker falls back to the default device. Nothing crashes and nothing hangs in Listening. Covered in Task 4 (`A_microphone_lost_while_recording_returns_to_idle_and_says_so`).
 2. **Windows microphone privacy blocks desktop apps.** Pressing the mic shows one warning naming Settings → Privacy & security → Microphone. Covered in Task 3 (HResult classification) and Task 4 (`A_denied_microphone_explains_the_privacy_setting`).
 3. **The speech model is not downloaded yet.** The first press still records. Afterwards the log shows download progress, then the transcript. A failed download leaves a warning and the next press tries again. Covered in Task 4 (`A_missing_model_is_downloaded_then_the_clip_is_transcribed` and `A_failed_download_is_reported_and_retried_next_time`).
-4. **Ctrl+Shift+Space is already taken by another app.** The app starts normally, the log says the hotkey is unavailable, and the mic button still works. Covered in Task 5 (`HotkeyService` reports failed registrations; the shell writes them to the Raven log).
+4. **Ctrl+Alt+Space is already taken by another app.** The app starts normally, the log says the hotkey is unavailable, and the mic button still works. Covered in Task 5 (`HotkeyService` reports failed registrations; the shell writes them to the Raven log).
 5. **A tap vs. a hold.** A press shorter than 350 ms latches recording on, and the next press stops it. A longer hold stops on release. Autorepeat from a held key must not restart anything. Covered in Task 4 (`PushToTalkGesture` tests).
 
 ---
@@ -615,7 +615,7 @@ Behavior. Every rule below needs a test:
     - A non-empty `Text` → add a `You` entry with the trimmed text.
     - Empty text → nothing.
     - `DictationModelLoadException` → Warning "The speech model could not be loaded: {message}".
-  - Always end in `State = Idle`, `Level = 0` and `Caption` back to the idle hint "Hold Ctrl+Shift+Space or the mic button to talk."
+  - Always end in `State = Idle`, `Level = 0` and `Caption` back to the idle hint "Hold Ctrl+Alt+Space or the mic button to talk."
 - **Capture failure.** `recorder.Failed` → through `dispatcher.Post`: the Warning for its kind, `recorder.Stop()` (discard the clip), `State = Idle`, `gesture.Reset()`, then `RefreshMicrophones()`.
 - **Warning texts by kind.**
   - Denied: "Windows is blocking microphone access. Turn on Settings → Privacy & security → Microphone → Let desktop apps access your microphone."
