@@ -40,7 +40,7 @@ public static class HotkeyInterop
     /// <summary>
     /// Whether the foreground window belongs to an elevated process while this one is not: Windows then hides the
     /// keyboard from GetAsyncKeyState here (every key reads as up). A token that cannot even be opened for a query is
-    /// taken as elevated, which is what denies it; any other failure as not elevated.
+    /// taken as elevated, which is what denies it; any other failure as not elevated (see <see cref="HidesKeysFromUs"/>).
     /// </summary>
     public static unsafe bool IsForegroundElevated()
     {
@@ -57,8 +57,16 @@ public static class HotkeyInterop
             return false;
         }
 
-        return ProcessElevation(pid) != false && ProcessElevation((uint)Environment.ProcessId) != true;
+        return HidesKeysFromUs(ProcessElevation(pid), ProcessElevation((uint)Environment.ProcessId));
     }
+
+    /// <summary>
+    /// The decision on the two token reads: true, false, or null when the elevation could not be read for a reason other
+    /// than access (an access-denied read is already true). Only a known elevated foreground counts, and only while this
+    /// process is not elevated itself; an unknown foreground uses the release poll like any other window.
+    /// </summary>
+    internal static bool HidesKeysFromUs(bool? foregroundElevated, bool? selfElevated) =>
+        foregroundElevated == true && selfElevated != true;
 
     private const int ErrorAccessDenied = 5;
 

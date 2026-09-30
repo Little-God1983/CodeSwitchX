@@ -98,7 +98,6 @@
                 <Setter Property="Foreground" Value="#F59E0B" />
                 <Setter TargetName="Disc" Property="Fill" Value="#26F59E0B" />
                 <Setter TargetName="Disc" Property="Stroke" Value="#F59E0B" />
-                <Setter Property="Cursor" Value="Wait" />
               </DataTrigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>

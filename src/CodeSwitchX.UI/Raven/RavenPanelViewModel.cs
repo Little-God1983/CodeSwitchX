@@ -475,8 +475,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             await previous;
             var clip = await stopping;
-            if (clip is null || clip.Length < MinimumClip)
+            if (clip is null)
             {
+                return; // the start failed, and has said why
+            }
+
+            if (clip.Length < MinimumClip)
+            {
+                // A tap read as a hold (a late or lost key release) ends here as well: never silently.
+                AddEntry(RavenLogKind.Note, "That was too short. Hold the keys or the mic button while you talk.");
                 return;
             }
 

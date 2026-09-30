@@ -117,14 +117,15 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task A_clip_shorter_than_half_a_second_is_dropped()
+    public async Task A_clip_shorter_than_half_a_second_is_dropped_and_says_so()
     {
         _recorder.Stop().Returns(new RecordedClip(new float[100], TimeSpan.FromMilliseconds(499)));
         var vm = NewVm();
 
         await HoldAsync(vm);
 
-        vm.Log.ShouldBeEmpty();
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
+        vm.Log.Single().Text.ShouldBe("That was too short. Hold the keys or the mic button while you talk.");
         vm.State.ShouldBe(RavenState.Idle);
         await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
