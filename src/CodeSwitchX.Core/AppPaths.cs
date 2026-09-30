@@ -21,6 +21,12 @@ public sealed class AppPaths
     public string LogsDirectory => Path.Combine(Root, "logs");
     public string ModelsDirectory => Path.Combine(Root, "models");
 
+    /// <summary>Where Claude Code finds CodeSwitchX's MCP server: its address and the token. Readable by the current user only.</summary>
+    public string McpConfigFile => Path.Combine(Root, "mcp.json");
+
+    /// <summary>The working folder of Raven's brain: no repository, so it has no code to look at.</summary>
+    public string RavenDirectory => Path.Combine(Root, "raven");
+
     public void EnsureCreated()
     {
         Directory.CreateDirectory(Root);
