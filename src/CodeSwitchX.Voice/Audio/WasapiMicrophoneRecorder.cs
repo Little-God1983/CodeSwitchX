@@ -12,7 +12,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
     private readonly MMDeviceEnumerator _enumerator = new();
     private Session? _session;
 
-    public event EventHandler<float>? BlockCaptured;
+    public event EventHandler<CapturedBlock>? BlockCaptured;
 
     public event EventHandler<MicrophoneException>? Failed;
 
@@ -114,7 +114,8 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
                 count = _samples.Count;
             }
 
-            owner.BlockCaptured?.Invoke(owner, AudioMath.Rms(block));
+            var duration = TimeSpan.FromSeconds((double)block.Length / capture.WaveFormat.SampleRate);
+            owner.BlockCaptured?.Invoke(owner, new CapturedBlock(AudioMath.Rms(block), duration));
 
             if (count >= (long)MaxSeconds * capture.WaveFormat.SampleRate
                 && Interlocked.Exchange(ref _autoStopped, 1) == 0)

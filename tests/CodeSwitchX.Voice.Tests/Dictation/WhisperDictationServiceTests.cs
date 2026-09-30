@@ -28,6 +28,43 @@ public sealed class WhisperDictationServiceTests
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
     }
 
+    /// <summary>A damaged model whose path is read only once the test lets it: the load, and with it the gate, is held
+    /// for as long as the test wants, the way a long inference holds it.</summary>
+    private sealed class BlockingStore(string path) : IWhisperModelStore, IDisposable
+    {
+        public ManualResetEventSlim Entered { get; } = new();
+        public ManualResetEventSlim Proceed { get; } = new();
+        public int LoadThread { get; private set; } = -1;
+
+        public WhisperModel Model => WhisperModel.BaseEnglish;
+
+        public string ModelPath
+        {
+            get
+            {
+                if (!Entered.IsSet)
+                {
+                    LoadThread = Environment.CurrentManagedThreadId;
+                    Entered.Set();
+                    Proceed.Wait(TimeSpan.FromSeconds(10));
+                }
+
+                return path;
+            }
+        }
+
+        public bool IsPresent => true;
+        public long? SizeBytes => null;
+        public string? LoadedRuntime => null;
+        public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+
+        public void Dispose()
+        {
+            Entered.Dispose();
+            Proceed.Dispose();
+        }
+    }
+
     private static WhisperDictationService Service(TimeSpan? minimum = null) =>
         new(new MissingStore(),
             Options.Create(new DictationOptions { ModelFolder = @"C:\nowhere", MinimumClip = minimum ?? TimeSpan.FromMilliseconds(500) }),
@@ -135,5 +172,128 @@ public sealed class WhisperDictationServiceTests
         {
             Cleanup(folder);
         }
+    }
+
+    // The caller is the UI thread. Loading a 1.6 GB model on it froze the window for seconds.
+    [Fact]
+    public async Task The_model_is_loaded_off_the_callers_thread_and_the_call_returns_at_once()
+    {
+        var folder = await BrokenModelFolder("csx-offthread-");
+        using var store = new BlockingStore(Path.Combine(folder, "ggml-base.en.bin"));
+        try
+        {
+            using var service = new WhisperDictationService(store,
+                Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance);
+
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+                TestContext.Current.CancellationToken);
+
+            store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
+            transcription.IsCompleted.ShouldBeFalse();
+            store.LoadThread.ShouldNotBe(Environment.CurrentManagedThreadId);
+            store.Proceed.Set();
+            await Should.ThrowAsync<DictationModelLoadException>(() => transcription);
+        }
+        finally
+        {
+            store.Proceed.Set();
+            Cleanup(folder);
+        }
+    }
+
+    // The app exits right after a release often enough: freeing the model under the inference that is still running
+    // is a native use-after-free.
+    [Fact]
+    public async Task Dispose_waits_for_a_running_transcription_before_freeing_the_model()
+    {
+        var folder = await BrokenModelFolder("csx-dispose-");
+        using var store = new BlockingStore(Path.Combine(folder, "ggml-base.en.bin"));
+        try
+        {
+            var service = new WhisperDictationService(store,
+                Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance);
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+                TestContext.Current.CancellationToken);
+            store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
+
+            var dispose = Task.Run(service.Dispose, TestContext.Current.CancellationToken);
+
+            (await Task.WhenAny(dispose, Task.Delay(300, TestContext.Current.CancellationToken))).ShouldNotBe(dispose,
+                "Dispose returned while the transcription still held the model");
+            store.Proceed.Set();
+            await Should.ThrowAsync<DictationModelLoadException>(() => transcription);
+            await dispose.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            store.Proceed.Set();
+            Cleanup(folder);
+        }
+    }
+
+    // A stuck GPU must not hang the app's exit.
+    [Fact]
+    public async Task Dispose_gives_up_waiting_after_its_timeout()
+    {
+        var folder = await BrokenModelFolder("csx-dispose-timeout-");
+        using var store = new BlockingStore(Path.Combine(folder, "ggml-base.en.bin"));
+        try
+        {
+            var service = new WhisperDictationService(store,
+                Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance)
+            {
+                DisposeTimeout = TimeSpan.FromMilliseconds(100),
+            };
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+                TestContext.Current.CancellationToken);
+            store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
+
+            await Task.Run(service.Dispose, TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+            transcription.IsCompleted.ShouldBeFalse("the transcription is still running");
+            store.Proceed.Set();
+            await Should.ThrowAsync<DictationModelLoadException>(() => transcription);
+        }
+        finally
+        {
+            store.Proceed.Set();
+            Cleanup(folder);
+        }
+    }
+
+    [Fact]
+    public async Task A_transcription_after_dispose_is_refused()
+    {
+        var folder = await BrokenModelFolder("csx-disposed-");
+        try
+        {
+            var service = new WhisperDictationService(new PresentStore(Path.Combine(folder, "ggml-base.en.bin")),
+                Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance);
+            service.Dispose();
+
+            await Should.ThrowAsync<ObjectDisposedException>(() =>
+                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Cleanup(folder);
+        }
+    }
+
+    // The warm-up decodes about a second of real speech: on silence Whisper keeps retrying its decoding for seconds.
+    [Fact]
+    public void The_warm_up_sample_is_about_a_second_of_speech_loud_enough_for_the_speech_gate()
+    {
+        var samples = WarmUpSpeech.Load();
+
+        var seconds = (double)samples.Length / AudioMath.TargetRate;
+        seconds.ShouldBeInRange(0.6, 2.0);
+        var gate = new SpeechGate();
+        for (var i = 0; i + 160 <= samples.Length; i += 160)
+        {
+            gate.Step(AudioMath.Rms(samples.AsSpan(i, 160)), TimeSpan.FromMilliseconds(10));
+        }
+
+        gate.HeardSpeech.ShouldBeTrue();
     }
 }

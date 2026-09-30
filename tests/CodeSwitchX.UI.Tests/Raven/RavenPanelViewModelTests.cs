@@ -50,7 +50,8 @@ public sealed class RavenPanelViewModelTests
         await vm.ReleaseMicAsync();
     }
 
-    private void Block(float rms) => _recorder.BlockCaptured += Raise.Event<EventHandler<float>>(_recorder, rms);
+    /// <summary>One block the way WASAPI hands it over on the RØDE Connect input: 10 ms.</summary>
+    private void Block(float rms) => _recorder.BlockCaptured += Raise.Event<EventHandler<CapturedBlock>>(_recorder, new CapturedBlock(rms, TimeSpan.FromMilliseconds(10)));
 
     [Fact]
     public async Task A_hold_records_and_the_transcript_appears_as_my_turn()
@@ -206,12 +207,30 @@ public sealed class RavenPanelViewModelTests
         var vm = NewVm();
         vm.PressMic();
 
-        for (var i = 0; i < 60; i++)
+        for (var i = 0; i < 300; i++) // 3 s
         {
             Block(0f);
         }
 
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log.Single().Text.ShouldBe("No sound from Headset. Check that it isn't muted.");
+    }
+
+    // The recorder reports how long each block is. Assuming 50 ms blocks, the ten-millisecond ones of the RØDE input made
+    // the two seconds of grace pass in 0.4 s.
+    [Fact]
+    public void The_silent_microphone_warning_counts_the_real_duration_of_the_blocks()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+
+        for (var i = 0; i < 199; i++)
+        {
+            Block(0f);
+        }
+
+        vm.Log.ShouldBeEmpty("1.99 s of nothing is still inside the grace period");
+        Block(0f);
         vm.Log.Single().Text.ShouldBe("No sound from Headset. Check that it isn't muted.");
     }
 
@@ -423,7 +442,7 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
         vm.PressMic();
-        for (var i = 0; i < 60; i++)
+        for (var i = 0; i < 300; i++) // 3 s
         {
             Block(0f);
         }
@@ -431,7 +450,7 @@ public sealed class RavenPanelViewModelTests
         _time.Advance(Hold);
         await vm.ReleaseMicAsync();
         vm.PressMic();
-        for (var i = 0; i < 60; i++)
+        for (var i = 0; i < 300; i++) // 3 s
         {
             Block(0f);
         }

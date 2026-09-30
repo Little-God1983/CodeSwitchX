@@ -8,14 +8,24 @@ namespace CodeSwitchX.Voice.Dictation;
 
 /// <summary>One shared WhisperFactory (it holds the loaded model; the library documents it as
 /// reusable across processors) and one processor per clip. Transcriptions are serialised: the
-/// user dictates one clip at a time and two at once would only fight for the GPU.</summary>
+/// user dictates one clip at a time and two at once would only fight for the GPU.
+///
+/// <para>Everything Whisper does runs on the thread pool, never on the caller's thread: loading
+/// the model takes seconds, and the caller is usually the UI thread.</para></summary>
 public sealed class WhisperDictationService(
     IWhisperModelStore store,
     IOptions<DictationOptions> options,
     ILogger<WhisperDictationService> logger) : IDictationService, IDisposable
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Lock _warmUpLock = new();
     private WhisperFactory? _factory;
+    private Task<bool>? _warmUp;
+    private bool _disposed;
+
+    /// <summary>How long <see cref="Dispose"/> waits for a running transcription before it gives up
+    /// on freeing the model. Only tests shorten it.</summary>
+    internal TimeSpan DisposeTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public async Task<DictationResult> TranscribeAsync(ReadOnlyMemory<float> samples,
         DictationVocabulary vocabulary, bool live, CancellationToken ct)
@@ -31,11 +41,22 @@ public sealed class WhisperDictationService(
             throw new DictationModelMissingException(store.ModelPath);
         }
 
-        await _gate.WaitAsync(ct);
+        // Task.Run rather than ConfigureAwait alone: a free gate completes WaitAsync synchronously,
+        // and everything after it, the model load included, would then run on the caller's thread.
+        return await Task.Run(() => TranscribeOnPoolAsync(samples, vocabulary, live, length, ct), ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<DictationResult> TranscribeOnPoolAsync(ReadOnlyMemory<float> samples,
+        DictationVocabulary vocabulary, bool live, TimeSpan length, CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         var clock = Stopwatch.StartNew();
         var loadedTheModel = _factory is null;
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             // FromPath and CreateBuilder are both in here on purpose: Whisper.net loads the model
             // lazily, so FromPath happily returns for a file it will later refuse and the real
             // failure surfaces in CreateBuilder, with _factory already cached, which would make
@@ -66,9 +87,10 @@ public sealed class WhisperDictationService(
             }
 
             var parts = new List<string>();
-            await using (var processor = builder.Build())
+            var processor = builder.Build();
+            await using (processor.ConfigureAwait(false))
             {
-                await foreach (var segment in processor.ProcessAsync(samples, ct))
+                await foreach (var segment in processor.ProcessAsync(samples, ct).ConfigureAwait(false))
                 {
                     var text = segment.Text.Trim();
                     if (text.Length > 0)
@@ -110,35 +132,86 @@ public sealed class WhisperDictationService(
         }
     }
 
+    /// <summary>Warms up once per process. A caller arriving while the warm-up runs waits for that
+    /// same run rather than starting a second one. A warm-up that found no model, or failed, is
+    /// tried again by the next caller: the model may have been downloaded since.</summary>
     public async Task WarmUpAsync(CancellationToken ct)
+    {
+        Task<bool> warmUp;
+        lock (_warmUpLock)
+        {
+            if (_warmUp is null or { IsCompletedSuccessfully: true, Result: false })
+            {
+                _warmUp = Task.Run(() => WarmUpOnPoolAsync(ct), CancellationToken.None);
+            }
+
+            warmUp = _warmUp;
+        }
+
+        await warmUp.ConfigureAwait(false);
+    }
+
+    /// <summary>True when the model is loaded and has decoded speech once.</summary>
+    private async Task<bool> WarmUpOnPoolAsync(CancellationToken ct)
     {
         try
         {
             if (!store.IsPresent)
             {
-                return;
+                return false;
             }
 
-            // One second of silence, only to force the work the first real clip would otherwise
-            // do: the model onto the GPU, and the backend's shaders compiled and cached. Long
-            // enough to clear MinimumClip, whose default is half that; a caller that raised it past
-            // a second just gets a warm-up that returns early, which costs nothing but the load.
+            if (_factory is not null)
+            {
+                return true; // a real clip got here first and paid for the load
+            }
+
+            // Real speech, not silence: on a clip with nobody talking Whisper's decoding keeps
+            // retrying and took anywhere from 6 to 23 s (2026-09-30, RTX on Vulkan), where this
+            // one-second sample takes 3 s and leaves the next real clip at about 0.2 s.
             var sw = Stopwatch.StartNew();
-            await TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, ct);
+            await TranscribeAsync(WarmUpSpeech.Load(), DictationVocabulary.Empty, live: false, ct)
+                .ConfigureAwait(false);
             logger.LogInformation("Dictation warm-up: {Model} ready on {Runtime} in {Ms} ms",
                 store.Model, store.LoadedRuntime ?? "(unknown)", sw.ElapsedMilliseconds);
+            return true;
         }
         catch (Exception ex)
         {
             // Deliberately swallowed, including cancellation. See IDictationService.WarmUpAsync:
             // nothing awaits the warm-up, and a model that will not load must not fail the caller.
             logger.LogWarning(ex, "Dictation warm-up failed; the first clip will pay the load instead");
+            return false;
         }
     }
 
+    /// <summary>Frees the model, but never under a running inference: that is a native
+    /// use-after-free, and the app exits right after a release often enough to hit it. A
+    /// transcription still running after <see cref="DisposeTimeout"/> keeps the model, and the
+    /// process exit takes it instead: a stuck GPU must not hang the exit.</summary>
     public void Dispose()
     {
-        _factory?.Dispose();
-        _gate.Dispose();
+        if (!_gate.Wait(DisposeTimeout))
+        {
+            logger.LogWarning("A transcription was still running after {Seconds} s; the speech model is left to the process exit",
+                DisposeTimeout.TotalSeconds);
+            return;
+        }
+
+        try
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _factory?.Dispose();
+                _factory = null;
+            }
+        }
+        finally
+        {
+            // The gate itself stays: a transcription queued behind this one takes it next and
+            // fails with ObjectDisposedException rather than waiting forever on a disposed gate.
+            _gate.Release();
+        }
     }
 }

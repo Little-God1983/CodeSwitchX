@@ -16,7 +16,8 @@ public interface IDictationService
 
     /// <summary>Loads the model and runs one throwaway clip through it, so that the first real
     /// dictation does not pay for either. Reading a large model off disk and onto the GPU takes
-    /// seconds (2.7 s for large-v3-turbo with a warm file cache, more from cold).
+    /// seconds (2.7 s for large-v3-turbo with a warm file cache, more from cold). Runs once per
+    /// process: once it has succeeded, a call returns at once. Never runs on the caller's thread.
     ///
     /// <para>Never throws: nothing awaits the result, and a model that will not load is not a
     /// reason to fail. The failure still reaches whoever actually dictates, from

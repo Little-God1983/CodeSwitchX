@@ -3,6 +3,10 @@
     <InternalsVisibleTo Include="CodeSwitchX.Voice.Tests" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The sample the warm-up decodes; see WarmUpSpeech.cs. -->
+    <EmbeddedResource Include="Dictation\WarmUpSpeech.pcm" LogicalName="CodeSwitchX.Voice.WarmUpSpeech.pcm" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />

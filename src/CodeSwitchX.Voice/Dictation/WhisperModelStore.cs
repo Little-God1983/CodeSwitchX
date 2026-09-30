@@ -52,15 +52,20 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
         var expected = (double)ApproximateBytes(Model);
         try
         {
-            using var source = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(Info(Model).Ggml, cancellationToken: ct);
-            await using (var target = File.Create(partial))
+            using var source = await WhisperGgmlDownloader.Default.GetGgmlModelAsync(Info(Model).Ggml, cancellationToken: ct)
+                .ConfigureAwait(false);
+            // ConfigureAwait(false) throughout: 1.6 GB in 80 KB reads is some twenty thousand
+            // continuations, none of which needs the caller's thread. Progress is marshalled by
+            // whoever reports it.
+            var target = File.Create(partial);
+            await using (target.ConfigureAwait(false))
             {
                 var buffer = new byte[81_920];
                 long read = 0;
                 int n;
-                while ((n = await source.ReadAsync(buffer, ct)) > 0)
+                while ((n = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
                 {
-                    await target.WriteAsync(buffer.AsMemory(0, n), ct);
+                    await target.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
                     read += n;
                     progress?.Report(Math.Min(read / expected, 0.99));
                 }

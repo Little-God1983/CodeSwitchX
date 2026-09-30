@@ -17,7 +17,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public static readonly TimeSpan MaximumRecording = TimeSpan.FromSeconds(120);
 
     private static readonly TimeSpan MinimumClip = TimeSpan.FromMilliseconds(500);
-    private static readonly TimeSpan BlockDuration = TimeSpan.FromMilliseconds(50);
 
     private readonly IMicrophoneCatalog _catalog;
     private readonly IMicrophoneRecorder _recorder;
@@ -51,7 +50,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _logger = logger;
         _gesture = new PushToTalkGesture(time);
 
-        _recorder.BlockCaptured += (_, rms) => _dispatcher.Post(() => OnBlock(rms));
+        _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
         _catalog.DevicesChanged += (_, _) => _dispatcher.Post(RefreshMicrophones);
     }
@@ -225,15 +224,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _ = StopAsync();
     }
 
-    private void OnBlock(float rms)
+    private void OnBlock(CapturedBlock block)
     {
         if (State != RavenState.Listening)
         {
             return;
         }
 
-        Level = AudioMath.LevelOf(rms);
-        if (_silence.Step(rms, BlockDuration) == SignalEvent.Silent && !_silentWarned)
+        Level = AudioMath.LevelOf(block.Rms);
+        if (_silence.Step(block.Rms, block.Duration) == SignalEvent.Silent && !_silentWarned)
         {
             _silentWarned = true;
             AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");

@@ -27,6 +27,32 @@ public sealed class SpokenAudioTranscriptionTests
         result.Text.ShouldContain("chat", Case.Insensitive);
     }
 
+    // Needs the model too. Measured 2026-09-30 on Vulkan: the warm-up about 3 s, a second call 0 ms, the first clip after
+    // it about 0.2 s. The warm-up once decoded one second of silence, which took 6 to 23 s and ran again on every press.
+    [Fact(Explicit = true)]
+    public async Task The_warm_up_runs_once_and_leaves_the_first_clip_fast()
+    {
+        var options = Options.Create(new DictationOptions
+        {
+            ModelFolder = CodeSwitchX.Core.AppPaths.Default().ModelsDirectory,
+            Model = WhisperModel.LargeV3Turbo,
+            Language = "auto",
+        });
+        using var service = new WhisperDictationService(new WhisperModelStore(options), options, NullLogger<WhisperDictationService>.Instance);
+        var samples = Speak("Open the Diffusion Nexus workspace and start a new chat.");
+        var ct = TestContext.Current.CancellationToken;
+
+        await service.WarmUpAsync(ct);
+        var again = System.Diagnostics.Stopwatch.StartNew();
+        await service.WarmUpAsync(ct);
+        again.ElapsedMilliseconds.ShouldBeLessThan(50, "a second warm-up must not run the model again");
+        var first = System.Diagnostics.Stopwatch.StartNew();
+        var result = await service.TranscribeAsync(samples, new DictationVocabulary(["Diffusion Nexus"], []), live: false, ct);
+
+        first.ElapsedMilliseconds.ShouldBeLessThan(1500);
+        result.Text.ShouldContain("chat", Case.Insensitive);
+    }
+
     private static float[] Speak(string text)
     {
         using var stream = new MemoryStream();
