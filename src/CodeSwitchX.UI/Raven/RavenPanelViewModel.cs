@@ -38,6 +38,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly ILogger<RavenPanelViewModel> _logger;
     private readonly PushToTalkGesture _gesture;
+
+    /// <summary>The inputs holding push to talk now: the gesture sees one hold, which ends when the last of them is let go.</summary>
+    private readonly HashSet<TalkInput> _heldInputs = [];
     private readonly SilentMicWatch _silence = new();
     private readonly SpeechGate _speech = new();
     private readonly ITimer _deviceRefresh;
@@ -269,18 +272,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Button mouse-down or hotkey down. Records whether or not earlier clips are still being transcribed or the model
-    /// is downloading; only the short stop of the last capture turns a press away, and never silently.
+    /// is downloading; only the short stop of the last capture turns a press away, and never silently. A press while
+    /// another input already holds the mic (the chord during a mouse hold, a click during a held chord) joins that hold
+    /// and does nothing else.
     /// </summary>
+    /// <param name="input">What pressed: its own release is what lets go of it.</param>
     /// <param name="sinceKeyDown">How long ago the key went down, for a hotkey press the UI thread handled late: a hold
     /// is timed from then.</param>
-    public void PressMic(TimeSpan sinceKeyDown = default)
+    public void PressMic(TalkInput input, TimeSpan sinceKeyDown = default)
     {
+        if (_heldInputs.Count > 0)
+        {
+            _heldInputs.Add(input);
+            return;
+        }
+
         if (!PendingStop.IsCompleted)
         {
             AddEntry(RavenLogKind.Note, "Still stopping the last recording. Press again.");
             return;
         }
 
+        _heldInputs.Add(input);
         switch (_gesture.Press(sinceKeyDown))
         {
             case PushToTalkAction.Start:
@@ -292,10 +305,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Button mouse-up or hotkey up; completes once the recording it stopped has been transcribed.</summary>
-    public Task ReleaseMicAsync()
+    /// <summary>
+    /// Button mouse-up or hotkey up; completes once the recording it stopped has been transcribed. Only the release of
+    /// the last input holding the mic is the gesture's release: while another still holds it, the recording goes on.
+    /// </summary>
+    public Task ReleaseMicAsync(TalkInput input)
     {
+        if (!_heldInputs.Remove(input) || _heldInputs.Count > 0)
+        {
+            return Task.CompletedTask;
+        }
+
         return _gesture.Release() == PushToTalkAction.Stop ? BeginStop() : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The recording ended for another reason (a failure, the length limit, no microphone): the gesture forgets its hold
+    /// or latch, and the inputs that held it are forgotten too, so their late releases stop nothing.
+    /// </summary>
+    private void ForgetHold()
+    {
+        _gesture.Reset();
+        _heldInputs.Clear();
     }
 
     /// <summary>
@@ -340,7 +371,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (SelectedMicrophone is not { } mic)
         {
-            _gesture.Reset();
+            ForgetHold();
             AddEntry(RavenLogKind.Warning, "No microphone found. Plug one in or check Windows sound settings.");
             return;
         }
@@ -373,7 +404,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             AddEntry(RavenLogKind.Warning, WarningFor(ex is MicrophoneException failure ? failure.Kind : MicrophoneFailureKind.Unavailable, mic));
             if (recording == _recording && _capturing)
             {
-                _gesture.Reset();
+                ForgetHold();
                 _capturing = false;
                 UpdateState();
             }
@@ -394,7 +425,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        _gesture.Reset();
+        ForgetHold();
         _ = BeginStop();
     }
 
@@ -423,7 +454,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _capturing = false;
             PendingStop = ReleaseCaptureAsync();
             UpdateState();
-            _gesture.Reset();
+            ForgetHold();
         }
 
         RefreshMicrophones();

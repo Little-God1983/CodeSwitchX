@@ -241,8 +241,8 @@ public sealed class HotkeyService
         if (_isForegroundElevated())
         {
             _talkRelease?.Stop();
-            raven.PressMic();
-            _ = raven.ReleaseMicAsync();
+            raven.PressMic(TalkInput.Hotkey);
+            _ = raven.ReleaseMicAsync(TalkInput.Hotkey);
             if (!_unseenReleaseNoted && raven.State == RavenState.Listening)
             {
                 _unseenReleaseNoted = true;
@@ -253,7 +253,7 @@ public sealed class HotkeyService
         }
 
         var age = _messageAge();
-        raven.PressMic(age < TimeSpan.Zero ? TimeSpan.Zero : age > MaximumMessageAge ? MaximumMessageAge : age);
+        raven.PressMic(TalkInput.Hotkey, age < TimeSpan.Zero ? TimeSpan.Zero : age > MaximumMessageAge ? MaximumMessageAge : age);
         WatchForTalkRelease();
     }
 
@@ -277,7 +277,7 @@ public sealed class HotkeyService
                 _talkRelease.Stop();
                 if (_shell is not null)
                 {
-                    _ = _shell.Raven.ReleaseMicAsync();
+                    _ = _shell.Raven.ReleaseMicAsync(TalkInput.Hotkey);
                 }
             };
         }

@@ -46,10 +46,10 @@ public sealed class RavenPanelViewModelTests
 
     private async Task HoldAsync(RavenPanelViewModel vm)
     {
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
     }
 
     /// <summary>A second of someone talking: loud enough, long enough, for the speech gate.</summary>
@@ -83,14 +83,14 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
         vm.Caption.ShouldBe("Listening…");
         await WithinAsync(vm.PendingStart);
         _recorder.Received(1).Start(Headset.Id);
         Speak();
         _time.Advance(Hold);
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         var last = vm.Log[^1];
         last.Kind.ShouldBe(RavenLogKind.You);
@@ -105,15 +105,94 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
 
-        vm.PressMic();
-        await vm.ReleaseMicAsync();
+        vm.PressMic(TalkInput.MicButton);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
         Speak();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingTranscriptions);
 
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
+    }
+
+    // The mouse holds the mic button; the chord pressed and let go meanwhile joins that hold and does not end it.
+    [Fact]
+    public async Task The_hotkey_pressed_and_released_while_the_mouse_holds_the_mic_does_not_stop_the_recording()
+    {
+        var vm = NewVm();
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+
+        vm.PressMic(TalkInput.Hotkey);
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.Hotkey);
+
+        vm.State.ShouldBe(RavenState.Listening, "the mouse still holds the mic");
+        _recorder.DidNotReceive().Stop();
+
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+
+        _recorder.Received(1).Stop();
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    [Fact]
+    public async Task A_mouse_click_while_the_hotkey_is_held_does_not_stop_the_recording()
+    {
+        var vm = NewVm();
+        vm.PressMic(TalkInput.Hotkey);
+        Speak();
+        _time.Advance(Hold);
+
+        vm.PressMic(TalkInput.MicButton);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+
+        vm.State.ShouldBe(RavenState.Listening, "the chord is still held");
+        _recorder.DidNotReceive().Stop();
+
+        await vm.ReleaseMicAsync(TalkInput.Hotkey);
+
+        _recorder.Received(1).Stop();
+        vm.State.ShouldBe(RavenState.Idle);
+    }
+
+    [Fact]
+    public async Task A_hold_with_both_inputs_stops_once_both_are_released_whichever_goes_first()
+    {
+        var vm = NewVm();
+        vm.PressMic(TalkInput.MicButton);
+        vm.PressMic(TalkInput.Hotkey);
+        Speak();
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        vm.State.ShouldBe(RavenState.Listening, "the chord is still held");
+
+        await vm.ReleaseMicAsync(TalkInput.Hotkey);
+
+        _recorder.Received(1).Stop();
+        vm.State.ShouldBe(RavenState.Idle);
+        _recorder.Received(1).Start(Headset.Id);
+    }
+
+    // The recording reached the limit while the chord was held: that hold is over, so the mouse starts a new one.
+    [Fact]
+    public async Task A_recording_that_ended_on_its_own_forgets_the_inputs_that_held_it()
+    {
+        var vm = NewVm();
+        vm.PressMic(TalkInput.Hotkey);
+        Speak();
+        _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.PressMic(TalkInput.MicButton);
+
+        vm.State.ShouldBe(RavenState.Listening);
+        await vm.ReleaseMicAsync(TalkInput.Hotkey);
+        vm.State.ShouldBe(RavenState.Listening, "the chord's late release belongs to the recording that ended");
     }
 
     [Fact]
@@ -195,7 +274,7 @@ public sealed class RavenPanelViewModelTests
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied"));
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
@@ -209,7 +288,7 @@ public sealed class RavenPanelViewModelTests
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Unavailable, "busy"));
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Text.ShouldBe("Headset could not be opened. Another app may be using it exclusively.");
@@ -221,7 +300,7 @@ public sealed class RavenPanelViewModelTests
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.AudioServiceDown, "not running"));
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
@@ -232,7 +311,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_microphone_lost_while_recording_returns_to_idle_and_says_so()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
@@ -244,7 +323,7 @@ public sealed class RavenPanelViewModelTests
         _recorder.Received(1).Stop();
         await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
     }
 
@@ -252,7 +331,7 @@ public sealed class RavenPanelViewModelTests
     public void A_silent_microphone_is_warned_about_once()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         for (var i = 0; i < 300; i++) // 3 s
         {
@@ -269,7 +348,7 @@ public sealed class RavenPanelViewModelTests
     public void The_silent_microphone_warning_counts_the_real_duration_of_the_blocks()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         for (var i = 0; i < 199; i++)
         {
@@ -285,7 +364,7 @@ public sealed class RavenPanelViewModelTests
     public void The_level_follows_the_microphone_while_listening()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         Block(0.1f);
 
@@ -302,22 +381,22 @@ public sealed class RavenPanelViewModelTests
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(first.Task, Task.FromResult(new DictationResult("second", TimeSpan.FromSeconds(2))));
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
-        var firstRelease = vm.ReleaseMicAsync();
+        var firstRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Transcribing);
         vm.Caption.ShouldBe("Transcribing…");
         await WithinAsync(vm.PendingStop); // the capture is stopped; its clip is still being transcribed
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening, "capturing shows over a pending transcription");
         vm.Caption.ShouldBe("Listening…");
         await WithinAsync(vm.PendingStart);
         _recorder.Received(2).Start(Headset.Id);
         Speak();
         _time.Advance(Hold);
-        var secondRelease = vm.ReleaseMicAsync();
+        var secondRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
         await WithinAsync(vm.PendingStop);
 
         vm.State.ShouldBe(RavenState.Transcribing);
@@ -345,20 +424,20 @@ public sealed class RavenPanelViewModelTests
             return download.Task;
         });
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
-        var firstRelease = vm.ReleaseMicAsync();
+        var firstRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
         await WithinAsync(downloading.Task);
         vm.Caption.ShouldBe("Downloading the speech model…");
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
         await WithinAsync(vm.PendingStart);
         _recorder.Received(2).Start(Headset.Id);
         Speak();
         _time.Advance(Hold);
-        var secondRelease = vm.ReleaseMicAsync();
+        var secondRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Transcribing);
         vm.Caption.ShouldBe("Downloading the speech model…");
 
@@ -383,21 +462,21 @@ public sealed class RavenPanelViewModelTests
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
-        var release = vm.ReleaseMicAsync();
+        var release = vm.ReleaseMicAsync(TalkInput.MicButton);
 
-        vm.PressMic();
-        await vm.ReleaseMicAsync();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        vm.PressMic(TalkInput.MicButton);
 
         vm.Log.Where(l => l.Kind == RavenLogKind.Note).Select(l => l.Text)
             .ShouldBe(["Still stopping the last recording. Press again.", "Still stopping the last recording. Press again."]);
         _recorder.Received(1).Start(Arg.Any<string>());
         hold.Set();
         await WithinAsync(release);
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
     }
 
@@ -512,7 +591,7 @@ public sealed class RavenPanelViewModelTests
         _catalog.Default().Returns((MicrophoneDevice?)null);
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         vm.SelectedMicrophone.ShouldBeNull();
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
@@ -549,7 +628,7 @@ public sealed class RavenPanelViewModelTests
     public void Collapsing_the_panel_does_not_stop_a_recording()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         vm.TogglePanelCommand.Execute(null);
 
@@ -563,7 +642,7 @@ public sealed class RavenPanelViewModelTests
     public async Task The_recorder_reaching_its_limit_ends_the_recording_like_a_release()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(TimeSpan.FromMinutes(10));
         vm.State.ShouldBe(RavenState.Listening, "the panel has no timer of its own");
@@ -575,7 +654,7 @@ public sealed class RavenPanelViewModelTests
         _recorder.Received(1).Stop();
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.You);
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening, "the held key's gesture was reset, so the next press starts");
     }
 
@@ -623,15 +702,15 @@ public sealed class RavenPanelViewModelTests
     public async Task The_silent_microphone_warning_is_armed_again_for_a_second_recording()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         for (var i = 0; i < 300; i++) // 3 s
         {
             Block(0f);
         }
 
         _time.Advance(Hold);
-        await vm.ReleaseMicAsync();
-        vm.PressMic();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        vm.PressMic(TalkInput.MicButton);
         for (var i = 0; i < 300; i++) // 3 s
         {
             Block(0f);
@@ -644,7 +723,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_capture_failure_lists_the_microphones_again()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
         _catalog.ClearReceivedCalls();
 
@@ -766,12 +845,12 @@ public sealed class RavenPanelViewModelTests
     public async Task A_quiet_clip_is_not_transcribed_and_says_so()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         RoomNoise(3);
         Speak(0.4); // a cough is not dictation
         _time.Advance(Hold);
 
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
@@ -784,14 +863,14 @@ public sealed class RavenPanelViewModelTests
     public async Task A_clip_with_speech_between_pauses_is_transcribed()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         RoomNoise(1);
         Speak(0.3);
         RoomNoise(0.5);
         Speak(0.3);
         _time.Advance(Hold);
 
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
     }
@@ -801,11 +880,11 @@ public sealed class RavenPanelViewModelTests
     {
         _models.IsPresent.Returns(false);
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         RoomNoise(2);
         _time.Advance(Hold);
 
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         await _models.DidNotReceive().DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
     }
@@ -815,11 +894,11 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
         await HoldAsync(vm);
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         RoomNoise(1);
         _time.Advance(Hold);
 
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         vm.Log.Last().Text.ShouldBe("I didn't hear anything.");
         await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
@@ -890,7 +969,7 @@ public sealed class RavenPanelViewModelTests
     public void A_lost_microphone_warning_has_the_exact_text()
     {
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
 
@@ -985,12 +1064,12 @@ public sealed class RavenPanelViewModelTests
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
         vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var release = vm.ReleaseMicAsync();
+        var release = vm.ReleaseMicAsync(TalkInput.MicButton);
 
         clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
         release.IsCompleted.ShouldBeFalse();
@@ -1016,7 +1095,7 @@ public sealed class RavenPanelViewModelTests
             return new RecordedClip([], TimeSpan.Zero);
         });
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -1024,13 +1103,13 @@ public sealed class RavenPanelViewModelTests
 
         clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
         vm.State.ShouldBe(RavenState.Idle);
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         _recorder.Received(1).Start(Arg.Any<string>()); // a press while the old capture is still stopping is ignored
         vm.Log.Last().Text.ShouldBe("Still stopping the last recording. Press again.");
 
         hold.Set();
         await WithinAsync(vm.PendingStop);
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
     }
 
@@ -1048,7 +1127,7 @@ public sealed class RavenPanelViewModelTests
         var vm = NewVm();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
 
         clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
         vm.State.ShouldBe(RavenState.Listening);
@@ -1077,11 +1156,11 @@ public sealed class RavenPanelViewModelTests
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
 
-        var release = vm.ReleaseMicAsync();
+        var release = vm.ReleaseMicAsync(TalkInput.MicButton);
         await Task.Delay(50, TestContext.Current.CancellationToken);
         _recorder.DidNotReceive().Stop();
         hold.Set();
@@ -1107,8 +1186,8 @@ public sealed class RavenPanelViewModelTests
             }
         });
         var vm = NewVm();
-        vm.PressMic();
-        await vm.ReleaseMicAsync(); // a tap: latched while the start still runs
+        vm.PressMic(TalkInput.MicButton);
+        await vm.ReleaseMicAsync(TalkInput.MicButton); // a tap: latched while the start still runs
         vm.State.ShouldBe(RavenState.Listening);
 
         hold.Set();
@@ -1117,7 +1196,7 @@ public sealed class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Idle);
         vm.Caption.ShouldBe(RavenPanelViewModel.IdleCaption);
         vm.Log.Single().Text.ShouldBe("Headset could not be opened. Another app may be using it exclusively.");
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening, "the gesture was reset: the press starts, it does not stop the latch");
         await WithinAsync(vm.PendingStart);
         _recorder.Received(2).Start(Headset.Id);
@@ -1133,11 +1212,11 @@ public sealed class RavenPanelViewModelTests
             throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied");
         });
         var vm = NewVm();
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
 
-        var release = vm.ReleaseMicAsync();
+        var release = vm.ReleaseMicAsync(TalkInput.MicButton);
         hold.Set();
         await WithinAsync(release);
 
@@ -1189,11 +1268,11 @@ public sealed class RavenPanelViewModelTests
         });
         var vm = NewVm();
 
-        vm.PressMic();
+        vm.PressMic(TalkInput.MicButton);
         await WithinAsync(fetched.Task);
         Speak();
         _time.Advance(Hold);
-        await vm.ReleaseMicAsync();
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
 
         await _vocabulary.Received(1).GetAsync(Arg.Any<CancellationToken>());
         await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), words, false, Arg.Any<CancellationToken>());

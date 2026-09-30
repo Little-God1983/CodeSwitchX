@@ -72,7 +72,7 @@ public partial class RavenPanelView : UserControl
         button.Focus();
         _heldMic = button;
         button.CaptureMouse();
-        _viewModel.PressMic();
+        _viewModel.PressMic(TalkInput.MicButton);
     }
 
     private void OnMicUp(object sender, MouseButtonEventArgs e)
@@ -101,7 +101,7 @@ public partial class RavenPanelView : UserControl
         button?.ReleaseMouseCapture();
         if (_viewModel is not null)
         {
-            _ = _viewModel.ReleaseMicAsync();
+            _ = _viewModel.ReleaseMicAsync(TalkInput.MicButton);
         }
     }
 
@@ -119,7 +119,7 @@ public partial class RavenPanelView : UserControl
             return;
         }
 
-        _viewModel.PressMic();
-        _ = _viewModel.ReleaseMicAsync();
+        _viewModel.PressMic(TalkInput.MicButton);
+        _ = _viewModel.ReleaseMicAsync(TalkInput.MicButton);
     }
 }
