@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using CodeSwitchX.Hosting.Win32;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
 using Microsoft.Extensions.Logging;
 
@@ -63,15 +64,22 @@ public sealed class HotkeyService
     /// <summary>How often a held push-to-talk chord is checked for its release, which no window message reports.</summary>
     private static readonly TimeSpan ReleasePoll = TimeSpan.FromMilliseconds(30);
 
+    public const string UnseenReleaseNote =
+        "Push to talk can't see the key being released while an admin window is in front. Press Ctrl+Shift+Space again to stop.";
+
     private readonly ILogger<HotkeyService> _logger;
+    private readonly Func<uint, bool> _isKeyDown;
     private HwndSource? _source;
     private ShellViewModel? _shell;
     private nint _hwnd;
     private DispatcherTimer? _talkRelease;
+    private bool _unseenReleaseNoted;
 
-    public HotkeyService(ILogger<HotkeyService> logger)
+    /// <param name="isKeyDown">Whether a virtual key reads as held; GetAsyncKeyState unless a test replaces it.</param>
+    public HotkeyService(ILogger<HotkeyService> logger, Func<uint, bool>? isKeyDown = null)
     {
         _logger = logger;
+        _isKeyDown = isKeyDown ?? HotkeyInterop.IsKeyDown;
     }
 
     public static IReadOnlyList<HotkeyBinding> Bindings { get; } = BuildBindings();
@@ -176,8 +184,7 @@ public sealed class HotkeyService
         }
         else if (id == PushToTalkId)
         {
-            _shell.Raven.PressMic();
-            WatchForTalkRelease();
+            PushToTalk(_shell.Raven);
             handled = true;
         }
         else if (id == ToggleRavenId)
@@ -187,6 +194,32 @@ public sealed class HotkeyService
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// The hotkey has just gone down, so Space reads as held unless Windows hides the keyboard from this process: it
+    /// does while an elevated window is in front, and GetAsyncKeyState then reads every key as up. Polled that way, a
+    /// hold would read as released straight away, a tap that latches, and the recording would run on after the user let
+    /// go without a word. So a key that cannot be read makes the press a tap on purpose, and the panel says once per
+    /// session that the next press stops it.
+    /// </summary>
+    private void PushToTalk(RavenPanelViewModel raven)
+    {
+        var keySeen = _isKeyDown(VkSpace);
+        raven.PressMic();
+        if (keySeen)
+        {
+            WatchForTalkRelease();
+            return;
+        }
+
+        _talkRelease?.Stop();
+        _ = raven.ReleaseMicAsync();
+        if (!_unseenReleaseNoted && raven.State == RavenState.Listening)
+        {
+            _unseenReleaseNoted = true;
+            raven.Note(UnseenReleaseNote);
+        }
     }
 
     /// <summary>
@@ -200,7 +233,7 @@ public sealed class HotkeyService
             _talkRelease = new DispatcherTimer(DispatcherPriority.Input) { Interval = ReleasePoll };
             _talkRelease.Tick += (_, _) =>
             {
-                if (HotkeyInterop.IsKeyDown(VkSpace) && HotkeyInterop.IsKeyDown(VkControl))
+                if (_isKeyDown(VkSpace) && _isKeyDown(VkControl))
                 {
                     return;
                 }

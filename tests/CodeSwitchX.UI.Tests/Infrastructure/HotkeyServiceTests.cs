@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
@@ -106,6 +107,115 @@ public class HotkeyServiceTests
             harness.Recorder.Received(1).Start(headset.Id);
             window.WindowState.ShouldBe(WindowState.Minimized, "talking to Raven must not take the foreground from VS Code");
         });
+    }
+
+    // An elevated window in front hides the keyboard from GetAsyncKeyState: the held Space reads as up. Polled, that
+    // hold would latch and record on after the user let go; unseen, the press is a tap on purpose and the next one stops.
+    [Fact]
+    public async Task Push_to_talk_whose_key_cannot_be_read_latches_says_so_once_and_the_next_press_stops()
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+
+        await WithHotkeysAsync(harness, _ => false, press =>
+        {
+            press();
+            raven.State.ShouldBe(RavenState.Listening, "a tap latches the mic on");
+            PumpFor(TimeSpan.FromMilliseconds(150));
+            raven.State.ShouldBe(RavenState.Listening, "no release poll ends it");
+
+            press();
+            raven.State.ShouldNotBe(RavenState.Listening, "the next press stops");
+            PumpUntil(() => raven.State == RavenState.Idle);
+
+            press();
+            raven.State.ShouldBe(RavenState.Listening);
+        });
+
+        raven.Log.Count(l => l.Text == HotkeyService.UnseenReleaseNote).ShouldBe(1, "once per session");
+        raven.Log.Single(l => l.Text == HotkeyService.UnseenReleaseNote).Kind.ShouldBe(RavenLogKind.Note);
+    }
+
+    [Fact]
+    public async Task Push_to_talk_whose_key_reads_as_held_is_stopped_by_the_release_poll()
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+        var held = true;
+
+        await WithHotkeysAsync(harness, _ => held, press =>
+        {
+            press();
+            raven.State.ShouldBe(RavenState.Listening);
+            PumpFor(TimeSpan.FromMilliseconds(150));
+            raven.State.ShouldBe(RavenState.Listening, "the keys are still held");
+
+            harness.Time.Advance(TimeSpan.FromSeconds(1));
+            held = false;
+            PumpUntil(() => raven.State == RavenState.Idle);
+        });
+
+        raven.Log.ShouldNotContain(l => l.Text == HotkeyService.UnseenReleaseNote);
+        harness.Recorder.Received(1).Stop();
+    }
+
+    private static ShellTestHarness RecordingHarness()
+    {
+        var harness = new ShellTestHarness();
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        harness.Microphones.List().Returns([headset]);
+        harness.Microphones.Default().Returns(headset);
+        harness.Recorder.Stop().Returns(new RecordedClip([], TimeSpan.Zero));
+        return harness;
+    }
+
+    /// <summary>A window wired to the shell with a hotkey service reading the keys through <paramref name="isKeyDown"/>;
+    /// the body gets a press of push-to-talk and runs on the window's thread.</summary>
+    private static Task WithHotkeysAsync(ShellTestHarness harness, Func<uint, bool> isKeyDown, Action<Action> body)
+    {
+        var binding = HotkeyService.Bindings.Single(b => b.Label == "Push to talk");
+        return StaThread.RunAsync(() =>
+        {
+            var window = HiddenWindow();
+            var hwnd = new WindowInteropHelper(window).Handle;
+            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, isKeyDown);
+            hotkeys.Attach(hwnd, harness.Shell);
+            try
+            {
+                body(() => StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, binding.Id, 0));
+            }
+            finally
+            {
+                hotkeys.Detach();
+                window.Close();
+            }
+        });
+    }
+
+    private static void PumpFor(TimeSpan duration)
+    {
+        var until = DateTime.UtcNow + duration;
+        PumpUntil(() => DateTime.UtcNow >= until);
+    }
+
+    /// <summary>Runs the window thread's dispatcher (timers, awaited continuations) until the condition holds.</summary>
+    private static void PumpUntil(Func<bool> done)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!done())
+        {
+            DateTime.UtcNow.ShouldBeLessThan(deadline, "the condition never held");
+            var frame = new DispatcherFrame();
+            var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(5), DispatcherPriority.Background, (sender, _) =>
+            {
+                ((DispatcherTimer)sender!).Stop();
+                frame.Continue = false;
+            }, Dispatcher.CurrentDispatcher);
+            timer.Start();
+            Dispatcher.PushFrame(frame);
+        }
     }
 
     [Fact]
