@@ -85,11 +85,10 @@ public sealed partial class ShellViewModel : ObservableObject
                 Settings.TileScale = Yard.TileScale;
             }
         };
-        // The same for the Raven panel: it owns its open state and microphone, the settings store them. The stored
-        // microphone is the one to look for among those plugged in; a fallback at startup is not saved, so the stored
-        // choice comes back when the device does.
+        // The same for the Raven panel: it owns its open state and microphone choice, the settings store them. Only the
+        // user's choice is stored, never a fallback to the default, so the choice comes back when its device does.
         Raven.IsOpen = Settings.RavenPanelOpen;
-        Raven.SelectedMicrophone = Settings.RavenMicrophone;
+        Raven.PreferredMicrophone = Settings.RavenMicrophone;
         Raven.RefreshMicrophones();
         Raven.PropertyChanged += (_, e) =>
         {
@@ -97,9 +96,9 @@ public sealed partial class ShellViewModel : ObservableObject
             {
                 Settings.RavenPanelOpen = Raven.IsOpen;
             }
-            else if (e.PropertyName == nameof(RavenPanelViewModel.SelectedMicrophone))
+            else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicrophone))
             {
-                Settings.RavenMicrophone = Raven.SelectedMicrophone;
+                Settings.RavenMicrophone = Raven.PreferredMicrophone;
             }
         };
         _ = AutoStartAsync();

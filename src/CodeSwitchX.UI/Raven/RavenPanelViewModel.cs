@@ -33,6 +33,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private ITimer? _limitTimer;
     private MicrophoneDevice? _recordingMic;
     private bool _silentWarned;
+    private bool _refreshing;
+    private bool _fellBack;
     private long _recordingId;
 
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
@@ -57,8 +59,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private bool _isOpen = true;
 
+    /// <summary>The microphone recorded from: the preferred one while it is plugged in, the Windows default otherwise.</summary>
     [ObservableProperty]
     private MicrophoneDevice? _selectedMicrophone;
+
+    /// <summary>
+    /// The user's choice: the one stored in the settings, or the one last picked. Only a pick changes it, never a
+    /// fallback, so the choice is selected again when its device comes back (RØDE Connect started after CodeSwitchX,
+    /// a Bluetooth headset waking up). Null means "no choice": the Windows default.
+    /// </summary>
+    [ObservableProperty]
+    private MicrophoneDevice? _preferredMicrophone;
 
     [ObservableProperty]
     private RavenState _state;
@@ -82,17 +93,48 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         var devices = _catalog.List();
         var previous = SelectedMicrophone;
-        Microphones.Clear();
-        foreach (var device in devices)
+        var preferred = PreferredMicrophone;
+        MicrophoneChoiceResult choice;
+        // A list-bound ComboBox writes null into the selection while the list is cleared; that is no pick.
+        _refreshing = true;
+        try
         {
-            Microphones.Add(device);
+            Microphones.Clear();
+            foreach (var device in devices)
+            {
+                Microphones.Add(device);
+            }
+
+            choice = MicrophoneChoice.Resolve(devices, preferred, _catalog.Default());
+            SelectedMicrophone = choice.Device;
+        }
+        finally
+        {
+            _refreshing = false;
         }
 
-        var choice = MicrophoneChoice.Resolve(devices, previous, _catalog.Default());
-        SelectedMicrophone = choice.Device;
-        if (choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault && previous is not null && choice.Device is not null)
+        if (preferred is null || choice.Device is null || Equals(previous, choice.Device))
         {
-            AddEntry(RavenLogKind.Note, $"{previous.Name} is gone. Using {choice.Device.Name}.");
+            return;
+        }
+
+        if (choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault)
+        {
+            _fellBack = true;
+            AddEntry(RavenLogKind.Note, $"{preferred.Name} is gone. Using {choice.Device.Name}.");
+        }
+        else if (_fellBack)
+        {
+            _fellBack = false;
+            AddEntry(RavenLogKind.Note, $"Using {choice.Device.Name} again.");
+        }
+    }
+
+    partial void OnSelectedMicrophoneChanged(MicrophoneDevice? value)
+    {
+        if (!_refreshing && value is not null)
+        {
+            PreferredMicrophone = value;
         }
     }
 

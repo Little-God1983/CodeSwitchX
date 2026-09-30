@@ -90,6 +90,49 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task A_stored_microphone_that_appears_after_startup_is_selected_and_never_saved_over()
+    {
+        // CodeSwitchX started before RØDE Connect: the virtual input is missing at first.
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var rode = new MicrophoneDevice("id-rode", "RØDE Connect Virtual Input");
+        _h.Microphones.List().Returns([headset]);
+        _h.Microphones.Default().Returns(headset);
+        _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(rode));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
+
+        _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty); // something else changed
+        _h.Microphones.List().Returns([headset, rode]);
+        _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty);
+
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(rode);
+        _h.Shell.Settings.RavenMicrophone.ShouldBe(rode);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, Arg.Any<MicrophoneDevice?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Unplugging_the_chosen_microphone_uses_the_default_without_saving_it()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var desk = new MicrophoneDevice("id-desk", "Desk mic");
+        _h.Microphones.List().Returns([headset, desk]);
+        _h.Microphones.Default().Returns(headset);
+        _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(desk));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Microphones.List().Returns([headset]);
+        _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty);
+
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
+        _h.Shell.Settings.RavenMicrophone.ShouldBe(desk);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, Arg.Any<MicrophoneDevice?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Choosing_another_microphone_is_saved()
     {
         var headset = new MicrophoneDevice("id-headset", "Headset");

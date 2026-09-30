@@ -263,6 +263,40 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
+    public void A_fallback_keeps_the_preferred_microphone_and_selects_it_again_when_it_comes_back()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone = Desk;
+        vm.PreferredMicrophone.ShouldBe(Desk, "a pick is the user's choice");
+        _catalog.List().Returns([Headset]);
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        vm.SelectedMicrophone.ShouldBe(Headset);
+        vm.PreferredMicrophone.ShouldBe(Desk, "a fallback is not a choice");
+
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty); // another device comes or goes
+        _catalog.List().Returns([Headset, Desk]);
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+
+        vm.SelectedMicrophone.ShouldBe(Desk);
+        vm.Log.Select(e => e.Text).ShouldBe(["Desk mic is gone. Using Headset.", "Using Desk mic again."]);
+    }
+
+    [Fact]
+    public void A_list_bound_control_clearing_the_selection_during_a_refresh_changes_neither_choice()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone = Desk;
+        // What a TwoWay-bound ComboBox does when its items are cleared: it writes null back.
+        vm.Microphones.CollectionChanged += (_, _) => vm.SelectedMicrophone = null;
+
+        vm.RefreshMicrophones();
+
+        vm.SelectedMicrophone.ShouldBe(Desk);
+        vm.PreferredMicrophone.ShouldBe(Desk);
+        vm.Log.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void A_microphone_with_a_new_id_is_selected_again_without_a_note()
     {
         var vm = NewVm();
