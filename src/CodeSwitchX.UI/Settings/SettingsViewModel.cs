@@ -68,7 +68,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
             // the writer's flag rather than reading the row again, which could disagree with what the writer does.
-            TileScale = await LoadTileScaleAsync(ct);
+            TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
             RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
             RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
             StorePayloads = _writerOptions.StorePayloads;
@@ -159,29 +159,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         BudgetChanged?.Invoke(value);
     }
 
-    /// <summary>
-    /// In a try of its own: a stored value that is not a number (edited by hand) leaves the tiles at their normal size
-    /// without a message in the Settings view, and a failure reading the other settings does not lose the size.
-    /// </summary>
-    private async Task<double> LoadTileScaleAsync(CancellationToken ct)
-    {
-        try
-        {
-            return await _settings.GetAsync<double?>(SettingKeys.TileScale, ct) ?? 1;
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(ex, "Reading the tile size failed; the tiles keep their normal size");
-            return 1;
-        }
-    }
-
     /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
     partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
 
     /// <summary>
-    /// Like <see cref="LoadTileScaleAsync"/>: a stored value of the wrong shape (edited by hand) reads as missing, without a
-    /// message in the Settings view and without losing the settings read after it.
+    /// In a try of its own: a stored value of the wrong shape (edited by hand) reads as missing, without a message in the
+    /// Settings view and without losing the settings read after it.
     /// </summary>
     private async Task<T?> LoadOrDefaultAsync<T>(string key, string what, CancellationToken ct)
     {
