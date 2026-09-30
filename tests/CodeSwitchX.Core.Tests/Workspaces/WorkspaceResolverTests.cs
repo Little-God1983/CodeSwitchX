@@ -73,6 +73,88 @@ public class WorkspaceResolverTests
     }
 
     [Fact]
+    public void A_folder_workspace_owns_its_folder_over_a_code_workspace_that_starts_with_it()
+    {
+        var sdk = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var installer = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        // Listed by name, the code-workspace comes first; the folder must still win whatever the order.
+        var workspaces = new[]
+        {
+            new Workspace { Id = installer, Name = "A installer", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = Guid.NewGuid() },
+            new Workspace { Id = sdk, Name = "SDK", RootPath = @"C:\Repo\SDK", TrackId = Guid.NewGuid() },
+        };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(sdk);
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces.Reverse()));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(sdk);
+    }
+
+    [Fact]
+    public void Of_two_code_workspaces_that_start_with_one_folder_the_first_registered_owns_it_whatever_the_names()
+    {
+        var installer = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var suite = Guid.Parse("88888888-8888-8888-8888-888888888888");
+        var older = DateTimeOffset.Parse("2026-09-01T00:00:00Z");
+        var workspaces = new[]
+        {
+            new Workspace { Id = suite, Name = "A suite", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\suite.code-workspace", CreatedAt = older.AddDays(1), TrackId = Guid.NewGuid() },
+            new Workspace { Id = installer, Name = "Zeta installer", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", CreatedAt = older, TrackId = Guid.NewGuid() },
+        };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(installer);
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces.Reverse()));
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(installer);
+    }
+
+    [Fact]
+    public void Every_folder_of_a_code_workspace_is_a_root_of_it_but_a_folder_workspace_keeps_its_own_folder()
+    {
+        var sdk = Guid.Parse("55555555-5555-5555-5555-555555555555");
+        var installer = Guid.Parse("66666666-6666-6666-6666-666666666666");
+        const string file = @"c:\repo\installer.code-workspace";
+        var workspaces = new[]
+        {
+            new Workspace { Id = installer, Name = "Installer", RootPath = @"c:\repo\sdk", WorkspaceFile = file, TrackId = Guid.NewGuid() },
+            new Workspace { Id = sdk, Name = "SDK", RootPath = @"c:\repo\sdk", TrackId = Guid.NewGuid() },
+        };
+        IReadOnlyList<WorkspaceFolder>? FoldersOf(string path) =>
+            path == file ? [new WorkspaceFolder(@"c:\repo\sdk", null), new WorkspaceFolder(@"c:\repo\installer", "Installer app")] : null;
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces, FoldersOf));
+
+        resolver.Resolve(@"C:\repo\sdk\src").ShouldBe(sdk);
+        resolver.Resolve(@"C:\repo\installer\src").ShouldBe(installer);
+    }
+
+    [Fact]
+    public void A_code_workspace_whose_file_cannot_be_read_keeps_its_root()
+    {
+        var workspace = new Workspace { Id = App, Name = "App", RootPath = @"c:\repo\app", WorkspaceFile = @"c:\repo\app.code-workspace", TrackId = Guid.NewGuid() };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf([workspace], _ => null));
+
+        resolver.Resolve(@"c:\repo\app\src").ShouldBe(App);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void The_target_of_a_workspace_without_a_file_is_its_folder(string? workspaceFile)
+    {
+        Workspace.TargetOf(@"c:\repo\app", workspaceFile).ShouldBe(@"c:\repo\app");
+        new Workspace { RootPath = @"c:\repo\app", WorkspaceFile = workspaceFile }.Target.ShouldBe(@"c:\repo\app");
+        Workspace.TargetOf(@"c:\repo\app", @"c:\repo\app.code-workspace").ShouldBe(@"c:\repo\app.code-workspace");
+    }
+
+    [Fact]
     public void RootsOf_includes_worktrees_as_child_roots()
     {
         var workspace = new Workspace

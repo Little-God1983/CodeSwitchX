@@ -27,7 +27,11 @@ public sealed class WorkspaceRegistry
         try
         {
             var workspaces = await _store.GetAllAsync(ct).ConfigureAwait(false);
-            _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces));
+
+            // Off the caller's thread before reading the .code-workspace files: SQLite answers synchronously, so this can
+            // still be the UI thread of the Add dialog, and a file on an offline share blocks the read for about 20 s.
+            await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces, WorkspaceProbe.FoldersOf).ToList());
             _bus.Publish(new WorkspaceRootsChanged());
             return workspaces;
         }
@@ -42,6 +46,7 @@ public sealed class WorkspaceRegistry
         // Stored in the user's casing: this path is launched, shown and used as a terminal cwd. Claude Code keys its
         // project state by the exact cwd string, so lower-casing it would split resume history and project memory.
         workspace.RootPath = PathNormalizer.Canonical(workspace.RootPath);
+        workspace.WorkspaceFile = workspace.WorkspaceFile is { Length: > 0 } file ? PathNormalizer.Canonical(file) : null;
         foreach (var worktree in workspace.Worktrees)
         {
             worktree.WorkspaceId = workspace.Id;

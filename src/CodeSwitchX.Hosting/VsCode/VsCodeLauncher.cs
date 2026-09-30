@@ -38,8 +38,8 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
     /// </summary>
     public static IReadOnlyList<string> BuildArguments(Workspace workspace) =>
         string.IsNullOrWhiteSpace(workspace.VsCodeProfile)
-            ? ["--new-window", Target(workspace)]
-            : ["--new-window", "--profile", workspace.VsCodeProfile, Target(workspace)];
+            ? ["--new-window", workspace.Target]
+            : ["--new-window", "--profile", workspace.VsCodeProfile, workspace.Target];
 
     /// <summary>The text VS Code puts in its title for this target: the folder name, or "<file> (Workspace)".</summary>
     public static string DisplayNameForMatching(Workspace workspace)
@@ -59,7 +59,7 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
     {
         // VS Code opens a missing command-line path as a new, unsaved file. Its tab puts the folder's name in the title,
         // so the window would pass for the workspace, and saving it would write a file where the folder was.
-        var target = Target(workspace);
+        var target = workspace.Target;
         if (workspace.WorkspaceFile is { Length: > 0 } ? !File.Exists(target) : !Directory.Exists(target))
         {
             return new LaunchResult(false, null, $"{target} was not found. It may have been moved or renamed, or its drive is not connected.");
@@ -110,6 +110,4 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
         info.Environment.Remove("ELECTRON_RUN_AS_NODE");
         return info;
     }
-
-    private static string Target(Workspace workspace) => workspace.WorkspaceFile is { Length: > 0 } file ? file : workspace.RootPath;
 }

@@ -21,27 +21,33 @@ public sealed class WorkspaceStore : IWorkspaceStore
     }
 
     /// <summary>Case-insensitive lookup: paths are stored in the user's casing but compared by their normalised key.</summary>
-    public async Task<Workspace?> FindByRootAsync(string root, CancellationToken ct = default)
+    public async Task<Workspace?> FindByTargetAsync(string rootPath, string? workspaceFile, CancellationToken ct = default)
     {
-        var key = PathNormalizer.Normalize(root);
+        var key = Workspace.TargetKey(rootPath, workspaceFile);
         await using var db = await _factory.CreateDbContextAsync(ct);
         var candidates = await db.Workspaces.AsNoTracking().ToListAsync(ct);
-        return candidates.FirstOrDefault(w => PathNormalizer.Normalize(w.RootPath) == key);
+        return candidates.FirstOrDefault(w => Workspace.TargetKey(w.RootPath, w.WorkspaceFile) == key);
     }
 
     public async Task AddAsync(Workspace workspace, CancellationToken ct = default)
     {
         workspace.RootPath = PathNormalizer.Canonical(workspace.RootPath);
-        var key = PathNormalizer.Normalize(workspace.RootPath);
+        workspace.WorkspaceFile = workspace.WorkspaceFile is { Length: > 0 } file ? PathNormalizer.Canonical(file) : null;
+        var key = Workspace.TargetKey(workspace.RootPath, workspace.WorkspaceFile);
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var roots = await db.Workspaces.Select(w => w.RootPath).ToListAsync(ct);
-        if (roots.Any(r => PathNormalizer.Normalize(r) == key))
+
+        // No unique index can hold the key (it is compared normalised), so the check and the insert share one transaction:
+        // SQLite begins it IMMEDIATE, taking the write lock before the check reads, and a racing add waits and then sees this row.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var targets = await db.Workspaces.Select(w => new { w.RootPath, w.WorkspaceFile }).ToListAsync(ct);
+        if (targets.Any(t => Workspace.TargetKey(t.RootPath, t.WorkspaceFile) == key))
         {
-            throw new DuplicateWorkspaceException(workspace.RootPath);
+            throw new DuplicateWorkspaceException(workspace.Target);
         }
 
         db.Workspaces.Add(workspace);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task UpdateAsync(Workspace workspace, CancellationToken ct = default)
