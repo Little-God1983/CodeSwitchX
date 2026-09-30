@@ -21,4 +21,11 @@ public interface IMicrophoneRecorder
 
     /// <summary>The capture died mid-recording (device unplugged); raised on the capture thread. Same rules as BlockCaptured.</summary>
     event EventHandler<MicrophoneException>? Failed;
+
+    /// <summary>
+    /// The recording reached the recorder's length limit and capturing stopped by itself: raised once per recording, on
+    /// the capture thread. The clip so far is kept for <see cref="Stop"/>, which the listener still calls. The recorder
+    /// alone owns the limit, so nobody else keeps a clock for it. Same rules as BlockCaptured.
+    /// </summary>
+    event EventHandler? LimitReached;
 }

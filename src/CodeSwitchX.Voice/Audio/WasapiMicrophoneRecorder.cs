@@ -5,6 +5,7 @@ namespace CodeSwitchX.Voice.Audio;
 
 public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
 {
+    /// <summary>The one length limit of a recording: capturing stops by itself here and <see cref="LimitReached"/> says so.</summary>
     private const int MaxSeconds = 120;
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
 
@@ -15,6 +16,8 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
     public event EventHandler<CapturedBlock>? BlockCaptured;
 
     public event EventHandler<MicrophoneException>? Failed;
+
+    public event EventHandler? LimitReached;
 
     public bool IsRecording
     {
@@ -121,6 +124,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
                 && Interlocked.Exchange(ref _autoStopped, 1) == 0)
             {
                 capture.StopRecording();
+                owner.LimitReached?.Invoke(owner, EventArgs.Empty);
             }
         }
 

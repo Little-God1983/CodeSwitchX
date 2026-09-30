@@ -17,8 +17,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The mic button's tooltip, with the chord from <see cref="HotkeyService.PushToTalk"/>.</summary>
     public static readonly string MicToolTip = $"Hold to talk, or tap to keep listening until the next tap ({HotkeyService.PushToTalk.Keys})";
 
-    /// <summary>The recorder stops capturing at this length without telling anyone, so the panel ends the recording itself.</summary>
-    public static readonly TimeSpan MaximumRecording = TimeSpan.FromSeconds(120);
 
     /// <summary>How long after startup the model is warmed up: long enough to leave the startup itself alone.</summary>
     public static readonly TimeSpan StartupWarmUpDelay = TimeSpan.FromSeconds(5);
@@ -37,14 +35,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly SilentMicWatch _silence = new();
     private readonly SpeechGate _speech = new();
 
-    private ITimer? _limitTimer;
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
     private bool _silentWarned;
     private bool _refreshing;
     private bool _fellBack;
     private bool _audioFailed;
-    private long _recordingId;
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
 
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
@@ -63,6 +59,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
+        _recorder.LimitReached += (_, _) => _dispatcher.Post(OnLimitReached);
         _catalog.DevicesChanged += (_, _) => _dispatcher.Post(RefreshMicrophones);
     }
 
@@ -308,15 +305,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         State = RavenState.Listening;
         Caption = "Listening…";
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
-
-        var id = ++_recordingId;
-        _limitTimer?.Dispose();
-        _limitTimer = _time.CreateTimer(_ => _dispatcher.Post(() => OnLimitReached(id)), null, MaximumRecording, Timeout.InfiniteTimeSpan);
     }
 
-    private void OnLimitReached(long id)
+    /// <summary>
+    /// The recorder stopped capturing at its length limit: the recording ends the way a release ends it, and the gesture
+    /// forgets the held key, whose release is then no stop of a later recording. A limit reported after the recording
+    /// already ended is old news.
+    /// </summary>
+    private void OnLimitReached()
     {
-        if (id != _recordingId || State != RavenState.Listening)
+        if (State != RavenState.Listening)
         {
             return;
         }
@@ -347,7 +345,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (State == RavenState.Listening)
         {
             AddEntry(RavenLogKind.Warning, WarningFor(error.Kind, _recordingMic));
-            StopLimitTimer();
             PendingStop = ReleaseCaptureAsync();
             ReturnToIdle();
             _gesture.Reset();
@@ -376,7 +373,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private async Task StopAsync()
     {
-        StopLimitTimer();
         State = RavenState.Transcribing;
         Caption = "Transcribing…";
         try
@@ -463,12 +459,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return true;
     }
 
-    private void StopLimitTimer()
-    {
-        _recordingId++;
-        _limitTimer?.Dispose();
-        _limitTimer = null;
-    }
 
     private void ReturnToIdle()
     {

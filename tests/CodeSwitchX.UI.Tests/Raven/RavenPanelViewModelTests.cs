@@ -417,22 +417,36 @@ public sealed class RavenPanelViewModelTests
         _recorder.DidNotReceive().Stop();
     }
 
+    // The recorder owns the length limit and says when it stopped capturing; the panel keeps no clock of its own.
     [Fact]
-    public async Task A_recording_stops_by_itself_after_two_minutes()
+    public async Task The_recorder_reaching_its_limit_ends_the_recording_like_a_release()
     {
         var vm = NewVm();
         vm.PressMic();
         Speak();
+        _time.Advance(TimeSpan.FromMinutes(10));
+        vm.State.ShouldBe(RavenState.Listening, "the panel has no timer of its own");
 
-        _time.Advance(TimeSpan.FromSeconds(119));
-        vm.State.ShouldBe(RavenState.Listening);
-        _time.Advance(TimeSpan.FromSeconds(1));
+        _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
         await WithinAsync(vm.PendingStop);
 
+        _recorder.Received(1).Stop();
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.You);
         vm.PressMic();
-        vm.State.ShouldBe(RavenState.Listening);
+        vm.State.ShouldBe(RavenState.Listening, "the held key's gesture was reset, so the next press starts");
+    }
+
+    [Fact]
+    public async Task A_limit_reported_after_the_recording_ended_changes_nothing()
+    {
+        var vm = NewVm();
+        await HoldAsync(vm);
+
+        _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
+
+        _recorder.Received(1).Stop();
+        vm.State.ShouldBe(RavenState.Idle);
     }
 
     [Fact]
@@ -461,18 +475,6 @@ public sealed class RavenPanelViewModelTests
 
         vm.Log.ShouldBeEmpty();
         vm.State.ShouldBe(RavenState.Idle);
-    }
-
-    [Fact]
-    public async Task The_two_minute_timer_is_cancelled_by_a_manual_stop()
-    {
-        var vm = NewVm();
-
-        await HoldAsync(vm);
-        _time.Advance(TimeSpan.FromSeconds(120));
-
-        _recorder.Received(1).Stop();
-        vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
     }
 
     [Fact]
