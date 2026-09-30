@@ -8,8 +8,6 @@ public readonly record struct CapturedBlock(float Rms, TimeSpan Duration);
 
 public interface IMicrophoneRecorder
 {
-    bool IsRecording { get; }
-
     /// <exception cref="MicrophoneException">The device could not be opened.</exception>
     void Start(string deviceId);
 

@@ -21,7 +21,7 @@ public sealed class SpokenAudioTranscriptionTests
         using var service = new WhisperDictationService(new WhisperModelStore(options), options, NullLogger<WhisperDictationService>.Instance);
 
         var samples = Speak("Open the Diffusion Nexus workspace and start a new chat.");
-        var result = await service.TranscribeAsync(samples, new DictationVocabulary(["Diffusion Nexus"], []), live: false, TestContext.Current.CancellationToken);
+        var result = await service.TranscribeAsync(samples, new DictationVocabulary(["Diffusion Nexus"], []), TestContext.Current.CancellationToken);
 
         result.Text.ShouldContain("Diffusion Nexus", Case.Insensitive);
         result.Text.ShouldContain("chat", Case.Insensitive);
@@ -47,7 +47,7 @@ public sealed class SpokenAudioTranscriptionTests
         await service.WarmUpAsync(ct);
         again.ElapsedMilliseconds.ShouldBeLessThan(50, "a second warm-up must not run the model again");
         var first = System.Diagnostics.Stopwatch.StartNew();
-        var result = await service.TranscribeAsync(samples, new DictationVocabulary(["Diffusion Nexus"], []), live: false, ct);
+        var result = await service.TranscribeAsync(samples, new DictationVocabulary(["Diffusion Nexus"], []), ct);
 
         first.ElapsedMilliseconds.ShouldBeLessThan(1500);
         result.Text.ShouldContain("chat", Case.Insensitive);

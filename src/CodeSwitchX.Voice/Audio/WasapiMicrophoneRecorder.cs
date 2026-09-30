@@ -24,17 +24,6 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
 
     public event EventHandler? LimitReached;
 
-    public bool IsRecording
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _session is not null;
-            }
-        }
-    }
-
     public void Start(string deviceId)
     {
         lock (_gate)

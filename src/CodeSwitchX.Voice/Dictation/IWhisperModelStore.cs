@@ -9,9 +9,6 @@ public interface IWhisperModelStore
 
     bool IsPresent { get; }
 
-    /// <summary>Size of the installed file, or null when not present.</summary>
-    long? SizeBytes { get; }
-
     /// <summary>Name of the native backend that actually loaded ("Vulkan", "Cuda12", "Cpu"), or
     /// null while no model has been loaded yet, because the choice is made when the first one is.
     /// Lets a host show whether the GPU is in use without guessing.</summary>

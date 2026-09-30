@@ -17,6 +17,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The mic button's tooltip, with the chord from <see cref="HotkeyService.PushToTalk"/>.</summary>
     public static readonly string MicToolTip = $"Hold to talk, or tap to keep listening until the next tap ({HotkeyService.PushToTalk.Keys})";
 
+    /// <summary>How many entries the log keeps; past that, the oldest go.</summary>
+    public const int MaximumLogEntries = 500;
 
     /// <summary>How long after startup the model is warmed up: long enough to leave the startup itself alone.</summary>
     public static readonly TimeSpan StartupWarmUpDelay = TimeSpan.FromSeconds(5);
@@ -65,6 +67,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private long _appliedListing;
     private long _recording;
     private bool _capturing;
+
+    /// <summary>Stopped clips not yet done, the one transcribing included. This and the queue's counters below are
+    /// touched on the UI thread only: the queue's awaits resume there.</summary>
     private int _pending;
     private bool _downloading;
 
@@ -72,10 +77,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private long _clipsQueued;
 
     /// <summary>
-    /// Clips numbered up to this one are dropped when their turn comes: they were queued behind a download that failed,
-    /// whose one warning counted them. Without this, each would start a download of its own and fail the same way.
+    /// Clips numbered up to this one that would be transcribed are dropped when their turn comes: they were queued
+    /// behind a download that failed, whose one warning counts them as they are dropped. Without this, each would start
+    /// a download of its own and fail the same way. A clip that is too short or silent still says so.
     /// </summary>
     private long _droppedThrough;
+
+    /// <summary>The failed download's warning, what it says before the count, and how many clips it has dropped.</summary>
+    private RavenLogEntry? _dropWarning;
+    private string _dropReason = "";
+    private int _dropped;
     private Task _pipeline = Task.CompletedTask;
     private Task<bool> _started = Task.FromResult(false);
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
@@ -320,8 +331,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Never on the calling thread, however the service behaves: loading the model takes seconds. Only at startup and
-    /// after a download, never per press: a model that will not load would otherwise be loaded twice per press.
+    /// Never on the calling thread, however the service behaves: loading the model takes seconds. Only at startup, never
+    /// per press: a model that will not load would otherwise be loaded twice per press. Not after a download either: the
+    /// clip that asked for it is transcribed next and loads the model itself.
     /// </summary>
     private void WarmUpInBackground() => _ = Task.Run(() => _dictation.WarmUpAsync(CancellationToken.None));
 
@@ -413,13 +425,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _capturing = false;
-        Interlocked.Increment(ref _pending);
+        _pending++;
         UpdateState();
         var heardSpeech = _speech.HeardSpeech;
         var words = _vocabularyFetch;
         var stop = StopCaptureAsync(_started);
         PendingStop = stop;
-        var number = Interlocked.Increment(ref _clipsQueued);
+        var number = ++_clipsQueued;
         var turn = TranscribeInTurnAsync(_pipeline, number, stop, heardSpeech, words);
         _pipeline = turn;
         return turn;
@@ -649,11 +661,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             await previous;
             var clip = await stopping;
-            if (number <= Interlocked.Read(ref _droppedThrough))
-            {
-                return; // queued behind a failed download, whose warning counted it
-            }
-
             if (clip is null)
             {
                 return; // the start failed, and has said why
@@ -672,13 +679,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
+            if (number <= _droppedThrough)
+            {
+                // Queued behind a failed download: counted in its warning.
+                _dropped++;
+                _dropWarning!.Text = DropWarning();
+                return;
+            }
+
             if (!_models.IsPresent && !await DownloadModelAsync(number))
             {
                 return;
             }
 
             var words = await vocabulary;
-            var result = await _dictation.TranscribeAsync(clip.Samples16k, words, live: false, CancellationToken.None);
+            var result = await _dictation.TranscribeAsync(clip.Samples16k, words, CancellationToken.None);
             var text = result.Text.Trim();
             if (text.Length > 0)
             {
@@ -700,7 +715,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            Interlocked.Decrement(ref _pending);
+            _pending--;
             UpdateState();
         }
     }
@@ -721,7 +736,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Downloads the model for clip <paramref name="number"/>. A failure drops every clip queued behind it with this one
-    /// warning; a clip stopped after the failure, the next press, tries the download again.
+    /// warning, which counts them as their turns come; a clip stopped after the failure, the next press, tries the
+    /// download again.
     /// </summary>
     private async Task<bool> DownloadModelAsync(long number)
     {
@@ -737,15 +753,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "The speech model could not be downloaded");
-            var queued = Interlocked.Read(ref _clipsQueued);
-            Interlocked.Exchange(ref _droppedThrough, queued);
-            var dropped = (queued - number) switch
-            {
-                0 => "",
-                1 => " 1 waiting recording was dropped.",
-                var n => $" {n} waiting recordings were dropped.",
-            };
-            AddEntry(RavenLogKind.Warning, $"The speech model could not be downloaded: {ex.Message}.{dropped} Press the mic to try again.");
+            _droppedThrough = _clipsQueued;
+            _dropped = 0;
+            _dropReason = $"The speech model could not be downloaded: {ex.Message}.";
+            _dropWarning = AddEntry(RavenLogKind.Warning, DropWarning());
             return false;
         }
         finally
@@ -755,13 +766,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         entry.Text = "Speech model downloaded.";
-        WarmUpInBackground();
         return true;
     }
 
+    private string DropWarning() => _dropReason + _dropped switch
+    {
+        0 => "",
+        1 => " 1 waiting recording was dropped.",
+        var n => $" {n} waiting recordings were dropped.",
+    } + " Press the mic to try again.";
+
     /// <summary>
     /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Transcribing while any
-    /// stopped clip is pending (the download, or how many wait, in the caption); otherwise Idle.
+    /// stopped clip is pending (the download, or how many wait behind the one transcribing, in the caption); otherwise Idle.
     /// </summary>
     private void UpdateState()
     {
@@ -773,8 +790,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Level = 0;
-        var pending = Volatile.Read(ref _pending);
-        if (pending == 0)
+        if (_pending == 0)
         {
             State = RavenState.Idle;
             Caption = IdleCaption;
@@ -783,13 +799,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         State = RavenState.Transcribing;
         Caption = _downloading ? "Downloading the speech model…"
-            : pending > 1 ? $"Transcribing… ({pending} waiting)"
+            : _pending > 1 ? $"Transcribing… ({_pending - 1} waiting)"
             : "Transcribing…";
     }
 
+    /// <summary>The oldest entries go first: the log of a panel left open for days of dictation would grow for good.</summary>
     private RavenLogEntry AddEntry(RavenLogKind kind, string text)
     {
         var entry = new RavenLogEntry(kind, text, _time.GetUtcNow());
+        while (Log.Count >= MaximumLogEntries)
+        {
+            Log.RemoveAt(0);
+        }
+
         Log.Add(entry);
         return entry;
     }

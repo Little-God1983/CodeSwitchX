@@ -16,11 +16,6 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
 
     public bool IsPresent => File.Exists(ModelPath);
 
-    // One look at the file: FileInfo caches what Exists read, so Length reports that same file. A
-    // separate File.Exists and then FileInfo.Length could see a file that went away in between
-    // (a delete, or a download's rename swapping it) and throw FileNotFoundException.
-    public long? SizeBytes => new FileInfo(ModelPath) is { Exists: true } file ? file.Length : null;
-
     // Whisper.net picks a native backend the first time a WhisperFactory is built and remembers
     // it process-wide, so this is null until someone has dictated once.
     public string? LoadedRuntime => RuntimeOptions.LoadedLibrary?.ToString();

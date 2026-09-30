@@ -7,12 +7,8 @@ public interface IDictationService
     /// <summary>Transcribes 16 kHz mono float samples. Applies the vocabulary hint and the
     /// corrections. Returns empty text for clips shorter than <see cref="DictationOptions.MinimumClip"/>.
     /// Throws <see cref="DictationModelMissingException"/> when the model file is not on disk.</summary>
-    /// <param name="live">This is a preview of speech still in progress, not the clip the user
-    /// is waiting on. Live transcriptions arrive every second or so for as long as someone is
-    /// talking, so they are logged at Debug: at Information a minute of dictation buries
-    /// everything else in the log. The recognition itself is identical.</param>
     Task<DictationResult> TranscribeAsync(ReadOnlyMemory<float> samples,
-        DictationVocabulary vocabulary, bool live, CancellationToken ct);
+        DictationVocabulary vocabulary, CancellationToken ct);
 
     /// <summary>Loads the model and runs one throwaway clip through it, so that the first real
     /// dictation does not pay for either. Reading a large model off disk and onto the GPU takes

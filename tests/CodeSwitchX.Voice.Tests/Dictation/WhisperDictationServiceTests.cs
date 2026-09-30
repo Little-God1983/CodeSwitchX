@@ -13,7 +13,6 @@ public sealed class WhisperDictationServiceTests
         public WhisperModel Model => WhisperModel.BaseEnglish;
         public string ModelPath => @"C:\nowhere\ggml-base.en.bin";
         public bool IsPresent => false;
-        public long? SizeBytes => null;
         public string? LoadedRuntime => null;
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
     }
@@ -23,7 +22,6 @@ public sealed class WhisperDictationServiceTests
         public WhisperModel Model => WhisperModel.BaseEnglish;
         public string ModelPath => path;
         public bool IsPresent => true;
-        public long? SizeBytes => new FileInfo(path).Length;
         public string? LoadedRuntime => "Vulkan";
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
     }
@@ -54,7 +52,6 @@ public sealed class WhisperDictationServiceTests
         }
 
         public bool IsPresent => true;
-        public long? SizeBytes => null;
         public string? LoadedRuntime => null;
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
 
@@ -97,7 +94,7 @@ public sealed class WhisperDictationServiceTests
     {
         var samples = new float[AudioMath.TargetRate / 4]; // 250 ms of silence
 
-        var result = await Service().TranscribeAsync(samples, DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken);
+        var result = await Service().TranscribeAsync(samples, DictationVocabulary.Empty, TestContext.Current.CancellationToken);
 
         result.Text.ShouldBe("");
         result.AudioLength.ShouldBe(TimeSpan.FromMilliseconds(250));
@@ -109,7 +106,7 @@ public sealed class WhisperDictationServiceTests
         var samples = new float[AudioMath.TargetRate]; // 1 s
 
         var ex = await Should.ThrowAsync<DictationModelMissingException>(() =>
-            Service().TranscribeAsync(samples, DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+            Service().TranscribeAsync(samples, DictationVocabulary.Empty, TestContext.Current.CancellationToken));
 
         ex.ModelPath.ShouldBe(@"C:\nowhere\ggml-base.en.bin");
     }
@@ -138,7 +135,7 @@ public sealed class WhisperDictationServiceTests
             await service.WarmUpAsync(TestContext.Current.CancellationToken);
 
             await Should.ThrowAsync<DictationModelLoadException>(() =>
-                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -165,7 +162,7 @@ public sealed class WhisperDictationServiceTests
             {
                 await service.WarmUpAsync(TestContext.Current.CancellationToken);
                 await Should.ThrowAsync<DictationModelLoadException>(() =>
-                    service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+                    service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, TestContext.Current.CancellationToken));
                 logger.Errors.ShouldBe(1 + press, "one load per press, by the transcription the user waits on");
             }
         }
@@ -243,7 +240,7 @@ public sealed class WhisperDictationServiceTests
                 NullLogger<WhisperDictationService>.Instance);
 
             var ex = await Should.ThrowAsync<DictationModelLoadException>(() =>
-                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, TestContext.Current.CancellationToken));
 
             ex.ModelPath.ShouldBe(path);
             ex.Message.ShouldContain("ggml-base.en.bin");
@@ -268,7 +265,7 @@ public sealed class WhisperDictationServiceTests
             using var service = new WhisperDictationService(store,
                 Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance);
 
-            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty,
                 TestContext.Current.CancellationToken);
 
             store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
@@ -295,7 +292,7 @@ public sealed class WhisperDictationServiceTests
         {
             var service = new WhisperDictationService(store,
                 Options.Create(new DictationOptions { ModelFolder = folder }), NullLogger<WhisperDictationService>.Instance);
-            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty,
                 TestContext.Current.CancellationToken);
             store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
 
@@ -327,7 +324,7 @@ public sealed class WhisperDictationServiceTests
             {
                 DisposeTimeout = TimeSpan.FromMilliseconds(100),
             };
-            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false,
+            var transcription = service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty,
                 TestContext.Current.CancellationToken);
             store.Entered.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue("the load started");
 
@@ -355,7 +352,7 @@ public sealed class WhisperDictationServiceTests
             service.Dispose();
 
             await Should.ThrowAsync<ObjectDisposedException>(() =>
-                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+                service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, TestContext.Current.CancellationToken));
         }
         finally
         {

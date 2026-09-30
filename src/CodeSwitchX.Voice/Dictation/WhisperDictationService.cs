@@ -29,7 +29,7 @@ public sealed class WhisperDictationService(
     internal TimeSpan DisposeTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public async Task<DictationResult> TranscribeAsync(ReadOnlyMemory<float> samples,
-        DictationVocabulary vocabulary, bool live, CancellationToken ct)
+        DictationVocabulary vocabulary, CancellationToken ct)
     {
         var length = TimeSpan.FromSeconds((double)samples.Length / AudioMath.TargetRate);
         if (length < options.Value.MinimumClip)
@@ -44,12 +44,12 @@ public sealed class WhisperDictationService(
 
         // Task.Run rather than ConfigureAwait alone: a free gate completes WaitAsync synchronously,
         // and everything after it, the model load included, would then run on the caller's thread.
-        return await Task.Run(() => TranscribeOnPoolAsync(samples, vocabulary, live, length, ct), ct)
+        return await Task.Run(() => TranscribeOnPoolAsync(samples, vocabulary, length, ct), ct)
             .ConfigureAwait(false);
     }
 
     private async Task<DictationResult> TranscribeOnPoolAsync(ReadOnlyMemory<float> samples,
-        DictationVocabulary vocabulary, bool live, TimeSpan length, CancellationToken ct)
+        DictationVocabulary vocabulary, TimeSpan length, CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         var clock = Stopwatch.StartNew();
@@ -108,24 +108,11 @@ public sealed class WhisperDictationService(
             // The elapsed time and whether the model had to be loaded are both in here because a
             // slow clip is nearly always the one that loaded the model, and without the two side
             // by side that is indistinguishable from slow recognition.
-            // Two templates rather than one with a " (live)" string interpolated into it: that
-            // string would arrive as a structured property and make the two kinds of line
-            // impossible to filter apart.
-            if (live)
-            {
-                logger.LogDebug(
-                    "Dictation (live): {Seconds:F1}s of audio -> {Chars} chars in {Ms} ms on {Runtime}",
-                    length.TotalSeconds, corrected.Length, clock.ElapsedMilliseconds,
-                    store.LoadedRuntime ?? "(unknown)");
-            }
-            else
-            {
-                logger.LogInformation(
-                    "Dictation: {Seconds:F1}s of audio -> {Chars} chars in {Ms} ms on {Runtime}{Load}",
-                    length.TotalSeconds, corrected.Length, clock.ElapsedMilliseconds,
-                    store.LoadedRuntime ?? "(unknown)",
-                    loadedTheModel ? " (includes loading the model)" : "");
-            }
+            logger.LogInformation(
+                "Dictation: {Seconds:F1}s of audio -> {Chars} chars in {Ms} ms on {Runtime}{Load}",
+                length.TotalSeconds, corrected.Length, clock.ElapsedMilliseconds,
+                store.LoadedRuntime ?? "(unknown)",
+                loadedTheModel ? " (includes loading the model)" : "");
 
             return new DictationResult(corrected, length);
         }
@@ -182,7 +169,7 @@ public sealed class WhisperDictationService(
             // retrying and took anywhere from 6 to 23 s (2026-09-30, RTX on Vulkan), where this
             // one-second sample takes 3 s and leaves the next real clip at about 0.2 s.
             var sw = Stopwatch.StartNew();
-            await TranscribeAsync(WarmUpSpeech.Load(), DictationVocabulary.Empty, live: false, ct)
+            await TranscribeAsync(WarmUpSpeech.Load(), DictationVocabulary.Empty, ct)
                 .ConfigureAwait(false);
             logger.LogInformation("Dictation warm-up: {Model} ready on {Runtime} in {Ms} ms",
                 store.Model, store.LoadedRuntime ?? "(unknown)", sw.ElapsedMilliseconds);

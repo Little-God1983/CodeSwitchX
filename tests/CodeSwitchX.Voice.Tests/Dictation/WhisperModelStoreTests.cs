@@ -39,7 +39,6 @@ public sealed class WhisperModelStoreTests : IDisposable
         var store = Store(WhisperModel.BaseEnglish);
 
         store.IsPresent.ShouldBeFalse();
-        store.SizeBytes.ShouldBeNull();
     }
 
     [Fact]
@@ -60,7 +59,7 @@ public sealed class WhisperModelStoreTests : IDisposable
         var store = Store(WhisperModel.BaseEnglish);
 
         store.IsPresent.ShouldBeTrue();
-        store.SizeBytes.ShouldBe(123);
+        new FileInfo(store.ModelPath).Length.ShouldBe(123);
     }
 
     [Fact]
@@ -100,7 +99,7 @@ public sealed class WhisperModelStoreTests : IDisposable
         await store.DownloadAsync(new SyncProgress(reports.Add), CancellationToken.None);
 
         store.IsPresent.ShouldBeTrue();
-        store.SizeBytes.ShouldBe((long)(approximate * 0.995));
+        new FileInfo(store.ModelPath).Length.ShouldBe((long)(approximate * 0.995));
         reports[^1].ShouldBe(1.0);
     }
 
@@ -123,7 +122,7 @@ public sealed class WhisperModelStoreTests : IDisposable
 
         await store.DownloadAsync(null, CancellationToken.None);
 
-        store.SizeBytes.ShouldBe(1000);
+        new FileInfo(store.ModelPath).Length.ShouldBe(1000);
     }
 
     private WhisperModelStore Downloading(WhisperModel model, Stream source) =>
