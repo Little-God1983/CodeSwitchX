@@ -14,6 +14,9 @@ public interface IRavenShell
 
     void ShowYard();
 
+    /// <summary>Whether the workspace's VS Code window is the one the user works in now. Any thread.</summary>
+    bool IsVsCodeInFront(Guid workspaceId);
+
     /// <summary>Shows, stores and uses the defaults, as if they were picked in Settings.</summary>
     void SetChatDefaults(ChatDefaults defaults);
 
@@ -66,11 +69,23 @@ public sealed class RavenActions : IYardActions
         _agents.Failed += (chat, why) => _ui.Post(() => _shell().Warn($"Raven's chat in {chat.Workspace} ({FolderName(chat.Folder)}): {why}"));
     }
 
+    /// <summary>How often a hand-over looks whether the workspace's VS Code is in front yet.</summary>
+    internal static readonly TimeSpan FrontPoll = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>How long "open it" waits for VS Code to come to the front before it answers that the chat opens later.</summary>
+    internal static readonly TimeSpan FrontWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>How long a hand-over keeps waiting for the user to come to VS Code, after "open it" has answered.</summary>
+    internal static readonly TimeSpan PendingHandOver = TimeSpan.FromMinutes(10);
+
     /// <summary>
-    /// How long a hand-over waits between showing the workspace and opening the chat: the link goes to VS Code's most
-    /// recently active window, which the one just shown must have become by then.
+    /// How long a hand-over waits once VS Code is in front before it sends the link, so VS Code has taken the window as
+    /// its most recently active one.
     /// </summary>
-    internal TimeSpan HandOverDelay { get; set; } = TimeSpan.FromMilliseconds(800);
+    internal TimeSpan HandOverDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>The hand-over still waiting for VS Code to come to the front, if any; completes once it is done or given up.</summary>
+    internal Task PendingHandOverTask { get; private set; } = Task.CompletedTask;
 
     public ChatDefaults Defaults => _chats.Defaults;
 
@@ -140,15 +155,74 @@ public sealed class RavenActions : IYardActions
             return $"{name} is open.";
         }
 
-        await Task.Delay(HandOverDelay, _time, ct).ConfigureAwait(false);
-        if (_openUrl(ChatUrl(chat.Id, cutOff)) is { } failed)
+        // VS Code gives the link to the window focused last. When the user is in another app, CodeSwitchX cannot take
+        // the front, and the link would open the chat in whichever VS Code window they used last: it waits for them.
+        var goOn = cutOff ? " It was still working, and that turn was cut off; its input box says to go on." : "";
+        if (!await InFrontWithinAsync(workspaceId, FrontWait, ct).ConfigureAwait(false))
         {
-            _logger.LogWarning("Could not open chat {Id} in VS Code: {Problem}", chat.Id, failed);
+            PendingHandOverTask = HandOverWhenInFrontAsync(chat, workspaceId, cutOff);
+            return $"{name} is open in CodeSwitchX, which is not in front: the chat opens in VS Code as soon as the user switches to it.{goOn}";
+        }
+
+        if (await HandOverAsync(chat.Id, cutOff, ct).ConfigureAwait(false) is { } failed)
+        {
             throw new YardActionException($"{name} is open, but VS Code could not be asked to open the chat: {failed} It can be resumed in its Claude Code panel.");
         }
 
-        return $"{name} is open, and the chat opens in VS Code's Claude Code panel."
-            + (cutOff ? " It was still working, and that turn was cut off; its input box says to go on." : "");
+        return $"{name} is open, and the chat opens in VS Code's Claude Code panel.{goOn}";
+    }
+
+    /// <summary>True once the workspace's VS Code is in front, looked at every <see cref="FrontPoll"/>; false when it was not within the time.</summary>
+    private async Task<bool> InFrontWithinAsync(Guid workspaceId, TimeSpan within, CancellationToken ct)
+    {
+        var until = _time.GetUtcNow() + within;
+        while (!_shell().IsVsCodeInFront(workspaceId))
+        {
+            if (_time.GetUtcNow() >= until)
+            {
+                return false;
+            }
+
+            await Task.Delay(FrontPoll, _time, ct).ConfigureAwait(false);
+        }
+
+        return true;
+    }
+
+    /// <summary>Sends the link once VS Code is in front; says in Raven's log when it gave up or could not send it. Never faults.</summary>
+    private async Task HandOverWhenInFrontAsync(AgentChat chat, Guid workspaceId, bool cutOff)
+    {
+        try
+        {
+            if (!await InFrontWithinAsync(workspaceId, PendingHandOver, CancellationToken.None).ConfigureAwait(false))
+            {
+                _ui.Post(() => _shell().Warn(
+                    $"The chat Raven handed over in {chat.Workspace} was not opened in VS Code: it never came to the front. Open it from the Claude Code panel's session history."));
+                return;
+            }
+
+            if (await HandOverAsync(chat.Id, cutOff, CancellationToken.None).ConfigureAwait(false) is { } failed)
+            {
+                _ui.Post(() => _shell().Warn($"VS Code could not be asked to open the chat Raven handed over in {chat.Workspace}: {failed}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Handing chat {Id} over to VS Code failed", chat.Id);
+        }
+    }
+
+    /// <summary>Sends the chat's link to VS Code, which is in front; null once sent, else why not.</summary>
+    private async Task<string?> HandOverAsync(string chatId, bool cutOff, CancellationToken ct)
+    {
+        await Task.Delay(HandOverDelay, _time, ct).ConfigureAwait(false);
+        var failed = _openUrl(ChatUrl(chatId, cutOff));
+        if (failed is not null)
+        {
+            _logger.LogWarning("Could not open chat {Id} in VS Code: {Problem}", chatId, failed);
+        }
+
+        return failed;
     }
 
     public Task BackToYardAsync(CancellationToken ct) => OnUiAsync(() => _shell().ShowYard(), ct);

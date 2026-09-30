@@ -266,6 +266,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 
+    bool IRavenShell.IsVsCodeInFront(Guid workspaceId) => _host.IsInFront(workspaceId);
+
     void IRavenShell.ShowYard()
     {
         if (Mode != ShellMode.Yard)

@@ -52,6 +52,20 @@ public class HostManagerTests
     }
 
     [Fact]
+    public async Task A_workspace_s_VS_Code_is_in_front_only_while_its_window_has_the_foreground()
+    {
+        _manager.IsInFront(_workspace.Id).ShouldBeFalse(); // never opened
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+
+        _windows.ForegroundWindow().Returns((nint)42);
+        _manager.IsInFront(_workspace.Id).ShouldBeFalse();
+
+        _windows.ForegroundWindow().Returns((nint)500);
+        _manager.IsInFront(_workspace.Id).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Open_is_a_no_op_while_the_window_is_alive()
     {
         WindowAppearsAfterLaunch();

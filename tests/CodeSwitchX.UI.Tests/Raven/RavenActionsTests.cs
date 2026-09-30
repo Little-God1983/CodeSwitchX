@@ -19,6 +19,7 @@ public sealed class RavenActionsTests
     private readonly List<string> _sequence = [];
     private readonly List<string> _urls = [];
     private string? _urlFailure;
+    private readonly FakeTimeProvider _time = new();
     private readonly RavenActions _actions;
 
     public RavenActionsTests()
@@ -30,7 +31,7 @@ public sealed class RavenActionsTests
             {
                 _urls.Add(url);
                 return _urlFailure;
-            }, new FakeTimeProvider(), NullLogger<RavenActions>.Instance)
+            }, _time, NullLogger<RavenActions>.Instance)
         {
             HandOverDelay = TimeSpan.Zero,
         };
@@ -223,6 +224,56 @@ public sealed class RavenActionsTests
         RavenActions.ChatUrl("abc", cutOff: true).ShouldBe("vscode://anthropic.claude-code/open?session=abc&prompt=Go%20on%20where%20you%20stopped.");
     }
 
+    [Fact]
+    public async Task A_chat_handed_over_while_the_user_is_in_another_app_opens_once_VS_Code_comes_to_the_front()
+    {
+        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
+        _shell.InFront = false;
+        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
+        await AdvanceUntil(() => open.IsCompleted, RavenActions.FrontWait);
+
+        (await open).ShouldBe("Diffusion-Full is open in CodeSwitchX, which is not in front: the chat opens in VS Code as soon as the user switches to it.");
+        _urls.ShouldBeEmpty(); // it would go to whichever VS Code window was used last
+
+        _shell.InFront = true;
+        await AdvanceUntil(() => _actions.PendingHandOverTask.IsCompleted, RavenActions.FrontPoll);
+
+        _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", cutOff: false)]);
+        _shell.Warnings.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_hand_over_VS_Code_never_comes_forward_for_is_given_up_in_the_log()
+    {
+        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
+        _shell.InFront = false;
+        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
+        await AdvanceUntil(() => open.IsCompleted, RavenActions.FrontWait);
+
+        await AdvanceUntil(() => _actions.PendingHandOverTask.IsCompleted, RavenActions.PendingHandOver);
+
+        _urls.ShouldBeEmpty();
+        _shell.Warnings.ShouldHaveSingleItem().ShouldContain("was not opened in VS Code: it never came to the front");
+    }
+
+    /// <summary>Moves the clock on a poll at a time, up to a little more than <paramref name="span"/>, until the condition holds.</summary>
+    private async Task AdvanceUntil(Func<bool> condition, TimeSpan span)
+    {
+        var until = _time.GetUtcNow() + span + TimeSpan.FromSeconds(2);
+        while (!condition() && _time.GetUtcNow() < until)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(RavenActions.FrontPoll);
+        }
+
+        for (var i = 0; i < 100 && !condition(); i++)
+        {
+            await Task.Delay(10, Ct);
+        }
+
+        condition().ShouldBeTrue();
+    }
+
     private sealed class FakeShell(ChatSettings chats) : IRavenShell
     {
         public List<Guid> Opened { get; } = [];
@@ -240,6 +291,11 @@ public sealed class RavenActionsTests
         public void ShowYard()
         {
         }
+
+        /// <summary>Whether VS Code is in front; it is, unless a test says otherwise.</summary>
+        public bool InFront { get; set; } = true;
+
+        public bool IsVsCodeInFront(Guid workspaceId) => InFront;
 
         public void SetChatDefaults(ChatDefaults defaults)
         {
