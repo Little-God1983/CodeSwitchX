@@ -7,6 +7,7 @@ using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
+using CodeSwitchX.Voice.Audio;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Shell;
@@ -42,6 +43,67 @@ public class ShellViewModelTests
         await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
 
         await _h.Settings.Received(1).SetAsync(SettingKeys.TileScale, 0.9, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_raven_panel_starts_in_its_stored_state()
+    {
+        _h.Settings.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.IsOpen.ShouldBeFalse();
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenPanelOpen, Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Collapsing_raven_is_saved()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.IsOpen.ShouldBeTrue("a panel never collapsed starts open");
+
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+
+        _h.Shell.Settings.RavenPanelOpen.ShouldBeFalse();
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenPanelOpen, false, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_stored_microphone_that_is_still_plugged_in_is_selected_at_startup()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var desk = new MicrophoneDevice("id-desk", "Desk mic");
+        _h.Microphones.List().Returns([headset, desk]);
+        _h.Microphones.Default().Returns(headset);
+        _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(desk));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.Microphones.ShouldBe([headset, desk]);
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(desk);
+        _h.Shell.Raven.Log.ShouldBeEmpty("nothing fell back");
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, Arg.Any<MicrophoneDevice?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Choosing_another_microphone_is_saved()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var desk = new MicrophoneDevice("id-desk", "Desk mic");
+        _h.Microphones.List().Returns([headset, desk]);
+        _h.Microphones.Default().Returns(headset);
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset, "nothing stored: the Windows default");
+
+        _h.Shell.Raven.SelectedMicrophone = desk;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenMicrophone, desk, Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using CodeSwitchX.Core;
 using Microsoft.Extensions.Logging;
 using Path = System.IO.Path;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Data;
@@ -12,11 +13,14 @@ using CodeSwitchX.Ingest;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Workspaces;
 using CodeSwitchX.UI.Yard;
+using CodeSwitchX.Voice;
+using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -165,11 +169,15 @@ public partial class App : Application
         services.AddCodeSwitchXTelemetry();
         services.AddCodeSwitchXTranscriptIndexer();
         services.AddCodeSwitchXHosting();
+        services.AddCodeSwitchXVoice(paths.ModelsDirectory);
+        services.AddSingleton<IDictationVocabularyProvider>(sp =>
+            new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
+        services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();
         services.AddSingleton<Func<AddWorkspaceViewModel>>(sp => () => sp.GetRequiredService<AddWorkspaceViewModel>());

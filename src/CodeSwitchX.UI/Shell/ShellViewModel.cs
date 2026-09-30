@@ -3,6 +3,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Yard;
@@ -33,12 +34,13 @@ public sealed partial class ShellViewModel : ObservableObject
     private int _openAttempt;
 
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
-        HostManager host, ILogger<ShellViewModel> logger)
+        RavenPanelViewModel raven, HostManager host, ILogger<ShellViewModel> logger)
     {
         Yard = yard;
         Cab = cab;
         Settings = settings;
         PerformanceBar = performanceBar;
+        Raven = raven;
         _host = host;
         _logger = logger;
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
@@ -55,6 +57,7 @@ public sealed partial class ShellViewModel : ObservableObject
     public CabViewModel Cab { get; }
     public SettingsViewModel Settings { get; }
     public PerformanceBarViewModel PerformanceBar { get; }
+    public RavenPanelViewModel Raven { get; }
 
     public async Task InitializeAsync(CancellationToken ct)
     {
@@ -80,6 +83,23 @@ public sealed partial class ShellViewModel : ObservableObject
             if (e.PropertyName == nameof(YardViewModel.TileScale))
             {
                 Settings.TileScale = Yard.TileScale;
+            }
+        };
+        // The same for the Raven panel: it owns its open state and microphone, the settings store them. The stored
+        // microphone is the one to look for among those plugged in; a fallback at startup is not saved, so the stored
+        // choice comes back when the device does.
+        Raven.IsOpen = Settings.RavenPanelOpen;
+        Raven.SelectedMicrophone = Settings.RavenMicrophone;
+        Raven.RefreshMicrophones();
+        Raven.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RavenPanelViewModel.IsOpen))
+            {
+                Settings.RavenPanelOpen = Raven.IsOpen;
+            }
+            else if (e.PropertyName == nameof(RavenPanelViewModel.SelectedMicrophone))
+            {
+                Settings.RavenMicrophone = Raven.SelectedMicrophone;
             }
         };
         _ = AutoStartAsync();

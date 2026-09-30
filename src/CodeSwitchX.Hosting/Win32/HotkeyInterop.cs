@@ -23,4 +23,7 @@ public static class HotkeyInterop
         PInvoke.RegisterHotKey(new HWND(hwnd), id, (HOT_KEY_MODIFIERS)(uint)modifiers, virtualKey);
 
     public static bool Unregister(nint hwnd, int id) => PInvoke.UnregisterHotKey(new HWND(hwnd), id);
+
+    /// <summary>Whether the key is physically down right now, whichever window has the keyboard: a hotkey's release reaches no window.</summary>
+    public static bool IsKeyDown(uint virtualKey) => (PInvoke.GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 }

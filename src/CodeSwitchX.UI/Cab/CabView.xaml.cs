@@ -17,6 +17,9 @@ public partial class CabView : UserControl
         Unloaded += (_, _) => Detach();
         IsVisibleChanged += (_, _) => Publish();
         HostArea.SizeChanged += (_, _) => Publish();
+        // A move inside the window without a size change (the Raven panel folding while the window is maximised, say)
+        // raises no SizeChanged; every layout pass is checked, and Publish ignores a rectangle that did not change.
+        HostArea.LayoutUpdated += (_, _) => Publish();
     }
 
     /// <summary>Screen rectangle (physical pixels) of the host area, raised whenever it changes.</summary>

@@ -70,6 +70,11 @@ public partial class MainWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         _hotkeys.Attach(hwnd, _shell);
+        foreach (var binding in _hotkeys.FailedBindings.Where(HotkeyService.IsRavenBinding))
+        {
+            _shell.Raven.Note($"{binding.Label} ({binding.Keys}) is taken by another app. Use the mic button instead.");
+        }
+
         _tray.Attach(this, _shell);
         _locationWatcher = new WindowLocationWatcher(_watcherLogger);
         _locationWatcher.Moved += movedHwnd => _host.SnapBack(movedHwnd);

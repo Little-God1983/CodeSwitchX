@@ -1,0 +1,294 @@
+<UserControl x:Class="CodeSwitchX.UI.Raven.RavenPanelView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:raven="clr-namespace:CodeSwitchX.UI.Raven"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance raven:RavenPanelViewModel}"
+             d:DesignWidth="320" d:DesignHeight="800">
+  <UserControl.Resources>
+    <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+    <!-- Keyboard focus only (mouse clicks draw none): a ring in the voice colour around the control. -->
+    <Style x:Key="FocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Rectangle Margin="-3" RadiusX="8" RadiusY="8" Stroke="#62D0E8" StrokeThickness="2" SnapsToDevicePixels="True" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="RoundFocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Ellipse Margin="-4" Stroke="#62D0E8" StrokeThickness="2" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The chevrons: a quiet square that lights up under the mouse. -->
+    <Style x:Key="IconButton" TargetType="Button">
+      <Setter Property="Width" Value="28" />
+      <Setter Property="Height" Value="28" />
+      <Setter Property="Foreground" Value="#9CA3AF" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="#1F2937" />
+      <Setter Property="FontFamily" Value="{StaticResource Icons}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Box" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Foreground" Value="#D1D5DB" />
+                <Setter TargetName="Box" Property="Background" Value="#1F2937" />
+                <Setter TargetName="Box" Property="BorderBrush" Value="#374151" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Box" Property="Background" Value="#374151" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The mic: the panel's primary control. Voice colour at rest, red while listening, amber while transcribing. -->
+    <Style x:Key="MicButton" TargetType="Button">
+      <Setter Property="Width" Value="52" />
+      <Setter Property="Height" Value="52" />
+      <Setter Property="FontSize" Value="20" />
+      <Setter Property="Foreground" Value="#62D0E8" />
+      <Setter Property="Background" Value="#2662D0E8" />
+      <Setter Property="BorderBrush" Value="#62D0E8" />
+      <Setter Property="FontFamily" Value="{StaticResource Icons}" />
+      <Setter Property="Content" Value="&#xE720;" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="ToolTip" Value="Hold to talk, or tap to keep listening until the next tap (Ctrl+Shift+Space)" />
+      <Setter Property="AutomationProperties.Name" Value="Push to talk" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource RoundFocusRing}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Grid>
+              <Ellipse x:Name="Halo" Margin="-6" Fill="#33EF4444" Visibility="Collapsed" />
+              <Ellipse x:Name="Disc" Fill="{TemplateBinding Background}" Stroke="{TemplateBinding BorderBrush}" StrokeThickness="2" />
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Disc" Property="Fill" Value="#4062D0E8" />
+              </Trigger>
+              <DataTrigger Binding="{Binding State}" Value="Listening">
+                <Setter Property="Foreground" Value="White" />
+                <Setter TargetName="Disc" Property="Fill" Value="#EF4444" />
+                <Setter TargetName="Disc" Property="Stroke" Value="#EF4444" />
+                <Setter TargetName="Halo" Property="Visibility" Value="Visible" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="Transcribing">
+                <Setter Property="Foreground" Value="#F59E0B" />
+                <Setter TargetName="Disc" Property="Fill" Value="#26F59E0B" />
+                <Setter TargetName="Disc" Property="Stroke" Value="#F59E0B" />
+                <Setter Property="Cursor" Value="Wait" />
+              </DataTrigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="StateText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#62D0E8" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Text" Value="IDLE" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding State}" Value="Listening">
+          <Setter Property="Text" Value="LISTENING" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding State}" Value="Transcribing">
+          <Setter Property="Text" Value="TRANSCRIBING" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Log entries: my words in a box, notes dim, warnings amber with a glyph. -->
+    <DataTemplate x:Key="YouEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border Background="#1F2937" CornerRadius="8,8,8,2" Padding="10,7,10,8">
+        <StackPanel>
+          <TextBlock FontSize="11" Foreground="#9CA3AF" Text="{Binding At.LocalDateTime, StringFormat='You · {0:HH:mm}'}" />
+          <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Margin="0,3,0,0" Text="{Binding Text}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="NoteEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <TextBlock FontSize="13" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="2,0" Text="{Binding Text}" />
+    </DataTemplate>
+    <DataTemplate x:Key="WarningEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Grid Margin="2,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <TextBlock FontFamily="{StaticResource Icons}" FontSize="13" Foreground="#F59E0B" Text="&#xE7BA;" Margin="0,2,8,0" VerticalAlignment="Top" />
+        <TextBlock Grid.Column="1" FontSize="13" Foreground="#F59E0B" TextWrapping="Wrap" Text="{Binding Text}" />
+      </Grid>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
+    <Grid>
+      <!-- Open: 320 px (MainWindow sets the width). -->
+      <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolVisible}}">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" BorderBrush="#1F2937" BorderThickness="0,0,0,1" Padding="14,12,14,14">
+          <StackPanel>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Style="{StaticResource StateText}" Margin="10,1,0,0" />
+              <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}"
+                      ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
+            </Grid>
+
+            <raven:RavenOrb Width="160" Height="160" Margin="0,8,0,4" HorizontalAlignment="Center" IsAnimating="True"
+                            State="{Binding State}" Level="{Binding Level}" />
+
+            <TextBlock Text="{Binding Caption}" FontSize="13" Foreground="#9CA3AF" TextAlignment="Center" TextWrapping="Wrap"
+                       MinHeight="36" Margin="8,0,8,10" />
+
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Button x:Name="MicButton" Style="{StaticResource MicButton}" Margin="6,0,0,0" VerticalAlignment="Center"
+                      PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
+                      PreviewKeyDown="OnMicKey" />
+              <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
+                <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,0,0,4" />
+                <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"
+                          FontSize="13" HorizontalAlignment="Stretch" AutomationProperties.Name="Microphone"
+                          ToolTip="{Binding SelectedMicrophone.Name}" />
+                <Border Height="4" CornerRadius="2" Background="#1F2937" Margin="0,8,0,0" ClipToBounds="True"
+                        ToolTip="Mic level">
+                  <Border Background="#62D0E8" CornerRadius="2" RenderTransformOrigin="0,0.5">
+                    <Border.RenderTransform>
+                      <ScaleTransform ScaleX="{Binding Level}" />
+                    </Border.RenderTransform>
+                  </Border>
+                </Border>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+          <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <ItemsControl ItemsSource="{Binding Log}" Margin="14,12,14,4" Focusable="False">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="{x:Type raven:RavenLogEntry}">
+                  <ContentControl Content="{Binding}" Focusable="False" Margin="0,0,0,10">
+                    <ContentControl.Style>
+                      <Style TargetType="ContentControl">
+                        <Setter Property="ContentTemplate" Value="{StaticResource NoteEntry}" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Kind}" Value="You">
+                            <Setter Property="ContentTemplate" Value="{StaticResource YouEntry}" />
+                          </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="Warning">
+                            <Setter Property="ContentTemplate" Value="{StaticResource WarningEntry}" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </ContentControl.Style>
+                  </ContentControl>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+          <TextBlock Text="What you say appears here." FontSize="13" Foreground="#4B5563" HorizontalAlignment="Center"
+                     VerticalAlignment="Center" IsHitTestVisible="False">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Log.Count}" Value="0">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </Grid>
+
+        <Border Grid.Row="2" BorderBrush="#1F2937" BorderThickness="0,1,0,0" Padding="14,10,14,12">
+          <Grid>
+            <TextBox x:Name="TypeBox" Text="{Binding TypedText, UpdateSourceTrigger=PropertyChanged}" FontSize="13"
+                     AutomationProperties.Name="Type instead of talking">
+              <TextBox.InputBindings>
+                <KeyBinding Key="Return" Command="{Binding SubmitTypedCommand}" />
+              </TextBox.InputBindings>
+            </TextBox>
+            <TextBlock Text="Type instead of talking…" FontSize="13" Foreground="#6B7280" IsHitTestVisible="False"
+                       VerticalAlignment="Center" Margin="12,0,12,0">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding TypedText}" Value="">
+                      <Setter Property="Visibility" Value="Visible" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <!-- Collapsed: a 58 px rail that keeps the orb and the mic. -->
+      <StackPanel HorizontalAlignment="Center" Margin="0,14,0,14"
+                  Visibility="{Binding IsOpen, Converter={StaticResource BoolCollapsed}}">
+        <Button Style="{StaticResource IconButton}" Content="&#xE76C;" Command="{Binding TogglePanelCommand}"
+                ToolTip="Expand Raven (Ctrl+Alt+J)" AutomationProperties.Name="Expand Raven" HorizontalAlignment="Center" />
+        <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
+                        State="{Binding State}" Level="{Binding Level}">
+          <raven:RavenOrb.Style>
+            <!-- At this size the idle breath is under a pixel: only listening and transcribing animate here. -->
+            <Style TargetType="raven:RavenOrb">
+              <Setter Property="IsAnimating" Value="True" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding State}" Value="Idle">
+                  <Setter Property="IsAnimating" Value="False" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </raven:RavenOrb.Style>
+        </raven:RavenOrb>
+        <Button Style="{StaticResource MicButton}" Width="38" Height="38" FontSize="16" Margin="0,16,0,0" HorizontalAlignment="Center"
+                PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
+                PreviewKeyDown="OnMicKey" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>
