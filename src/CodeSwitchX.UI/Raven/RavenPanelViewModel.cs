@@ -51,6 +51,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _refreshing;
     private bool _fellBack;
     private bool _audioFailed;
+
+    /// <summary>How many device listings have started; each listing's number, so an older one is never applied over a newer one.</summary>
+    private long _listings;
+
+    /// <summary>The number of the listing applied last (UI thread).</summary>
+    private long _appliedListing;
     private long _recording;
     private bool _capturing;
     private int _pending;
@@ -87,7 +93,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _recorder.LimitReached += (_, _) => _dispatcher.Post(OnLimitReached);
         // A trailing debounce: every notification (on whatever thread COM raises it) restarts the wait. The timer calls
         // back on the thread pool, which lists the devices there; only the result goes to the UI thread.
-        _deviceRefresh = time.CreateTimer(_ => ListDevicesAfterChange(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _deviceRefresh = time.CreateTimer(_ => ListAndPostDevices(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _catalog.DevicesChanged += (_, _) => _deviceRefresh.Change(DeviceChangeSettle, Timeout.InfiniteTimeSpan);
     }
 
@@ -139,30 +145,62 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     internal Task PendingStart => _started;
 
-    /// <summary>Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded.</summary>
-    public void RefreshMicrophones() => ApplyDevices(ReadDevices());
+    /// <summary>The last <see cref="RefreshMicrophonesAsync"/>; completed when none ran or it has been applied.</summary>
+    internal Task PendingRefresh { get; private set; } = Task.CompletedTask;
 
-    /// <summary>The settled end of a burst of device notifications, on the thread pool.</summary>
-    private void ListDevicesAfterChange()
+    /// <summary>
+    /// Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded, the
+    /// panel after a capture failure. The listing (COM calls that a slow endpoint or a dying audio service can hold up
+    /// for seconds) runs on the thread pool; only its result is applied, on the UI thread. Call on the UI thread; the
+    /// task completes once the result is applied.
+    /// </summary>
+    public Task RefreshMicrophonesAsync() => PendingRefresh = Task.Run(ListAndPostDevices);
+
+    /// <summary>
+    /// Lists the devices on the calling thread (the thread pool: a refresh, or the settled end of a burst of device
+    /// notifications) and posts the result to the UI thread. Completes once it is applied there.
+    /// </summary>
+    private Task ListAndPostDevices()
     {
         var devices = ReadDevices();
-        _dispatcher.Post(() => ApplyDevices(devices));
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _dispatcher.Post(() =>
+        {
+            try
+            {
+                ApplyDevices(devices);
+                applied.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                applied.TrySetException(ex);
+            }
+        });
+        return applied.Task;
     }
 
     private DeviceList ReadDevices()
     {
+        var number = Interlocked.Increment(ref _listings);
         try
         {
-            return new DeviceList(_catalog.List(), _catalog.Default(), null);
+            return new DeviceList(number, _catalog.List(), _catalog.Default(), null);
         }
         catch (Exception ex)
         {
-            return new DeviceList([], null, ex);
+            return new DeviceList(number, [], null, ex);
         }
     }
 
     private void ApplyDevices(DeviceList list)
     {
+        // Listings run concurrently (a startup refresh, a debounced change); one that finishes late is older news.
+        if (list.Number < _appliedListing)
+        {
+            return;
+        }
+
+        _appliedListing = list.Number;
         if (list.Failure is { } ex)
         {
             // A stopped Windows audio service makes the enumeration throw (a COMException). The app still starts; the
@@ -467,7 +505,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             ForgetHold();
         }
 
-        RefreshMicrophones();
+        _ = RefreshMicrophonesAsync();
     }
 
     /// <summary>The dead capture is still stopped and disposed, off the UI thread; its clip is dropped.</summary>
@@ -670,8 +708,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _ => $"{mic?.Name ?? "The microphone"} could not be opened. Another app may be using it exclusively.",
     };
 
-    /// <summary>The active microphones and the Windows default, or why they could not be listed.</summary>
-    private sealed record DeviceList(IReadOnlyList<MicrophoneDevice> Devices, MicrophoneDevice? Default, Exception? Failure);
+    /// <summary>The active microphones and the Windows default, or why they could not be listed; numbered in the order the listings started.</summary>
+    private sealed record DeviceList(long Number, IReadOnlyList<MicrophoneDevice> Devices, MicrophoneDevice? Default, Exception? Failure);
 
     /// <summary>
     /// Whole percents on the UI thread, whatever thread the download reports on. The percent is worked out on the

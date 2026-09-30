@@ -123,6 +123,7 @@ public class HotkeyServiceTests
     {
         var harness = new ShellTestHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
 
         await OnMinimisedShellAsync(harness, "Collapse or expand Raven", window =>
         {
@@ -139,6 +140,7 @@ public class HotkeyServiceTests
         harness.Microphones.List().Returns([headset]);
         harness.Microphones.Default().Returns(headset);
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
 
         await OnMinimisedShellAsync(harness, "Push to talk", window =>
         {
@@ -157,6 +159,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
 
         await WithHotkeysAsync(harness, _ => false, elevated: true, TimeSpan.Zero, press =>
@@ -183,6 +186,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
         var held = true;
 
@@ -209,6 +213,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
         var held = true;
 
@@ -237,6 +242,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
         var released = false;
 
@@ -261,6 +267,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
 
         await WithHotkeysAsync(harness, _ => false, elevated: false, TimeSpan.FromSeconds(1), press =>
@@ -280,6 +287,7 @@ public class HotkeyServiceTests
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         var raven = harness.Shell.Raven;
 
         await WithHotkeysAsync(harness, _ => false, elevated: false, TimeSpan.FromMilliseconds(50), press =>
@@ -395,6 +403,7 @@ public class HotkeyServiceTests
     {
         var harness = new ShellTestHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
 
         await OnMinimisedShellAsync(harness, label, window =>
             window.WindowState.ShouldBe(WindowState.Minimized, "the user's own application keeps the foreground"));
@@ -405,6 +414,7 @@ public class HotkeyServiceTests
     {
         var harness = new ShellTestHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         harness.VsCodeWindowAppears();
         harness.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
         await harness.Shell.EnterCabAsync(harness.App.Id);

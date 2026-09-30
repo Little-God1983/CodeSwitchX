@@ -36,11 +36,11 @@ public sealed class RavenPanelViewModelTests
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(result);
 
-    private RavenPanelViewModel NewVm(IUiDispatcher? dispatcher = null)
+    private async Task<RavenPanelViewModel> NewVmAsync(IUiDispatcher? dispatcher = null)
     {
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher ?? new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance);
-        vm.RefreshMicrophones();
+        await WithinAsync(vm.RefreshMicrophonesAsync());
         return vm;
     }
 
@@ -99,7 +99,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_hold_records_and_the_transcript_appears_as_my_turn()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         vm.State.ShouldBe(RavenState.Listening);
@@ -121,7 +121,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_quick_tap_latches_and_the_next_press_stops()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         await vm.ReleaseMicAsync(TalkInput.MicButton);
@@ -138,7 +138,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task The_hotkey_pressed_and_released_while_the_mouse_holds_the_mic_does_not_stop_the_recording()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -160,7 +160,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_mouse_click_while_the_hotkey_is_held_does_not_stop_the_recording()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.Hotkey);
         Speak();
         _time.Advance(Hold);
@@ -180,7 +180,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_hold_with_both_inputs_stops_once_both_are_released_whichever_goes_first()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         vm.PressMic(TalkInput.Hotkey);
         Speak();
@@ -200,7 +200,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_recording_that_ended_on_its_own_forgets_the_inputs_that_held_it()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.Hotkey);
         Speak();
         _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
@@ -217,7 +217,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_clip_shorter_than_half_a_second_is_dropped_and_says_so()
     {
         _recorder.Stop().Returns(new RecordedClip(new float[100], TimeSpan.FromMilliseconds(499)));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -236,7 +236,7 @@ public sealed class RavenPanelViewModelTests
             call.Arg<IProgress<double>?>()!.Report(0.5);
             return Task.CompletedTask;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -260,7 +260,7 @@ public sealed class RavenPanelViewModelTests
             seen.Add(vm.Log[0].Text);
             return Task.CompletedTask;
         });
-        vm = NewVm();
+        vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -273,7 +273,7 @@ public sealed class RavenPanelViewModelTests
         _models.IsPresent.Returns(false);
         _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("disk full")));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -299,7 +299,7 @@ public sealed class RavenPanelViewModelTests
             downloading.TrySetResult();
             return download.Task;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         var releases = await QueueClipsAsync(vm, 3);
 
         await WithinAsync(downloading.Task);
@@ -325,7 +325,7 @@ public sealed class RavenPanelViewModelTests
         var download = new TaskCompletionSource();
         _models.IsPresent.Returns(false);
         _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(download.Task);
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         var releases = await QueueClipsAsync(vm, 2);
 
         download.SetException(new IOException("network down"));
@@ -339,7 +339,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_denied_microphone_explains_the_privacy_setting()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied"));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
@@ -353,7 +353,7 @@ public sealed class RavenPanelViewModelTests
     public async Task An_unavailable_microphone_names_the_device()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Unavailable, "busy"));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
@@ -365,7 +365,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_stopped_windows_audio_service_says_so_rather_than_blaming_another_app()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.AudioServiceDown, "not running"));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
@@ -377,7 +377,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_microphone_lost_while_recording_returns_to_idle_and_says_so()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
@@ -395,9 +395,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_silent_microphone_is_warned_about_once()
+    public async Task A_silent_microphone_is_warned_about_once()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
 
         for (var i = 0; i < 300; i++) // 3 s
@@ -412,9 +412,9 @@ public sealed class RavenPanelViewModelTests
     // The recorder reports how long each block is. Assuming 50 ms blocks, the ten-millisecond ones of the RØDE input made
     // the two seconds of grace pass in 0.4 s.
     [Fact]
-    public void The_silent_microphone_warning_counts_the_real_duration_of_the_blocks()
+    public async Task The_silent_microphone_warning_counts_the_real_duration_of_the_blocks()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
 
         for (var i = 0; i < 199; i++)
@@ -428,9 +428,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void The_level_follows_the_microphone_while_listening()
+    public async Task The_level_follows_the_microphone_while_listening()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
 
         Block(0.1f);
@@ -447,7 +447,7 @@ public sealed class RavenPanelViewModelTests
         var first = new TaskCompletionSource<DictationResult>();
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(first.Task, Task.FromResult(new DictationResult("second", TimeSpan.FromSeconds(2))));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -490,7 +490,7 @@ public sealed class RavenPanelViewModelTests
             downloading.TrySetResult();
             return download.Task;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -528,7 +528,7 @@ public sealed class RavenPanelViewModelTests
             hold.Wait(TimeSpan.FromSeconds(10));
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -548,9 +548,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void An_unplugged_selected_microphone_falls_back_to_the_default_with_a_note()
+    public async Task An_unplugged_selected_microphone_falls_back_to_the_default_with_a_note()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         _catalog.List().Returns([Headset]);
 
@@ -565,9 +565,9 @@ public sealed class RavenPanelViewModelTests
     // Plugging in one USB headset raises five to eight notifications (state, added, and the default once per role); an
     // Audiosrv restart raises bursts. Each used to list the devices and refill the list on the UI thread.
     [Fact]
-    public void Eight_device_notifications_within_300_ms_list_the_devices_once()
+    public async Task Eight_device_notifications_within_300_ms_list_the_devices_once()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         _catalog.ClearReceivedCalls();
 
         for (var i = 0; i < 8; i++)
@@ -586,12 +586,15 @@ public sealed class RavenPanelViewModelTests
 
     // The enumeration is COM calls and property-store reads: done off the UI thread, only its result is applied there.
     [Fact]
-    public void The_devices_are_listed_outside_the_ui_thread_and_the_result_applied_on_it()
+    public async Task The_devices_are_listed_outside_the_ui_thread_and_the_result_applied_on_it()
     {
         var dispatcher = new QueueingDispatcher();
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher, _time,
             NullLogger<RavenPanelViewModel>.Instance);
-        vm.RefreshMicrophones();
+        var refresh = vm.RefreshMicrophonesAsync();
+        await WithinAsync(dispatcher.Posted);
+        dispatcher.RunAll();
+        await WithinAsync(refresh);
         _catalog.ClearReceivedCalls();
         _catalog.List().Returns([Desk]);
 
@@ -603,10 +606,72 @@ public sealed class RavenPanelViewModelTests
         vm.Microphones.ShouldBe([Desk]);
     }
 
+    // At startup a slow Bluetooth or USB endpoint, after a capture failure a dying audio service: either can hold the
+    // enumeration up, and neither may hold up the shell. Listed off the calling thread, applied on the UI thread.
     [Fact]
-    public void A_fallback_keeps_the_preferred_microphone_and_selects_it_again_when_it_comes_back()
+    public async Task Refreshing_the_microphones_lists_them_off_the_calling_thread_and_applies_them_on_the_ui_thread()
     {
-        var vm = NewVm();
+        using var hold = new ManualResetEventSlim();
+        _catalog.List().Returns(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return [Headset, Desk];
+        });
+        var dispatcher = new QueueingDispatcher();
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher, _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var refresh = vm.RefreshMicrophonesAsync();
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        vm.PendingRefresh.ShouldBeSameAs(refresh);
+        hold.Set();
+        await WithinAsync(dispatcher.Posted);
+        vm.Microphones.ShouldBeEmpty("nothing is applied until the UI thread runs the post");
+        refresh.IsCompleted.ShouldBeFalse("the refresh completes once the devices are applied");
+        dispatcher.RunAll();
+        await WithinAsync(refresh);
+        vm.Microphones.ShouldBe([Headset, Desk]);
+        vm.SelectedMicrophone.ShouldBe(Headset);
+    }
+
+    // Two refreshes whose listings finish out of order: the later listing is the one applied.
+    [Fact]
+    public async Task A_listing_that_finishes_after_a_newer_one_is_not_applied_over_it()
+    {
+        using var hold = new ManualResetEventSlim();
+        var calls = 0;
+        _catalog.List().Returns(_ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                hold.Wait(TimeSpan.FromSeconds(10));
+                return [Headset, Desk];
+            }
+
+            return [Desk];
+        });
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+
+        var older = vm.RefreshMicrophonesAsync();
+        while (Volatile.Read(ref calls) == 0)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        hold.Set();
+        await WithinAsync(older);
+
+        vm.Microphones.ShouldBe([Desk]);
+    }
+
+    [Fact]
+    public async Task A_fallback_keeps_the_preferred_microphone_and_selects_it_again_when_it_comes_back()
+    {
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         vm.PreferredMicrophone.ShouldBe(Desk, "a pick is the user's choice");
         _catalog.List().Returns([Headset]);
@@ -623,14 +688,14 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_list_bound_control_clearing_the_selection_during_a_refresh_changes_neither_choice()
+    public async Task A_list_bound_control_clearing_the_selection_during_a_refresh_changes_neither_choice()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         // What a TwoWay-bound ComboBox does when its items are cleared: it writes null back.
         vm.Microphones.CollectionChanged += (_, _) => vm.SelectedMicrophone = null;
 
-        vm.RefreshMicrophones();
+        await vm.RefreshMicrophonesAsync();
 
         vm.SelectedMicrophone.ShouldBe(Desk);
         vm.PreferredMicrophone.ShouldBe(Desk);
@@ -638,25 +703,25 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_microphone_with_a_new_id_is_selected_again_without_a_note()
+    public async Task A_microphone_with_a_new_id_is_selected_again_without_a_note()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         var moved = new MicrophoneDevice("id-desk-2", "Desk mic");
         _catalog.List().Returns([Headset, moved]);
 
-        vm.RefreshMicrophones();
+        await vm.RefreshMicrophonesAsync();
 
         vm.SelectedMicrophone.ShouldBe(moved);
         vm.Log.ShouldBeEmpty();
     }
 
     [Fact]
-    public void No_microphone_at_all_warns_on_press()
+    public async Task No_microphone_at_all_warns_on_press()
     {
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
 
@@ -668,9 +733,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void Typed_text_becomes_my_turn_and_the_box_clears()
+    public async Task Typed_text_becomes_my_turn_and_the_box_clears()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.TypedText = "  open the yard ";
 
         vm.SubmitTypedCommand.Execute(null);
@@ -681,9 +746,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void Blank_typed_text_is_ignored()
+    public async Task Blank_typed_text_is_ignored()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.TypedText = "   ";
 
         vm.SubmitTypedCommand.Execute(null);
@@ -692,9 +757,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void Collapsing_the_panel_does_not_stop_a_recording()
+    public async Task Collapsing_the_panel_does_not_stop_a_recording()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
 
         vm.TogglePanelCommand.Execute(null);
@@ -708,7 +773,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task The_recorder_reaching_its_limit_ends_the_recording_like_a_release()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(TimeSpan.FromMinutes(10));
@@ -728,7 +793,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_limit_reported_after_the_recording_ended_changes_nothing()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         await HoldAsync(vm);
 
         _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
@@ -743,7 +808,7 @@ public sealed class RavenPanelViewModelTests
         _models.ModelPath.Returns(@"c:\m\ggml.bin");
         var load = new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."));
         Transcribes(Task.FromException<DictationResult>(load));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -757,7 +822,7 @@ public sealed class RavenPanelViewModelTests
     public async Task An_empty_transcript_adds_no_entry()
     {
         Transcribes(Task.FromResult(new DictationResult("  ", TimeSpan.FromSeconds(2))));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -768,7 +833,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task The_silent_microphone_warning_is_armed_again_for_a_second_recording()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         for (var i = 0; i < 300; i++) // 3 s
         {
@@ -787,16 +852,26 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task A_capture_failure_lists_the_microphones_again()
+    public async Task A_capture_failure_lists_the_microphones_again_off_the_ui_thread()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
-        _catalog.ClearReceivedCalls();
+        using var hold = new ManualResetEventSlim();
+        _catalog.List().Returns(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return [Desk];
+        });
 
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
 
-        _catalog.Received(1).List();
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2), "a dying audio service must not hold up the UI thread");
+        vm.State.ShouldBe(RavenState.Idle);
+        hold.Set();
+        await WithinAsync(vm.PendingRefresh);
+        vm.Microphones.ShouldBe([Desk]);
     }
 
     // The model is warmed at startup and after a download. A warm-up per press loaded a model that would not load twice
@@ -804,7 +879,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_press_does_not_warm_the_model_up()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
         await Task.Delay(50, TestContext.Current.CancellationToken);
@@ -823,7 +898,7 @@ public sealed class RavenPanelViewModelTests
             warmed.TrySetResult();
             return Task.CompletedTask;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -837,7 +912,7 @@ public sealed class RavenPanelViewModelTests
         _models.IsPresent.Returns(false);
         _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new IOException("disk full")));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
         await Task.Delay(50, TestContext.Current.CancellationToken);
@@ -858,7 +933,7 @@ public sealed class RavenPanelViewModelTests
             hold.Wait(TimeSpan.FromSeconds(10));
             return Task.CompletedTask;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.ScheduleWarmUp();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -881,7 +956,7 @@ public sealed class RavenPanelViewModelTests
             warmed.TrySetResult();
             return Task.CompletedTask;
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.IsOpen = open;
 
         vm.ScheduleWarmUp();
@@ -898,7 +973,7 @@ public sealed class RavenPanelViewModelTests
     public async Task There_is_no_startup_warm_up_without_a_model()
     {
         _models.IsPresent.Returns(false);
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.ScheduleWarmUp();
         _time.Advance(TimeSpan.FromSeconds(10));
@@ -911,7 +986,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_quiet_clip_is_not_transcribed_and_says_so()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         RoomNoise(3);
         Speak(0.4); // a cough is not dictation
@@ -929,7 +1004,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task A_clip_with_speech_between_pauses_is_transcribed()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         RoomNoise(1);
         Speak(0.3);
@@ -946,7 +1021,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_quiet_clip_does_not_start_the_model_download()
     {
         _models.IsPresent.Returns(false);
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         RoomNoise(2);
         _time.Advance(Hold);
@@ -959,7 +1034,7 @@ public sealed class RavenPanelViewModelTests
     [Fact]
     public async Task The_speech_of_one_recording_does_not_count_for_the_next()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         await HoldAsync(vm);
         vm.PressMic(TalkInput.MicButton);
         RoomNoise(1);
@@ -982,7 +1057,7 @@ public sealed class RavenPanelViewModelTests
             caption = vm!.Caption;
             return Task.CompletedTask;
         });
-        vm = NewVm();
+        vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -991,11 +1066,11 @@ public sealed class RavenPanelViewModelTests
 
     // A stopped Windows audio service makes the device enumeration throw a COMException. The app must still start.
     [Fact]
-    public void Windows_audio_being_unavailable_warns_and_leaves_no_microphones()
+    public async Task Windows_audio_being_unavailable_warns_and_leaves_no_microphones()
     {
         _catalog.List().Returns(_ => throw new System.Runtime.InteropServices.COMException("The audio service is not running."));
 
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.Microphones.ShouldBeEmpty();
         vm.SelectedMicrophone.ShouldBeNull();
@@ -1004,13 +1079,13 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void Windows_audio_failing_on_the_default_device_is_caught_too()
+    public async Task Windows_audio_failing_on_the_default_device_is_caught_too()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         _catalog.Default().Returns(_ => throw new System.Runtime.InteropServices.COMException("gone"));
 
-        vm.RefreshMicrophones();
+        await vm.RefreshMicrophonesAsync();
 
         vm.Microphones.ShouldBeEmpty();
         vm.SelectedMicrophone.ShouldBeNull();
@@ -1019,9 +1094,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_device_change_with_no_devices_clears_the_selection()
+    public async Task A_device_change_with_no_devices_clears_the_selection()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone.ShouldNotBeNull();
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
@@ -1033,9 +1108,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_lost_microphone_warning_has_the_exact_text()
+    public async Task A_lost_microphone_warning_has_the_exact_text()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
 
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
@@ -1046,11 +1121,11 @@ public sealed class RavenPanelViewModelTests
     // Audiosrv stopping or restarting raises bursts of device notifications, render devices included; each one lists
     // the devices again and fails the same way.
     [Fact]
-    public void Windows_audio_failing_again_and_again_warns_once_and_says_when_it_is_back()
+    public async Task Windows_audio_failing_again_and_again_warns_once_and_says_when_it_is_back()
     {
         Exception? failure = null;
         _catalog.List().Returns(_ => failure is null ? [Headset, Desk] : throw failure);
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         failure = new System.Runtime.InteropServices.COMException("The audio service is not running.");
 
         for (var i = 0; i < 3; i++)
@@ -1074,9 +1149,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void The_only_microphone_unplugged_says_none_is_left_and_its_return_says_so_too()
+    public async Task The_only_microphone_unplugged_says_none_is_left_and_its_return_says_so_too()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
@@ -1100,9 +1175,9 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void The_fallback_microphone_unplugged_too_says_none_is_left()
+    public async Task The_fallback_microphone_unplugged_too_says_none_is_left()
     {
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.SelectedMicrophone = Desk;
         _catalog.List().Returns([Headset]);
         DevicesChange();
@@ -1130,7 +1205,7 @@ public sealed class RavenPanelViewModelTests
             hold.Wait(TimeSpan.FromSeconds(10));
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
-        vm = NewVm();
+        vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -1161,7 +1236,7 @@ public sealed class RavenPanelViewModelTests
             hold.Wait(TimeSpan.FromSeconds(10));
             return new RecordedClip([], TimeSpan.Zero);
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(vm.PendingStart);
 
@@ -1191,7 +1266,7 @@ public sealed class RavenPanelViewModelTests
             entered.TrySetResult();
             hold.Wait(TimeSpan.FromSeconds(10));
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
         vm.PressMic(TalkInput.MicButton);
@@ -1222,7 +1297,7 @@ public sealed class RavenPanelViewModelTests
             stoppedAfterStart = Volatile.Read(ref started);
             return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -1252,7 +1327,7 @@ public sealed class RavenPanelViewModelTests
                 throw new MicrophoneException(MicrophoneFailureKind.Unavailable, "busy");
             }
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         await vm.ReleaseMicAsync(TalkInput.MicButton); // a tap: latched while the start still runs
         vm.State.ShouldBe(RavenState.Listening);
@@ -1278,7 +1353,7 @@ public sealed class RavenPanelViewModelTests
             hold.Wait(TimeSpan.FromSeconds(10));
             throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied");
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
         vm.PressMic(TalkInput.MicButton);
         Speak();
         _time.Advance(Hold);
@@ -1315,7 +1390,7 @@ public sealed class RavenPanelViewModelTests
             vm!.Log[0].Text.ShouldBe("Downloading the speech model (1.6 GB)… 50%");
             return Task.CompletedTask;
         });
-        vm = NewVm(dispatcher);
+        vm = await NewVmAsync(dispatcher);
 
         await HoldAsync(vm);
 
@@ -1333,7 +1408,7 @@ public sealed class RavenPanelViewModelTests
             fetched.TrySetResult();
             return Task.FromResult(words);
         });
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
         await WithinAsync(fetched.Task);
@@ -1349,7 +1424,7 @@ public sealed class RavenPanelViewModelTests
     public async Task A_vocabulary_that_cannot_be_read_does_not_stop_the_transcription()
     {
         _vocabulary.GetAsync(Arg.Any<CancellationToken>()).Returns(Task.FromException<DictationVocabulary>(new IOException("network drive gone")));
-        var vm = NewVm();
+        var vm = await NewVmAsync();
 
         await HoldAsync(vm);
 
@@ -1361,6 +1436,10 @@ public sealed class RavenPanelViewModelTests
     private sealed class QueueingDispatcher : IUiDispatcher
     {
         private readonly Queue<Action> _posts = new();
+        private readonly TaskCompletionSource _posted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once anything has been posted.</summary>
+        public Task Posted => _posted.Task;
 
         public void Post(Action action)
         {
@@ -1368,6 +1447,8 @@ public sealed class RavenPanelViewModelTests
             {
                 _posts.Enqueue(action);
             }
+
+            _posted.TrySetResult();
         }
 
         public void RunAll()

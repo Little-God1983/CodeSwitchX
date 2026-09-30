@@ -89,7 +89,7 @@ public sealed partial class ShellViewModel : ObservableObject
         // user's choice is stored, never a fallback to the default, so the choice comes back when its device does.
         Raven.IsOpen = Settings.RavenPanelOpen;
         Raven.PreferredMicrophone = Settings.RavenMicrophone;
-        Raven.RefreshMicrophones();
+        _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         Raven.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(RavenPanelViewModel.IsOpen))

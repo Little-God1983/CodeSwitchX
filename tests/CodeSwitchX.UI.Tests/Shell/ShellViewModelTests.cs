@@ -72,6 +72,29 @@ public class ShellViewModelTests
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenPanelOpen, false, Arg.Any<CancellationToken>());
     }
 
+    // A slow Bluetooth or USB endpoint makes the enumeration take seconds: the shell comes up without waiting for it.
+    [Fact]
+    public async Task Startup_does_not_wait_for_the_microphones_to_be_listed()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        using var hold = new ManualResetEventSlim();
+        _h.Microphones.List().Returns(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return [headset];
+        });
+        _h.Microphones.Default().Returns(headset);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        _h.Shell.Raven.SelectedMicrophone.ShouldBeNull();
+        hold.Set();
+        await _h.Shell.Raven.PendingRefresh.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
+    }
+
     [Fact]
     public async Task A_stored_microphone_that_is_still_plugged_in_is_selected_at_startup()
     {
@@ -82,6 +105,7 @@ public class ShellViewModelTests
         _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(desk));
 
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
 
         _h.Shell.Raven.Microphones.ShouldBe([headset, desk]);
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(desk);
@@ -100,6 +124,7 @@ public class ShellViewModelTests
         _h.Microphones.Default().Returns(headset);
         _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(rode));
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
 
         _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty); // something else changed
@@ -124,6 +149,7 @@ public class ShellViewModelTests
         _h.Microphones.Default().Returns(headset);
         _h.Settings.GetAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, Arg.Any<CancellationToken>()).Returns(Task.FromResult<MicrophoneDevice?>(desk));
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
 
         _h.Microphones.List().Returns([headset]);
         _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty);
@@ -144,6 +170,7 @@ public class ShellViewModelTests
         _h.Microphones.List().Returns([headset, desk]);
         _h.Microphones.Default().Returns(headset);
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset, "nothing stored: the Windows default");
 
         _h.Shell.Raven.SelectedMicrophone = desk;
