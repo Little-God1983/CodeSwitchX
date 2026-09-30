@@ -18,6 +18,25 @@ public enum HotkeyModifiers : uint
     NoRepeat = 0x4000,
 }
 
+/// <summary>What reading the foreground process's elevation found.</summary>
+public enum ForegroundElevation
+{
+    NotElevated,
+
+    /// <summary>The process token says elevated.</summary>
+    Elevated,
+
+    /// <summary>The process could not be opened at all: protected, anti-cheat, or another user's. That says nothing
+    /// about elevation, and such windows do not hide the keyboard.</summary>
+    ProcessDenied,
+
+    /// <summary>The process opened, but its token was denied: what an elevated process does to one that is not.</summary>
+    TokenDenied,
+
+    /// <summary>Any other failure to read it.</summary>
+    Unknown,
+}
+
 public static class HotkeyInterop
 {
     public const int WmHotkey = 0x0312;
@@ -39,8 +58,8 @@ public static class HotkeyInterop
 
     /// <summary>
     /// Whether the foreground window belongs to an elevated process while this one is not: Windows then hides the
-    /// keyboard from GetAsyncKeyState here (every key reads as up). A token that cannot even be opened for a query is
-    /// taken as elevated, which is what denies it; any other failure as not elevated (see <see cref="HidesKeysFromUs"/>).
+    /// keyboard from GetAsyncKeyState here (every key reads as up). Only for a key that already reads as up: a key that
+    /// reads as down proves the keyboard is visible. See <see cref="HidesKeysFromUs"/> for what counts.
     /// </summary>
     public static unsafe bool IsForegroundElevated()
     {
@@ -57,26 +76,33 @@ public static class HotkeyInterop
             return false;
         }
 
-        return HidesKeysFromUs(ProcessElevation(pid), ProcessElevation((uint)Environment.ProcessId));
+        return HidesKeysFromUs(ProcessElevation(pid), SelfElevated());
     }
 
     /// <summary>
-    /// The decision on the two token reads: true, false, or null when the elevation could not be read for a reason other
-    /// than access (an access-denied read is already true). Only a known elevated foreground counts, and only while this
-    /// process is not elevated itself; an unknown foreground uses the release poll like any other window.
+    /// The decision on the two reads. The foreground hides the keys only when it is seen to be elevated: its token says
+    /// so, or its process opened and its token was denied. A process that cannot be opened at all (protected, anti-cheat,
+    /// another user's) and anything unknown use the release poll like any other window. Never while this process is
+    /// elevated itself (<paramref name="selfElevated"/> true; null when it could not be read).
     /// </summary>
-    internal static bool HidesKeysFromUs(bool? foregroundElevated, bool? selfElevated) =>
-        foregroundElevated == true && selfElevated != true;
+    internal static bool HidesKeysFromUs(ForegroundElevation foreground, bool? selfElevated) =>
+        foreground is ForegroundElevation.Elevated or ForegroundElevation.TokenDenied && selfElevated != true;
 
     private const int ErrorAccessDenied = 5;
 
-    /// <summary>True or false from the process token; null when it could not be read for another reason than access.</summary>
-    private static unsafe bool? ProcessElevation(uint pid)
+    private static bool? SelfElevated() => ProcessElevation((uint)Environment.ProcessId) switch
+    {
+        ForegroundElevation.Elevated => true,
+        ForegroundElevation.NotElevated => false,
+        _ => null,
+    };
+
+    private static unsafe ForegroundElevation ProcessElevation(uint pid)
     {
         var process = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
         if (process.IsNull)
         {
-            return Marshal.GetLastPInvokeError() == ErrorAccessDenied ? true : null;
+            return Marshal.GetLastPInvokeError() == ErrorAccessDenied ? ForegroundElevation.ProcessDenied : ForegroundElevation.Unknown;
         }
 
         try
@@ -84,7 +110,7 @@ public static class HotkeyInterop
             HANDLE token;
             if (!PInvoke.OpenProcessToken(process, TOKEN_ACCESS_MASK.TOKEN_QUERY, &token))
             {
-                return Marshal.GetLastPInvokeError() == ErrorAccessDenied ? true : null;
+                return Marshal.GetLastPInvokeError() == ErrorAccessDenied ? ForegroundElevation.TokenDenied : ForegroundElevation.Unknown;
             }
 
             try
@@ -93,10 +119,10 @@ public static class HotkeyInterop
                 uint size;
                 if (!PInvoke.GetTokenInformation(token, TOKEN_INFORMATION_CLASS.TokenElevation, &elevation, (uint)sizeof(TOKEN_ELEVATION), &size))
                 {
-                    return null;
+                    return ForegroundElevation.Unknown;
                 }
 
-                return elevation.TokenIsElevated != 0;
+                return elevation.TokenIsElevated != 0 ? ForegroundElevation.Elevated : ForegroundElevation.NotElevated;
             }
             finally
             {

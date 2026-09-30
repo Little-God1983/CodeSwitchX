@@ -101,7 +101,8 @@ public sealed class HotkeyService
 
     /// <param name="isKeyDown">Whether a virtual key reads as held; GetAsyncKeyState unless a test replaces it.</param>
     /// <param name="isForegroundElevated">Whether the foreground window is an elevated process's (which hides the
-    /// keyboard from GetAsyncKeyState); the process token's elevation unless a test replaces it.</param>
+    /// keyboard from GetAsyncKeyState); asked only when the chord's key reads as up. The process token's elevation
+    /// unless a test replaces it.</param>
     /// <param name="messageAge">How long ago the WM_HOTKEY being handled was posted; GetMessageTime unless a test
     /// replaces it.</param>
     public HotkeyService(ILogger<HotkeyService> logger, Func<uint, bool>? isKeyDown = null, Func<bool>? isForegroundElevated = null,
@@ -226,10 +227,12 @@ public sealed class HotkeyService
     }
 
     /// <summary>
-    /// Windows hides the keyboard from this process while an elevated window is in front: GetAsyncKeyState then reads
-    /// every key as up, and a polled hold would read as released straight away, a tap that latches, recording on after
-    /// the user let go. So over an elevated window the press is a tap on purpose, and the panel says once per session
-    /// that the next press stops it. The key state is no test for that: a key the UI thread reads late is up as well.
+    /// Decided from what can be seen. A chord key that reads as down proves the keyboard is visible: the release is
+    /// polled. Windows hides the keyboard from this process while an elevated window is in front: GetAsyncKeyState then
+    /// reads every key as up, and a polled hold would read as released straight away, a tap that latches, recording on
+    /// after the user let go. So when the key reads as up and the foreground is seen to be elevated, the press is a tap
+    /// on purpose, and the panel says once per session that the next press stops it. A key that reads as up is no proof
+    /// on its own: a key the UI thread reads late is up as well.
     /// <para>
     /// Otherwise the release is polled, and the press is timed from when the hotkey message was posted, not from when
     /// the UI thread got to it: a hold handled after a stall, whose key is already up at the first poll, still stops
@@ -238,7 +241,7 @@ public sealed class HotkeyService
     /// </summary>
     private void OnPushToTalk(RavenPanelViewModel raven)
     {
-        if (_isForegroundElevated())
+        if (!_isKeyDown(PushToTalk.VirtualKey) && _isForegroundElevated())
         {
             _talkRelease?.Stop();
             raven.PressMic(TalkInput.Hotkey);

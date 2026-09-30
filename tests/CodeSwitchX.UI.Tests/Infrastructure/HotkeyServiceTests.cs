@@ -150,8 +150,8 @@ public class HotkeyServiceTests
     }
 
     // An elevated window in front hides the keyboard from GetAsyncKeyState: the held Space reads as up. Polled, that
-    // hold would latch and record on after the user let go; so with an elevated window in front the press is a tap on
-    // purpose and the next one stops. The foreground's elevation decides, not the key state: a key read late is up too.
+    // hold would latch and record on after the user let go; so when the key reads up and an elevated window is in
+    // front, the press is a tap on purpose and the next one stops.
     [Fact]
     public async Task Push_to_talk_over_an_elevated_window_latches_says_so_once_and_the_next_press_stops()
     {
@@ -159,7 +159,7 @@ public class HotkeyServiceTests
         await harness.Shell.InitializeAsync(CancellationToken.None);
         var raven = harness.Shell.Raven;
 
-        await WithHotkeysAsync(harness, _ => true, elevated: true, TimeSpan.Zero, press =>
+        await WithHotkeysAsync(harness, _ => false, elevated: true, TimeSpan.Zero, press =>
         {
             press();
             raven.State.ShouldBe(RavenState.Listening, "a tap latches the mic on");
@@ -190,6 +190,31 @@ public class HotkeyServiceTests
         {
             press();
             raven.State.ShouldBe(RavenState.Listening);
+            PumpFor(TimeSpan.FromMilliseconds(150));
+            raven.State.ShouldBe(RavenState.Listening, "the keys are still held");
+
+            harness.Time.Advance(TimeSpan.FromSeconds(1));
+            held = false;
+            PumpUntil(() => raven.State == RavenState.Idle);
+        });
+
+        raven.Log.ShouldNotContain(l => l.Text == HotkeyService.UnseenReleaseNote);
+        harness.Recorder.Received(1).Stop();
+    }
+
+    // A key that reads as down is the proof the keyboard is visible, whatever the foreground's elevation reads as: the
+    // release poll works there, and an elevation check that guessed wrong would latch a hold.
+    [Fact]
+    public async Task Push_to_talk_whose_key_reads_as_held_uses_the_release_poll_even_over_a_window_that_reads_as_elevated()
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+        var held = true;
+
+        await WithHotkeysAsync(harness, _ => held, elevated: true, TimeSpan.Zero, press =>
+        {
+            press();
             PumpFor(TimeSpan.FromMilliseconds(150));
             raven.State.ShouldBe(RavenState.Listening, "the keys are still held");
 
