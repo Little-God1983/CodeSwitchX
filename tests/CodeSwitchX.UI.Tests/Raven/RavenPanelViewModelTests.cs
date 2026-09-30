@@ -110,7 +110,7 @@ public sealed class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Listening);
         Speak();
         vm.PressMic();
-        await WithinAsync(vm.PendingStop);
+        await WithinAsync(vm.PendingTranscriptions);
 
         vm.State.ShouldBe(RavenState.Idle);
         vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
@@ -292,25 +292,112 @@ public sealed class RavenPanelViewModelTests
         vm.Level.ShouldBeGreaterThan(0);
     }
 
+    // The user dictates the next sentence while the last one is still being transcribed: nothing is lost, and the log
+    // keeps the order they were spoken in, however long each takes.
     [Fact]
-    public async Task Pressing_while_transcribing_does_nothing()
+    public async Task A_second_recording_during_a_pending_transcription_records_and_both_transcripts_appear_in_recording_order()
     {
-        var pending = new TaskCompletionSource<DictationResult>();
-        Transcribes(pending.Task);
+        var first = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(new DictationResult("second", TimeSpan.FromSeconds(2))));
+        var vm = NewVm();
+        vm.PressMic();
+        Speak();
+        _time.Advance(Hold);
+        var firstRelease = vm.ReleaseMicAsync();
+        vm.State.ShouldBe(RavenState.Transcribing);
+        vm.Caption.ShouldBe("Transcribing…");
+        await WithinAsync(vm.PendingStop); // the capture is stopped; its clip is still being transcribed
+
+        vm.PressMic();
+        vm.State.ShouldBe(RavenState.Listening, "capturing shows over a pending transcription");
+        vm.Caption.ShouldBe("Listening…");
+        await WithinAsync(vm.PendingStart);
+        _recorder.Received(2).Start(Headset.Id);
+        Speak();
+        _time.Advance(Hold);
+        var secondRelease = vm.ReleaseMicAsync();
+        await WithinAsync(vm.PendingStop);
+
+        vm.State.ShouldBe(RavenState.Transcribing);
+        vm.Caption.ShouldBe("Transcribing… (2 waiting)");
+        secondRelease.IsCompleted.ShouldBeFalse("the second clip waits for the first");
+        first.SetResult(new DictationResult("first", TimeSpan.FromSeconds(2)));
+        await WithinAsync(firstRelease);
+        await WithinAsync(secondRelease);
+
+        vm.Log.Where(l => l.Kind == RavenLogKind.You).Select(l => l.Text).ShouldBe(["first", "second"]);
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Caption.ShouldBe(RavenPanelViewModel.IdleCaption);
+    }
+
+    // The first-run download of 1.6 GB takes minutes: the user can keep dictating, and the clips wait for the model.
+    [Fact]
+    public async Task A_download_in_progress_does_not_block_recording()
+    {
+        var download = new TaskCompletionSource();
+        var downloading = new TaskCompletionSource();
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            downloading.TrySetResult();
+            return download.Task;
+        });
+        var vm = NewVm();
+        vm.PressMic();
+        Speak();
+        _time.Advance(Hold);
+        var firstRelease = vm.ReleaseMicAsync();
+        await WithinAsync(downloading.Task);
+        vm.Caption.ShouldBe("Downloading the speech model…");
+
+        vm.PressMic();
+        vm.State.ShouldBe(RavenState.Listening);
+        await WithinAsync(vm.PendingStart);
+        _recorder.Received(2).Start(Headset.Id);
+        Speak();
+        _time.Advance(Hold);
+        var secondRelease = vm.ReleaseMicAsync();
+        vm.State.ShouldBe(RavenState.Transcribing);
+        vm.Caption.ShouldBe("Downloading the speech model…");
+
+        _models.IsPresent.Returns(true);
+        download.SetResult();
+        await WithinAsync(firstRelease);
+        await WithinAsync(secondRelease);
+
+        vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(2);
+        await _models.Received(1).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        vm.State.ShouldBe(RavenState.Idle);
+    }
+
+    // The recorder holds one capture at a time, so a press during the short stop of the last one cannot start. It says so.
+    [Fact]
+    public async Task A_press_while_the_last_recording_is_still_stopping_says_so_each_time()
+    {
+        using var hold = new ManualResetEventSlim();
+        _recorder.Stop().Returns(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
+        });
         var vm = NewVm();
         vm.PressMic();
         Speak();
         _time.Advance(Hold);
         var release = vm.ReleaseMicAsync();
-        vm.State.ShouldBe(RavenState.Transcribing);
 
         vm.PressMic();
+        await vm.ReleaseMicAsync();
+        vm.PressMic();
 
-        vm.State.ShouldBe(RavenState.Transcribing);
+        vm.Log.Where(l => l.Kind == RavenLogKind.Note).Select(l => l.Text)
+            .ShouldBe(["Still stopping the last recording. Press again.", "Still stopping the last recording. Press again."]);
         _recorder.Received(1).Start(Arg.Any<string>());
-        pending.SetResult(new DictationResult("done", TimeSpan.FromSeconds(2)));
-        await release;
-        vm.State.ShouldBe(RavenState.Idle);
+        hold.Set();
+        await WithinAsync(release);
+        vm.PressMic();
+        vm.State.ShouldBe(RavenState.Listening);
     }
 
     [Fact]
@@ -482,6 +569,7 @@ public sealed class RavenPanelViewModelTests
 
         _recorder.LimitReached += Raise.Event<EventHandler>(_recorder, EventArgs.Empty);
         await WithinAsync(vm.PendingStop);
+        await WithinAsync(vm.PendingTranscriptions);
 
         _recorder.Received(1).Stop();
         vm.State.ShouldBe(RavenState.Idle);
@@ -937,6 +1025,7 @@ public sealed class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Idle);
         vm.PressMic();
         _recorder.Received(1).Start(Arg.Any<string>()); // a press while the old capture is still stopping is ignored
+        vm.Log.Last().Text.ShouldBe("Still stopping the last recording. Press again.");
 
         hold.Set();
         await WithinAsync(vm.PendingStop);

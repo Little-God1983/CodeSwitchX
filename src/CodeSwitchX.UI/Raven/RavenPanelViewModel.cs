@@ -49,6 +49,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _fellBack;
     private bool _audioFailed;
     private long _recording;
+    private bool _capturing;
+    private int _pending;
+    private bool _downloading;
+    private Task _pipeline = Task.CompletedTask;
     private Task<bool> _started = Task.FromResult(false);
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
 
@@ -108,10 +112,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public ObservableCollection<RavenLogEntry> Log { get; } = [];
 
     /// <summary>
-    /// The stop in progress, if any: the recorder's Stop runs off the UI thread, and a press waits for it to finish
-    /// (the recorder holds one capture at a time). Completed when nothing is stopping.
+    /// The stop in progress, if any: the recorder's Stop runs off the UI thread, and a press during it is turned away
+    /// with a note (the recorder holds one capture at a time). Completed when nothing is stopping. Its transcription is
+    /// not part of it: that runs in <see cref="PendingTranscriptions"/>.
     /// </summary>
     internal Task PendingStop { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The last clip in the transcription queue; completes once every stopped clip is transcribed.</summary>
+    internal Task PendingTranscriptions => _pipeline;
 
     /// <summary>
     /// The recorder's Start of the current recording, which runs off the UI thread: opening a Bluetooth headset or a
@@ -259,11 +267,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void WarmUpInBackground() => _ = Task.Run(() => _dictation.WarmUpAsync(CancellationToken.None));
 
-    /// <summary>Button mouse-down or hotkey down.</summary>
+    /// <summary>
+    /// Button mouse-down or hotkey down. Records whether or not earlier clips are still being transcribed or the model
+    /// is downloading; only the short stop of the last capture turns a press away, and never silently.
+    /// </summary>
     public void PressMic()
     {
-        if (State == RavenState.Transcribing || !PendingStop.IsCompleted)
+        if (!PendingStop.IsCompleted)
         {
+            AddEntry(RavenLogKind.Note, "Still stopping the last recording. Press again.");
             return;
         }
 
@@ -278,22 +290,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Button mouse-up or hotkey up; completes once a stopped recording has been transcribed.</summary>
+    /// <summary>Button mouse-up or hotkey up; completes once the recording it stopped has been transcribed.</summary>
     public Task ReleaseMicAsync()
     {
         return _gesture.Release() == PushToTalkAction.Stop ? BeginStop() : Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Ends the capture and queues its clip behind the clips stopped before it, so their transcripts reach the log in
+    /// the order they were spoken. Returns the clip's place in the queue, which completes once it is transcribed.
+    /// </summary>
     private Task BeginStop()
     {
-        if (State != RavenState.Listening)
+        if (!_capturing)
         {
             return Task.CompletedTask;
         }
 
-        var stop = StopAsync();
+        _capturing = false;
+        Interlocked.Increment(ref _pending);
+        UpdateState();
+        var heardSpeech = _speech.HeardSpeech;
+        var words = _vocabularyFetch;
+        var stop = StopCaptureAsync(_started);
         PendingStop = stop;
-        return stop;
+        var turn = TranscribeInTurnAsync(_pipeline, stop, heardSpeech, words);
+        _pipeline = turn;
+        return turn;
     }
 
     [RelayCommand]
@@ -324,8 +347,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _silentWarned = false;
         _silence.Reset();
         _speech.Reset();
-        State = RavenState.Listening;
-        Caption = "Listening…";
+        _capturing = true;
+        UpdateState();
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
         _started = StartCaptureAsync(mic, ++_recording);
     }
@@ -346,10 +369,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Could not start recording from {Microphone}", mic.Name);
             AddEntry(RavenLogKind.Warning, WarningFor(ex is MicrophoneException failure ? failure.Kind : MicrophoneFailureKind.Unavailable, mic));
-            if (recording == _recording && State == RavenState.Listening)
+            if (recording == _recording && _capturing)
             {
                 _gesture.Reset();
-                ReturnToIdle();
+                _capturing = false;
+                UpdateState();
             }
 
             return false;
@@ -363,7 +387,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void OnLimitReached()
     {
-        if (State != RavenState.Listening)
+        if (!_capturing)
         {
             return;
         }
@@ -374,7 +398,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private void OnBlock(CapturedBlock block)
     {
-        if (State != RavenState.Listening)
+        if (!_capturing)
         {
             return;
         }
@@ -391,11 +415,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void OnCaptureFailed(MicrophoneException error)
     {
         _logger.LogWarning(error, "Microphone capture failed");
-        if (State == RavenState.Listening)
+        if (_capturing)
         {
             AddEntry(RavenLogKind.Warning, WarningFor(error.Kind, _recordingMic));
+            _capturing = false;
             PendingStop = ReleaseCaptureAsync();
-            ReturnToIdle();
+            UpdateState();
             _gesture.Reset();
         }
 
@@ -422,30 +447,38 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Says so first, then stops: the recorder's Stop waits for the capture thread (up to 2 s), resamples up to two
-    /// minutes of audio and disposes the capture, which runs off the UI thread while the panel shows "Transcribing…".
-    /// The awaits resume on the UI thread (its synchronisation context), where the log and the state live. A start still
-    /// running is waited for first; one that failed has nothing to stop, and has already said why.
+    /// The recorder's Stop waits for the capture thread (up to 2 s), resamples up to two minutes of audio and disposes
+    /// the capture: off the UI thread, while the panel already shows "Transcribing…". A start still running is waited
+    /// for first; one that failed has nothing to stop (null), and has already said why.
     /// </summary>
-    private async Task StopAsync()
+    private async Task<RecordedClip?> StopCaptureAsync(Task<bool> started)
     {
-        var started = _started;
-        State = RavenState.Transcribing;
-        Caption = "Transcribing…";
+        if (!await started)
+        {
+            return null;
+        }
+
+        return await Task.Run(_recorder.Stop);
+    }
+
+    /// <summary>
+    /// One clip's turn in the transcription queue: after every clip stopped before it, so its note or transcript lands
+    /// in the log in recording order. The awaits resume on the UI thread (its synchronisation context), where the log
+    /// and the state live. Never faults, so the clip behind it always gets its turn.
+    /// </summary>
+    private async Task TranscribeInTurnAsync(Task previous, Task<RecordedClip?> stopping, bool heardSpeech,
+        Task<DictationVocabulary> vocabulary)
+    {
         try
         {
-            if (!await started)
+            await previous;
+            var clip = await stopping;
+            if (clip is null || clip.Length < MinimumClip)
             {
                 return;
             }
 
-            var clip = await Task.Run(_recorder.Stop);
-            if (clip.Length < MinimumClip)
-            {
-                return;
-            }
-
-            if (!_speech.HeardSpeech)
+            if (!heardSpeech)
             {
                 AddEntry(RavenLogKind.Note, "I didn't hear anything.");
                 return;
@@ -456,7 +489,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            var words = await _vocabularyFetch;
+            var words = await vocabulary;
             var result = await _dictation.TranscribeAsync(clip.Samples16k, words, live: false, CancellationToken.None);
             var text = result.Text.Trim();
             if (text.Length > 0)
@@ -479,7 +512,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            ReturnToIdle();
+            Interlocked.Decrement(ref _pending);
+            UpdateState();
         }
     }
 
@@ -500,10 +534,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task<bool> DownloadModelAsync()
     {
         const string Prefix = "Downloading the speech model (1.6 GB)… ";
-        Caption = "Downloading the speech model…";
         var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
         var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{Prefix}{percent}%");
-
+        _downloading = true;
+        UpdateState();
         try
         {
             await _models.DownloadAsync(progress, CancellationToken.None);
@@ -514,19 +548,43 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             AddEntry(RavenLogKind.Warning, $"The speech model could not be downloaded: {ex.Message}. Press the mic to try again.");
             return false;
         }
+        finally
+        {
+            _downloading = false;
+            UpdateState();
+        }
 
         entry.Text = "Speech model downloaded.";
-        Caption = "Transcribing…";
         WarmUpInBackground();
         return true;
     }
 
-
-    private void ReturnToIdle()
+    /// <summary>
+    /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Transcribing while any
+    /// stopped clip is pending (the download, or how many wait, in the caption); otherwise Idle.
+    /// </summary>
+    private void UpdateState()
     {
-        State = RavenState.Idle;
+        if (_capturing)
+        {
+            State = RavenState.Listening;
+            Caption = "Listening…";
+            return;
+        }
+
         Level = 0;
-        Caption = IdleCaption;
+        var pending = Volatile.Read(ref _pending);
+        if (pending == 0)
+        {
+            State = RavenState.Idle;
+            Caption = IdleCaption;
+            return;
+        }
+
+        State = RavenState.Transcribing;
+        Caption = _downloading ? "Downloading the speech model…"
+            : pending > 1 ? $"Transcribing… ({pending} waiting)"
+            : "Transcribing…";
     }
 
     private RavenLogEntry AddEntry(RavenLogKind kind, string text)
