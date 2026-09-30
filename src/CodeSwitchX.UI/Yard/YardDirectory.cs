@@ -1,3 +1,4 @@
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
@@ -31,11 +32,11 @@ public sealed class YardDirectory : IYardDirectory
 
     public async Task<IReadOnlyList<YardWorkspace>> WorkspacesAsync(CancellationToken ct)
     {
-        var tiles = await OnUiThreadAsync(() => _yard.Tracks
+        var tiles = await _ui.InvokeAsync(() => _yard.Tracks
             .SelectMany(group => group.Tiles.Select(tile => (Track: group.Name, tile.Workspace, Git: tile.GitLines.ToList())))
-            .ToList(), ct).ConfigureAwait(false);
+            .ToList(), UiTimeout, ct).ConfigureAwait(false);
 
-        // Off the UI thread from here: OnUiThreadAsync resumes on the thread pool.
+        // Off the UI thread from here: InvokeAsync resumes on the thread pool.
         return tiles.Select(t => new YardWorkspace(
                 t.Workspace.Id,
                 t.Workspace.Name,
@@ -48,10 +49,10 @@ public sealed class YardDirectory : IYardDirectory
 
     public async Task<IReadOnlyList<YardChat>> ChatsAsync(CancellationToken ct)
     {
-        var rows = await OnUiThreadAsync(() => _yard.Tiles
+        var rows = await _ui.InvokeAsync(() => _yard.Tiles
             .SelectMany(tile => tile.Chats.Select(row => (tile.Workspace, Row: new Row(row.SessionId, row.Title, row.State, row.NeedsUser,
                 row.StateSince, row.ElapsedText, row.LastToolName, row.ContextFill))))
-            .ToList(), ct).ConfigureAwait(false);
+            .ToList(), UiTimeout, ct).ConfigureAwait(false);
 
         return rows.Select(r =>
             {
@@ -62,7 +63,10 @@ public sealed class YardDirectory : IYardDirectory
             .ToList();
     }
 
-    /// <summary>The folders its .code-workspace file lists, the root first; the root alone when there is none or it cannot be read now.</summary>
+    /// <summary>
+    /// The folders its .code-workspace file lists, the root first: the root is the tile's folder even when the file lists
+    /// only folders below it. The root alone when there is no file or it cannot be read now.
+    /// </summary>
     private IReadOnlyList<YardFolder> FoldersOf(Workspace workspace)
     {
         var root = new YardFolder(WorkspaceProbe.FolderName(workspace.RootPath), workspace.RootPath);
@@ -71,24 +75,16 @@ public sealed class YardDirectory : IYardDirectory
             return [root];
         }
 
-        return folders.Select(f => new YardFolder(f.Label, f.Path)).ToList();
-    }
-
-    private async Task<T> OnUiThreadAsync<T>(Func<T> read, CancellationToken ct)
-    {
-        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ui.Post(() =>
+        var listed = folders.Select(f => new YardFolder(f.Label, f.Path)).ToList();
+        var rootKey = PathNormalizer.Normalize(workspace.RootPath);
+        var rootListed = listed.FindIndex(f => PathNormalizer.Normalize(f.Path) == rootKey);
+        if (rootListed < 0)
         {
-            try
-            {
-                result.TrySetResult(read());
-            }
-            catch (Exception ex)
-            {
-                result.TrySetException(ex);
-            }
-        });
-        return await result.Task.WaitAsync(UiTimeout, ct).ConfigureAwait(false);
+            return [root, .. listed];
+        }
+
+        // Named as the file names it, and first.
+        return [listed[rootListed], .. listed.Where((_, i) => i != rootListed)];
     }
 
     private sealed record Row(string Id, string Title, SessionState State, bool NeedsYou, DateTimeOffset StateSince, string StateFor, string? LastTool,

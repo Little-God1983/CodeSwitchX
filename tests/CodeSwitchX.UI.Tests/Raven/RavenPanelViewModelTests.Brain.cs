@@ -65,6 +65,16 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task The_part_of_the_reply_before_a_card_keeps_no_empty_lines()
+    {
+        _brain.Answer = _ => [new BrainText("Let me check the Yard."), new BrainText("\n\n"), ListChats(), new BrainText("One chat.\n")];
+
+        var vm = await AskedAsync("What's waiting on me?");
+
+        vm.Log.Where(e => e.Kind == RavenLogKind.Raven).Select(e => e.Text).ShouldBe(["Let me check the Yard.", "One chat."]);
+    }
+
+    [Fact]
     public async Task A_tool_call_that_failed_marks_its_card()
     {
         _brain.Answer = _ => [ListChats("a"), new BrainToolCall("b", "list_workspaces", "{}"), new BrainToolResult("a", true), new BrainToolResult("b", false)];

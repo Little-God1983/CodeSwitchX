@@ -140,7 +140,7 @@ public sealed class EventApiService : IHostedService
         _logger.LogInformation("Event API listening on pipe {Pipe} and port {Port}", Endpoint.PipeName, Endpoint.Port);
         if (_yard is not null && port > 0)
         {
-            McpConfigFile.Write(_paths.McpConfigFile, port, token);
+            WriteMcpConfig(port, token);
         }
     }
 
@@ -157,14 +157,40 @@ public sealed class EventApiService : IHostedService
             {
                 File.Delete(file);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // Stopping goes on: the server is what must stop, and a file left behind is replaced at the next start.
             }
         }
 
         await _app.StopAsync(cancellationToken);
         await _app.DisposeAsync();
         _app = null;
+    }
+
+    /// <summary>
+    /// Raven is optional, the hook pipe is not: a file that cannot be written (held open by a scanner, an ACL that will
+    /// not take) leaves Raven without the Yard, and the app runs on. A file left from an earlier run is removed, so the
+    /// brain says the Yard cannot be seen rather than call an address that is gone.
+    /// </summary>
+    private void WriteMcpConfig(int port, string token)
+    {
+        try
+        {
+            McpConfigFile.Write(_paths.McpConfigFile, port, token);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "Could not write {File}; Raven cannot see the Yard", _paths.McpConfigFile);
+            try
+            {
+                File.Delete(_paths.McpConfigFile);
+            }
+            catch (Exception deleteFailed) when (deleteFailed is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(deleteFailed, "Could not remove the stale {File} either", _paths.McpConfigFile);
+            }
+        }
     }
 
     private static bool IsAuthorized(HttpContext context, string token)

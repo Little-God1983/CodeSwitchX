@@ -214,6 +214,52 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task Tools_still_connecting_are_no_failure_and_a_failure_after_they_worked_is_told_again()
+    {
+        var statuses = new Queue<string>(["pending", "failed", "failed", "connected", "failed"]);
+        _launcher.Answer = _ => [StreamJson.Init(statuses.Dequeue()), StreamJson.Text("Hm."), StreamJson.Result("Hm.")];
+
+        var warnings = new List<int>();
+        for (var turn = 1; turn <= 5; turn++)
+        {
+            if ((await AskAsync($"Turn {turn}")).OfType<BrainNotice>().Any(n => n.Warning))
+            {
+                warnings.Add(turn);
+            }
+        }
+
+        warnings.ShouldBe([2, 5]);
+    }
+
+    [Fact]
+    public async Task A_disposed_brain_starts_no_process_for_a_late_warm_up_or_question()
+    {
+        await _brain.DisposeAsync();
+
+        _brain.WarmUp();
+        var events = await AskAsync("Hi");
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _launcher.Started.ShouldBeEmpty();
+        events.ShouldHaveSingleItem().ShouldBe(new BrainFailed("Raven's brain has shut down with CodeSwitchX."));
+    }
+
+    [Fact]
+    public async Task A_place_that_cannot_be_searched_for_Claude_Code_fails_the_turn_with_the_reason()
+    {
+        var brain = new ClaudeCliBrain(_paths, _settings, _launcher, () => throw new UnauthorizedAccessException("Access to the path is denied."),
+            _time, NullLogger<ClaudeCliBrain>.Instance);
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.ShouldHaveSingleItem().ShouldBe(new BrainFailed("Raven could not look for Claude Code: Access to the path is denied."));
+    }
+
+    [Fact]
     public async Task An_answer_that_failed_says_why_and_keeps_the_process()
     {
         _launcher.Answer = _ => [StreamJson.Init(), StreamJson.ErrorResult];

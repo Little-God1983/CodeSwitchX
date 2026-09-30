@@ -17,6 +17,16 @@ public static class WorkspaceMatcher
     /// <summary>The lowest score that counts as a match.</summary>
     public const double Threshold = 0.7;
 
+    /// <summary>How much of what was said a name must make up to match by being part of it.</summary>
+    private const double MostOfTheQuery = 0.6;
+
+    /// <summary>
+    /// The best of the matches: those with the top score, or within a hair of it. What a question about one workspace is
+    /// about; the weaker matches are other workspaces that only look a little alike.
+    /// </summary>
+    public static IReadOnlyList<WorkspaceMatch> Best(IReadOnlyList<WorkspaceMatch> matches) =>
+        matches.Count == 0 ? [] : matches.Where(m => m.Score >= matches[0].Score - 0.01).ToList();
+
     /// <summary>The workspaces that match, best first; a workspace appears once, under its best-matching name.</summary>
     public static IReadOnlyList<WorkspaceMatch> Find(string query, IEnumerable<YardWorkspace> workspaces)
     {
@@ -76,11 +86,17 @@ public static class WorkspaceMatcher
             return 1;
         }
 
-        // One inside the other: "diffusion" in "diffusionfull". The closer the lengths, the better the match.
-        var (shorter, longer) = key.Length <= name.Length ? (key, name) : (name, key);
-        if (shorter.Length >= 3 && longer.Contains(shorter, StringComparison.Ordinal))
+        // What was said is part of the name: "diffusion" in "diffusionfull". The closer the lengths, the better the match.
+        if (key.Length >= 3 && key.Length < name.Length && name.Contains(key, StringComparison.Ordinal))
         {
-            return 0.8 + (0.1 * shorter.Length / longer.Length);
+            return 0.8 + (0.1 * key.Length / name.Length);
+        }
+
+        // The name is part of what was said, and most of it: "codeswitchx app" for CodeSwitchX. A short name that is only
+        // a piece of it ("code" or "switch" in "codeswitchx", "api" in "backend api") is no match.
+        if (name.Length >= MostOfTheQuery * key.Length && key.Contains(name, StringComparison.Ordinal))
+        {
+            return 0.8 + (0.1 * name.Length / key.Length);
         }
 
         // A misheard name: "code switch ex" for CodeSwitchX.

@@ -23,8 +23,7 @@ public sealed class YardTools(IYardDirectory yard)
         + "folders, git state (branch and uncommitted changes per repository) and how many chats need the user or are working.")]
     public async Task<IReadOnlyList<WorkspaceView>> ListWorkspaces(CancellationToken cancellationToken)
     {
-        var workspaces = await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false);
-        var chats = await yard.ChatsAsync(cancellationToken).ConfigureAwait(false);
+        var (workspaces, chats) = await ReadAsync(cancellationToken).ConfigureAwait(false);
         return workspaces.Select(w => WorkspaceView.Of(w, chats)).ToList();
     }
 
@@ -35,8 +34,7 @@ public sealed class YardTools(IYardDirectory yard)
     public async Task<IReadOnlyList<WorkspaceMatchView>> FindWorkspace(
         [Description("The name as the user said it, e.g. \"Diffusion Nexus\".")] string query, CancellationToken cancellationToken)
     {
-        var workspaces = await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false);
-        var chats = await yard.ChatsAsync(cancellationToken).ConfigureAwait(false);
+        var (workspaces, chats) = await ReadAsync(cancellationToken).ConfigureAwait(false);
         return WorkspaceMatcher.Find(query, workspaces)
             .Select(m => new WorkspaceMatchView(m.MatchedName, Math.Round(m.Score, 2), WorkspaceView.Of(m.Workspace, chats)))
             .ToList();
@@ -49,11 +47,14 @@ public sealed class YardTools(IYardDirectory yard)
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
-        [Description("Only the chats of the workspaces this name finds, matched like find_workspace. Leave it out for every workspace.")]
+        [Description("Only the chats of the workspace this name finds best, matched like find_workspace. Leave it out for every workspace.")]
         string? workspace = null,
         CancellationToken cancellationToken = default)
     {
-        var chats = await yard.ChatsAsync(cancellationToken).ConfigureAwait(false);
+        var byName = !string.IsNullOrWhiteSpace(workspace);
+        var (workspaces, chats) = byName
+            ? await ReadAsync(cancellationToken).ConfigureAwait(false)
+            : ([], await yard.ChatsAsync(cancellationToken).ConfigureAwait(false));
         IEnumerable<YardChat> shown = filter.Trim().ToLowerInvariant() switch
         {
             "needs_me" => chats.Where(c => c.NeedsYou),
@@ -63,17 +64,17 @@ public sealed class YardTools(IYardDirectory yard)
             _ => throw new McpException($"Unknown filter '{filter}'. Use one of: {string.Join(", ", ChatFilters)}."),
         };
 
-        if (!string.IsNullOrWhiteSpace(workspace))
+        if (byName)
         {
-            var names = WorkspaceMatcher.Find(workspace, await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false))
-                .Select(m => m.Workspace.Id)
-                .ToHashSet();
-            if (names.Count == 0)
+            // The best match only (and its ties): the chats of a workspace that merely looks a little like the name
+            // would be reported as the named workspace's.
+            var ids = WorkspaceMatcher.Best(WorkspaceMatcher.Find(workspace!, workspaces)).Select(m => m.Workspace.Id).ToHashSet();
+            if (ids.Count == 0)
             {
                 throw new McpException($"No workspace matches '{workspace}'. list_workspaces lists them all.");
             }
 
-            shown = shown.Where(c => names.Contains(c.WorkspaceId));
+            shown = shown.Where(c => ids.Contains(c.WorkspaceId));
         }
 
         return shown.Select(ChatView.Of).ToList();
@@ -94,6 +95,15 @@ public sealed class YardTools(IYardDirectory yard)
             [] => throw new McpException($"The Yard shows no chat '{id}'. list_chats lists them."),
             _ => throw new McpException($"'{id}' fits {found.Count} chats. Give more of the id."),
         };
+    }
+
+    /// <summary>The workspaces and the chats, both read at once: each read waits for the UI thread.</summary>
+    private async Task<(IReadOnlyList<YardWorkspace> Workspaces, IReadOnlyList<YardChat> Chats)> ReadAsync(CancellationToken ct)
+    {
+        var workspaces = yard.WorkspacesAsync(ct);
+        var chats = yard.ChatsAsync(ct);
+        await Task.WhenAll(workspaces, chats).ConfigureAwait(false);
+        return (await workspaces.ConfigureAwait(false), await chats.ConfigureAwait(false));
     }
 
     internal static string StateText(YardChat chat) => chat.State switch

@@ -96,6 +96,35 @@ public sealed class WorkspaceMatcherTests
     }
 
     [Fact]
+    public void A_short_folder_name_inside_what_was_said_is_no_match()
+    {
+        var shared = Workspace("Tools", ("code", @"E:\Repos\code"), ("switch", @"E:\Repos\switch"));
+        var backend = Workspace("Shop", ("api", @"E:\Repos\api"), ("end", @"E:\Repos\end"));
+
+        WorkspaceMatcher.Find("CodeSwitchX", [CodeSwitchX, shared]).ShouldHaveSingleItem().Workspace.ShouldBe(CodeSwitchX);
+        WorkspaceMatcher.Find("backend api", [backend]).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_name_that_is_most_of_what_was_said_matches()
+    {
+        WorkspaceMatcher.Find("CodeSwitchX app", Yard).ShouldHaveSingleItem().Workspace.ShouldBe(CodeSwitchX);
+    }
+
+    [Fact]
+    public void The_best_matches_are_the_top_score_and_its_ties()
+    {
+        var older = Workspace("CodeSwitch");
+        var twin = Workspace("Code Switch X");
+
+        var matches = WorkspaceMatcher.Find("CodeSwitchX", [older, CodeSwitchX, twin]);
+
+        matches.Count.ShouldBe(3);
+        WorkspaceMatcher.Best(matches).Select(m => m.Workspace).ShouldBe([CodeSwitchX, twin], ignoreOrder: true);
+        WorkspaceMatcher.Best([]).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void German_letters_count_as_letters()
     {
         WorkspaceMatcher.Find("Bücher Regal", [Workspace("BücherRegal")]).ShouldHaveSingleItem().Score.ShouldBe(1);

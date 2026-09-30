@@ -12,7 +12,20 @@ public sealed class ClaudeCliLocator(string? path, string homeDirectory, Func<st
         Environment.GetEnvironmentVariable("PATH"),
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         File.Exists,
-        (folder, pattern) => Directory.Exists(folder) ? Directory.EnumerateDirectories(folder, pattern) : []);
+        ExtensionFolders);
+
+    /// <summary>Read whole here, so a folder that cannot be listed (its ACL, a redirected profile) is no folder instead of an exception later.</summary>
+    private static IEnumerable<string> ExtensionFolders(string folder, string pattern)
+    {
+        try
+        {
+            return Directory.Exists(folder) ? Directory.EnumerateDirectories(folder, pattern).ToList() : [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return [];
+        }
+    }
 
     /// <summary>The full path, or null when Claude Code is not installed in any of the places.</summary>
     public string? Find() => Candidates().FirstOrDefault(fileExists);

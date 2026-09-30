@@ -99,6 +99,36 @@ public sealed class YardDirectoryTests
     }
 
     [Fact]
+    public async Task The_root_comes_first_even_when_the_workspace_file_lists_only_folders_below_it()
+    {
+        _diffusion.RootPath = @"E:\Repos\Diffusion";
+        _diffusion.WorkspaceFile = DiffusionFile;
+        await _yard.InitializeAsync(CancellationToken.None);
+        var directory = new YardDirectory(_yard, _ => null, new ImmediateDispatcher(),
+            _ => [new WorkspaceFolder(@"E:\Repos\Diffusion\src\App", null), new WorkspaceFolder(@"E:\Repos\Diffusion\src\Installer", null)]);
+
+        var workspaces = await directory.WorkspacesAsync(CancellationToken.None);
+
+        workspaces[1].Folders.ShouldBe([
+            new YardFolder("Diffusion", @"E:\Repos\Diffusion"),
+            new YardFolder("App", @"E:\Repos\Diffusion\src\App"),
+            new YardFolder("Installer", @"E:\Repos\Diffusion\src\Installer"),
+        ]);
+    }
+
+    [Fact]
+    public async Task A_root_the_workspace_file_lists_later_comes_first_under_the_file_s_name_for_it()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var directory = new YardDirectory(_yard, _ => null, new ImmediateDispatcher(),
+            _ => [new WorkspaceFolder(@"E:\Repos\DiffusionNexus", null), new WorkspaceFolder(@"e:\repos\diffusionnexus.installer.sdk", "Installer")]);
+
+        var workspaces = await directory.WorkspacesAsync(CancellationToken.None);
+
+        workspaces[1].Folders.Select(f => f.Name).ShouldBe(["Installer", "DiffusionNexus"]);
+    }
+
+    [Fact]
     public async Task A_workspace_file_that_cannot_be_read_now_leaves_the_root_folder()
     {
         _diffusion.WorkspaceFile = @"E:\Repos\locked.code-workspace";

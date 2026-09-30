@@ -788,7 +788,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         reply!.Text += piece;
                         break;
                     case BrainToolCall call:
-                        reply = null;
+                        // The part of the reply before the card is done: "Let me check.\n\n" keeps no empty lines.
+                        if (reply is not null)
+                        {
+                            reply.Text = reply.Text.TrimEnd();
+                            reply = null;
+                        }
+
                         var card = AddEntry(RavenLogKind.Action, call.Tool);
                         card.Detail = ActionDetail(call.Input);
                         cards[call.Id] = card;

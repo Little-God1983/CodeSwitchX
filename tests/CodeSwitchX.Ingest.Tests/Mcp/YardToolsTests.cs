@@ -97,6 +97,18 @@ public sealed class YardToolsTests
     }
 
     [Fact]
+    public async Task A_workspace_that_only_looks_like_the_name_lends_it_no_chats()
+    {
+        var older = Guid.NewGuid();
+        _yard.Workspaces.Add(new(older, "CodeSwitch", "Tools", @"E:\Repos\CodeSwitch", [], []));
+        _yard.Chats.Add(_yard.Chats[0] with { Id = "dddddddd-0004", Title = "Old version", WorkspaceId = older, Workspace = "CodeSwitch" });
+
+        var chats = await Tools.ListChats("all", "CodeSwitchX", CancellationToken.None);
+
+        chats.Select(c => c.Title).ShouldBe(["Speech gate", "Raven brain"]);
+    }
+
+    [Fact]
     public async Task A_workspace_name_that_matches_nothing_is_refused()
     {
         await Should.ThrowAsync<McpException>(() => Tools.ListChats("all", "Photoshop", CancellationToken.None));

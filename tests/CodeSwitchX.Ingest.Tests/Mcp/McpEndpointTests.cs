@@ -127,6 +127,28 @@ public sealed class McpEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_config_file_that_cannot_be_written_leaves_the_hook_pipe_running()
+    {
+        var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-mcp-" + Guid.NewGuid().ToString("N")));
+        paths.EnsureCreated();
+        Directory.CreateDirectory(paths.McpConfigFile); // a folder in its place: every write fails
+        var api = new EventApiService(paths, new EventBus(NullLogger<EventBus>.Instance), new AccessTokenStore(paths), TimeProvider.System,
+            NullLoggerFactory.Instance, new EventApiOptions { PipeName = "csx-test-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, _yard);
+        try
+        {
+            await api.StartAsync(CancellationToken.None);
+
+            api.Endpoint.ShouldNotBeNull().Port.ShouldBeGreaterThan(0);
+            File.Exists(paths.McpConfigFile).ShouldBeFalse();
+        }
+        finally
+        {
+            await api.StopAsync(CancellationToken.None);
+            Directory.Delete(paths.Root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task The_config_file_goes_when_the_server_stops()
     {
         await _api.StopAsync(CancellationToken.None);

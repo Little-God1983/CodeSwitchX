@@ -34,7 +34,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     private readonly List<BrainEvent> _notices = [];
     private IBrainProcess? _process;
     private string? _processModel;
-    private bool _yardChecked;
+
+    /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since.</summary>
+    private bool _yardWarned;
+
+    /// <summary>Set once the app disposes the brain: nothing starts a process after that.</summary>
+    private volatile bool _disposed;
 
     /// <summary>Why the last process went, when it went on its own: the next start says so.</summary>
     private string? _lost;
@@ -100,10 +105,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                 switch (ClaudeStream.Read(line))
                 {
-                    case ClaudeInit init when !_yardChecked:
-                        _yardChecked = true;
-                        if (YardProblem(init) is { } problem)
+                    case ClaudeInit init:
+                        // Every turn's init says how the tools stand; a failure is told once, and again only after they
+                        // were seen working in between. "pending" is no failure: the server is still being connected to.
+                        if (YardProblem(init) is not { } problem)
                         {
+                            _yardWarned = false;
+                        }
+                        else if (problem.Length > 0 && !_yardWarned)
+                        {
+                            _yardWarned = true;
                             yield return new BrainNotice(problem, Warning: true);
                         }
 
@@ -143,6 +154,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             await _turns.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -166,8 +182,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         return ValueTask.CompletedTask;
     }
 
-    /// <summary>The app's host disposes its services synchronously as it exits, and a service that only disposes asynchronously fails that.</summary>
-    public void Dispose() => Stop();
+    /// <summary>
+    /// The app's host disposes its services synchronously as it exits, and a service that only disposes asynchronously
+    /// fails that. Does not wait for a turn that runs: its process is killed, which ends the turn, and a warm-up or turn
+    /// that comes after this starts none.
+    /// </summary>
+    public void Dispose()
+    {
+        _disposed = true;
+        Stop();
+    }
 
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
     internal IReadOnlyList<string> Arguments(string model) =>
@@ -191,6 +215,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Starts the process when none runs or its model is not the one set; null when one runs, else why none could start.</summary>
     private string? EnsureRunning()
     {
+        if (_disposed)
+        {
+            return "Raven's brain has shut down with CodeSwitchX.";
+        }
+
         var model = _settings.Model;
         if (_process is { } running)
         {
@@ -209,7 +238,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
         }
 
-        if (_findClaude() is not { } claude)
+        string? claude;
+        try
+        {
+            claude = _findClaude();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _logger.LogWarning(ex, "Could not look for Claude Code");
+            return $"Raven could not look for Claude Code: {ex.Message}";
+        }
+
+        if (claude is null)
         {
             return "Claude Code is not installed, so Raven cannot answer. Install it (claude.ai/code) and ask again.";
         }
@@ -230,8 +270,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             return $"Raven's brain could not be started from {claude}: {ex.Message}";
         }
 
+        if (_disposed)
+        {
+            // Disposed while it started: the process it got would be owned by nothing.
+            Stop();
+            return "Raven's brain has shut down with CodeSwitchX.";
+        }
+
         _processModel = model;
-        _yardChecked = false;
+        _yardWarned = false;
         _logger.LogInformation("Started Raven's brain: {Claude} with {Model}", claude, model);
         if (_lost is not null)
         {
@@ -297,16 +344,24 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         Stop();
     }
 
+    /// <summary>Takes the process in one step: <see cref="Dispose"/> can stop it from another thread while a turn loses it.</summary>
     private void Stop()
     {
-        var process = _process;
-        _process = null;
+        var process = Interlocked.Exchange(ref _process, null);
         _processModel = null;
         process?.Dispose();
     }
 
-    /// <summary>What the user is told when the brain's init line says the Yard's tools did not connect; null when they did.</summary>
+    /// <summary>
+    /// What the user is told when the brain's init line says the Yard's tools failed; null when they are connected, and
+    /// empty (nothing to say yet) while they are still being connected to.
+    /// </summary>
     private static string? YardProblem(ClaudeInit init) => init.McpServers.TryGetValue(YardMcp.ServerName, out var status)
-        ? status == "connected" ? null : $"Raven cannot see the Yard: its tools did not connect ({status}). Its answers can only guess."
+        ? status switch
+        {
+            "connected" => null,
+            "pending" => "",
+            _ => $"Raven cannot see the Yard: its tools did not connect ({status}). Its answers can only guess.",
+        }
         : "Raven cannot see the Yard: its tools are missing. Its answers can only guess.";
 }
