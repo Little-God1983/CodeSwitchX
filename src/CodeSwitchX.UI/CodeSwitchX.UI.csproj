@@ -13,6 +13,7 @@
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\CodeSwitchX.Conductor\CodeSwitchX.Conductor.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Data\CodeSwitchX.Data.csproj" />
     <ProjectReference Include="..\CodeSwitchX.Ingest\CodeSwitchX.Ingest.csproj" />

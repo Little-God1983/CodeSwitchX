@@ -336,22 +336,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>The tiles as of now, read on the UI thread, which alone enumerates the tile collections; waits for it at most <see cref="UiTimeout"/>.</summary>
-    private async Task<List<WorkspaceTileViewModel>> TilesOnUiThreadAsync()
-    {
-        var tiles = new TaskCompletionSource<List<WorkspaceTileViewModel>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ui.Post(() =>
-        {
-            try
-            {
-                tiles.SetResult(Tiles.ToList());
-            }
-            catch (Exception ex)
-            {
-                tiles.TrySetException(ex);
-            }
-        });
-        return await tiles.Task.WaitAsync(UiTimeout).ConfigureAwait(false);
-    }
+    private Task<List<WorkspaceTileViewModel>> TilesOnUiThreadAsync() => _ui.InvokeAsync(() => Tiles.ToList(), UiTimeout);
 
     [RelayCommand]
     private void AddWorkspace() => AddWorkspaceRequested?.Invoke(null);

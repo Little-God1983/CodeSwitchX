@@ -1,6 +1,8 @@
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.Ingest.Mcp;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -12,7 +14,11 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Ingest.Api;
 
-/// <summary>In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus.</summary>
+/// <summary>
+/// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus. Given the Yard, it also
+/// serves the read-only MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), on the loopback port under
+/// <see cref="YardMcp.Route"/>, behind the same token, and writes <c>mcp.json</c> for Claude Code to find them.
+/// </summary>
 public sealed class EventApiService : IHostedService
 {
     private readonly AppPaths _paths;
@@ -22,10 +28,11 @@ public sealed class EventApiService : IHostedService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _logger;
     private readonly EventApiOptions _options;
+    private readonly IYardDirectory? _yard;
     private WebApplication? _app;
 
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
-        ILoggerFactory loggerFactory, EventApiOptions options)
+        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null)
     {
         _paths = paths;
         _bus = bus;
@@ -34,6 +41,7 @@ public sealed class EventApiService : IHostedService
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<EventApiService>();
         _options = options;
+        _yard = yard;
     }
 
     public EndpointDescriptor? Endpoint { get; private set; }
@@ -68,7 +76,28 @@ public sealed class EventApiService : IHostedService
             }
         });
 
+        if (_yard is not null)
+        {
+            // Stateless: every request stands alone, so a restarted brain or app needs no session to be re-established.
+            builder.Services.AddSingleton(_yard);
+            builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })
+                .WithHttpTransport(http => http.Stateless = true)
+                .WithTools<YardTools>();
+        }
+
         var app = builder.Build();
+
+        // Before routing picks an endpoint: the MCP tools answer only with the token, like /events.
+        app.Use(async (context, next) =>
+        {
+            if (context.Request.Path.StartsWithSegments(YardMcp.Route) && !IsAuthorized(context, token))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            await next(context);
+        });
 
         app.MapGet("/health", () => Results.Ok(new { pid = Environment.ProcessId, product = AppPaths.ProductFolderName }));
 
@@ -92,6 +121,11 @@ public sealed class EventApiService : IHostedService
             return Results.Accepted();
         });
 
+        if (_yard is not null)
+        {
+            app.MapMcp(YardMcp.Route);
+        }
+
         await app.StartAsync(cancellationToken);
         _app = app;
 
@@ -104,6 +138,10 @@ public sealed class EventApiService : IHostedService
             EndpointDescriptor.CurrentProcessStartedAtUtc());
         Endpoint.Write(_paths.EndpointFile);
         _logger.LogInformation("Event API listening on pipe {Pipe} and port {Port}", Endpoint.PipeName, Endpoint.Port);
+        if (_yard is not null && port > 0)
+        {
+            WriteMcpConfig(port, token);
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -113,17 +151,46 @@ public sealed class EventApiService : IHostedService
             return;
         }
 
-        try
+        foreach (var file in new[] { _paths.EndpointFile, _paths.McpConfigFile })
         {
-            File.Delete(_paths.EndpointFile);
-        }
-        catch (IOException)
-        {
+            try
+            {
+                File.Delete(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Stopping goes on: the server is what must stop, and a file left behind is replaced at the next start.
+            }
         }
 
         await _app.StopAsync(cancellationToken);
         await _app.DisposeAsync();
         _app = null;
+    }
+
+    /// <summary>
+    /// Raven is optional, the hook pipe is not: a file that cannot be written (held open by a scanner, an ACL that will
+    /// not take) leaves Raven without the Yard, and the app runs on. A file left from an earlier run is removed, so the
+    /// brain says the Yard cannot be seen rather than call an address that is gone.
+    /// </summary>
+    private void WriteMcpConfig(int port, string token)
+    {
+        try
+        {
+            McpConfigFile.Write(_paths.McpConfigFile, port, token);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "Could not write {File}; Raven cannot see the Yard", _paths.McpConfigFile);
+            try
+            {
+                File.Delete(_paths.McpConfigFile);
+            }
+            catch (Exception deleteFailed) when (deleteFailed is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(deleteFailed, "Could not remove the stale {File} either", _paths.McpConfigFile);
+            }
+        }
     }
 
     private static bool IsAuthorized(HttpContext context, string token)

@@ -54,7 +54,7 @@ public sealed class AccessTokenStore
             System.Text.Encoding.ASCII.GetBytes(token), System.Text.Encoding.ASCII.GetBytes(candidate));
     }
 
-    private static void RestrictToCurrentUser(string file)
+    internal static void RestrictToCurrentUser(string file)
     {
         var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No current user SID.");
         var security = new FileSecurity();

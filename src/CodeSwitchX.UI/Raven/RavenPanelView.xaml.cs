@@ -58,6 +58,18 @@ public partial class RavenPanelView : UserControl
     private void ScrollLogToEnd() => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => LogScroller.ScrollToEnd());
 
     /// <summary>
+    /// A reply grows in place as it streams in, which adds no entry: the log follows it while its end was in view before
+    /// it grew, and stays put when the user has scrolled up to read.
+    /// </summary>
+    private void OnLogScrolled(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.ExtentHeightChange > 0 && e.VerticalOffset + e.ViewportHeight >= e.ExtentHeight - e.ExtentHeightChange - 1)
+        {
+            LogScroller.ScrollToEnd();
+        }
+    }
+
+    /// <summary>
     /// Press on mouse-down, release on mouse-up. The mouse is captured, so a hold that drifts off the button still ends
     /// with a release; a capture taken away (another window comes up mid-hold) counts as a release too.
     /// </summary>
