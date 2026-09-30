@@ -99,9 +99,14 @@ public sealed class WorkspaceVocabularyProvider : IDictationVocabularyProvider, 
                 }
             }
 
+            // Every workspace name before any folder label: the prompt keeps the first words when the list is long.
             foreach (var workspace in workspaces)
             {
                 Add(workspace.Name);
+            }
+
+            foreach (var workspace in workspaces)
+            {
                 if (workspace.WorkspaceFile is { Length: > 0 } file && _foldersOf(file) is { } folders)
                 {
                     foreach (var folder in folders)

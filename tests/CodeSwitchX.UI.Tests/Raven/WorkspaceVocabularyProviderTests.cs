@@ -38,6 +38,20 @@ public sealed class WorkspaceVocabularyProviderTests
         vocabulary.Corrections.ShouldBeEmpty();
     }
 
+    // The prompt keeps the first words when the list is too long for Whisper, so the names come first.
+    [Fact]
+    public async Task Every_workspace_name_comes_before_any_folder_label()
+    {
+        var store = StoreOf(
+            new Workspace { Name = "Diffusion-Full", RootPath = @"c:\b", WorkspaceFile = @"c:\b\full.code-workspace" },
+            new Workspace { Name = "ContentAutomatorX", RootPath = @"c:\a" });
+        using var provider = NewProvider(store, _ => [new WorkspaceFolder(@"c:\x\d", "DiffusionNexus")]);
+
+        var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
+
+        vocabulary.Words.ShouldBe(["Diffusion-Full", "ContentAutomatorX", "DiffusionNexus"]);
+    }
+
     [Fact]
     public async Task An_unreadable_workspace_file_leaves_only_the_name()
     {
