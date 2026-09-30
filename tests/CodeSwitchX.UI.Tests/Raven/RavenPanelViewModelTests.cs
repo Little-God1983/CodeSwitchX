@@ -86,6 +86,7 @@ public sealed class RavenPanelViewModelTests
         vm.PressMic();
         vm.State.ShouldBe(RavenState.Listening);
         vm.Caption.ShouldBe("Listening…");
+        await WithinAsync(vm.PendingStart);
         _recorder.Received(1).Start(Headset.Id);
         Speak();
         _time.Advance(Hold);
@@ -188,12 +189,13 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_denied_microphone_explains_the_privacy_setting()
+    public async Task A_denied_microphone_explains_the_privacy_setting()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied"));
         var vm = NewVm();
 
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
         vm.Log.Last().Text.ShouldContain("Privacy & security");
@@ -201,23 +203,25 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void An_unavailable_microphone_names_the_device()
+    public async Task An_unavailable_microphone_names_the_device()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.Unavailable, "busy"));
         var vm = NewVm();
 
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Text.ShouldBe("Headset could not be opened. Another app may be using it exclusively.");
     }
 
     [Fact]
-    public void A_stopped_windows_audio_service_says_so_rather_than_blaming_another_app()
+    public async Task A_stopped_windows_audio_service_says_so_rather_than_blaming_another_app()
     {
         _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.AudioServiceDown, "not running"));
         var vm = NewVm();
 
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
         vm.Log.Last().Text.ShouldBe("Windows audio is not running. Start the Windows Audio service or restart the PC.");
@@ -228,6 +232,7 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
 
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
 
@@ -547,10 +552,11 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_capture_failure_lists_the_microphones_again()
+    public async Task A_capture_failure_lists_the_microphones_again()
     {
         var vm = NewVm();
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
         _catalog.ClearReceivedCalls();
 
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
@@ -922,6 +928,7 @@ public sealed class RavenPanelViewModelTests
         });
         var vm = NewVm();
         vm.PressMic();
+        await WithinAsync(vm.PendingStart);
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
         _recorder.Failed += Raise.Event<EventHandler<MicrophoneException>>(_recorder, new MicrophoneException(MicrophoneFailureKind.Missing, "gone"));
@@ -935,6 +942,120 @@ public sealed class RavenPanelViewModelTests
         await WithinAsync(vm.PendingStop);
         vm.PressMic();
         vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    // Opening a Bluetooth headset or a waking USB device takes hundreds of milliseconds to seconds: not on the UI thread.
+    [Fact]
+    public async Task A_slow_start_runs_off_the_calling_thread_while_the_panel_already_says_listening()
+    {
+        using var hold = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource();
+        _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ =>
+        {
+            entered.TrySetResult();
+            hold.Wait(TimeSpan.FromSeconds(10));
+        });
+        var vm = NewVm();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        vm.PressMic();
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        vm.State.ShouldBe(RavenState.Listening);
+        vm.Caption.ShouldBe("Listening…");
+        await WithinAsync(entered.Task);
+        vm.PendingStart.IsCompleted.ShouldBeFalse();
+        hold.Set();
+        await WithinAsync(vm.PendingStart);
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    [Fact]
+    public async Task A_release_before_the_start_finished_stops_once_the_start_is_done()
+    {
+        using var hold = new ManualResetEventSlim();
+        var started = false;
+        var stoppedAfterStart = false;
+        _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            Volatile.Write(ref started, true);
+        });
+        _recorder.Stop().Returns(_ =>
+        {
+            stoppedAfterStart = Volatile.Read(ref started);
+            return new RecordedClip(new float[32000], TimeSpan.FromSeconds(2));
+        });
+        var vm = NewVm();
+        vm.PressMic();
+        Speak();
+        _time.Advance(Hold);
+
+        var release = vm.ReleaseMicAsync();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _recorder.DidNotReceive().Stop();
+        hold.Set();
+        await WithinAsync(release);
+
+        _recorder.Received(1).Stop();
+        stoppedAfterStart.ShouldBeTrue("the stop waited for the start");
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+        vm.State.ShouldBe(RavenState.Idle);
+    }
+
+    [Fact]
+    public async Task A_start_that_fails_late_returns_to_idle_with_its_warning_and_the_next_press_starts_again()
+    {
+        using var hold = new ManualResetEventSlim();
+        var calls = 0;
+        _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ =>
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                hold.Wait(TimeSpan.FromSeconds(10));
+                throw new MicrophoneException(MicrophoneFailureKind.Unavailable, "busy");
+            }
+        });
+        var vm = NewVm();
+        vm.PressMic();
+        await vm.ReleaseMicAsync(); // a tap: latched while the start still runs
+        vm.State.ShouldBe(RavenState.Listening);
+
+        hold.Set();
+        await WithinAsync(vm.PendingStart);
+
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Caption.ShouldBe(RavenPanelViewModel.IdleCaption);
+        vm.Log.Single().Text.ShouldBe("Headset could not be opened. Another app may be using it exclusively.");
+        vm.PressMic();
+        vm.State.ShouldBe(RavenState.Listening, "the gesture was reset: the press starts, it does not stop the latch");
+        await WithinAsync(vm.PendingStart);
+        _recorder.Received(2).Start(Headset.Id);
+    }
+
+    [Fact]
+    public async Task A_release_before_a_start_that_fails_ends_with_the_warning_and_nothing_to_transcribe()
+    {
+        using var hold = new ManualResetEventSlim();
+        _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ =>
+        {
+            hold.Wait(TimeSpan.FromSeconds(10));
+            throw new MicrophoneException(MicrophoneFailureKind.Denied, "denied");
+        });
+        var vm = NewVm();
+        vm.PressMic();
+        Speak();
+        _time.Advance(Hold);
+
+        var release = vm.ReleaseMicAsync();
+        hold.Set();
+        await WithinAsync(release);
+
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log.Single().Text.ShouldContain("Privacy & security");
+        _recorder.DidNotReceive().Stop();
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     // 1.6 GB in 80 KB reads is some twenty thousand reports: only a new whole percent goes to the UI thread.

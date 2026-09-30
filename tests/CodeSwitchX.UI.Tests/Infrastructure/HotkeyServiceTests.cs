@@ -117,6 +117,7 @@ public class HotkeyServiceTests
         await OnMinimisedShellAsync(harness, "Push to talk", window =>
         {
             harness.Shell.Raven.State.ShouldBe(RavenState.Listening);
+            PumpUntil(() => harness.Shell.Raven.PendingStart.IsCompleted); // the recorder starts off the UI thread
             harness.Recorder.Received(1).Start(headset.Id);
             window.WindowState.ShouldBe(WindowState.Minimized, "talking to Raven must not take the foreground from VS Code");
         });

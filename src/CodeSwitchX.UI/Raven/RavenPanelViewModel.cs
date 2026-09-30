@@ -48,6 +48,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _refreshing;
     private bool _fellBack;
     private bool _audioFailed;
+    private long _recording;
+    private Task<bool> _started = Task.FromResult(false);
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
 
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
@@ -110,6 +112,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// (the recorder holds one capture at a time). Completed when nothing is stopping.
     /// </summary>
     internal Task PendingStop { get; private set; } = Task.CompletedTask;
+
+    /// <summary>
+    /// The recorder's Start of the current recording, which runs off the UI thread: opening a Bluetooth headset or a
+    /// waking USB device takes hundreds of milliseconds to seconds. A stop waits for it.
+    /// </summary>
+    internal Task PendingStart => _started;
 
     /// <summary>Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded.</summary>
     public void RefreshMicrophones() => ApplyDevices(ReadDevices());
@@ -312,18 +320,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        try
-        {
-            _recorder.Start(mic.Id);
-        }
-        catch (MicrophoneException ex)
-        {
-            _logger.LogWarning(ex, "Could not start recording from {Microphone}", mic.Name);
-            _gesture.Reset();
-            AddEntry(RavenLogKind.Warning, WarningFor(ex.Kind, mic));
-            return;
-        }
-
         _recordingMic = mic;
         _silentWarned = false;
         _silence.Reset();
@@ -331,6 +327,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         State = RavenState.Listening;
         Caption = "Listening…";
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
+        _started = StartCaptureAsync(mic, ++_recording);
+    }
+
+    /// <summary>
+    /// Opens the microphone off the UI thread; the panel already says it is listening. A failure is reported whenever it
+    /// comes. If the recording is still running by then, the panel returns to idle and forgets the press; if it was
+    /// already released, its stop finds nothing to stop. Resumes on the UI thread (its synchronisation context).
+    /// </summary>
+    private async Task<bool> StartCaptureAsync(MicrophoneDevice mic, long recording)
+    {
+        try
+        {
+            await Task.Run(() => _recorder.Start(mic.Id));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not start recording from {Microphone}", mic.Name);
+            AddEntry(RavenLogKind.Warning, WarningFor(ex is MicrophoneException failure ? failure.Kind : MicrophoneFailureKind.Unavailable, mic));
+            if (recording == _recording && State == RavenState.Listening)
+            {
+                _gesture.Reset();
+                ReturnToIdle();
+            }
+
+            return false;
+        }
     }
 
     /// <summary>
@@ -382,8 +405,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The dead capture is still stopped and disposed, off the UI thread; its clip is dropped.</summary>
     private async Task ReleaseCaptureAsync()
     {
+        var started = _started;
         try
         {
+            if (!await started)
+            {
+                return;
+            }
+
             await Task.Run(_recorder.Stop);
         }
         catch (Exception ex)
@@ -395,14 +424,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// Says so first, then stops: the recorder's Stop waits for the capture thread (up to 2 s), resamples up to two
     /// minutes of audio and disposes the capture, which runs off the UI thread while the panel shows "Transcribing…".
-    /// The awaits resume on the UI thread (its synchronisation context), where the log and the state live.
+    /// The awaits resume on the UI thread (its synchronisation context), where the log and the state live. A start still
+    /// running is waited for first; one that failed has nothing to stop, and has already said why.
     /// </summary>
     private async Task StopAsync()
     {
+        var started = _started;
         State = RavenState.Transcribing;
         Caption = "Transcribing…";
         try
         {
+            if (!await started)
+            {
+                return;
+            }
+
             var clip = await Task.Run(_recorder.Stop);
             if (clip.Length < MinimumClip)
             {
