@@ -5,6 +5,15 @@ namespace CodeSwitchX.Core.Workspaces;
 
 public sealed record WorktreeInfo(string Path, string? Branch);
 
+/// <summary>A local folder a <c>.code-workspace</c> file lists.</summary>
+/// <param name="Path">Full path.</param>
+/// <param name="Name">The name the file gives the folder, which VS Code's Explorer shows; null when it gives none.</param>
+public sealed record WorkspaceFolder(string Path, string? Name)
+{
+    /// <summary>What to call the folder: the file's name for it, else the folder's own.</summary>
+    public string Label => Name ?? WorkspaceProbe.FolderName(Path);
+}
+
 public sealed record WorkspaceProbeResult(
     string RootPath,
     string SuggestedName,
@@ -71,7 +80,7 @@ public sealed class WorkspaceProbe
 
         return new WorkspaceProbeResult(
             canonicalRoot,
-            name ?? Path.GetFileName(root.TrimEnd('\\', '/')),
+            name ?? FolderName(root),
             workspaceFile,
             git.IsRepository,
             git.Branch,
@@ -101,32 +110,11 @@ public sealed class WorkspaceProbe
     /// </summary>
     private static string FirstFolderOf(string workspaceFile)
     {
-        var baseDirectory = Path.GetDirectoryName(workspaceFile)!;
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(workspaceFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            if (document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("folders", out var folders)
-                && folders.ValueKind == JsonValueKind.Array)
+            if (ListedFolders(workspaceFile).FirstOrDefault()?.Path is { } path)
             {
-                foreach (var folder in folders.EnumerateArray().Where(f => f.ValueKind == JsonValueKind.Object))
-                {
-                    string? path = null;
-                    if (folder.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
-                    {
-                        path = Path.GetFullPath(Path.Combine(baseDirectory, p.GetString()!));
-                    }
-                    else if (folder.TryGetProperty("uri", out var u) && u.ValueKind == JsonValueKind.String
-                        && Uri.TryCreate(u.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
-                    {
-                        path = uri.LocalPath;
-                    }
-
-                    if (path is not null)
-                    {
-                        return Directory.Exists(path) ? path : throw new DirectoryNotFoundException($"'{path}', the first folder of {workspaceFile}, does not exist.");
-                    }
-                }
+                return Directory.Exists(path) ? path : throw new DirectoryNotFoundException($"'{path}', the first folder of {workspaceFile}, does not exist.");
             }
         }
         catch (JsonException)
@@ -134,6 +122,59 @@ public sealed class WorkspaceProbe
         }
 
         throw new ArgumentException($"{workspaceFile} lists no local folder to use as the workspace root.", nameof(workspaceFile));
+    }
+
+    /// <summary>
+    /// Every local folder a <c>.code-workspace</c> file lists, in its order, with full paths; empty when it lists none.
+    /// Null when the file cannot be read or parsed right now: VS Code rewrites it on a settings change, so it can be locked
+    /// or half-written for a moment, and that is no reason to drop the folders it listed. Read on every git round, so a
+    /// folder added to the file shows without re-adding the tile. Reads the disk; call it off the UI thread.
+    /// </summary>
+    public static IReadOnlyList<WorkspaceFolder>? FoldersOf(string workspaceFile)
+    {
+        try
+        {
+            return ListedFolders(workspaceFile).ToList();
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A folder's own name; the path itself for a drive or share root (<c>C:\</c>), which has none.</summary>
+    public static string FolderName(string path)
+    {
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        return name.Length > 0 ? name : path;
+    }
+
+    private static IEnumerable<WorkspaceFolder> ListedFolders(string workspaceFile)
+    {
+        var baseDirectory = Path.GetDirectoryName(workspaceFile)!;
+        using var document = JsonDocument.Parse(File.ReadAllText(workspaceFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+        if (document.RootElement.ValueKind != JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("folders", out var folders)
+            || folders.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var folder in folders.EnumerateArray().Where(f => f.ValueKind == JsonValueKind.Object))
+        {
+            var name = folder.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(n.GetString())
+                ? n.GetString()
+                : null;
+            if (folder.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String)
+            {
+                yield return new WorkspaceFolder(Path.GetFullPath(Path.Combine(baseDirectory, p.GetString()!)), name);
+            }
+            else if (folder.TryGetProperty("uri", out var u) && u.ValueKind == JsonValueKind.String
+                && Uri.TryCreate(u.GetString(), UriKind.Absolute, out var uri) && uri.IsFile)
+            {
+                yield return new WorkspaceFolder(uri.LocalPath, name);
+            }
+        }
     }
 
     /// <summary>

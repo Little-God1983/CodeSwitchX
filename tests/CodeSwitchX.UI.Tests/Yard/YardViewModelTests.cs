@@ -411,8 +411,8 @@ public class YardViewModelTests : IDisposable
 
         await yard.RefreshGitAsync(CancellationToken.None);
 
-        yard.FindTile(shop.Id)!.Branch.ShouldBe("main", "one tile's failure is its own, every cycle");
-        yard.FindTile(shop.Id)!.DirtyCount.ShouldBe(0);
+        yard.FindTile(shop.Id)!.GitLines[0].Branch.ShouldBe("main", "one tile's failure is its own, every cycle");
+        yard.FindTile(shop.Id)!.GitLines[0].DirtyCount.ShouldBe(0);
     }
 
     [Theory]
@@ -429,7 +429,160 @@ public class YardViewModelTests : IDisposable
 
         await yard.RefreshGitAsync(CancellationToken.None);
 
-        yard.FindTile(app.Id)!.GitStateLabel.ShouldBe(label);
+        yard.FindTile(app.Id)!.GitLines.ShouldHaveSingleItem().GitStateLabel.ShouldBe(label);
+    }
+
+    [Fact]
+    public async Task A_workspace_file_with_folders_in_several_repositories_gets_a_named_line_per_repository()
+    {
+        // Diffusion-Full lists DiffusionNexus.Installer.SDK and DiffusionNexus; changes in the second never showed.
+        var sdk = Repo("sdk");
+        var nexus = Repo("nexus");
+        var docs = Path.Combine(_tempRoot, "docs");
+        Directory.CreateDirectory(docs);
+        Directory.CreateDirectory(Path.Combine(sdk, "tools"));
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" }, { "path": "docs" }, { "path": "sdk/tools" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var status = new List<string>();
+        var yard = Yard((dir, args, _) =>
+        {
+            if (args.StartsWith("status", StringComparison.Ordinal))
+            {
+                lock (status)
+                {
+                    status.Add(dir);
+                }
+            }
+
+            return Task.FromResult<string?>(dir == nexus ? " M a.cs\n M b.cs\n?? c.cs\n" : string.Empty);
+        });
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var tile = yard.FindTile(full.Id)!;
+        tile.GitLines.Select(l => (l.Text, l.GitStateLabel)).ShouldBe([("sdk · main", "clean"), ("nexus · main", "3 changed")],
+            "docs is no repository, and sdk/tools is in sdk's");
+        status.ShouldNotBeEmpty();
+        status.Count(d => d == sdk).ShouldBe(status.Count(d => d == nexus), "git status runs once per checkout: sdk's line in the file, and sdk/tools, cost none");
+        status.ShouldNotContain(Path.Combine(sdk, "tools"));
+    }
+
+    [Fact]
+    public async Task A_git_round_that_finds_the_same_lines_leaves_the_tile_as_it_is()
+    {
+        // A new list every round rebuilt every line on the tile each 30 s, and closed the tooltip the user had open.
+        var sdk = Repo("sdk");
+        Repo("nexus");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        var tile = yard.FindTile(full.Id)!;
+        var changed = new List<string?>();
+        tile.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        tile.GitLines.Count.ShouldBe(2);
+        changed.ShouldNotContain(nameof(WorkspaceTileViewModel.GitLines));
+    }
+
+    [Fact]
+    public async Task A_line_is_named_as_the_workspace_file_names_its_folder_and_its_tooltip_gives_the_path()
+    {
+        // Two folders called src in different repositories both read "src · main", tooltip included.
+        var clientSrc = Path.Combine(Repo("client"), "src");
+        var serverSrc = Path.Combine(Repo("server"), "src");
+        Directory.CreateDirectory(clientSrc);
+        Directory.CreateDirectory(serverSrc);
+        var file = Path.Combine(_tempRoot, "Both.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "client/src", "name": "Client" }, { "path": "server/src" } ] }""");
+        var both = new Workspace { Name = "Both", RootPath = clientSrc, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([both]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var lines = yard.FindTile(both.Id)!.GitLines;
+        lines.Select(l => l.Text).ShouldBe(["Client · main", "src · main"]);
+        lines.Select(l => l.ToolTipText).ShouldBe([$"Client · main\n{clientSrc}", $"src · main\n{serverSrc}"]);
+    }
+
+    [Fact]
+    public async Task A_folder_whose_check_fails_keeps_its_line_and_holds_back_neither_the_root_nor_the_worktree_sync()
+    {
+        var sdk = Repo("sdk");
+        var nexus = Repo("nexus");
+        var hotfix = Path.Combine(_tempRoot, "sdk-hotfix");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var nexusFails = false;
+        var yard = Yard((dir, args, _) =>
+            dir == nexus && nexusFails ? throw new IOException("HEAD is being rewritten")
+            : args.StartsWith("worktree list", StringComparison.Ordinal)
+                ? Task.FromResult<string?>($"worktree {sdk}\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/next\n\nworktree {hotfix}\nHEAD 2222222222222222222222222222222222222222\nbranch refs/heads/hotfix\n\n")
+            : Task.FromResult<string?>(dir == nexus ? " M a.cs\n" : string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        nexusFails = true;
+        File.WriteAllText(Path.Combine(sdk, ".git", "HEAD"), "ref: refs/heads/next\n");
+        Directory.CreateDirectory(Path.Combine(sdk, ".git", "worktrees", "sdk-hotfix"));
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(full.Id)!.GitLines.Select(l => (l.Text, l.GitStateLabel)).ShouldBe([("sdk · next", "clean"), ("nexus · main", "1 changed")],
+            "the root's line is this round's, nexus keeps last round's rather than vanishing");
+        full.Worktrees.ShouldHaveSingleItem().Path.ShouldBe(hotfix);
+    }
+
+    [Fact]
+    public async Task A_workspace_file_that_cannot_be_read_for_a_moment_keeps_the_other_repositories_lines()
+    {
+        // VS Code rewrites the file on a settings change; a round that hit it then dropped the tile to one line for 30 s.
+        var sdk = Repo("sdk");
+        Repo("nexus");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        File.WriteAllText(Path.Combine(sdk, ".git", "HEAD"), "ref: refs/heads/next\n");
+
+        using (new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await yard.RefreshGitAsync(CancellationToken.None);
+        }
+
+        yard.FindTile(full.Id)!.GitLines.Select(l => l.Text).ShouldBe(["sdk · next", "nexus · main"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_with_one_repository_shows_its_branch_without_a_folder_name()
+    {
+        var app = Repo("app");
+        var file = Path.Combine(_tempRoot, "App.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "app" } ] }""");
+        var single = new Workspace { Name = "App", RootPath = app, WorkspaceFile = file, TrackId = _general.Id };
+        var plain = new Workspace { Name = "Plain", RootPath = Repo("plain"), TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([single, plain]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(single.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("main");
+        yard.FindTile(plain.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("main");
     }
 
     [Fact]
@@ -447,7 +600,7 @@ public class YardViewModelTests : IDisposable
         appStatusMayEnd.SetResult(string.Empty);
         await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        yard.FindTile(extra.Id)!.Branch.ShouldBe("main", "the refresh asked for during the running one was dropped, and the tile said no git for 30 s");
+        yard.FindTile(extra.Id)!.GitLines[0].Branch.ShouldBe("main", "the refresh asked for during the running one was dropped, and the tile said no git for 30 s");
     }
 
     [Fact]

@@ -18,13 +18,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     private readonly YardViewModel _owner;
 
-    [ObservableProperty] private string? _branch;
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(GitStateLabel))]
-    private int? _dirtyCount;
     [ObservableProperty] private HostState _hostState = HostState.NotStarted;
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;
+
+    /// <summary>The tile's git lines: one per repository its folders are in, the root folder's first; see <see cref="GitLine"/>.</summary>
+    [ObservableProperty] private IReadOnlyList<GitLine> _gitLines = [GitLine.Unknown];
 
     public WorkspaceTileViewModel(Workspace workspace, YardViewModel owner)
     {
@@ -40,15 +39,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
     /// <summary>
-    /// The pill after the branch: "clean", or how many files have uncommitted changes (edited, staged or new). Null when
-    /// git could not tell, so no pill: a made-up "clean" would hide changes.
+    /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
+    /// round, and close the tooltip the user has open.
     /// </summary>
-    public string? GitStateLabel => DirtyCount switch
+    public void ShowGit(IReadOnlyList<GitLine> lines)
     {
-        null => null,
-        0 => "clean",
-        var n => $"{n} changed",
-    };
+        if (!GitLines.SequenceEqual(lines))
+        {
+            GitLines = lines;
+        }
+    }
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
     public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;

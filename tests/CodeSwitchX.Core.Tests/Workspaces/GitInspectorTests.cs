@@ -56,7 +56,7 @@ public class GitInspectorTests : IDisposable
 
         var info = await inspector.InspectAsync(_root, CancellationToken.None);
 
-        info.ShouldBe(new GitInfo(true, "main", 2));
+        info.ShouldBe(new GitInfo(true, "main", 2, Path.Combine(_root, ".git")), "the git directory tells folders of one checkout apart from another repository");
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public class GitInspectorTests : IDisposable
         File.WriteAllText(Path.Combine(_root, ".git", "HEAD"), "ref: refs/heads/main\n");
         var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
 
-        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null), "a failed status must not claim a clean tree");
+        (await inspector.InspectAsync(_root, CancellationToken.None)).ShouldBe(new GitInfo(true, "main", null, Path.Combine(_root, ".git")), "a failed status must not claim a clean tree");
         (await inspector.InspectAsync(Path.Combine(_root, "nope"), CancellationToken.None)).ShouldBe(new GitInfo(false, null, null));
     }
 
@@ -123,6 +123,23 @@ public class GitInspectorTests : IDisposable
 
         info.IsRepository.ShouldBeTrue();
         info.Branch.ShouldBe("main");
+    }
+
+    [Fact]
+    public async Task GitDirOf_names_the_checkout_a_folder_is_in_without_running_git()
+    {
+        var repo = Path.Combine(_root, "repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(repo, "src");
+        var plain = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(sub);
+        Directory.CreateDirectory(plain);
+        var inspector = new GitInspector((_, _, _) => throw new InvalidOperationException("no process for this"));
+        var inspected = await new GitInspector((_, _, _) => Task.FromResult<string?>(string.Empty)).InspectAsync(repo, CancellationToken.None);
+
+        inspector.GitDirOf(sub).ShouldBe(inspected.GitDir, "a subfolder is in the same checkout");
+        inspector.GitDirOf(plain).ShouldBeNull();
     }
 
     [Fact]

@@ -4,7 +4,8 @@ using CodeSwitchX.Core.Paths;
 namespace CodeSwitchX.Core.Workspaces;
 
 /// <param name="DirtyCount">Changed and untracked files; null when git could not report them (not a repository, git missing, refused or timed out).</param>
-public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount);
+/// <param name="GitDir">The repository's git directory, full path; two folders with the same one are in the same checkout.</param>
+public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount, string? GitDir = null);
 
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
@@ -80,8 +81,15 @@ public sealed class GitInspector
         int? dirty = status is null
             ? null
             : status.Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Trim('\r').Length > 0);
-        return new GitInfo(true, branch, dirty);
+        return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir));
     }
+
+    /// <summary>
+    /// The git directory of the repository <paramref name="folder"/> is in, full path as <see cref="GitInfo.GitDir"/> has
+    /// it; null outside one. A file or two read, no process: cheap enough to find out whether a folder's checkout is one
+    /// already inspected before running git status on it. Reads the disk; call it off the UI thread.
+    /// </summary>
+    public string? GitDirOf(string folder) => ResolveGitDir(folder, _profileDirectory) is { } gitDir ? Path.GetFullPath(gitDir) : null;
 
     private async Task<string?> ReadBranchFromGitAsync(string root, CancellationToken ct)
     {
