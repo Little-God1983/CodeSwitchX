@@ -51,6 +51,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private MicrophoneDevice? _recordingMic;
     private bool _silentWarned;
 
+    /// <summary>This recording's "No sound" warning while it stands: nothing has come through since.</summary>
+    private RavenLogEntry? _silentWarning;
+
     /// <summary>This recording's "stopped sending sound" warning was given (once per recording).</summary>
     private bool _droppedWarned;
 
@@ -427,12 +430,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _capturing = false;
         _pending++;
         UpdateState();
-        var heardSpeech = _speech.HeardSpeech;
+        var speech = _speech.Read();
+        var mic = _recordingMic?.Name;
         var words = _vocabularyFetch;
         var stop = StopCaptureAsync(_started);
         PendingStop = stop;
         var number = ++_clipsQueued;
-        var turn = TranscribeInTurnAsync(_pipeline, number, stop, heardSpeech, words);
+        var turn = TranscribeInTurnAsync(_pipeline, number, stop, speech, mic, words);
         _pipeline = turn;
         return turn;
     }
@@ -471,6 +475,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _recordingMic = mic;
         _silentWarned = false;
+        _silentWarning = null;
         _droppedWarned = false;
         _droppedStands = false;
         _silence.Reset();
@@ -585,7 +590,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             case SignalEvent.Silent when !_silentWarned:
                 _silentWarned = true;
-                AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");
+                _silentWarning = AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");
+                break;
+            case SignalEvent.Live when _silentWarning is not null:
+                // Late, not muted: a Bluetooth headset takes a moment to switch to its microphone.
+                ReplaceEntry(_silentWarning, RavenLogKind.Note,
+                    $"{_recordingMic?.Name} took a moment to start sending sound. What you said before that was not recorded.");
+                _silentWarning = null;
                 break;
             case SignalEvent.Dropped when !_droppedWarned:
                 // Heard, then nothing: a headset that went to sleep or was muted mid-recording.
@@ -654,8 +665,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// in the log in recording order. The awaits resume on the UI thread (its synchronisation context), where the log
     /// and the state live. Never faults, so the clip behind it always gets its turn.
     /// </summary>
-    private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, bool heardSpeech,
-        Task<DictationVocabulary> vocabulary)
+    private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, SpeechReading speech,
+        string? mic, Task<DictationVocabulary> vocabulary)
     {
         try
         {
@@ -673,8 +684,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (!heardSpeech)
+            if (!speech.HeardSpeech)
             {
+                _logger.LogInformation(
+                    "No speech in {Seconds:0.0} s from {Microphone}: loudest block {Loudest:0.0000}, {Speech:0.00} s at the open level {Open:0.0000}",
+                    clip.Length.TotalSeconds, mic, speech.Loudest, speech.Speech.TotalSeconds, speech.OpenRms);
                 AddEntry(RavenLogKind.Note, "I didn't hear anything.");
                 return;
             }
@@ -814,6 +828,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         Log.Add(entry);
         return entry;
+    }
+
+    /// <summary>Puts a new entry in the old one's place; one already dropped from the log is added at the end instead.</summary>
+    private void ReplaceEntry(RavenLogEntry old, RavenLogKind kind, string text)
+    {
+        var index = Log.IndexOf(old);
+        if (index < 0)
+        {
+            AddEntry(kind, text);
+            return;
+        }
+
+        Log[index] = new RavenLogEntry(kind, text, old.At);
     }
 
     private static string WarningFor(MicrophoneFailureKind kind, MicrophoneDevice? mic) => kind switch

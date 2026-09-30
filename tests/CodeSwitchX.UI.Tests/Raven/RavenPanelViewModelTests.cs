@@ -461,6 +461,41 @@ public sealed class RavenPanelViewModelTests
         vm.Log.Single().Text.ShouldBe("No sound from Headset. Check that it isn't muted.");
     }
 
+    // A Bluetooth headset takes a few seconds to switch to its microphone and hands over nothing until then.
+    [Fact]
+    public async Task A_microphone_that_starts_sending_late_turns_its_warning_into_a_note()
+    {
+        var vm = await NewVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        Blocks(0f, 3);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
+
+        Speak();
+
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
+        vm.Log.Single().Text.ShouldBe("Headset took a moment to start sending sound. What you said before that was not recorded.");
+
+        Blocks(0f, 3);
+        Speak();
+
+        vm.Log.Count.ShouldBe(1, "a pause after the late start is no new warning");
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    [Fact]
+    public async Task A_silent_microphone_that_never_starts_keeps_its_warning()
+    {
+        var vm = await NewVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        Blocks(0f, 3);
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+
+        vm.Log[0].Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log[0].Text.ShouldBe("No sound from Headset. Check that it isn't muted.");
+    }
+
     // A Bluetooth headset goes to sleep halfway through a latched recording: heard first, then nothing for ten seconds.
     [Fact]
     public async Task A_microphone_that_stops_sending_sound_is_warned_about_once_and_its_return_is_noted()
@@ -1189,6 +1224,22 @@ public sealed class RavenPanelViewModelTests
         Speak(0.3);
         RoomNoise(0.5);
         Speak(0.3);
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    // The RØDE Connect Virtual Input delivers normal speech at about 0.007, under the fixed 0.01 the gate used to need.
+    [Fact]
+    public async Task Speech_on_a_quiet_microphone_is_transcribed()
+    {
+        var vm = await NewVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        RoomNoise(1);
+        Blocks(0.007f, 1);
+        RoomNoise(0.5);
         _time.Advance(Hold);
 
         await vm.ReleaseMicAsync(TalkInput.MicButton);
