@@ -1,3 +1,4 @@
+using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -15,6 +16,8 @@ public static class VoiceServiceCollectionExtensions
         });
         services.AddSingleton<IWhisperModelStore, WhisperModelStore>();
         services.AddSingleton<IDictationService, WhisperDictationService>();
+        services.AddSingleton<IMicrophoneCatalog, WasapiMicrophoneCatalog>();
+        services.AddSingleton<IMicrophoneRecorder, WasapiMicrophoneRecorder>();
         return services;
     }
 }

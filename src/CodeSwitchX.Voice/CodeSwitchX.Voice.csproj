@@ -6,6 +6,8 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="NAudio.Core" />
+    <PackageReference Include="NAudio.Wasapi" />
     <PackageReference Include="Whisper.net" />
     <!-- Two runtimes, and Whisper.net's default RuntimeLibraryOrder already prefers Vulkan over Cpu, so no code
          picks between them: Vulkan loads when its native library can load, Cpu is the automatic fallback when it cannot.
