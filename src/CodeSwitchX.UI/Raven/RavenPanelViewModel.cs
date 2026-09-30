@@ -11,7 +11,11 @@ namespace CodeSwitchX.UI.Raven;
 /// <summary>The Raven panel: push-to-talk dictation into a log, with the microphone choice and its failures explained.</summary>
 public sealed partial class RavenPanelViewModel : ObservableObject
 {
-    public const string IdleCaption = "Hold Ctrl+Shift+Space or the mic button to talk.";
+    /// <summary>Names the chord from <see cref="HotkeyService.PushToTalk"/>, so a new chord changes the hint with it.</summary>
+    public static readonly string IdleCaption = $"Hold {HotkeyService.PushToTalk.Keys} or the mic button to talk.";
+
+    /// <summary>The mic button's tooltip, with the chord from <see cref="HotkeyService.PushToTalk"/>.</summary>
+    public static readonly string MicToolTip = $"Hold to talk, or tap to keep listening until the next tap ({HotkeyService.PushToTalk.Keys})";
 
     /// <summary>The recorder stops capturing at this length without telling anyone, so the panel ends the recording itself.</summary>
     public static readonly TimeSpan MaximumRecording = TimeSpan.FromSeconds(120);

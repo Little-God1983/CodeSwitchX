@@ -73,7 +73,7 @@
       <Setter Property="FontFamily" Value="{StaticResource Icons}" />
       <Setter Property="Content" Value="&#xE720;" />
       <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="ToolTip" Value="Hold to talk, or tap to keep listening until the next tap (Ctrl+Shift+Space)" />
+      <Setter Property="ToolTip" Value="{x:Static raven:RavenPanelViewModel.MicToolTip}" />
       <Setter Property="AutomationProperties.Name" Value="Push to talk" />
       <Setter Property="FocusVisualStyle" Value="{StaticResource RoundFocusRing}" />
       <Setter Property="Template">

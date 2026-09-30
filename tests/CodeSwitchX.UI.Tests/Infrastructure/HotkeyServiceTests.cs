@@ -48,6 +48,19 @@ public class HotkeyServiceTests
         talk.Keys.ShouldBe("Ctrl+Shift+Space");
     }
 
+    // The chord is defined once: changing it changes the registration and every text that names it.
+    [Fact]
+    public void The_push_to_talk_chord_is_defined_once_and_every_hint_names_it_from_there()
+    {
+        var talk = HotkeyService.PushToTalk;
+
+        HotkeyService.Bindings.Single(b => b.Id == 21).ShouldBeSameAs(talk);
+        RavenPanelViewModel.IdleCaption.ShouldBe($"Hold {talk.Keys} or the mic button to talk.");
+        RavenPanelViewModel.MicToolTip.ShouldBe($"Hold to talk, or tap to keep listening until the next tap ({talk.Keys})");
+        HotkeyService.UnseenReleaseNote.ShouldBe(
+            $"Push to talk can't see the key being released while an admin window is in front. Press {talk.Keys} again to stop.");
+    }
+
     [Fact]
     public void Ctrl_alt_j_collapses_or_expands_raven()
     {

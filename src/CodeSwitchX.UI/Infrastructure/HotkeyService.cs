@@ -46,8 +46,8 @@ public sealed record HotkeyBinding(int Id, HotkeyModifiers Modifiers, uint Virtu
 /// Ctrl+Alt+Y toggles Yard/Cab; Ctrl+Shift+Alt+1..9 jumps to a tile. The digit row deliberately adds Shift:
 /// AltGr is reported to RegisterHotKey as Ctrl+Alt, so a bare Ctrl+Alt+digit hotkey would swallow AltGr+2/3/7/8/9/0
 /// (² ³ { [ ] }) in every application on German and many other European layouts while CodeSwitchX runs.
-/// Ctrl+Shift+Space is Raven's push-to-talk and Ctrl+Alt+J folds its panel; neither brings the shell up, so talking
-/// works while VS Code keeps the focus.
+/// <see cref="PushToTalk"/> is Raven's push-to-talk and Ctrl+Alt+J folds its panel; neither brings the shell up, so
+/// talking works while VS Code keeps the focus.
 /// </summary>
 public sealed class HotkeyService
 {
@@ -64,8 +64,17 @@ public sealed class HotkeyService
     /// <summary>How often a held push-to-talk chord is checked for its release, which no window message reports.</summary>
     private static readonly TimeSpan ReleasePoll = TimeSpan.FromMilliseconds(30);
 
-    public const string UnseenReleaseNote =
-        "Push to talk can't see the key being released while an admin window is in front. Press Ctrl+Shift+Space again to stop.";
+    /// <summary>
+    /// Raven's push-to-talk chord, the one place it is defined: the registration, the release poll and every text that
+    /// names the chord (the panel's caption and tooltip, the admin-window note) follow it. NoRepeat: while the chord is
+    /// held, autorepeat must not press the mic again (the panel resets its gesture when a recording reaches its length
+    /// limit and counts on no repeat arriving after that).
+    /// </summary>
+    public static HotkeyBinding PushToTalk { get; } =
+        new(PushToTalkId, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkSpace, "Push to talk");
+
+    public static readonly string UnseenReleaseNote =
+        $"Push to talk can't see the key being released while an admin window is in front. Press {PushToTalk.Keys} again to stop.";
 
     private readonly ILogger<HotkeyService> _logger;
     private readonly Func<uint, bool> _isKeyDown;
@@ -112,9 +121,7 @@ public sealed class HotkeyService
                 Vk1 + (uint)(i - 1), $"Ctrl+Shift+Alt+{i}"));
         }
 
-        // NoRepeat on push-to-talk: while the chord is held, autorepeat must not press the mic again (the panel resets its
-        // gesture when a recording reaches its length limit and counts on no repeat arriving after that).
-        bindings.Add(new(PushToTalkId, HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.NoRepeat, VkSpace, "Push to talk"));
+        bindings.Add(PushToTalk);
         bindings.Add(new(ToggleRavenId, HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.NoRepeat, VkJ, "Collapse or expand Raven"));
 
         return bindings.ToArray();
@@ -184,7 +191,7 @@ public sealed class HotkeyService
         }
         else if (id == PushToTalkId)
         {
-            PushToTalk(_shell.Raven);
+            OnPushToTalk(_shell.Raven);
             handled = true;
         }
         else if (id == ToggleRavenId)
@@ -203,9 +210,9 @@ public sealed class HotkeyService
     /// go without a word. So a key that cannot be read makes the press a tap on purpose, and the panel says once per
     /// session that the next press stops it.
     /// </summary>
-    private void PushToTalk(RavenPanelViewModel raven)
+    private void OnPushToTalk(RavenPanelViewModel raven)
     {
-        var keySeen = _isKeyDown(VkSpace);
+        var keySeen = _isKeyDown(PushToTalk.VirtualKey);
         raven.PressMic();
         if (keySeen)
         {
@@ -223,8 +230,8 @@ public sealed class HotkeyService
     }
 
     /// <summary>
-    /// A hotkey reports its press only. The chord counts as released once Space or Ctrl is up; a quick tap is released
-    /// within a poll or two, which the panel's gesture reads as a tap that latches the mic on.
+    /// A hotkey reports its press only. The chord counts as released once its key (Space) or Ctrl is up; a quick tap is
+    /// released within a poll or two, which the panel's gesture reads as a tap that latches the mic on.
     /// </summary>
     private void WatchForTalkRelease()
     {
@@ -233,7 +240,7 @@ public sealed class HotkeyService
             _talkRelease = new DispatcherTimer(DispatcherPriority.Input) { Interval = ReleasePoll };
             _talkRelease.Tick += (_, _) =>
             {
-                if (_isKeyDown(VkSpace) && _isKeyDown(VkControl))
+                if (IsPushToTalkHeld())
                 {
                     return;
                 }
@@ -249,6 +256,9 @@ public sealed class HotkeyService
         _talkRelease.Stop();
         _talkRelease.Start();
     }
+
+    private bool IsPushToTalkHeld() =>
+        _isKeyDown(PushToTalk.VirtualKey) && (!PushToTalk.Modifiers.HasFlag(HotkeyModifiers.Control) || _isKeyDown(VkControl));
 
     /// <summary>
     /// A global hotkey is pressed from anywhere, so a hotkey that switches something brings the shell up: a minimised
