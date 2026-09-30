@@ -84,6 +84,13 @@ public sealed class GitInspector
         return new GitInfo(true, branch, dirty, Path.GetFullPath(gitDir));
     }
 
+    /// <summary>
+    /// The git directory of the repository <paramref name="folder"/> is in, full path as <see cref="GitInfo.GitDir"/> has
+    /// it; null outside one. A file or two read, no process: cheap enough to find out whether a folder's checkout is one
+    /// already inspected before running git status on it. Reads the disk; call it off the UI thread.
+    /// </summary>
+    public string? GitDirOf(string folder) => ResolveGitDir(folder, _profileDirectory) is { } gitDir ? Path.GetFullPath(gitDir) : null;
+
     private async Task<string?> ReadBranchFromGitAsync(string root, CancellationToken ct)
     {
         var current = (await _runGit(root, "branch --show-current", ct).ConfigureAwait(false))?.Trim();

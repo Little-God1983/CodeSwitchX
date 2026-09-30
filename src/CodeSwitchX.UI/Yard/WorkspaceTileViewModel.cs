@@ -18,10 +18,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     private readonly YardViewModel _owner;
 
-    [ObservableProperty] private string? _branch;
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(GitStateLabel))]
-    private int? _dirtyCount;
     [ObservableProperty] private HostState _hostState = HostState.NotStarted;
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;
@@ -42,15 +38,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
-    /// <summary>The root folder's pill; see <see cref="GitLine.Label"/>.</summary>
-    public string? GitStateLabel => GitLine.Label(DirtyCount);
-
-    /// <summary>Shows a git round's lines; <see cref="Branch"/> and <see cref="DirtyCount"/> are the root folder's, the first.</summary>
+    /// <summary>
+    /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
+    /// round, and close the tooltip the user has open.
+    /// </summary>
     public void ShowGit(IReadOnlyList<GitLine> lines)
     {
-        Branch = lines[0].Branch;
-        DirtyCount = lines[0].DirtyCount;
-        GitLines = lines;
+        if (!GitLines.SequenceEqual(lines))
+        {
+            GitLines = lines;
+        }
     }
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>

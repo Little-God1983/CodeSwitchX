@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
@@ -229,34 +230,78 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
-    /// (Diffusion-Full: DiffusionNexus.Installer.SDK and DiffusionNexus), each named after its folder. A folder that is no
-    /// repository, or in the same checkout as one before it, adds none. Runs off the UI thread: it reads the file.
+    /// (Diffusion-Full: DiffusionNexus.Installer.SDK and DiffusionNexus), each under the name the file gives the folder, or
+    /// its own. A folder that is no repository, or in a checkout already shown, adds none. Never throws but for
+    /// cancellation, so the other folders cannot hold back the root's line or the worktree sync: a folder whose check
+    /// fails, and a file that cannot be read for a moment, keep last round's lines. Runs off the UI thread: it reads the file.
     /// </summary>
     private async Task<IReadOnlyList<GitLine>> GitLinesAsync(WorkspaceTileViewModel tile, GitInfo root, CancellationToken ct)
     {
-        var lines = new List<GitLine> { new(FolderName(tile.RootPath), root.Branch, root.DirtyCount) };
-        if (tile.Workspace.WorkspaceFile is { } file)
+        var previous = tile.GitLines;
+        var folders = tile.Workspace.WorkspaceFile is { } file ? WorkspaceProbe.FoldersOf(file) : [];
+        if (folders is null)
         {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (root.GitDir is { } rootGitDir)
-            {
-                seen.Add(rootGitDir);
-            }
-
-            foreach (var folder in WorkspaceProbe.FoldersOf(file))
-            {
-                var info = await _git.InspectAsync(folder, ct).ConfigureAwait(false);
-                if (info.GitDir is { } gitDir && seen.Add(gitDir))
-                {
-                    lines.Add(new GitLine(FolderName(folder), info.Branch, info.DirtyCount));
-                }
-            }
+            return [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath }, .. previous.Skip(1)];
         }
 
-        return lines.Count > 1 ? lines : [lines[0] with { Folder = null }];
+        var rootKey = PathNormalizer.Normalize(tile.RootPath);
+        var rootLine = new GitLine(
+            folders.FirstOrDefault(f => PathNormalizer.Normalize(f.Path) == rootKey)?.Label ?? WorkspaceProbe.FolderName(tile.RootPath),
+            root.Branch,
+            root.DirtyCount,
+            tile.RootPath);
+        var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
+
+        // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
+        // folder in it. Both steps look at the folders side by side: one on an offline share blocks Directory.Exists for
+        // about 20 s, and that should cost the round once, not once per folder.
+        var gitDirs = await Task.WhenAll(others.Select(f => GitDirOfAsync(f, ct))).ConfigureAwait(false);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (root.GitDir is { } rootGitDir)
+        {
+            seen.Add(rootGitDir);
+        }
+
+        var lines = await Task.WhenAll(others.Zip(gitDirs).Select(p => p.Second switch
+        {
+            { Failed: true } => Task.FromResult(PreviousLine(p.First)),
+            { GitDir: { } gitDir } when seen.Add(gitDir) => LineAsync(p.First),
+            _ => Task.FromResult<GitLine?>(null),
+        })).ConfigureAwait(false);
+
+        List<GitLine> all = [rootLine, .. lines.OfType<GitLine>()];
+        return all.Count > 1 ? all : [rootLine with { Folder = null }];
+
+        GitLine? PreviousLine(WorkspaceFolder folder) =>
+            previous.FirstOrDefault(l => l.Path is { } path && PathNormalizer.Normalize(path) == PathNormalizer.Normalize(folder.Path));
+
+        async Task<GitLine?> LineAsync(WorkspaceFolder folder)
+        {
+            try
+            {
+                var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
+                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Git refresh of {Folder}, a folder of {Root}, failed", folder.Path, tile.RootPath);
+                return PreviousLine(folder);
+            }
+        }
     }
 
-    private static string FolderName(string path) => System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(path));
+    private async Task<(string? GitDir, bool Failed)> GitDirOfAsync(WorkspaceFolder folder, CancellationToken ct)
+    {
+        try
+        {
+            return (await Task.Run(() => _git.GitDirOf(folder.Path), ct).ConfigureAwait(false), false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Finding the repository of {Folder} failed", folder.Path);
+            return (null, true);
+        }
+    }
 
     /// <summary>True to run once more; otherwise the round is over, decided in the same critical section, so no request is lost.</summary>
     private bool AnotherRefreshWasAskedFor()

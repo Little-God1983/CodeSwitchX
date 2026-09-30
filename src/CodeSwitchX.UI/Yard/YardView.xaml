@@ -40,7 +40,7 @@
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
       <!-- left-aligned, so the star column is only as wide as the branch and the pill follows it; a long branch is
            trimmed to what is left, and a long folder name to a part of the line, so neither hides the other -->
-      <Grid Margin="0,1" HorizontalAlignment="Left" ToolTip="{Binding Text}">
+      <Grid Margin="0,1" HorizontalAlignment="Left" ToolTip="{Binding ToolTipText}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="Auto" />

@@ -126,6 +126,23 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
+    public async Task GitDirOf_names_the_checkout_a_folder_is_in_without_running_git()
+    {
+        var repo = Path.Combine(_root, "repo");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        File.WriteAllText(Path.Combine(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var sub = Path.Combine(repo, "src");
+        var plain = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(sub);
+        Directory.CreateDirectory(plain);
+        var inspector = new GitInspector((_, _, _) => throw new InvalidOperationException("no process for this"));
+        var inspected = await new GitInspector((_, _, _) => Task.FromResult<string?>(string.Empty)).InspectAsync(repo, CancellationToken.None);
+
+        inspector.GitDirOf(sub).ShouldBe(inspected.GitDir, "a subfolder is in the same checkout");
+        inspector.GitDirOf(plain).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_repository_at_the_profile_folder_does_not_claim_the_folders_below_it()
     {
         // A dotfiles repository in the user profile would otherwise make every folder under the profile a repository,

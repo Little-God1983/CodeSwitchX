@@ -33,28 +33,52 @@ public class WorkspaceProbeTests : IDisposable
               // VS Code allows comments and trailing commas here
               "folders": [
                 { "path": "MyApp" },
-                { "uri": "{{new Uri(other).AbsoluteUri}}" },
+                { "uri": "{{new Uri(other).AbsoluteUri}}", "name": "Other App" },
                 { "uri": "vscode-remote://ssh-remote+box/src" },
                 { "name": "no path" },
               ],
             }
             """);
 
-        WorkspaceProbe.FoldersOf(file).ShouldBe([_root, other]);
+        WorkspaceProbe.FoldersOf(file).ShouldBe([new WorkspaceFolder(_root, null), new WorkspaceFolder(other, "Other App")]);
+        WorkspaceProbe.FoldersOf(file)!.Select(f => f.Label).ShouldBe(["MyApp", "Other App"], "the name VS Code's Explorer shows wins over the folder's own");
     }
 
     [Theory]
-    [InlineData("{ not json")]
     [InlineData("""{ "settings": {} }""")]
     [InlineData("[]")]
     public void FoldersOf_is_empty_for_a_file_that_lists_no_folders(string content)
     {
-        var file = Path.Combine(_root, "Broken.code-workspace");
+        var file = Path.Combine(_root, "Empty.code-workspace");
         File.WriteAllText(file, content);
 
         WorkspaceProbe.FoldersOf(file).ShouldBeEmpty();
-        WorkspaceProbe.FoldersOf(Path.Combine(_root, "Missing.code-workspace")).ShouldBeEmpty();
     }
+
+    [Fact]
+    public void FoldersOf_is_null_for_a_file_it_cannot_read_rather_than_empty()
+    {
+        // VS Code rewrites the file on a settings change; a locked or half-written file is no file without folders.
+        var file = Path.Combine(_root, "Saving.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "." }""");
+        WorkspaceProbe.FoldersOf(file).ShouldBeNull("half-written");
+
+        File.WriteAllText(file, """{ "folders": [ { "path": "." } ] }""");
+        using (new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            WorkspaceProbe.FoldersOf(file).ShouldBeNull("locked");
+        }
+
+        WorkspaceProbe.FoldersOf(Path.Combine(_root, "Missing.code-workspace")).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(@"c:\repo\app", "app")]
+    [InlineData(@"c:\repo\app\", "app")]
+    [InlineData(@"C:\", @"C:\")]
+    [InlineData(@"\\server\share\", @"\\server\share\")]
+    public void FolderName_is_the_last_segment_or_the_path_itself_for_a_root_which_has_none(string path, string expected) =>
+        WorkspaceProbe.FolderName(path).ShouldBe(expected);
 
     [Fact]
     public async Task A_folder_is_probed_for_git_solutions_claude_md_and_worktrees()
