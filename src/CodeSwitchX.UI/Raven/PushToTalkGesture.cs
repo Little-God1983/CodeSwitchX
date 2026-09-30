@@ -14,10 +14,13 @@ public sealed class PushToTalkGesture(TimeProvider time)
 
     private bool _held;
     private bool _latched;
+    private bool _timing;
     private long _pressedAt;
 
     /// <summary>Start when idle; Stop when latched; None when already held (key autorepeat).</summary>
-    public PushToTalkAction Press()
+    /// <param name="sinceKeyDown">How long ago the key actually went down, when the press is handled late (a hotkey
+    /// message the UI thread got to after a stall): the hold is timed from then, not from now.</param>
+    public PushToTalkAction Press(TimeSpan sinceKeyDown = default)
     {
         if (_held)
         {
@@ -31,7 +34,9 @@ public sealed class PushToTalkGesture(TimeProvider time)
             return PushToTalkAction.Stop;
         }
 
-        _pressedAt = time.GetTimestamp();
+        var late = sinceKeyDown > TimeSpan.Zero ? (long)(sinceKeyDown.TotalSeconds * time.TimestampFrequency) : 0;
+        _pressedAt = time.GetTimestamp() - late;
+        _timing = true;
         return PushToTalkAction.Start;
     }
 
@@ -44,13 +49,13 @@ public sealed class PushToTalkGesture(TimeProvider time)
         }
 
         _held = false;
-        if (_pressedAt == 0)
+        if (!_timing)
         {
             return PushToTalkAction.None;
         }
 
         var heldFor = time.GetElapsedTime(_pressedAt);
-        _pressedAt = 0;
+        _timing = false;
         if (heldFor >= HoldThreshold)
         {
             return PushToTalkAction.Stop;
@@ -65,6 +70,6 @@ public sealed class PushToTalkGesture(TimeProvider time)
     {
         _held = false;
         _latched = false;
-        _pressedAt = 0;
+        _timing = false;
     }
 }

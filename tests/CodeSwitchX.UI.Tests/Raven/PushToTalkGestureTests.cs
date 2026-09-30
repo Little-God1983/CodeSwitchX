@@ -17,6 +17,27 @@ public sealed class PushToTalkGestureTests
         g.Release().ShouldBe(PushToTalkAction.Stop);
     }
 
+    // The hotkey's press is handled when the UI thread gets to it; timed from the message, a held key the UI saw late is
+    // still a hold, and its release stops rather than latches.
+    [Fact]
+    public void A_press_handled_late_is_timed_from_when_the_key_went_down()
+    {
+        var g = NewGesture();
+        g.Press(TimeSpan.FromSeconds(1)).ShouldBe(PushToTalkAction.Start);
+
+        g.Release().ShouldBe(PushToTalkAction.Stop);
+    }
+
+    [Fact]
+    public void A_tap_handled_late_by_less_than_the_threshold_still_latches()
+    {
+        var g = NewGesture();
+        g.Press(TimeSpan.FromMilliseconds(100)).ShouldBe(PushToTalkAction.Start);
+        _time.Advance(TimeSpan.FromMilliseconds(100));
+
+        g.Release().ShouldBe(PushToTalkAction.None);
+    }
+
     [Fact]
     public void A_quick_tap_latches_and_the_next_press_stops()
     {

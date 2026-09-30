@@ -124,15 +124,16 @@ public class HotkeyServiceTests
     }
 
     // An elevated window in front hides the keyboard from GetAsyncKeyState: the held Space reads as up. Polled, that
-    // hold would latch and record on after the user let go; unseen, the press is a tap on purpose and the next one stops.
+    // hold would latch and record on after the user let go; so with an elevated window in front the press is a tap on
+    // purpose and the next one stops. The foreground's elevation decides, not the key state: a key read late is up too.
     [Fact]
-    public async Task Push_to_talk_whose_key_cannot_be_read_latches_says_so_once_and_the_next_press_stops()
+    public async Task Push_to_talk_over_an_elevated_window_latches_says_so_once_and_the_next_press_stops()
     {
         var harness = RecordingHarness();
         await harness.Shell.InitializeAsync(CancellationToken.None);
         var raven = harness.Shell.Raven;
 
-        await WithHotkeysAsync(harness, _ => false, press =>
+        await WithHotkeysAsync(harness, _ => true, elevated: true, TimeSpan.Zero, press =>
         {
             press();
             raven.State.ShouldBe(RavenState.Listening, "a tap latches the mic on");
@@ -159,7 +160,7 @@ public class HotkeyServiceTests
         var raven = harness.Shell.Raven;
         var held = true;
 
-        await WithHotkeysAsync(harness, _ => held, press =>
+        await WithHotkeysAsync(harness, _ => held, elevated: false, TimeSpan.Zero, press =>
         {
             press();
             raven.State.ShouldBe(RavenState.Listening);
@@ -175,6 +176,45 @@ public class HotkeyServiceTests
         harness.Recorder.Received(1).Stop();
     }
 
+    // The UI thread was busy while the user held the chord for a second and let go: WM_HOTKEY is handled after the
+    // release. Timed from the message, the press is a hold, and the first poll that finds the key up stops it.
+    [Fact]
+    public async Task A_hold_the_ui_thread_handled_late_stops_at_the_first_poll_instead_of_latching()
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+
+        await WithHotkeysAsync(harness, _ => false, elevated: false, TimeSpan.FromSeconds(1), press =>
+        {
+            press();
+            PumpUntil(() => raven.State == RavenState.Idle);
+        });
+
+        harness.Recorder.Received(1).Stop();
+        raven.Log.ShouldNotContain(l => l.Text == HotkeyService.UnseenReleaseNote, "no admin window was in front");
+    }
+
+    // A quick tap, released before the UI thread handled it: the key already reads up, which is a tap, not an admin
+    // window.
+    [Fact]
+    public async Task A_quick_tap_whose_key_is_already_up_latches_without_the_admin_window_note()
+    {
+        var harness = RecordingHarness();
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        var raven = harness.Shell.Raven;
+
+        await WithHotkeysAsync(harness, _ => false, elevated: false, TimeSpan.FromMilliseconds(50), press =>
+        {
+            press();
+            PumpFor(TimeSpan.FromMilliseconds(150));
+            raven.State.ShouldBe(RavenState.Listening, "a tap latches the mic on");
+        });
+
+        raven.Log.ShouldNotContain(l => l.Text == HotkeyService.UnseenReleaseNote);
+        harness.Recorder.DidNotReceive().Stop();
+    }
+
     private static ShellTestHarness RecordingHarness()
     {
         var harness = new ShellTestHarness();
@@ -185,16 +225,18 @@ public class HotkeyServiceTests
         return harness;
     }
 
-    /// <summary>A window wired to the shell with a hotkey service reading the keys through <paramref name="isKeyDown"/>;
-    /// the body gets a press of push-to-talk and runs on the window's thread.</summary>
-    private static Task WithHotkeysAsync(ShellTestHarness harness, Func<uint, bool> isKeyDown, Action<Action> body)
+    /// <summary>A window wired to the shell with a hotkey service reading the keys through <paramref name="isKeyDown"/>,
+    /// seeing the foreground as <paramref name="elevated"/> or not and each WM_HOTKEY as sent <paramref name="messageAge"/>
+    /// ago; the body gets a press of push-to-talk and runs on the window's thread.</summary>
+    private static Task WithHotkeysAsync(ShellTestHarness harness, Func<uint, bool> isKeyDown, bool elevated, TimeSpan messageAge,
+        Action<Action> body)
     {
-        var binding = HotkeyService.Bindings.Single(b => b.Label == "Push to talk");
+        var binding = HotkeyService.PushToTalk;
         return StaThread.RunAsync(() =>
         {
             var window = HiddenWindow();
             var hwnd = new WindowInteropHelper(window).Handle;
-            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, isKeyDown);
+            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, isKeyDown, () => elevated, () => messageAge);
             hotkeys.Attach(hwnd, harness.Shell);
             try
             {

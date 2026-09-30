@@ -58,3 +58,9 @@ GetWindowLong
 WINDOW_EX_STYLE
 EVENT_OBJECT_CREATE
 EVENT_OBJECT_SHOW
+GetMessageTime
+OpenProcess
+OpenProcessToken
+GetTokenInformation
+TOKEN_ELEVATION
+CloseHandle

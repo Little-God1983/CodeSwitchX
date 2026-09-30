@@ -271,7 +271,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Button mouse-down or hotkey down. Records whether or not earlier clips are still being transcribed or the model
     /// is downloading; only the short stop of the last capture turns a press away, and never silently.
     /// </summary>
-    public void PressMic()
+    /// <param name="sinceKeyDown">How long ago the key went down, for a hotkey press the UI thread handled late: a hold
+    /// is timed from then.</param>
+    public void PressMic(TimeSpan sinceKeyDown = default)
     {
         if (!PendingStop.IsCompleted)
         {
@@ -279,7 +281,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        switch (_gesture.Press())
+        switch (_gesture.Press(sinceKeyDown))
         {
             case PushToTalkAction.Start:
                 StartRecording();

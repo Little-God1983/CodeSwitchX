@@ -65,6 +65,13 @@ public sealed class HotkeyService
     private static readonly TimeSpan ReleasePoll = TimeSpan.FromMilliseconds(30);
 
     /// <summary>
+    /// The latest a WM_HOTKEY is believed to be. GetMessageTime belongs to the last message this thread retrieved; a
+    /// hotkey delivered some other way (sent, not posted) would read an older one. No stall the user sits through is
+    /// longer, and a hold longer than this still stops at the first poll either way.
+    /// </summary>
+    private static readonly TimeSpan MaximumMessageAge = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Raven's push-to-talk chord, the one place it is defined: the registration, the release poll and every text that
     /// names the chord (the panel's caption and tooltip, the admin-window note) follow it. NoRepeat: while the chord is
     /// held, autorepeat must not press the mic again (the panel resets its gesture when a recording reaches its length
@@ -78,6 +85,8 @@ public sealed class HotkeyService
 
     private readonly ILogger<HotkeyService> _logger;
     private readonly Func<uint, bool> _isKeyDown;
+    private readonly Func<bool> _isForegroundElevated;
+    private readonly Func<TimeSpan> _messageAge;
     private HwndSource? _source;
     private ShellViewModel? _shell;
     private nint _hwnd;
@@ -85,10 +94,17 @@ public sealed class HotkeyService
     private bool _unseenReleaseNoted;
 
     /// <param name="isKeyDown">Whether a virtual key reads as held; GetAsyncKeyState unless a test replaces it.</param>
-    public HotkeyService(ILogger<HotkeyService> logger, Func<uint, bool>? isKeyDown = null)
+    /// <param name="isForegroundElevated">Whether the foreground window is an elevated process's (which hides the
+    /// keyboard from GetAsyncKeyState); the process token's elevation unless a test replaces it.</param>
+    /// <param name="messageAge">How long ago the WM_HOTKEY being handled was posted; GetMessageTime unless a test
+    /// replaces it.</param>
+    public HotkeyService(ILogger<HotkeyService> logger, Func<uint, bool>? isKeyDown = null, Func<bool>? isForegroundElevated = null,
+        Func<TimeSpan>? messageAge = null)
     {
         _logger = logger;
         _isKeyDown = isKeyDown ?? HotkeyInterop.IsKeyDown;
+        _isForegroundElevated = isForegroundElevated ?? HotkeyInterop.IsForegroundElevated;
+        _messageAge = messageAge ?? HotkeyInterop.CurrentMessageAge;
     }
 
     public static IReadOnlyList<HotkeyBinding> Bindings { get; } = BuildBindings();
@@ -204,29 +220,35 @@ public sealed class HotkeyService
     }
 
     /// <summary>
-    /// The hotkey has just gone down, so Space reads as held unless Windows hides the keyboard from this process: it
-    /// does while an elevated window is in front, and GetAsyncKeyState then reads every key as up. Polled that way, a
-    /// hold would read as released straight away, a tap that latches, and the recording would run on after the user let
-    /// go without a word. So a key that cannot be read makes the press a tap on purpose, and the panel says once per
-    /// session that the next press stops it.
+    /// Windows hides the keyboard from this process while an elevated window is in front: GetAsyncKeyState then reads
+    /// every key as up, and a polled hold would read as released straight away, a tap that latches, recording on after
+    /// the user let go. So over an elevated window the press is a tap on purpose, and the panel says once per session
+    /// that the next press stops it. The key state is no test for that: a key the UI thread reads late is up as well.
+    /// <para>
+    /// Otherwise the release is polled, and the press is timed from when the hotkey message was posted, not from when
+    /// the UI thread got to it: a hold handled after a stall, whose key is already up at the first poll, still stops
+    /// rather than latching.
+    /// </para>
     /// </summary>
     private void OnPushToTalk(RavenPanelViewModel raven)
     {
-        var keySeen = _isKeyDown(PushToTalk.VirtualKey);
-        raven.PressMic();
-        if (keySeen)
+        if (_isForegroundElevated())
         {
-            WatchForTalkRelease();
+            _talkRelease?.Stop();
+            raven.PressMic();
+            _ = raven.ReleaseMicAsync();
+            if (!_unseenReleaseNoted && raven.State == RavenState.Listening)
+            {
+                _unseenReleaseNoted = true;
+                raven.Note(UnseenReleaseNote);
+            }
+
             return;
         }
 
-        _talkRelease?.Stop();
-        _ = raven.ReleaseMicAsync();
-        if (!_unseenReleaseNoted && raven.State == RavenState.Listening)
-        {
-            _unseenReleaseNoted = true;
-            raven.Note(UnseenReleaseNote);
-        }
+        var age = _messageAge();
+        raven.PressMic(age < TimeSpan.Zero ? TimeSpan.Zero : age > MaximumMessageAge ? MaximumMessageAge : age);
+        WatchForTalkRelease();
     }
 
     /// <summary>
