@@ -52,6 +52,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public bool HooksInstalled { get; set; }
 
+    public const double MinTileScale = 0.75;
+    public const double MaxTileScale = 1.5;
+    private double _tileScale = 1;
+
+    /// <summary>
+    /// How big the tiles are drawn: 1 is their normal size. The slider in the header sets it; the shell hands it the
+    /// stored value at startup and stores every change. A value outside the slider's range (a stored one edited by hand,
+    /// or from a build with another range) is pulled into it, and it is kept to two decimals: the slider's snapping adds
+    /// float noise (0.9000000000000001) that would otherwise be stored.
+    /// </summary>
+    public double TileScale
+    {
+        get => _tileScale;
+        set => SetProperty(ref _tileScale, double.IsFinite(value) ? Math.Round(Math.Clamp(value, MinTileScale, MaxTileScale), 2) : 1);
+    }
+
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger)
     {

@@ -38,9 +38,9 @@
     <!-- one repository's line: branch (named after its folder when a tile has several), then the git state pill:
          green when clean, amber with uncommitted changes, none when git could not tell -->
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
-      <!-- left-aligned, so the star column is only as wide as the branch and the pill follows it; a long branch is
+      <!-- the pill sits at the line's right edge, so the pills of every line and every tile line up; a long branch is
            trimmed to what is left, and a long folder name to a part of the line, so neither hides the other -->
-      <Grid Margin="0,1" HorizontalAlignment="Left" ToolTip="{Binding ToolTipText}">
+      <Grid Margin="0,1" ToolTip="{Binding ToolTipText}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="Auto" />
@@ -167,6 +167,13 @@
     <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+          <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
+          <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
+                  TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Tile size"
+                  Value="{Binding TileScale}" />
+          <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                     Margin="0,0,16,0" />
           <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
           <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
           <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
@@ -183,6 +190,11 @@
             <StackPanel Margin="0,0,0,16">
               <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" Opacity="0.7" Margin="8,0,0,0" />
               <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
+                <!-- the Tile size slider zooms the tiles, text and all; a layout transform, so the wrap panel makes room -->
+                <ItemsControl.LayoutTransform>
+                  <ScaleTransform ScaleX="{Binding DataContext.TileScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
+                                  ScaleY="{Binding DataContext.TileScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}" />
+                </ItemsControl.LayoutTransform>
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
                     <WrapPanel />

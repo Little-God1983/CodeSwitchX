@@ -72,6 +72,16 @@ public sealed partial class ShellViewModel : ObservableObject
                 Yard.HooksInstalled = HooksReachUs(Settings.HookState);
             }
         };
+        // The Yard owns its tile size and the settings store it. The window shows only after this method, so the tiles
+        // are never drawn at the default size first.
+        Yard.TileScale = Settings.TileScale;
+        Yard.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(YardViewModel.TileScale))
+            {
+                Settings.TileScale = Yard.TileScale;
+            }
+        };
         _ = AutoStartAsync();
     }
 
