@@ -21,6 +21,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>How long after startup the model is warmed up: long enough to leave the startup itself alone.</summary>
     public static readonly TimeSpan StartupWarmUpDelay = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How long the device notifications must be quiet before the microphones are listed again: plugging in one headset
+    /// raises five to eight of them (state, added, the default once per role), an Audiosrv restart whole bursts.
+    /// </summary>
+    public static readonly TimeSpan DeviceChangeSettle = TimeSpan.FromMilliseconds(300);
+
     private static readonly TimeSpan MinimumClip = TimeSpan.FromMilliseconds(500);
 
     private readonly IMicrophoneCatalog _catalog;
@@ -34,6 +40,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly PushToTalkGesture _gesture;
     private readonly SilentMicWatch _silence = new();
     private readonly SpeechGate _speech = new();
+    private readonly ITimer _deviceRefresh;
 
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
@@ -60,7 +67,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
         _recorder.LimitReached += (_, _) => _dispatcher.Post(OnLimitReached);
-        _catalog.DevicesChanged += (_, _) => _dispatcher.Post(RefreshMicrophones);
+        // A trailing debounce: every notification (on whatever thread COM raises it) restarts the wait. The timer calls
+        // back on the thread pool, which lists the devices there; only the result goes to the UI thread.
+        _deviceRefresh = time.CreateTimer(_ => ListDevicesAfterChange(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _catalog.DevicesChanged += (_, _) => _deviceRefresh.Change(DeviceChangeSettle, Timeout.InfiniteTimeSpan);
     }
 
     [ObservableProperty]
@@ -102,16 +112,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     internal Task PendingStop { get; private set; } = Task.CompletedTask;
 
     /// <summary>Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded.</summary>
-    public void RefreshMicrophones()
+    public void RefreshMicrophones() => ApplyDevices(ReadDevices());
+
+    /// <summary>The settled end of a burst of device notifications, on the thread pool.</summary>
+    private void ListDevicesAfterChange()
     {
-        IReadOnlyList<MicrophoneDevice> devices;
-        MicrophoneDevice? windowsDefault;
+        var devices = ReadDevices();
+        _dispatcher.Post(() => ApplyDevices(devices));
+    }
+
+    private DeviceList ReadDevices()
+    {
         try
         {
-            devices = _catalog.List();
-            windowsDefault = _catalog.Default();
+            return new DeviceList(_catalog.List(), _catalog.Default(), null);
         }
         catch (Exception ex)
+        {
+            return new DeviceList([], null, ex);
+        }
+    }
+
+    private void ApplyDevices(DeviceList list)
+    {
+        if (list.Failure is { } ex)
         {
             // A stopped Windows audio service makes the enumeration throw (a COMException). The app still starts; the
             // panel says why it has no microphones. The stored choice stays for when the service is back.
@@ -127,6 +151,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        var devices = list.Devices;
+        var windowsDefault = list.Default;
         if (_audioFailed)
         {
             _audioFailed = false;
@@ -482,6 +508,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         MicrophoneFailureKind.AudioServiceDown => "Windows audio is not running. Start the Windows Audio service or restart the PC.",
         _ => $"{mic?.Name ?? "The microphone"} could not be opened. Another app may be using it exclusively.",
     };
+
+    /// <summary>The active microphones and the Windows default, or why they could not be listed.</summary>
+    private sealed record DeviceList(IReadOnlyList<MicrophoneDevice> Devices, MicrophoneDevice? Default, Exception? Failure);
 
     /// <summary>
     /// Whole percents on the UI thread, whatever thread the download reports on. The percent is worked out on the

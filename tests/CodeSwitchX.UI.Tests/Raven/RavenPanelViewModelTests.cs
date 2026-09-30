@@ -68,6 +68,13 @@ public sealed class RavenPanelViewModelTests
 
     private static async Task WithinAsync(Task task) => await task.WaitAsync(TimeSpan.FromSeconds(5));
 
+    /// <summary>A device notification, and the settle time after which the panel lists the devices again.</summary>
+    private void DevicesChange()
+    {
+        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        _time.Advance(RavenPanelViewModel.DeviceChangeSettle);
+    }
+
     /// <summary>One block the way WASAPI hands it over on the RØDE Connect input: 10 ms.</summary>
     private void Block(float rms) => _recorder.BlockCaptured += Raise.Event<EventHandler<CapturedBlock>>(_recorder, new CapturedBlock(rms, TimeSpan.FromMilliseconds(10)));
 
@@ -308,12 +315,53 @@ public sealed class RavenPanelViewModelTests
         vm.SelectedMicrophone = Desk;
         _catalog.List().Returns([Headset]);
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.SelectedMicrophone.ShouldBe(Headset);
         vm.Microphones.ShouldBe([Headset]);
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
         vm.Log.Single().Text.ShouldBe("Desk mic is gone. Using Headset.");
+    }
+
+    // Plugging in one USB headset raises five to eight notifications (state, added, and the default once per role); an
+    // Audiosrv restart raises bursts. Each used to list the devices and refill the list on the UI thread.
+    [Fact]
+    public void Eight_device_notifications_within_300_ms_list_the_devices_once()
+    {
+        var vm = NewVm();
+        _catalog.ClearReceivedCalls();
+
+        for (var i = 0; i < 8; i++)
+        {
+            _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+            _time.Advance(TimeSpan.FromMilliseconds(30));
+        }
+
+        _catalog.DidNotReceive().List();
+        _time.Advance(RavenPanelViewModel.DeviceChangeSettle);
+
+        _catalog.Received(1).List();
+        _catalog.Received(1).Default();
+        vm.Microphones.ShouldBe([Headset, Desk]);
+    }
+
+    // The enumeration is COM calls and property-store reads: done off the UI thread, only its result is applied there.
+    [Fact]
+    public void The_devices_are_listed_outside_the_ui_thread_and_the_result_applied_on_it()
+    {
+        var dispatcher = new QueueingDispatcher();
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher, _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+        vm.RefreshMicrophones();
+        _catalog.ClearReceivedCalls();
+        _catalog.List().Returns([Desk]);
+
+        DevicesChange();
+
+        _catalog.Received(1).List();
+        vm.Microphones.ShouldBe([Headset, Desk], "nothing is applied until the UI thread runs the post");
+        dispatcher.RunAll();
+        vm.Microphones.ShouldBe([Desk]);
     }
 
     [Fact]
@@ -323,13 +371,13 @@ public sealed class RavenPanelViewModelTests
         vm.SelectedMicrophone = Desk;
         vm.PreferredMicrophone.ShouldBe(Desk, "a pick is the user's choice");
         _catalog.List().Returns([Headset]);
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
         vm.SelectedMicrophone.ShouldBe(Headset);
         vm.PreferredMicrophone.ShouldBe(Desk, "a fallback is not a choice");
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty); // another device comes or goes
+        DevicesChange(); // another device comes or goes
         _catalog.List().Returns([Headset, Desk]);
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.SelectedMicrophone.ShouldBe(Desk);
         vm.Log.Select(e => e.Text).ShouldBe(["Desk mic is gone. Using Headset.", "Using Desk mic again."]);
@@ -737,7 +785,7 @@ public sealed class RavenPanelViewModelTests
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.SelectedMicrophone.ShouldBeNull();
         vm.Microphones.ShouldBeEmpty();
@@ -766,20 +814,20 @@ public sealed class RavenPanelViewModelTests
 
         for (var i = 0; i < 3; i++)
         {
-            _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+            DevicesChange();
         }
 
         vm.Log.Count(l => l.Kind == RavenLogKind.Warning).ShouldBe(1);
         vm.Log.Single().Text.ShouldBe("Windows audio is not available: The audio service is not running.");
 
         failure = null;
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.Log.Select(l => l.Text).ShouldBe(["Windows audio is not available: The audio service is not running.", "Windows audio is back."]);
         vm.Microphones.ShouldBe([Headset, Desk]);
 
         failure = new System.Runtime.InteropServices.COMException("stopped again");
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.Log.Last().Text.ShouldBe("Windows audio is not available: stopped again", "a new failure after a recovery is news");
     }
@@ -792,19 +840,19 @@ public sealed class RavenPanelViewModelTests
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.SelectedMicrophone.ShouldBeNull();
         vm.PreferredMicrophone.ShouldBe(Desk);
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
         vm.Log.Single().Text.ShouldBe("Desk mic is gone. No microphone is connected.");
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty); // still nothing
+        DevicesChange(); // still nothing
         vm.Log.Count.ShouldBe(1);
 
         _catalog.List().Returns([Desk]);
         _catalog.Default().Returns(Desk);
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.SelectedMicrophone.ShouldBe(Desk);
         vm.Log.Select(l => l.Text).ShouldBe(["Desk mic is gone. No microphone is connected.", "Using Desk mic again."]);
@@ -816,11 +864,11 @@ public sealed class RavenPanelViewModelTests
         var vm = NewVm();
         vm.SelectedMicrophone = Desk;
         _catalog.List().Returns([Headset]);
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
 
-        _catalog.DevicesChanged += Raise.Event<EventHandler>(_catalog, EventArgs.Empty);
+        DevicesChange();
 
         vm.Log.Select(l => l.Text).ShouldBe(["Desk mic is gone. Using Headset.", "Headset is gone. No microphone is connected."]);
     }
@@ -950,6 +998,39 @@ public sealed class RavenPanelViewModelTests
 
         vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
         await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), DictationVocabulary.Empty, false, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Keeps posts until the test runs them, the way the UI thread runs them later.</summary>
+    private sealed class QueueingDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _posts = new();
+
+        public void Post(Action action)
+        {
+            lock (_posts)
+            {
+                _posts.Enqueue(action);
+            }
+        }
+
+        public void RunAll()
+        {
+            while (true)
+            {
+                Action next;
+                lock (_posts)
+                {
+                    if (_posts.Count == 0)
+                    {
+                        return;
+                    }
+
+                    next = _posts.Dequeue();
+                }
+
+                next();
+            }
+        }
     }
 
     /// <summary>Runs posts inline, like <see cref="ImmediateDispatcher"/>, and counts them.</summary>

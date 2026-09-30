@@ -4,6 +4,11 @@ using NAudio.CoreAudioApi.Interfaces;
 
 namespace CodeSwitchX.Voice.Audio;
 
+/// <summary>
+/// The capture devices. <see cref="List"/> and <see cref="Default"/> create their own enumerator on the calling thread:
+/// the panel lists the devices on the thread pool, and the long-lived one, created with the catalog on the UI thread,
+/// could have its calls marshalled back to that thread. The long-lived one only carries the notifications.
+/// </summary>
 public sealed class WasapiMicrophoneCatalog : IMicrophoneCatalog, IMMNotificationClient, IDisposable
 {
     private readonly MMDeviceEnumerator _enumerator = new();
@@ -19,7 +24,8 @@ public sealed class WasapiMicrophoneCatalog : IMicrophoneCatalog, IMMNotificatio
     public IReadOnlyList<MicrophoneDevice> List()
     {
         var result = new List<MicrophoneDevice>();
-        foreach (var device in _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        using var enumerator = new MMDeviceEnumerator();
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
         {
             using (device)
             {
@@ -32,7 +38,8 @@ public sealed class WasapiMicrophoneCatalog : IMicrophoneCatalog, IMMNotificatio
 
     public MicrophoneDevice? Default()
     {
-        return DefaultFor(Role.Communications) ?? DefaultFor(Role.Console);
+        using var enumerator = new MMDeviceEnumerator();
+        return DefaultFor(enumerator, Role.Communications) ?? DefaultFor(enumerator, Role.Console);
     }
 
     public void Dispose()
@@ -64,11 +71,11 @@ public sealed class WasapiMicrophoneCatalog : IMicrophoneCatalog, IMMNotificatio
     {
     }
 
-    private MicrophoneDevice? DefaultFor(Role role)
+    private static MicrophoneDevice? DefaultFor(MMDeviceEnumerator enumerator, Role role)
     {
         try
         {
-            using var device = _enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, role);
+            using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, role);
             return new MicrophoneDevice(device.ID, device.FriendlyName);
         }
         catch (COMException)

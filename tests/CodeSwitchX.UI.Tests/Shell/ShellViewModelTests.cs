@@ -5,6 +5,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.Voice.Audio;
@@ -102,8 +103,10 @@ public class ShellViewModelTests
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
 
         _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty); // something else changed
+        _h.Time.Advance(RavenPanelViewModel.DeviceChangeSettle);
         _h.Microphones.List().Returns([headset, rode]);
         _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty);
+        _h.Time.Advance(RavenPanelViewModel.DeviceChangeSettle);
 
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(rode);
         _h.Shell.Settings.RavenMicrophone.ShouldBe(rode);
@@ -124,6 +127,7 @@ public class ShellViewModelTests
 
         _h.Microphones.List().Returns([headset]);
         _h.Microphones.DevicesChanged += Raise.Event<EventHandler>(_h.Microphones, EventArgs.Empty);
+        _h.Time.Advance(RavenPanelViewModel.DeviceChangeSettle);
 
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset);
         _h.Shell.Settings.RavenMicrophone.ShouldBe(desk);
