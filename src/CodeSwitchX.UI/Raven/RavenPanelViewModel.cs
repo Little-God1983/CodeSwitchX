@@ -48,6 +48,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
     private bool _silentWarned;
+
+    /// <summary>This recording's "stopped sending sound" warning was given (once per recording).</summary>
+    private bool _droppedWarned;
+
+    /// <summary>That warning stands: the sound has not come back since.</summary>
+    private bool _droppedStands;
     private bool _refreshing;
     private bool _fellBack;
     private bool _audioFailed;
@@ -426,6 +432,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _recordingMic = mic;
         _silentWarned = false;
+        _droppedWarned = false;
+        _droppedStands = false;
         _silence.Reset();
         _speech.Reset();
         _capturing = true;
@@ -486,10 +494,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         Level = AudioMath.LevelOf(block.Rms);
         _speech.Step(block.Rms, block.Duration);
-        if (_silence.Step(block.Rms, block.Duration) == SignalEvent.Silent && !_silentWarned)
+        switch (_silence.Step(block.Rms, block.Duration))
         {
-            _silentWarned = true;
-            AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");
+            case SignalEvent.Silent when !_silentWarned:
+                _silentWarned = true;
+                AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");
+                break;
+            case SignalEvent.Dropped when !_droppedWarned:
+                // Heard, then nothing: a headset that went to sleep or was muted mid-recording.
+                _droppedWarned = true;
+                _droppedStands = true;
+                AddEntry(RavenLogKind.Warning, $"{_recordingMic?.Name} stopped sending sound. Check that it isn't muted or gone to sleep.");
+                break;
+            case SignalEvent.Live when _droppedStands:
+                _droppedStands = false;
+                AddEntry(RavenLogKind.Note, $"{_recordingMic?.Name} is sending sound again.");
+                break;
         }
     }
 

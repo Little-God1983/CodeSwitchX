@@ -409,6 +409,51 @@ public sealed class RavenPanelViewModelTests
         vm.Log.Single().Text.ShouldBe("No sound from Headset. Check that it isn't muted.");
     }
 
+    // A Bluetooth headset goes to sleep halfway through a latched recording: heard first, then nothing for ten seconds.
+    [Fact]
+    public async Task A_microphone_that_stops_sending_sound_is_warned_about_once_and_its_return_is_noted()
+    {
+        var vm = await NewVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+
+        Blocks(0f, 9.99);
+        vm.Log.ShouldBeEmpty("under ten seconds of nothing after sound is a pause");
+        Block(0f);
+
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log.Single().Text.ShouldBe("Headset stopped sending sound. Check that it isn't muted or gone to sleep.");
+
+        Speak();
+
+        vm.Log[^1].Kind.ShouldBe(RavenLogKind.Note);
+        vm.Log[^1].Text.ShouldBe("Headset is sending sound again.");
+
+        Blocks(0f, 10);
+        Speak();
+
+        vm.Log.Count.ShouldBe(2, "once per recording");
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    [Fact]
+    public async Task The_stopped_sending_sound_warning_is_armed_again_for_the_next_recording()
+    {
+        var vm = await NewVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        Blocks(0f, 10);
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        Blocks(0f, 10);
+
+        vm.Log.Count(l => l.Text == "Headset stopped sending sound. Check that it isn't muted or gone to sleep.").ShouldBe(2);
+        vm.Log.ShouldNotContain(l => l.Text == "Headset is sending sound again.", "the sound never came back");
+    }
+
     // The recorder reports how long each block is. Assuming 50 ms blocks, the ten-millisecond ones of the RØDE input made
     // the two seconds of grace pass in 0.4 s.
     [Fact]
