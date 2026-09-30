@@ -23,7 +23,7 @@
     </Grid.ColumnDefinitions>
 
     <!-- Raven stays in every mode; the Cab's host area shrinks with it and the docked VS Code follows. -->
-    <raven:RavenPanelView Grid.Row="0" Grid.Column="0" DataContext="{Binding Raven}">
+    <raven:RavenPanelView x:Name="RavenPanel" Grid.Row="0" Grid.Column="0" DataContext="{Binding Raven}">
       <raven:RavenPanelView.Style>
         <Style TargetType="raven:RavenPanelView">
           <Setter Property="Width" Value="320" />

@@ -6,16 +6,24 @@ namespace CodeSwitchX.UI.Raven;
 /// <summary>
 /// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing and a
 /// gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
-/// and is asked to animate; with animations turned off in Windows it draws one still frame per change. The geometry
-/// follows the concept page's canvas, whose 336 px square maps onto the element's size.
+/// and is asked to animate; with animations turned off in Windows it draws one still frame per change. Idle breathing
+/// also stops while its window is not the active one (VS Code docked in front, say): listening and transcribing keep
+/// animating, because they show what the microphone and the model are doing. The geometry follows the concept page's
+/// canvas, whose 336 px square maps onto the element's size.
+/// <para>
+/// Each frame is drawn into a <see cref="DrawingGroup"/> that <see cref="OnRender"/> hands to WPF once. Redrawing that
+/// group updates the screen without InvalidateVisual, which would arrange the element again on every frame and so run
+/// a layout pass, and every LayoutUpdated handler in the window, some thirty times a second.
+/// </para>
 /// </summary>
 public sealed class RavenOrb : FrameworkElement
 {
     public static readonly DependencyProperty StateProperty = DependencyProperty.Register(nameof(State), typeof(RavenState), typeof(RavenOrb),
-        new FrameworkPropertyMetadata(RavenState.Idle, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(RavenState.Idle, (d, _) => ((RavenOrb)d).OnStateChanged()));
 
+    /// <summary>Changes every captured block (10 ms): redrawn by the next frame while animating, straight away otherwise.</summary>
     public static readonly DependencyProperty LevelProperty = DependencyProperty.Register(nameof(Level), typeof(double), typeof(RavenOrb),
-        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(0.0, (d, _) => ((RavenOrb)d).OnInputChanged()));
 
     public static readonly DependencyProperty IsAnimatingProperty = DependencyProperty.Register(nameof(IsAnimating), typeof(bool), typeof(RavenOrb),
         new FrameworkPropertyMetadata(false, (d, _) => ((RavenOrb)d).UpdateHook()));
@@ -28,6 +36,7 @@ public sealed class RavenOrb : FrameworkElement
 
     private static readonly Color Voice = Color.FromRgb(0x62, 0xD0, 0xE8);
 
+    private readonly DrawingGroup _frame = new();
     private Window? _window;
     private bool _hooked;
     private TimeSpan _lastTick = TimeSpan.MinValue;
@@ -66,7 +75,8 @@ public sealed class RavenOrb : FrameworkElement
 
     private static bool MotionAllowed => SystemParameters.ClientAreaAnimation;
 
-    private bool ShouldAnimate => IsAnimating && IsVisible && MotionAllowed && _window is not null && _window.WindowState != WindowState.Minimized;
+    private bool ShouldAnimate => IsAnimating && IsVisible && MotionAllowed && _window is not null && _window.WindowState != WindowState.Minimized
+        && (_window.IsActive || State != RavenState.Idle);
 
     private void OnLoaded()
     {
@@ -74,6 +84,8 @@ public sealed class RavenOrb : FrameworkElement
         if (_window is not null)
         {
             _window.StateChanged += OnWindowStateChanged;
+            _window.Activated += OnWindowStateChanged;
+            _window.Deactivated += OnWindowStateChanged;
         }
 
         SystemParameters.StaticPropertyChanged += OnSystemParameterChanged;
@@ -85,6 +97,8 @@ public sealed class RavenOrb : FrameworkElement
         if (_window is not null)
         {
             _window.StateChanged -= OnWindowStateChanged;
+            _window.Activated -= OnWindowStateChanged;
+            _window.Deactivated -= OnWindowStateChanged;
             _window = null;
         }
 
@@ -94,12 +108,27 @@ public sealed class RavenOrb : FrameworkElement
 
     private void OnWindowStateChanged(object? sender, EventArgs e) => UpdateHook();
 
+    private void OnStateChanged()
+    {
+        UpdateHook();
+        OnInputChanged();
+    }
+
+    /// <summary>While animating the next frame shows the change; still, the one frame is drawn again now.</summary>
+    private void OnInputChanged()
+    {
+        if (!_hooked)
+        {
+            DrawFrame();
+        }
+    }
+
     private void OnSystemParameterChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(SystemParameters.ClientAreaAnimation))
         {
             UpdateHook();
-            InvalidateVisual();
+            DrawFrame();
         }
     }
 
@@ -120,7 +149,7 @@ public sealed class RavenOrb : FrameworkElement
         else
         {
             CompositionTarget.Rendering -= OnRendering;
-            InvalidateVisual(); // the still frame
+            DrawFrame(); // the still frame
         }
     }
 
@@ -146,11 +175,19 @@ public sealed class RavenOrb : FrameworkElement
         }
 
         _lastDraw = now;
-        InvalidateVisual();
+        DrawFrame();
     }
 
-    protected override void OnRender(DrawingContext dc)
+    /// <summary>Called again by WPF only when the element is arranged at a new size; the frames go through the group.</summary>
+    protected override void OnRender(DrawingContext drawingContext)
     {
+        DrawFrame();
+        drawingContext.DrawDrawing(_frame);
+    }
+
+    private void DrawFrame()
+    {
+        using var dc = _frame.Open();
         var size = Math.Min(ActualWidth, ActualHeight);
         if (size <= 0)
         {

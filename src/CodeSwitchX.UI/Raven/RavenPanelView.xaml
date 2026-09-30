@@ -170,6 +170,7 @@
                       ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
             </Grid>
 
+            <!-- Animates only while it is seen: idle breathing pauses while the window is inactive or minimised. -->
             <raven:RavenOrb Width="160" Height="160" Margin="0,8,0,4" HorizontalAlignment="Center" IsAnimating="True"
                             State="{Binding State}" Level="{Binding Level}" />
 

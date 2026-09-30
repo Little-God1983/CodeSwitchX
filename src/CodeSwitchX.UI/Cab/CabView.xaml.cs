@@ -16,10 +16,9 @@ public partial class CabView : UserControl
         Loaded += (_, _) => Attach();
         Unloaded += (_, _) => Detach();
         IsVisibleChanged += (_, _) => Publish();
+        // The Raven panel folding or unfolding changes the host area's width, and with it its SizeChanged. No per-frame
+        // LayoutUpdated hook: that ran Publish on every layout pass in the window, an animation's included.
         HostArea.SizeChanged += (_, _) => Publish();
-        // A move inside the window without a size change (the Raven panel folding while the window is maximised, say)
-        // raises no SizeChanged; every layout pass is checked, and Publish ignores a rectangle that did not change.
-        HostArea.LayoutUpdated += (_, _) => Publish();
     }
 
     /// <summary>Screen rectangle (physical pixels) of the host area, raised whenever it changes.</summary>
@@ -48,6 +47,12 @@ public partial class CabView : UserControl
     }
 
     private void OnWindowMoved(object? sender, EventArgs e) => Publish();
+
+    /// <summary>
+    /// For a neighbour whose size change may move the host area (the Raven panel, left of it): checked once per change of
+    /// that neighbour, and a rectangle that did not change is not raised again.
+    /// </summary>
+    public void Republish() => Publish();
 
     private void Publish()
     {

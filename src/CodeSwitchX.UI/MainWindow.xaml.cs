@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         _watcherLogger = watcherLogger;
         DataContext = shell;
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
+        RavenPanel.SizeChanged += (_, _) => CabView.Republish();
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
     }
 
