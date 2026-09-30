@@ -146,6 +146,89 @@ public sealed class WhisperDictationServiceTests
         }
     }
 
+    // A model that failed to load is not loaded again by a warm-up while the file is unchanged: before, every press warmed
+    // up (one load, failing) and then transcribed (a second load, failing the same way), so the error took twice as long.
+    [Fact]
+    public async Task A_warm_up_after_a_failed_load_returns_at_once_so_a_broken_model_loads_once_per_press()
+    {
+        var folder = await BrokenModelFolder("csx-warm-once-");
+        try
+        {
+            var logger = new CountingLogger();
+            using var service = new WhisperDictationService(new PresentStore(Path.Combine(folder, "ggml-base.en.bin")),
+                Options.Create(new DictationOptions { ModelFolder = folder }), logger);
+
+            await service.WarmUpAsync(TestContext.Current.CancellationToken);
+            logger.Errors.ShouldBe(1, "the startup warm-up tries the model once");
+
+            for (var press = 1; press <= 2; press++)
+            {
+                await service.WarmUpAsync(TestContext.Current.CancellationToken);
+                await Should.ThrowAsync<DictationModelLoadException>(() =>
+                    service.TranscribeAsync(new float[AudioMath.TargetRate], DictationVocabulary.Empty, live: false, TestContext.Current.CancellationToken));
+                logger.Errors.ShouldBe(1 + press, "one load per press, by the transcription the user waits on");
+            }
+        }
+        finally
+        {
+            Cleanup(folder);
+        }
+    }
+
+    // The user replaces the damaged file (a new download, or a copy): the warm-up tries the new one.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_replaced_model_file_is_tried_again_by_the_warm_up(bool newLength)
+    {
+        var folder = await BrokenModelFolder("csx-warm-replaced-");
+        var path = Path.Combine(folder, "ggml-base.en.bin");
+        try
+        {
+            var logger = new CountingLogger();
+            using var service = new WhisperDictationService(new PresentStore(path),
+                Options.Create(new DictationOptions { ModelFolder = folder }), logger);
+            await service.WarmUpAsync(TestContext.Current.CancellationToken);
+            await service.WarmUpAsync(TestContext.Current.CancellationToken);
+            logger.Errors.ShouldBe(1);
+
+            if (newLength)
+            {
+                await File.WriteAllBytesAsync(path, new byte[8192], TestContext.Current.CancellationToken);
+            }
+
+            File.SetLastWriteTimeUtc(path, File.GetLastWriteTimeUtc(path).AddMinutes(1));
+            await service.WarmUpAsync(TestContext.Current.CancellationToken);
+
+            logger.Errors.ShouldBe(2);
+        }
+        finally
+        {
+            Cleanup(folder);
+        }
+    }
+
+    /// <summary>Counts the errors logged; each failed load of the model logs exactly one.</summary>
+    private sealed class CountingLogger : Microsoft.Extensions.Logging.ILogger<WhisperDictationService>
+    {
+        private int _errors;
+
+        public int Errors => Volatile.Read(ref _errors);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Error)
+            {
+                Interlocked.Increment(ref _errors);
+            }
+        }
+    }
+
     // A present but unloadable model is a different problem from a missing one. The message has to name what the user
     // can try, and the backend it failed on.
     [Fact]

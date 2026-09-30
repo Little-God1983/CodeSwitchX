@@ -222,7 +222,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }, null, StartupWarmUpDelay, Timeout.InfiniteTimeSpan);
     }
 
-    /// <summary>Never on the calling thread, however the service behaves: loading the model takes seconds.</summary>
+    /// <summary>
+    /// Never on the calling thread, however the service behaves: loading the model takes seconds. Only at startup and
+    /// after a download, never per press: a model that will not load would otherwise be loaded twice per press.
+    /// </summary>
     private void WarmUpInBackground() => _ = Task.Run(() => _dictation.WarmUpAsync(CancellationToken.None));
 
     /// <summary>Button mouse-down or hotkey down.</summary>
@@ -304,7 +307,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _speech.Reset();
         State = RavenState.Listening;
         Caption = "Listening…";
-        WarmUpInBackground();
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
 
         var id = ++_recordingId;
@@ -457,6 +459,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         entry.Text = "Speech model downloaded.";
         Caption = "Transcribing…";
+        WarmUpInBackground();
         return true;
     }
 

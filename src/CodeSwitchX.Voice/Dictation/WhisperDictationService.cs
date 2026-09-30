@@ -21,6 +21,7 @@ public sealed class WhisperDictationService(
     private readonly Lock _warmUpLock = new();
     private WhisperFactory? _factory;
     private Task<bool>? _warmUp;
+    private ModelFileKey? _failedLoad;
     private bool _disposed;
 
     /// <summary>How long <see cref="Dispose"/> waits for a running transcription before it gives up
@@ -67,6 +68,7 @@ public sealed class WhisperDictationService(
             {
                 _factory ??= WhisperFactory.FromPath(store.ModelPath);
                 builder = _factory.CreateBuilder().WithLanguage(options.Value.Language);
+                RememberFailedLoad(null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -77,6 +79,7 @@ public sealed class WhisperDictationService(
                     store.ModelPath, store.LoadedRuntime ?? "(no backend chosen)");
                 _factory?.Dispose();
                 _factory = null;
+                RememberFailedLoad(ModelFileKey.Of(store.ModelPath));
                 throw new DictationModelLoadException(store.ModelPath, store.LoadedRuntime, ex);
             }
 
@@ -134,7 +137,10 @@ public sealed class WhisperDictationService(
 
     /// <summary>Warms up once per process. A caller arriving while the warm-up runs waits for that
     /// same run rather than starting a second one. A warm-up that found no model, or failed, is
-    /// tried again by the next caller: the model may have been downloaded since.</summary>
+    /// tried again by the next caller: the model may have been downloaded since. A model file that
+    /// already failed to load, by a warm-up or a transcription, is not loaded again while its length
+    /// and last-write time are unchanged: the warm-up returns false at once, and only a
+    /// transcription, which the user waits on and must see fail, tries it again.</summary>
     public async Task WarmUpAsync(CancellationToken ct)
     {
         Task<bool> warmUp;
@@ -166,6 +172,12 @@ public sealed class WhisperDictationService(
                 return true; // a real clip got here first and paid for the load
             }
 
+            if (FailedLoadOf(ModelFileKey.Of(store.ModelPath)))
+            {
+                logger.LogDebug("Dictation warm-up skipped: {Path} failed to load and has not changed since", store.ModelPath);
+                return false;
+            }
+
             // Real speech, not silence: on a clip with nobody talking Whisper's decoding keeps
             // retrying and took anywhere from 6 to 23 s (2026-09-30, RTX on Vulkan), where this
             // one-second sample takes 3 s and leaves the next real clip at about 0.2 s.
@@ -182,6 +194,40 @@ public sealed class WhisperDictationService(
             // nothing awaits the warm-up, and a model that will not load must not fail the caller.
             logger.LogWarning(ex, "Dictation warm-up failed; the first clip will pay the load instead");
             return false;
+        }
+    }
+
+    private void RememberFailedLoad(ModelFileKey? key)
+    {
+        lock (_warmUpLock)
+        {
+            _failedLoad = key;
+        }
+    }
+
+    private bool FailedLoadOf(ModelFileKey? key)
+    {
+        lock (_warmUpLock)
+        {
+            return key is not null && key == _failedLoad;
+        }
+    }
+
+    /// <summary>Tells one model file from its replacement: a new download or copy changes the length or the write time.</summary>
+    private sealed record ModelFileKey(long Length, DateTime LastWriteUtc)
+    {
+        /// <summary>Null when the file cannot be read, which never matches a remembered failure.</summary>
+        public static ModelFileKey? Of(string path)
+        {
+            try
+            {
+                var file = new FileInfo(path);
+                return file.Exists ? new ModelFileKey(file.Length, file.LastWriteTimeUtc) : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                return null;
+            }
         }
     }
 

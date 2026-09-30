@@ -508,10 +508,25 @@ public sealed class RavenPanelViewModelTests
         _catalog.Received(1).List();
     }
 
+    // The model is warmed at startup and after a download. A warm-up per press loaded a model that would not load twice
+    // per press: once for the warm-up, once for the clip queued behind it.
     [Fact]
-    public async Task Starting_a_recording_warms_the_model_up()
+    public async Task A_press_does_not_warm_the_model_up()
+    {
+        var vm = NewVm();
+
+        await HoldAsync(vm);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        await _dictation.DidNotReceive().WarmUpAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_downloaded_model_is_warmed_up_once()
     {
         var warmed = new TaskCompletionSource();
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         _dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
             warmed.TrySetResult();
@@ -519,14 +534,30 @@ public sealed class RavenPanelViewModelTests
         });
         var vm = NewVm();
 
-        vm.PressMic();
+        await HoldAsync(vm);
 
         await WithinAsync(warmed.Task);
+        await _dictation.Received(1).WarmUpAsync(Arg.Any<CancellationToken>());
     }
 
-    // Loading the model takes seconds. Whatever the warm-up does on the calling thread, the press must not wait for it.
     [Fact]
-    public async Task A_warm_up_that_blocks_does_not_hold_up_the_press_and_a_tap_still_latches()
+    public async Task A_failed_download_warms_nothing_up()
+    {
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new IOException("disk full")));
+        var vm = NewVm();
+
+        await HoldAsync(vm);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        await _dictation.DidNotReceive().WarmUpAsync(Arg.Any<CancellationToken>());
+    }
+
+    // Loading the model takes seconds. Whatever the warm-up does on the calling thread, the timer that starts it must not
+    // wait for it.
+    [Fact]
+    public async Task A_warm_up_that_blocks_does_not_hold_up_its_caller()
     {
         using var hold = new ManualResetEventSlim();
         var entered = new TaskCompletionSource();
@@ -537,13 +568,12 @@ public sealed class RavenPanelViewModelTests
             return Task.CompletedTask;
         });
         var vm = NewVm();
+        vm.ScheduleWarmUp();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        vm.PressMic();
-        await vm.ReleaseMicAsync();
+        _time.Advance(RavenPanelViewModel.StartupWarmUpDelay);
 
         clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
-        vm.State.ShouldBe(RavenState.Listening, "a quick tap latches");
         await WithinAsync(entered.Task);
         hold.Set();
     }
