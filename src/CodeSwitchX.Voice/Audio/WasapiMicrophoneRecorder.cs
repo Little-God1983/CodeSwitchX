@@ -3,6 +3,12 @@ using NAudio.Wave;
 
 namespace CodeSwitchX.Voice.Audio;
 
+/// <summary>
+/// Records one microphone at a time. Every recording gets its own device enumerator, made in <see cref="Start"/> on the
+/// calling thread (the panel starts from the thread pool) and released with the recording: one made with the recorder
+/// would live on the UI thread that DI builds it on, and calls on it from the pool could be marshalled back to that
+/// thread, or fail to marshal at all.
+/// </summary>
 public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
 {
     /// <summary>The one length limit of a recording: capturing stops by itself here and <see cref="LimitReached"/> says so.</summary>
@@ -10,7 +16,6 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
 
     private readonly object _gate = new();
-    private readonly MMDeviceEnumerator _enumerator = new();
     private Session? _session;
 
     public event EventHandler<CapturedBlock>? BlockCaptured;
@@ -39,13 +44,15 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
                 throw new InvalidOperationException("A recording is already running.");
             }
 
+            MMDeviceEnumerator? enumerator = null;
             MMDevice? device = null;
             WasapiCapture? capture = null;
             try
             {
-                device = _enumerator.GetDevice(deviceId);
+                enumerator = new MMDeviceEnumerator();
+                device = enumerator.GetDevice(deviceId);
                 capture = CreateCapture(device);
-                var session = new Session(this, device, capture);
+                var session = new Session(this, enumerator, device, capture);
                 capture.DataAvailable += session.OnData;
                 capture.RecordingStopped += session.OnStopped;
                 capture.StartRecording();
@@ -55,6 +62,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
             {
                 capture?.Dispose();
                 device?.Dispose();
+                enumerator?.Dispose();
                 throw new MicrophoneException(MicrophoneFailure.Classify(e), e.Message, e);
             }
         }
@@ -72,11 +80,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
         return session is null ? new RecordedClip([], TimeSpan.Zero) : session.Finish();
     }
 
-    public void Dispose()
-    {
-        Stop();
-        _enumerator.Dispose();
-    }
+    public void Dispose() => Stop();
 
     // WasapiCapture remembers SynchronizationContext.Current and posts RecordingStopped through it. Built on the UI thread
     // that would queue the event behind a Stop() that is waiting for it, so build it with no context: every event then
@@ -95,7 +99,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
         }
     }
 
-    private sealed class Session(WasapiMicrophoneRecorder owner, MMDevice device, WasapiCapture capture)
+    private sealed class Session(WasapiMicrophoneRecorder owner, MMDeviceEnumerator enumerator, MMDevice device, WasapiCapture capture)
     {
         private readonly List<float> _samples = [];
         private readonly ManualResetEventSlim _stopped = new(false);
@@ -180,6 +184,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
             capture.RecordingStopped -= OnStopped;
             capture.Dispose();
             device.Dispose();
+            enumerator.Dispose();
             _stopped.Dispose();
         }
     }
