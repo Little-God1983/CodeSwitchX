@@ -39,7 +39,7 @@ public sealed class WasapiMicrophoneCatalog : IMicrophoneCatalog, IMMNotificatio
     public MicrophoneDevice? Default()
     {
         using var enumerator = new MMDeviceEnumerator();
-        return DefaultFor(enumerator, Role.Communications) ?? DefaultFor(enumerator, Role.Console);
+        return DefaultFor(enumerator, Role.Console) ?? DefaultFor(enumerator, Role.Communications);
     }
 
     public void Dispose()
