@@ -171,7 +171,8 @@ public partial class App : Application
         services.AddCodeSwitchXHosting();
         services.AddCodeSwitchXVoice(paths.ModelsDirectory);
         services.AddSingleton<IDictationVocabularyProvider>(sp =>
-            new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf));
+            new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf,
+                sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<TimeProvider>()));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
