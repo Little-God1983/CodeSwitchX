@@ -374,6 +374,6 @@ public sealed class WhisperDictationServiceTests
             gate.Step(AudioMath.Rms(samples.AsSpan(i, 160)), TimeSpan.FromMilliseconds(10));
         }
 
-        gate.HeardSpeech.ShouldBeTrue();
+        gate.Read().HeardSpeech.ShouldBeTrue();
     }
 }
