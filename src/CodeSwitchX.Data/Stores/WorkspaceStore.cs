@@ -32,16 +32,22 @@ public sealed class WorkspaceStore : IWorkspaceStore
     public async Task AddAsync(Workspace workspace, CancellationToken ct = default)
     {
         workspace.RootPath = PathNormalizer.Canonical(workspace.RootPath);
+        workspace.WorkspaceFile = workspace.WorkspaceFile is { Length: > 0 } file ? PathNormalizer.Canonical(file) : null;
         var key = Workspace.TargetKey(workspace.RootPath, workspace.WorkspaceFile);
         await using var db = await _factory.CreateDbContextAsync(ct);
+
+        // No unique index can hold the key (it is compared normalised), so the check and the insert share one transaction:
+        // SQLite begins it IMMEDIATE, taking the write lock before the check reads, and a racing add waits and then sees this row.
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var targets = await db.Workspaces.Select(w => new { w.RootPath, w.WorkspaceFile }).ToListAsync(ct);
         if (targets.Any(t => Workspace.TargetKey(t.RootPath, t.WorkspaceFile) == key))
         {
-            throw new DuplicateWorkspaceException(workspace.WorkspaceFile is { Length: > 0 } file ? file : workspace.RootPath);
+            throw new DuplicateWorkspaceException(workspace.Target);
         }
 
         db.Workspaces.Add(workspace);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task UpdateAsync(Workspace workspace, CancellationToken ct = default)

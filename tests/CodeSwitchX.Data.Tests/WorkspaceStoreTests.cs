@@ -112,6 +112,38 @@ public class WorkspaceStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_workspace_file_is_stored_canonical()
+    {
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+
+        await _store.AddAsync(new Workspace { Name = "A", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:/repo/sub/../Installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
+
+        (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().WorkspaceFile.ShouldBe(@"c:\repo\Installer.code-workspace");
+    }
+
+    [Fact]
+    public async Task Adds_of_one_target_that_race_store_it_once()
+    {
+        // The duplicate check reads before it inserts, and no unique index backs it up: both must happen in one transaction.
+        var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        var adds = Enumerable.Range(0, 16).Select(i => Task.Run(async () =>
+        {
+            try
+            {
+                await _store.AddAsync(new Workspace { Name = $"A{i}", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
+                return true;
+            }
+            catch (DuplicateWorkspaceException)
+            {
+                return false;
+            }
+        }));
+
+        (await Task.WhenAll(adds)).Count(added => added).ShouldBe(1);
+        (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task FindByTarget_Update_and_Remove_work()
     {
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];

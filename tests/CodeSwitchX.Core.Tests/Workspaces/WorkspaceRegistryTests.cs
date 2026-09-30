@@ -41,6 +41,29 @@ public class WorkspaceRegistryTests
     }
 
     [Fact]
+    public async Task Register_canonicalises_the_workspace_file_and_makes_every_folder_it_lists_a_root()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "csx-reg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "Installer.code-workspace"), """{ "folders": [ { "path": "SDK" }, { "path": "Installer" } ] }""");
+            var workspace = new Workspace { Name = "Installer", RootPath = Path.Combine(dir, "SDK"), WorkspaceFile = Path.Combine(dir, "sub", "..", "Installer.code-workspace") };
+            _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([workspace]));
+
+            await _registry.RegisterAsync(workspace, CancellationToken.None);
+
+            workspace.WorkspaceFile.ShouldBe(Path.Combine(dir, "Installer.code-workspace"));
+            _resolver.Resolve(Path.Combine(dir, "SDK", "src")).ShouldBe(workspace.Id);
+            _resolver.Resolve(Path.Combine(dir, "Installer", "src")).ShouldBe(workspace.Id);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Register_announces_the_workspace_before_the_roots_change_so_its_tile_exists_when_chats_move_into_it()
     {
         // WorkspaceRootsChanged makes the engine re-map chats at once. If the new workspace's tile did not exist yet,

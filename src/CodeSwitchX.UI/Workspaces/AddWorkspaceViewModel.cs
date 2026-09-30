@@ -128,7 +128,7 @@ public sealed partial class AddWorkspaceViewModel : ObservableObject
             // Nothing deletes a track, so one stored for a folder that cannot be added would stay on the Yard for good.
             if (await _store.FindByTargetAsync(RootPath, WorkspaceFile, CancellationToken.None) is not null)
             {
-                throw new DuplicateWorkspaceException(WorkspaceFile ?? RootPath);
+                throw new DuplicateWorkspaceException(Workspace.TargetOf(RootPath, WorkspaceFile));
             }
 
             var track = !string.IsNullOrWhiteSpace(NewTrackName) ? await TrackNamedAsync(NewTrackName.Trim())
