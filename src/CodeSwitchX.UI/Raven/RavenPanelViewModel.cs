@@ -482,6 +482,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         MicrophoneFailureKind.Denied =>
             "Windows is blocking microphone access. Turn on Settings → Privacy & security → Microphone → Let desktop apps access your microphone.",
         MicrophoneFailureKind.Missing => $"{mic?.Name ?? "The microphone"} is not available any more.",
+        MicrophoneFailureKind.AudioServiceDown => "Windows audio is not running. Start the Windows Audio service or restart the PC.",
         _ => $"{mic?.Name ?? "The microphone"} could not be opened. Another app may be using it exclusively.",
     };
 

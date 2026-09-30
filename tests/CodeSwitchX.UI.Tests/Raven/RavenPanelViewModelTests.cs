@@ -205,6 +205,18 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
+    public void A_stopped_windows_audio_service_says_so_rather_than_blaming_another_app()
+    {
+        _recorder.When(r => r.Start(Arg.Any<string>())).Do(_ => throw new MicrophoneException(MicrophoneFailureKind.AudioServiceDown, "not running"));
+        var vm = NewVm();
+
+        vm.PressMic();
+
+        vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log.Last().Text.ShouldBe("Windows audio is not running. Start the Windows Audio service or restart the PC.");
+    }
+
+    [Fact]
     public async Task A_microphone_lost_while_recording_returns_to_idle_and_says_so()
     {
         var vm = NewVm();
