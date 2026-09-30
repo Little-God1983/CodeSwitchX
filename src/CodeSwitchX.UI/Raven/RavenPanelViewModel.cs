@@ -49,7 +49,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
-    private bool _silentWarned;
 
     /// <summary>This recording's "No sound" warning while it stands: nothing has come through since.</summary>
     private RavenLogEntry? _silentWarning;
@@ -474,7 +473,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _recordingMic = mic;
-        _silentWarned = false;
         _silentWarning = null;
         _droppedWarned = false;
         _droppedStands = false;
@@ -588,8 +586,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _speech.Step(block.Rms, block.Duration);
         switch (_silence.Step(block.Rms, block.Duration))
         {
-            case SignalEvent.Silent when !_silentWarned:
-                _silentWarned = true;
+            case SignalEvent.Silent: // at most once a recording: the watch reports it only before anything was heard
                 _silentWarning = AddEntry(RavenLogKind.Warning, $"No sound from {_recordingMic?.Name}. Check that it isn't muted.");
                 break;
             case SignalEvent.Live when _silentWarning is not null:
