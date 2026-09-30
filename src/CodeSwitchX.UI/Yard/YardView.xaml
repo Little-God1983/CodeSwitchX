@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard"
+             xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
              AllowDrop="True" Background="Transparent" DragEnter="OnDragOver" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
   <UserControl.Resources>
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
@@ -38,9 +39,9 @@
     <!-- one repository's line: branch (named after its folder when a tile has several), then the git state pill:
          green when clean, amber with uncommitted changes, none when git could not tell -->
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
-      <!-- left-aligned, so the star column is only as wide as the branch and the pill follows it; a long branch is
+      <!-- the pill sits at the line's right edge, so the pills of every line and every tile line up; a long branch is
            trimmed to what is left, and a long folder name to a part of the line, so neither hides the other -->
-      <Grid Margin="0,1" HorizontalAlignment="Left" ToolTip="{Binding ToolTipText}">
+      <Grid Margin="0,1" ToolTip="{Binding ToolTipText}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="Auto" />
@@ -87,6 +88,11 @@
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
       <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
               Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
+        <!-- the Tile size slider zooms the whole tile, text and all; a layout transform, so the wrap panel makes room -->
+        <Border.LayoutTransform>
+          <ScaleTransform ScaleX="{Binding DataContext.Settings.TileScale, RelativeSource={RelativeSource AncestorType=Window}}"
+                          ScaleY="{Binding DataContext.Settings.TileScale, RelativeSource={RelativeSource AncestorType=Window}}" />
+        </Border.LayoutTransform>
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
         </Border.InputBindings>
@@ -167,6 +173,10 @@
     <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+          <Slider Width="120" VerticalAlignment="Center" Margin="0,0,16,0" Minimum="{x:Static settings:SettingsViewModel.MinTileScale}"
+                  Maximum="{x:Static settings:SettingsViewModel.MaxTileScale}" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                  Value="{Binding DataContext.Settings.TileScale, RelativeSource={RelativeSource AncestorType=Window}}" />
           <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
           <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
           <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />

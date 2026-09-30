@@ -30,6 +30,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _storePayloads;
     [ObservableProperty] private long? _fiveHourBudgetTokens;
 
+    /// <summary>How big the Yard draws its tiles: 1 is their normal size. The slider in the Yard's header sets it.</summary>
+    [ObservableProperty] private double _tileScale = 1;
+
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, AppPaths paths, ClaudeCodePaths claude,
         ILogger<SettingsViewModel> logger)
     {
@@ -61,6 +64,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
+            TileScale = ClampTileScale(await _settings.GetAsync<double?>(SettingKeys.TileScale, ct));
         }
         catch (Exception ex)
         {
@@ -145,6 +149,15 @@ public sealed partial class SettingsViewModel : ObservableObject
         Persist(SettingKeys.FiveHourBudgetTokens, value);
         BudgetChanged?.Invoke(value);
     }
+
+    public const double MinTileScale = 0.75;
+    public const double MaxTileScale = 1.5;
+
+    /// <summary>A stored value outside the slider's range (edited by hand, or from a build with another range) is pulled into it.</summary>
+    public static double ClampTileScale(double? value) => value is { } v && double.IsFinite(v) ? Math.Clamp(v, MinTileScale, MaxTileScale) : 1;
+
+    /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
+    partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
 
     partial void OnRelayExecutableChanged(string value)
     {

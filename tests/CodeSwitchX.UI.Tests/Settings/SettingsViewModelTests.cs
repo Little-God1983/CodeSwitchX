@@ -81,6 +81,34 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.StorePayloads, false, Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task The_tile_size_is_loaded_and_saved()
+    {
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.25));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.TileScale.ShouldBe(1.25);
+
+        _vm.TileScale = 0.9;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.TileScale, 0.9, Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().SetAsync(SettingKeys.TileScale, 1.25, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData(0.1, SettingsViewModel.MinTileScale)]
+    [InlineData(9.0, SettingsViewModel.MaxTileScale)]
+    [InlineData(double.NaN, 1)]
+    public async Task A_missing_or_out_of_range_tile_size_loads_as_one_the_slider_can_show(double? stored, double shown)
+    {
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.TileScale.ShouldBe(shown);
+    }
+
     /// <summary>Bounded: a queued save that never finishes must fail this test, not hang the run.</summary>
     private async Task FlushAsync()
     {
