@@ -244,8 +244,7 @@ public sealed class HotkeyService
         if (!_isKeyDown(PushToTalk.VirtualKey) && _isForegroundElevated())
         {
             _talkRelease?.Stop();
-            raven.PressMic(TalkInput.Hotkey);
-            _ = raven.ReleaseMicAsync(TalkInput.Hotkey);
+            _ = raven.TapMic(TalkInput.Hotkey);
             if (!_unseenReleaseNoted && raven.State == RavenState.Listening)
             {
                 _unseenReleaseNoted = true;

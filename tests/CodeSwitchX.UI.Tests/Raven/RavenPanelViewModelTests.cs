@@ -134,6 +134,26 @@ public sealed class RavenPanelViewModelTests
         vm.Log.Count(l => l.Kind == RavenLogKind.You).ShouldBe(1);
     }
 
+    // Space or Enter on the mic button, and the hotkey over an admin window: a press and its release at once, a tap.
+    [Theory]
+    [InlineData(TalkInput.MicButton)]
+    [InlineData(TalkInput.Hotkey)]
+    public async Task A_tap_latches_and_the_next_tap_stops(TalkInput input)
+    {
+        var vm = await NewVmAsync();
+
+        await vm.TapMic(input);
+        vm.State.ShouldBe(RavenState.Listening, "a tap latches the mic on");
+        Speak();
+        _time.Advance(Hold);
+
+        await WithinAsync(vm.TapMic(input));
+
+        _recorder.Received(1).Stop();
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+    }
+
     // The mouse holds the mic button; the chord pressed and let go meanwhile joins that hold and does not end it.
     [Fact]
     public async Task The_hotkey_pressed_and_released_while_the_mouse_holds_the_mic_does_not_stop_the_recording()

@@ -332,18 +332,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="input">What pressed: its own release is what lets go of it.</param>
     /// <param name="sinceKeyDown">How long ago the key went down, for a hotkey press the UI thread handled late: a hold
     /// is timed from then.</param>
-    public void PressMic(TalkInput input, TimeSpan sinceKeyDown = default)
+    public void PressMic(TalkInput input, TimeSpan sinceKeyDown = default) => _ = Press(input, sinceKeyDown);
+
+    /// <summary><see cref="PressMic"/>; returns the stopped recording's turn in the transcription queue when the press
+    /// stops a latched one.</summary>
+    private Task Press(TalkInput input, TimeSpan sinceKeyDown)
     {
         if (_heldInputs.Count > 0)
         {
             _heldInputs.Add(input);
-            return;
+            return Task.CompletedTask;
         }
 
         if (!PendingStop.IsCompleted)
         {
             AddEntry(RavenLogKind.Note, "Still stopping the last recording. Press again.");
-            return;
+            return Task.CompletedTask;
         }
 
         _heldInputs.Add(input);
@@ -351,10 +355,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             case PushToTalkAction.Start:
                 StartRecording();
-                break;
+                return Task.CompletedTask;
             case PushToTalkAction.Stop:
-                _ = BeginStop();
-                break;
+                return BeginStop();
+            default:
+                return Task.CompletedTask;
         }
     }
 
@@ -370,6 +375,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         return _gesture.Release() == PushToTalkAction.Stop ? BeginStop() : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// A press and its release at once, which the gesture reads as a tap: the first latches the mic on, the next stops
+    /// it. For an input whose release cannot be seen or has no meaning: Space or Enter on the mic button, the hotkey
+    /// while an admin window hides the keyboard. Completes once the recording it stopped has been transcribed.
+    /// </summary>
+    public Task TapMic(TalkInput input)
+    {
+        var pressed = Press(input, TimeSpan.Zero);
+        var released = ReleaseMicAsync(input);
+        return Task.WhenAll(pressed, released);
     }
 
     /// <summary>

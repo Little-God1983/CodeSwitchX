@@ -119,7 +119,6 @@ public partial class RavenPanelView : UserControl
             return;
         }
 
-        _viewModel.PressMic(TalkInput.MicButton);
-        _ = _viewModel.ReleaseMicAsync(TalkInput.MicButton);
+        _ = _viewModel.TapMic(TalkInput.MicButton);
     }
 }
