@@ -46,7 +46,11 @@ public static class HotkeyInterop
 
     public static bool Unregister(nint hwnd, int id) => PInvoke.UnregisterHotKey(new HWND(hwnd), id);
 
-    /// <summary>Whether the key is physically down right now, whichever window has the keyboard: a hotkey's release reaches no window.</summary>
+    /// <summary>
+    /// Whether the key (or mouse button) is physically down right now, whichever window has the keyboard: a hotkey's
+    /// release reaches no window. The one GetAsyncKeyState test in the app. While an elevated window is in front of this
+    /// unelevated process, Windows reads every key as up here (UIPI).
+    /// </summary>
     public static bool IsKeyDown(uint virtualKey) => (PInvoke.GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
     /// <summary>
@@ -63,14 +67,14 @@ public static class HotkeyInterop
     /// </summary>
     public static unsafe bool IsForegroundElevated()
     {
-        var hwnd = PInvoke.GetForegroundWindow();
-        if (hwnd.IsNull)
+        var hwnd = Win32WindowEnumerator.Foreground();
+        if (hwnd == 0)
         {
             return false;
         }
 
         uint pid;
-        PInvoke.GetWindowThreadProcessId(hwnd, &pid);
+        PInvoke.GetWindowThreadProcessId(new HWND(hwnd), &pid);
         if (pid == 0 || pid == (uint)Environment.ProcessId)
         {
             return false;
