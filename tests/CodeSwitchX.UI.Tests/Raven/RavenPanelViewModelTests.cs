@@ -701,6 +701,74 @@ public sealed class RavenPanelViewModelTests
         vm.SelectedMicrophone.ShouldBe(Headset);
     }
 
+    // Pressed right after startup, before the first listing reached the UI thread: a microphone exists, it is only not
+    // known yet. The press records once the listing arrives, without a "no microphone" warning.
+    [Fact]
+    public async Task A_press_while_the_first_listing_is_pending_records_once_it_arrives()
+    {
+        var dispatcher = new QueueingDispatcher();
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher, _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+        var refresh = vm.RefreshMicrophonesAsync();
+        await WithinAsync(dispatcher.Posted);
+
+        vm.PressMic(TalkInput.MicButton);
+
+        vm.State.ShouldBe(RavenState.Listening);
+        vm.Log.ShouldBeEmpty();
+        _recorder.DidNotReceive().Start(Arg.Any<string>());
+        dispatcher.RunAll();
+        await WithinAsync(refresh);
+        await WithinAsync(vm.PendingStart);
+
+        _recorder.Received(1).Start(Headset.Id);
+        vm.Log.ShouldBeEmpty();
+        vm.State.ShouldBe(RavenState.Listening);
+        Speak();
+        dispatcher.RunAll(); // the captured blocks reach the panel through the UI thread
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    [Fact]
+    public async Task A_press_while_a_listing_that_finds_nothing_is_pending_warns_once_it_arrives()
+    {
+        _catalog.List().Returns([]);
+        _catalog.Default().Returns((MicrophoneDevice?)null);
+        var dispatcher = new QueueingDispatcher();
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, dispatcher, _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+        var refresh = vm.RefreshMicrophonesAsync();
+        await WithinAsync(dispatcher.Posted);
+
+        vm.PressMic(TalkInput.MicButton);
+        vm.Log.ShouldBeEmpty("the listing has not arrived yet");
+        dispatcher.RunAll();
+        await WithinAsync(refresh);
+        await WithinAsync(vm.PendingStart);
+
+        vm.Log.Single().Text.ShouldBe("No microphone found. Plug one in or check Windows sound settings.");
+        vm.State.ShouldBe(RavenState.Idle);
+        _recorder.DidNotReceive().Start(Arg.Any<string>());
+        vm.PressMic(TalkInput.MicButton);
+        vm.Log.Count.ShouldBe(2, "the gesture was reset: the next press tries again and warns again");
+    }
+
+    // Nobody awaits the refresh started by a device change: a failure applying its result must still be reported.
+    [Fact]
+    public async Task A_failure_applying_the_listing_is_logged_and_faults_the_refresh()
+    {
+        var logger = new CodeSwitchX.Tests.ListLogger<RavenPanelViewModel>();
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, new ImmediateDispatcher(), _time, logger);
+        vm.Microphones.CollectionChanged += (_, _) => throw new InvalidOperationException("binding broke");
+
+        await Should.ThrowAsync<InvalidOperationException>(() => vm.RefreshMicrophonesAsync().WaitAsync(TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken));
+
+        logger.Entries.ShouldContain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+    }
+
     // Two refreshes whose listings finish out of order: the later listing is the one applied.
     [Fact]
     public async Task A_listing_that_finishes_after_a_newer_one_is_not_applied_over_it()

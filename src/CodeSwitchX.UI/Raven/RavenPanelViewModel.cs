@@ -179,6 +179,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
             catch (Exception ex)
             {
+                // Logged here: nobody awaits the refresh a device change starts, and a fault only in the task is lost.
+                _logger.LogError(ex, "Could not apply the microphone list");
                 applied.TrySetException(ex);
             }
         });
@@ -438,12 +440,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
 
+    private const string NoMicrophoneWarning = "No microphone found. Plug one in or check Windows sound settings.";
+
+    /// <summary>
+    /// Starts listening with the selected microphone. With none selected while a listing is still on its way (a press
+    /// right after startup), the panel listens at once and the capture starts once the listing has been applied; only a
+    /// listing that is done and found nothing warns.
+    /// </summary>
     private void StartRecording()
     {
-        if (SelectedMicrophone is not { } mic)
+        var mic = SelectedMicrophone;
+        if (mic is null && PendingRefresh.IsCompleted)
         {
             ForgetHold();
-            AddEntry(RavenLogKind.Warning, "No microphone found. Plug one in or check Windows sound settings.");
+            AddEntry(RavenLogKind.Warning, NoMicrophoneWarning);
             return;
         }
 
@@ -464,8 +474,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// comes. If the recording is still running by then, the panel returns to idle and forgets the press; if it was
     /// already released, its stop finds nothing to stop. Resumes on the UI thread (its synchronisation context).
     /// </summary>
-    private async Task<bool> StartCaptureAsync(MicrophoneDevice mic, long recording)
+    private async Task<bool> StartCaptureAsync(MicrophoneDevice? known, long recording)
     {
+        if (await MicrophoneOnceListedAsync(known, recording) is not { } mic)
+        {
+            return false;
+        }
+
         try
         {
             await Task.Run(() => _recorder.Start(mic.Id));
@@ -484,6 +499,49 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// The microphone to record from: <paramref name="known"/>, or the one selected once the pending listing has been
+    /// applied. Null, with the warning, when that listing found none; the recording, if it still runs, ends like a start
+    /// that failed.
+    /// </summary>
+    private async Task<MicrophoneDevice?> MicrophoneOnceListedAsync(MicrophoneDevice? known, long recording)
+    {
+        if (known is not null)
+        {
+            return known;
+        }
+
+        try
+        {
+            await PendingRefresh;
+        }
+        catch (Exception)
+        {
+            // Already logged where it happened; whatever was applied is what there is.
+        }
+
+        var current = recording == _recording;
+        if (SelectedMicrophone is { } mic)
+        {
+            if (current)
+            {
+                _recordingMic = mic;
+            }
+
+            return mic;
+        }
+
+        AddEntry(RavenLogKind.Warning, NoMicrophoneWarning);
+        if (current && _capturing)
+        {
+            ForgetHold();
+            _capturing = false;
+            UpdateState();
+        }
+
+        return null;
     }
 
     /// <summary>
