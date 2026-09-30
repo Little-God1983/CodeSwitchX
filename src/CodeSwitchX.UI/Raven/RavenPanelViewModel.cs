@@ -55,6 +55,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _capturing;
     private int _pending;
     private bool _downloading;
+
+    /// <summary>How many clips have been stopped: each stopped clip's number in the transcription queue.</summary>
+    private long _clipsQueued;
+
+    /// <summary>
+    /// Clips numbered up to this one are dropped when their turn comes: they were queued behind a download that failed,
+    /// whose one warning counted them. Without this, each would start a download of its own and fail the same way.
+    /// </summary>
+    private long _droppedThrough;
     private Task _pipeline = Task.CompletedTask;
     private Task<bool> _started = Task.FromResult(false);
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
@@ -347,7 +356,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var words = _vocabularyFetch;
         var stop = StopCaptureAsync(_started);
         PendingStop = stop;
-        var turn = TranscribeInTurnAsync(_pipeline, stop, heardSpeech, words);
+        var number = Interlocked.Increment(ref _clipsQueued);
+        var turn = TranscribeInTurnAsync(_pipeline, number, stop, heardSpeech, words);
         _pipeline = turn;
         return turn;
     }
@@ -499,13 +509,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// in the log in recording order. The awaits resume on the UI thread (its synchronisation context), where the log
     /// and the state live. Never faults, so the clip behind it always gets its turn.
     /// </summary>
-    private async Task TranscribeInTurnAsync(Task previous, Task<RecordedClip?> stopping, bool heardSpeech,
+    private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, bool heardSpeech,
         Task<DictationVocabulary> vocabulary)
     {
         try
         {
             await previous;
             var clip = await stopping;
+            if (number <= Interlocked.Read(ref _droppedThrough))
+            {
+                return; // queued behind a failed download, whose warning counted it
+            }
+
             if (clip is null)
             {
                 return; // the start failed, and has said why
@@ -524,7 +539,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (!_models.IsPresent && !await DownloadModelAsync())
+            if (!_models.IsPresent && !await DownloadModelAsync(number))
             {
                 return;
             }
@@ -571,7 +586,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    private async Task<bool> DownloadModelAsync()
+    /// <summary>
+    /// Downloads the model for clip <paramref name="number"/>. A failure drops every clip queued behind it with this one
+    /// warning; a clip stopped after the failure, the next press, tries the download again.
+    /// </summary>
+    private async Task<bool> DownloadModelAsync(long number)
     {
         const string Prefix = "Downloading the speech model (1.6 GB)… ";
         var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
@@ -585,7 +604,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "The speech model could not be downloaded");
-            AddEntry(RavenLogKind.Warning, $"The speech model could not be downloaded: {ex.Message}. Press the mic to try again.");
+            var queued = Interlocked.Read(ref _clipsQueued);
+            Interlocked.Exchange(ref _droppedThrough, queued);
+            var dropped = (queued - number) switch
+            {
+                0 => "",
+                1 => " 1 waiting recording was dropped.",
+                var n => $" {n} waiting recordings were dropped.",
+            };
+            AddEntry(RavenLogKind.Warning, $"The speech model could not be downloaded: {ex.Message}.{dropped} Press the mic to try again.");
             return false;
         }
         finally

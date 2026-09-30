@@ -52,6 +52,24 @@ public sealed class RavenPanelViewModelTests
         await vm.ReleaseMicAsync(TalkInput.MicButton);
     }
 
+    /// <summary>Holds and releases the mic <paramref name="count"/> times, each once the last capture has stopped; the
+    /// returned tasks complete as each clip's turn in the transcription queue ends.</summary>
+    private async Task<List<Task>> QueueClipsAsync(RavenPanelViewModel vm, int count)
+    {
+        var releases = new List<Task>();
+        for (var i = 0; i < count; i++)
+        {
+            vm.PressMic(TalkInput.MicButton);
+            await WithinAsync(vm.PendingStart);
+            Speak();
+            _time.Advance(Hold);
+            releases.Add(vm.ReleaseMicAsync(TalkInput.MicButton));
+            await WithinAsync(vm.PendingStop);
+        }
+
+        return releases;
+    }
+
     /// <summary>A second of someone talking: loud enough, long enough, for the speech gate.</summary>
     private void Speak(double seconds = 1) => Blocks(0.1f, seconds);
 
@@ -266,6 +284,55 @@ public sealed class RavenPanelViewModelTests
         await HoldAsync(vm);
 
         await _models.Received(2).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+    }
+
+    // Three clips were recorded while the first-run download ran, then the network dropped. Each queued clip used to
+    // start a download of its own, fail, and warn: one failure is one warning, and the next press tries again.
+    [Fact]
+    public async Task A_failed_download_drops_the_clips_queued_behind_it_with_one_warning_and_the_next_press_tries_again()
+    {
+        var download = new TaskCompletionSource();
+        var downloading = new TaskCompletionSource();
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            downloading.TrySetResult();
+            return download.Task;
+        });
+        var vm = NewVm();
+        var releases = await QueueClipsAsync(vm, 3);
+
+        await WithinAsync(downloading.Task);
+        download.SetException(new IOException("network down"));
+        await WithinAsync(Task.WhenAll(releases));
+
+        await _models.Received(1).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        vm.Log.Where(l => l.Kind == RavenLogKind.Warning).Select(l => l.Text).ShouldBe(
+            ["The speech model could not be downloaded: network down. 2 waiting recordings were dropped. Press the mic to try again."]);
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        vm.State.ShouldBe(RavenState.Idle);
+
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        await HoldAsync(vm);
+
+        await _models.Received(2).DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+        vm.Log[^1].Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    [Fact]
+    public async Task A_failed_download_with_one_clip_waiting_says_so_in_the_singular()
+    {
+        var download = new TaskCompletionSource();
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(download.Task);
+        var vm = NewVm();
+        var releases = await QueueClipsAsync(vm, 2);
+
+        download.SetException(new IOException("network down"));
+        await WithinAsync(Task.WhenAll(releases));
+
+        vm.Log.Single(l => l.Kind == RavenLogKind.Warning).Text.ShouldBe(
+            "The speech model could not be downloaded: network down. 1 waiting recording was dropped. Press the mic to try again.");
     }
 
     [Fact]
