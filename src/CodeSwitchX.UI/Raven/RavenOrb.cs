@@ -15,6 +15,12 @@ namespace CodeSwitchX.UI.Raven;
 /// group updates the screen without InvalidateVisual, which would arrange the element again on every frame and so run
 /// a layout pass, and every LayoutUpdated handler in the window, some thirty times a second.
 /// </para>
+/// <para>
+/// Only the wave ring's geometry is built per frame. The pens, the glow and the arcs are frozen once and reused: the pens
+/// per alpha byte (a handful of fixed alphas), the glow per alpha byte of its centre (the level moves it through some
+/// eighty values) and the arcs per scale, turned into place by a transform. Pens and arcs are dropped when the scale
+/// changes; the glow is mapped to the ellipse it fills and does not depend on the size.
+/// </para>
 /// </summary>
 public sealed class RavenOrb : FrameworkElement
 {
@@ -45,6 +51,10 @@ public sealed class RavenOrb : FrameworkElement
     private double _shownLevel;
     private Size _coreBrushSize;
     private RadialGradientBrush? _coreBrush;
+    private readonly Dictionary<(byte Alpha, double Thickness), Pen> _pens = [];
+    private readonly Dictionary<byte, Brush> _glows = [];
+    private double _cachedScale = double.NaN;
+    private StreamGeometry[]? _arcs;
 
     public RavenOrb()
     {
@@ -195,6 +205,13 @@ public sealed class RavenOrb : FrameworkElement
         }
 
         var scale = size / CanvasSize;
+        if (scale != _cachedScale)
+        {
+            _cachedScale = scale;
+            _pens.Clear();
+            _arcs = null;
+        }
+
         var center = new Point(ActualWidth / 2, ActualHeight / 2);
         var t = _hooked ? _seconds : 0;
         var amp = State == RavenState.Listening ? (_hooked ? _shownLevel : Math.Clamp(Level, 0, 1)) : 0;
@@ -215,28 +232,33 @@ public sealed class RavenOrb : FrameworkElement
         dc.DrawEllipse(CoreBrush(center, scale), null, center, core, core);
     }
 
-    private static void DrawGlow(DrawingContext dc, Point center, double scale, double amp)
+    /// <summary>
+    /// The glow brush keeps its default mapping (relative to the ellipse it fills: centred, radius a half), which draws
+    /// the same as one mapped to the absolute centre and radius, so it only depends on the alpha of its centre.
+    /// </summary>
+    private void DrawGlow(DrawingContext dc, Point center, double scale, double amp)
     {
         var radius = 160 * scale;
-        var glow = new RadialGradientBrush
+        var alpha = AlphaByte(0.28 + amp * 0.3);
+        if (!_glows.TryGetValue(alpha, out var glow))
         {
-            MappingMode = BrushMappingMode.Absolute,
-            Center = center,
-            GradientOrigin = center,
-            RadiusX = radius,
-            RadiusY = radius,
-            GradientStops =
+            glow = new RadialGradientBrush
             {
-                new GradientStop(WithAlpha(0.28 + amp * 0.3), 10.0 / 160),
-                new GradientStop(WithAlpha(0), 1),
-            },
-        };
-        glow.Freeze();
+                GradientStops =
+                {
+                    new GradientStop(Color.FromArgb(alpha, Voice.R, Voice.G, Voice.B), 10.0 / 160),
+                    new GradientStop(WithAlpha(0), 1),
+                },
+            };
+            glow.Freeze();
+            _glows[alpha] = glow;
+        }
+
         dc.DrawEllipse(glow, null, center, radius, radius);
     }
 
     /// <summary>A closed ring whose radius is the sum of three sines, pushed out by the level.</summary>
-    private static void DrawWaveRing(DrawingContext dc, Point center, double scale, double t, double amp, double breathe)
+    private void DrawWaveRing(DrawingContext dc, Point center, double scale, double t, double amp, double breathe)
     {
         const int Steps = 120;
         var geometry = new StreamGeometry();
@@ -263,24 +285,39 @@ public sealed class RavenOrb : FrameworkElement
         dc.DrawGeometry(null, VoicePen(0.9, Math.Max(1, 2.5 * scale)), geometry);
     }
 
-    private static void DrawArcs(DrawingContext dc, Point center, double scale, double t)
+    /// <summary>Three arcs of fixed length that turn: each is built once per scale, starting at angle 0 around the origin,
+    /// and turned to its start angle and moved to the centre as it is drawn.</summary>
+    private void DrawArcs(DrawingContext dc, Point center, double scale, double t)
     {
+        _arcs ??= [ArcGeometry(0, scale), ArcGeometry(1, scale), ArcGeometry(2, scale)];
         for (var k = 0; k < 3; k++)
         {
-            var radius = (Base + 34 + k * 10) * scale;
             var start = t * (2.2 + k * 0.9) + k * 2;
-            var end = start + 1.1 + k * 0.4;
-            var geometry = new StreamGeometry();
-            using (var ctx = geometry.Open())
-            {
-                ctx.BeginFigure(new Point(center.X + Math.Cos(start) * radius, center.Y + Math.Sin(start) * radius), isFilled: false, isClosed: false);
-                ctx.ArcTo(new Point(center.X + Math.Cos(end) * radius, center.Y + Math.Sin(end) * radius), new Size(radius, radius), 0,
-                    isLargeArc: false, SweepDirection.Clockwise, isStroked: true, isSmoothJoin: false);
-            }
-
-            geometry.Freeze();
-            dc.DrawGeometry(null, VoicePen(0.8 - k * 0.22, Math.Max(1, 3 * scale)), geometry);
+            var placement = Matrix.Identity;
+            placement.Rotate(start * 180 / Math.PI);
+            placement.Translate(center.X, center.Y);
+            var transform = new MatrixTransform(placement);
+            transform.Freeze();
+            dc.PushTransform(transform);
+            dc.DrawGeometry(null, VoicePen(0.8 - k * 0.22, Math.Max(1, 3 * scale)), _arcs[k]);
+            dc.Pop();
         }
+    }
+
+    private static StreamGeometry ArcGeometry(int k, double scale)
+    {
+        var radius = (Base + 34 + k * 10) * scale;
+        var sweep = 1.1 + k * 0.4;
+        var geometry = new StreamGeometry();
+        using (var ctx = geometry.Open())
+        {
+            ctx.BeginFigure(new Point(radius, 0), isFilled: false, isClosed: false);
+            ctx.ArcTo(new Point(Math.Cos(sweep) * radius, Math.Sin(sweep) * radius), new Size(radius, radius), 0,
+                isLargeArc: false, SweepDirection.Clockwise, isStroked: true, isSmoothJoin: false);
+        }
+
+        geometry.Freeze();
+        return geometry;
     }
 
     /// <summary>The core's gradient only depends on the size; it is built again when that changes.</summary>
@@ -310,12 +347,23 @@ public sealed class RavenOrb : FrameworkElement
         return _coreBrush;
     }
 
-    private static Color WithAlpha(double alpha) => Color.FromArgb((byte)Math.Round(Math.Clamp(alpha, 0, 1) * 255), Voice.R, Voice.G, Voice.B);
+    private static byte AlphaByte(double alpha) => (byte)Math.Round(Math.Clamp(alpha, 0, 1) * 255);
 
-    private static Pen VoicePen(double alpha, double thickness)
+    private static Color WithAlpha(double alpha) => Color.FromArgb(AlphaByte(alpha), Voice.R, Voice.G, Voice.B);
+
+    /// <summary>One frozen pen per alpha byte and thickness; the thicknesses follow the scale, whose change clears them.</summary>
+    private Pen VoicePen(double alpha, double thickness)
     {
-        var pen = new Pen(new SolidColorBrush(WithAlpha(alpha)), thickness) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-        pen.Freeze();
+        var key = (AlphaByte(alpha), thickness);
+        if (!_pens.TryGetValue(key, out var pen))
+        {
+            var brush = new SolidColorBrush(Color.FromArgb(key.Item1, Voice.R, Voice.G, Voice.B));
+            brush.Freeze();
+            pen = new Pen(brush, thickness) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            pen.Freeze();
+            _pens[key] = pen;
+        }
+
         return pen;
     }
 }
