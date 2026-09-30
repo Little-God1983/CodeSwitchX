@@ -46,9 +46,26 @@ public sealed class RavenPanelViewModelTests
     private async Task HoldAsync(RavenPanelViewModel vm)
     {
         vm.PressMic();
+        Speak();
         _time.Advance(Hold);
         await vm.ReleaseMicAsync();
     }
+
+    /// <summary>A second of someone talking: loud enough, long enough, for the speech gate.</summary>
+    private void Speak(double seconds = 1) => Blocks(0.1f, seconds);
+
+    /// <summary>The quiet room of the RØDE input, at its loudest block.</summary>
+    private void RoomNoise(double seconds) => Blocks(0.0004f, seconds);
+
+    private void Blocks(float rms, double seconds)
+    {
+        for (var i = 0; i < (int)Math.Round(seconds * 100); i++)
+        {
+            Block(rms);
+        }
+    }
+
+    private static async Task WithinAsync(Task task) => await task.WaitAsync(TimeSpan.FromSeconds(5));
 
     /// <summary>One block the way WASAPI hands it over on the RØDE Connect input: 10 ms.</summary>
     private void Block(float rms) => _recorder.BlockCaptured += Raise.Event<EventHandler<CapturedBlock>>(_recorder, new CapturedBlock(rms, TimeSpan.FromMilliseconds(10)));
@@ -62,6 +79,7 @@ public sealed class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Listening);
         vm.Caption.ShouldBe("Listening…");
         _recorder.Received(1).Start(Headset.Id);
+        Speak();
         _time.Advance(Hold);
         await vm.ReleaseMicAsync();
 
@@ -81,6 +99,7 @@ public sealed class RavenPanelViewModelTests
         vm.PressMic();
         await vm.ReleaseMicAsync();
         vm.State.ShouldBe(RavenState.Listening);
+        Speak();
         vm.PressMic();
 
         vm.State.ShouldBe(RavenState.Idle);
@@ -253,6 +272,7 @@ public sealed class RavenPanelViewModelTests
         Transcribes(pending.Task);
         var vm = NewVm();
         vm.PressMic();
+        Speak();
         _time.Advance(Hold);
         var release = vm.ReleaseMicAsync();
         vm.State.ShouldBe(RavenState.Transcribing);
@@ -387,6 +407,7 @@ public sealed class RavenPanelViewModelTests
     {
         var vm = NewVm();
         vm.PressMic();
+        Speak();
 
         _time.Advance(TimeSpan.FromSeconds(119));
         vm.State.ShouldBe(RavenState.Listening);
@@ -399,16 +420,17 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task A_load_failure_names_the_reason_without_suggesting_a_smaller_model()
+    public async Task A_load_failure_names_the_reason_and_how_to_download_the_model_again()
     {
-        var load = new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory"));
+        _models.ModelPath.Returns(@"c:\m\ggml.bin");
+        var load = new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."));
         Transcribes(Task.FromException<DictationResult>(load));
         var vm = NewVm();
 
         await HoldAsync(vm);
 
         vm.Log.Last().Kind.ShouldBe(RavenLogKind.Warning);
-        vm.Log.Last().Text.ShouldBe("The speech model could not be loaded: out of memory");
+        vm.Log.Last().Text.ShouldBe(@"The speech model could not be loaded: out of memory. Delete c:\m\ggml.bin and press the mic to download it again.");
         vm.Log.Last().Text.ShouldNotContain("smaller model");
         vm.State.ShouldBe(RavenState.Idle);
     }
@@ -471,13 +493,192 @@ public sealed class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void Starting_a_recording_warms_the_model_up()
+    public async Task Starting_a_recording_warms_the_model_up()
     {
+        var warmed = new TaskCompletionSource();
+        _dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            warmed.TrySetResult();
+            return Task.CompletedTask;
+        });
         var vm = NewVm();
 
         vm.PressMic();
 
-        _dictation.Received(1).WarmUpAsync(Arg.Any<CancellationToken>());
+        await WithinAsync(warmed.Task);
+    }
+
+    // Loading the model takes seconds. Whatever the warm-up does on the calling thread, the press must not wait for it.
+    [Fact]
+    public async Task A_warm_up_that_blocks_does_not_hold_up_the_press_and_a_tap_still_latches()
+    {
+        using var hold = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource();
+        _dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            entered.TrySetResult();
+            hold.Wait(TimeSpan.FromSeconds(10));
+            return Task.CompletedTask;
+        });
+        var vm = NewVm();
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        vm.PressMic();
+        await vm.ReleaseMicAsync();
+
+        clock.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2));
+        vm.State.ShouldBe(RavenState.Listening, "a quick tap latches");
+        await WithinAsync(entered.Task);
+        hold.Set();
+    }
+
+    // The hotkey works while the panel is collapsed, so the first clip after launch must be fast either way.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_model_is_warmed_up_five_seconds_after_startup_open_or_collapsed(bool open)
+    {
+        var warmed = new TaskCompletionSource();
+        _dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            warmed.TrySetResult();
+            return Task.CompletedTask;
+        });
+        var vm = NewVm();
+        vm.IsOpen = open;
+
+        vm.ScheduleWarmUp();
+        _time.Advance(TimeSpan.FromSeconds(4.9));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        warmed.Task.IsCompleted.ShouldBeFalse();
+        _time.Advance(TimeSpan.FromSeconds(0.1));
+
+        await WithinAsync(warmed.Task);
+    }
+
+    // No model yet: the first press downloads it. A startup warm-up has nothing to load.
+    [Fact]
+    public async Task There_is_no_startup_warm_up_without_a_model()
+    {
+        _models.IsPresent.Returns(false);
+        var vm = NewVm();
+
+        vm.ScheduleWarmUp();
+        _time.Advance(TimeSpan.FromSeconds(10));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        await _dictation.DidNotReceive().WarmUpAsync(Arg.Any<CancellationToken>());
+    }
+
+    // Whisper makes up words on a clip with nobody talking ("Oh.", or the vocabulary read back).
+    [Fact]
+    public async Task A_quiet_clip_is_not_transcribed_and_says_so()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+        RoomNoise(3);
+        Speak(0.4); // a cough is not dictation
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync();
+
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Note);
+        vm.Log.Single().Text.ShouldBe("I didn't hear anything.");
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Caption.ShouldBe(RavenPanelViewModel.IdleCaption);
+    }
+
+    [Fact]
+    public async Task A_clip_with_speech_between_pauses_is_transcribed()
+    {
+        var vm = NewVm();
+        vm.PressMic();
+        RoomNoise(1);
+        Speak(0.3);
+        RoomNoise(0.5);
+        Speak(0.3);
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync();
+
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.You);
+    }
+
+    [Fact]
+    public async Task A_quiet_clip_does_not_start_the_model_download()
+    {
+        _models.IsPresent.Returns(false);
+        var vm = NewVm();
+        vm.PressMic();
+        RoomNoise(2);
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync();
+
+        await _models.DidNotReceive().DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_speech_of_one_recording_does_not_count_for_the_next()
+    {
+        var vm = NewVm();
+        await HoldAsync(vm);
+        vm.PressMic();
+        RoomNoise(1);
+        _time.Advance(Hold);
+
+        await vm.ReleaseMicAsync();
+
+        vm.Log.Last().Text.ShouldBe("I didn't hear anything.");
+        await _dictation.Received(1).TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_caption_says_downloading_while_the_model_downloads()
+    {
+        _models.IsPresent.Returns(false);
+        string? caption = null;
+        RavenPanelViewModel? vm = null;
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            caption = vm!.Caption;
+            return Task.CompletedTask;
+        });
+        vm = NewVm();
+
+        await HoldAsync(vm);
+
+        caption.ShouldBe("Downloading the speech model…");
+    }
+
+    // A stopped Windows audio service makes the device enumeration throw a COMException. The app must still start.
+    [Fact]
+    public void Windows_audio_being_unavailable_warns_and_leaves_no_microphones()
+    {
+        _catalog.List().Returns(_ => throw new System.Runtime.InteropServices.COMException("The audio service is not running."));
+
+        var vm = NewVm();
+
+        vm.Microphones.ShouldBeEmpty();
+        vm.SelectedMicrophone.ShouldBeNull();
+        vm.Log.Single().Kind.ShouldBe(RavenLogKind.Warning);
+        vm.Log.Single().Text.ShouldBe("Windows audio is not available: The audio service is not running.");
+    }
+
+    [Fact]
+    public void Windows_audio_failing_on_the_default_device_is_caught_too()
+    {
+        var vm = NewVm();
+        vm.SelectedMicrophone = Desk;
+        _catalog.Default().Returns(_ => throw new System.Runtime.InteropServices.COMException("gone"));
+
+        vm.RefreshMicrophones();
+
+        vm.Microphones.ShouldBeEmpty();
+        vm.SelectedMicrophone.ShouldBeNull();
+        vm.PreferredMicrophone.ShouldBe(Desk, "the user's choice outlives the audio service");
+        vm.Log.Single().Text.ShouldBe("Windows audio is not available: gone");
     }
 
     [Fact]

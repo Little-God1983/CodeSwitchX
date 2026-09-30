@@ -70,9 +70,12 @@ public partial class MainWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         _hotkeys.Attach(hwnd, _shell);
-        foreach (var binding in _hotkeys.FailedBindings.Where(HotkeyService.IsRavenBinding))
+        foreach (var binding in _hotkeys.FailedBindings)
         {
-            _shell.Raven.Note($"{binding.Label} ({binding.Keys}) is taken by another app. Use the mic button instead.");
+            if (HotkeyService.RavenFailureNote(binding) is { } note)
+            {
+                _shell.Raven.Note(note);
+            }
         }
 
         _tray.Attach(this, _shell);

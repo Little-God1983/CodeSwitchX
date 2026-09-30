@@ -36,6 +36,8 @@ public sealed class ShellTestHarness
     public IVsCodeLauncher Launcher { get; } = Substitute.For<IVsCodeLauncher>();
     public IMicrophoneCatalog Microphones { get; } = Substitute.For<IMicrophoneCatalog>();
     public IMicrophoneRecorder Recorder { get; } = Substitute.For<IMicrophoneRecorder>();
+    public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
+    public IWhisperModelStore Models { get; } = Substitute.For<IWhisperModelStore>();
     public WorkspaceResolver Resolver { get; } = new();
     public SessionEngine Engine { get; }
     public HostManager Host { get; }
@@ -69,7 +71,7 @@ public sealed class ShellTestHarness
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), paths, claude, NullLogger<SettingsViewModel>.Instance);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
         Microphones.List().Returns([]);
-        var raven = new RavenPanelViewModel(Microphones, Recorder, Substitute.For<IDictationService>(), Substitute.For<IWhisperModelStore>(),
+        var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance);
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Host, NullLogger<ShellViewModel>.Instance);
     }

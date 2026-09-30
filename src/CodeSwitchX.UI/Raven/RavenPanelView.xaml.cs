@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -24,12 +25,23 @@ public partial class RavenPanelView : UserControl
         if (_viewModel is not null)
         {
             _viewModel.Log.CollectionChanged -= OnLogChanged;
+            _viewModel.PropertyChanged -= OnViewModelChanged;
         }
 
         _viewModel = viewModel;
         if (_viewModel is not null)
         {
             _viewModel.Log.CollectionChanged += OnLogChanged;
+            _viewModel.PropertyChanged += OnViewModelChanged;
+        }
+    }
+
+    /// <summary>Lines added while the panel was collapsed scrolled a log nobody saw: show the newest once it is open again.</summary>
+    private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RavenPanelViewModel.IsOpen) && _viewModel is { IsOpen: true })
+        {
+            ScrollLogToEnd();
         }
     }
 
@@ -38,9 +50,12 @@ public partial class RavenPanelView : UserControl
     {
         if (e.Action == NotifyCollectionChangedAction.Add)
         {
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => LogScroller.ScrollToEnd());
+            ScrollLogToEnd();
         }
     }
+
+    /// <summary>Once the layout has caught up with the change.</summary>
+    private void ScrollLogToEnd() => Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => LogScroller.ScrollToEnd());
 
     /// <summary>
     /// Press on mouse-down, release on mouse-up. The mouse is captured, so a hold that drifts off the button still ends

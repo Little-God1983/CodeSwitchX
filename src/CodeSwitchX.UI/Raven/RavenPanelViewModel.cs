@@ -16,6 +16,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The recorder stops capturing at this length without telling anyone, so the panel ends the recording itself.</summary>
     public static readonly TimeSpan MaximumRecording = TimeSpan.FromSeconds(120);
 
+    /// <summary>How long after startup the model is warmed up: long enough to leave the startup itself alone.</summary>
+    public static readonly TimeSpan StartupWarmUpDelay = TimeSpan.FromSeconds(5);
+
     private static readonly TimeSpan MinimumClip = TimeSpan.FromMilliseconds(500);
 
     private readonly IMicrophoneCatalog _catalog;
@@ -28,8 +31,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly ILogger<RavenPanelViewModel> _logger;
     private readonly PushToTalkGesture _gesture;
     private readonly SilentMicWatch _silence = new();
+    private readonly SpeechGate _speech = new();
 
     private ITimer? _limitTimer;
+    private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
     private bool _silentWarned;
     private bool _refreshing;
@@ -90,7 +95,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Re-lists the microphones and applies the stored choice; the shell calls this once the settings are loaded.</summary>
     public void RefreshMicrophones()
     {
-        var devices = _catalog.List();
+        IReadOnlyList<MicrophoneDevice> devices;
+        MicrophoneDevice? windowsDefault;
+        try
+        {
+            devices = _catalog.List();
+            windowsDefault = _catalog.Default();
+        }
+        catch (Exception ex)
+        {
+            // A stopped Windows audio service makes the enumeration throw (a COMException). The app still starts; the
+            // panel says why it has no microphones. The stored choice stays for when the service is back.
+            _logger.LogWarning(ex, "Could not list the microphones");
+            ClearMicrophones();
+            AddEntry(RavenLogKind.Warning, $"Windows audio is not available: {ex.Message}");
+            return;
+        }
+
         var previous = SelectedMicrophone;
         var preferred = PreferredMicrophone;
         MicrophoneChoiceResult choice;
@@ -104,7 +125,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 Microphones.Add(device);
             }
 
-            choice = MicrophoneChoice.Resolve(devices, preferred, _catalog.Default());
+            choice = MicrophoneChoice.Resolve(devices, preferred, windowsDefault);
             SelectedMicrophone = choice.Device;
         }
         finally
@@ -129,6 +150,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    private void ClearMicrophones()
+    {
+        _refreshing = true;
+        try
+        {
+            Microphones.Clear();
+            SelectedMicrophone = null;
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
     partial void OnSelectedMicrophoneChanged(MicrophoneDevice? value)
     {
         if (!_refreshing && value is not null)
@@ -139,6 +174,26 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     [RelayCommand]
     private void TogglePanel() => IsOpen = !IsOpen;
+
+    /// <summary>
+    /// Warms the model up <see cref="StartupWarmUpDelay"/> from now, if it is on disk by then, so that the first clip
+    /// after launch does not pay seconds for loading it. Whether the panel is open or not: the hotkey works either way.
+    /// The shell calls this once it has initialised.
+    /// </summary>
+    public void ScheduleWarmUp()
+    {
+        _warmUpTimer?.Dispose();
+        _warmUpTimer = _time.CreateTimer(_ =>
+        {
+            if (_models.IsPresent)
+            {
+                WarmUpInBackground();
+            }
+        }, null, StartupWarmUpDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>Never on the calling thread, however the service behaves: loading the model takes seconds.</summary>
+    private void WarmUpInBackground() => _ = Task.Run(() => _dictation.WarmUpAsync(CancellationToken.None));
 
     /// <summary>Button mouse-down or hotkey down.</summary>
     public void PressMic()
@@ -204,9 +259,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _recordingMic = mic;
         _silentWarned = false;
         _silence.Reset();
+        _speech.Reset();
         State = RavenState.Listening;
         Caption = "Listening…";
-        _ = _dictation.WarmUpAsync(CancellationToken.None);
+        WarmUpInBackground();
 
         var id = ++_recordingId;
         _limitTimer?.Dispose();
@@ -232,6 +288,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Level = AudioMath.LevelOf(block.Rms);
+        _speech.Step(block.Rms, block.Duration);
         if (_silence.Step(block.Rms, block.Duration) == SignalEvent.Silent && !_silentWarned)
         {
             _silentWarned = true;
@@ -272,6 +329,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
+            if (!_speech.HeardSpeech)
+            {
+                AddEntry(RavenLogKind.Note, "I didn't hear anything.");
+                return;
+            }
+
             if (!_models.IsPresent && !await DownloadModelAsync())
             {
                 return;
@@ -287,8 +350,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         catch (DictationModelLoadException ex)
         {
+            // A damaged download fails here on every press, and nothing else ever replaces the file: say which to delete.
             _logger.LogWarning(ex, "The speech model could not be loaded");
-            AddEntry(RavenLogKind.Warning, $"The speech model could not be loaded: {ex.InnerException?.Message ?? ex.Message}");
+            var reason = (ex.InnerException?.Message ?? ex.Message).TrimEnd().TrimEnd('.');
+            AddEntry(RavenLogKind.Warning,
+                $"The speech model could not be loaded: {reason}. Delete {_models.ModelPath} and press the mic to download it again.");
         }
         catch (Exception ex)
         {
@@ -304,6 +370,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task<bool> DownloadModelAsync()
     {
         const string Prefix = "Downloading the speech model (1.6 GB)… ";
+        Caption = "Downloading the speech model…";
         var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
         var last = 0;
         var progress = new PostedProgress(_dispatcher, value =>
@@ -328,6 +395,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         entry.Text = "Speech model downloaded.";
+        Caption = "Transcribing…";
         return true;
     }
 

@@ -79,8 +79,18 @@ public sealed class HotkeyService
     /// <summary>The bindings the last <see cref="Attach"/> could not register: another application holds them.</summary>
     public IReadOnlyList<HotkeyBinding> FailedBindings { get; private set; } = [];
 
-    /// <summary>Push-to-talk and the panel toggle, whose loss the Raven panel explains.</summary>
-    public static bool IsRavenBinding(HotkeyBinding binding) => binding.Id is PushToTalkId or ToggleRavenId;
+    /// <summary>What the Raven panel says when this binding is taken by another app, with the button that does the same
+    /// job; null for a binding that is not Raven's.</summary>
+    public static string? RavenFailureNote(HotkeyBinding binding)
+    {
+        var advice = binding.Id switch
+        {
+            PushToTalkId => "Use the mic button instead.",
+            ToggleRavenId => "Use the arrow button instead.",
+            _ => null,
+        };
+        return advice is null ? null : $"{binding.Label} ({binding.Keys}) is taken by another app. {advice}";
+    }
 
     private static HotkeyBinding[] BuildBindings()
     {

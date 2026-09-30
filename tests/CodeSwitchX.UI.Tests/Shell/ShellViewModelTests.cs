@@ -149,6 +149,26 @@ public class ShellViewModelTests
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenMicrophone, desk, Arg.Any<CancellationToken>());
     }
 
+    // The first clip after launch pays for loading the model unless something loads it first. Five seconds leave the
+    // startup itself alone.
+    [Fact]
+    public async Task The_speech_model_is_warmed_up_a_few_seconds_after_startup()
+    {
+        _h.Models.IsPresent.Returns(true);
+        var warmed = new TaskCompletionSource();
+        _h.Dictation.WarmUpAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            warmed.TrySetResult();
+            return Task.CompletedTask;
+        });
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        warmed.Task.IsCompleted.ShouldBeFalse();
+
+        _h.Time.Advance(TimeSpan.FromSeconds(5));
+
+        await warmed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public void The_window_title_names_the_build()
     {

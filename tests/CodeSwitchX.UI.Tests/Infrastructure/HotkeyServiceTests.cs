@@ -59,6 +59,18 @@ public class HotkeyServiceTests
         toggle.Keys.ShouldBe("Ctrl+Alt+J");
     }
 
+    // Each Raven hotkey has its own button to fall back on: the mic for push-to-talk, the arrow for folding the panel.
+    [Fact]
+    public void A_taken_raven_hotkey_is_explained_with_the_button_that_does_its_job()
+    {
+        var talk = HotkeyService.Bindings.Single(b => b.Id == 21);
+        var fold = HotkeyService.Bindings.Single(b => b.Id == 22);
+
+        HotkeyService.RavenFailureNote(talk).ShouldBe("Push to talk (Ctrl+Shift+Space) is taken by another app. Use the mic button instead.");
+        HotkeyService.RavenFailureNote(fold).ShouldBe("Collapse or expand Raven (Ctrl+Alt+J) is taken by another app. Use the arrow button instead.");
+        HotkeyService.RavenFailureNote(HotkeyService.Bindings.Single(b => b.Label == "Ctrl+Alt+Y")).ShouldBeNull("not Raven's to explain");
+    }
+
     [Fact]
     public void Every_binding_names_its_keys()
     {

@@ -101,6 +101,7 @@ public sealed partial class ShellViewModel : ObservableObject
                 Settings.RavenMicrophone = Raven.PreferredMicrophone;
             }
         };
+        Raven.ScheduleWarmUp();
         _ = AutoStartAsync();
     }
 
