@@ -41,7 +41,7 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
             try
             {
                 device = _enumerator.GetDevice(deviceId);
-                capture = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+                capture = CreateCapture(device);
                 var session = new Session(this, device, capture);
                 capture.DataAvailable += session.OnData;
                 capture.RecordingStopped += session.OnStopped;
@@ -75,6 +75,23 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
         _enumerator.Dispose();
     }
 
+    // WasapiCapture remembers SynchronizationContext.Current and posts RecordingStopped through it. Built on the UI thread
+    // that would queue the event behind a Stop() that is waiting for it, so build it with no context: every event then
+    // stays on the capture thread.
+    private static WasapiCapture CreateCapture(MMDevice device)
+    {
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        try
+        {
+            return new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: 50);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
     private sealed class Session(WasapiMicrophoneRecorder owner, MMDevice device, WasapiCapture capture)
     {
         private readonly List<float> _samples = [];
@@ -90,10 +107,16 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
             }
 
             var block = SampleDecoder.ToMonoFloats(e.Buffer, e.BytesRecorded, capture.WaveFormat);
-            _samples.AddRange(block);
+            int count;
+            lock (_samples)
+            {
+                _samples.AddRange(block);
+                count = _samples.Count;
+            }
+
             owner.BlockCaptured?.Invoke(owner, AudioMath.Rms(block));
 
-            if (_samples.Count >= (long)MaxSeconds * capture.WaveFormat.SampleRate
+            if (count >= (long)MaxSeconds * capture.WaveFormat.SampleRate
                 && Interlocked.Exchange(ref _autoStopped, 1) == 0)
             {
                 capture.StopRecording();
@@ -124,18 +147,35 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
                 _stopped.Set();
             }
 
-            _stopped.Wait(StopTimeout);
-
+            var stopped = _stopped.Wait(StopTimeout);
             var rate = capture.WaveFormat.SampleRate;
+            float[] captured;
+            lock (_samples)
+            {
+                captured = _samples.ToArray();
+            }
+
+            if (stopped)
+            {
+                Release();
+            }
+            else
+            {
+                // The capture thread did not finish in time. Disposing joins that thread, so never do that on the caller.
+                _ = Task.Run(Release);
+            }
+
+            var length = TimeSpan.FromSeconds((double)captured.Length / rate);
+            return new RecordedClip(AudioMath.Resample(captured, rate), length);
+        }
+
+        private void Release()
+        {
             capture.DataAvailable -= OnData;
             capture.RecordingStopped -= OnStopped;
             capture.Dispose();
             device.Dispose();
             _stopped.Dispose();
-
-            var captured = _samples.ToArray();
-            var length = TimeSpan.FromSeconds((double)captured.Length / rate);
-            return new RecordedClip(AudioMath.Resample(captured, rate), length);
         }
     }
 }
