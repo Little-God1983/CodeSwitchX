@@ -26,8 +26,8 @@ public enum ForegroundElevation
     /// <summary>The process token says elevated.</summary>
     Elevated,
 
-    /// <summary>The process could not be opened at all: protected, anti-cheat, or another user's. That says nothing
-    /// about elevation, and such windows do not hide the keyboard.</summary>
+    /// <summary>The process could not be opened at all: another account's (an admin window elevated with typed-in
+    /// credentials, which hides the keyboard), or one hardened against access (anti-cheat).</summary>
     ProcessDenied,
 
     /// <summary>The process opened, but its token was denied: what an elevated process does to one that is not.</summary>
@@ -80,26 +80,30 @@ public static class HotkeyInterop
             return false;
         }
 
-        return HidesKeysFromUs(ProcessElevation(pid), SelfElevated());
+        return HidesKeysFromUs(ProcessElevation(pid), SelfElevated.Value);
     }
 
     /// <summary>
-    /// The decision on the two reads. The foreground hides the keys only when it is seen to be elevated: its token says
-    /// so, or its process opened and its token was denied. A process that cannot be opened at all (protected, anti-cheat,
-    /// another user's) and anything unknown use the release poll like any other window. Never while this process is
+    /// The decision on the two reads. The foreground hides the keys when it is seen to be elevated (its token says so,
+    /// or its process opened and its token was denied) and when its process cannot be opened at all: that is how an
+    /// admin window elevated under another account looks. A hardened process (anti-cheat) looks the same without hiding
+    /// anything, but it is asked about only for a key that already reads as up, which over such a window is a quick tap
+    /// that latches anyway: the press only gains the note. Anything unknown uses the release poll. Never while this process is
     /// elevated itself (<paramref name="selfElevated"/> true; null when it could not be read).
     /// </summary>
     internal static bool HidesKeysFromUs(ForegroundElevation foreground, bool? selfElevated) =>
-        foreground is ForegroundElevation.Elevated or ForegroundElevation.TokenDenied && selfElevated != true;
+        foreground is ForegroundElevation.Elevated or ForegroundElevation.TokenDenied or ForegroundElevation.ProcessDenied
+        && selfElevated != true;
 
     private const int ErrorAccessDenied = 5;
 
-    private static bool? SelfElevated() => ProcessElevation((uint)Environment.ProcessId) switch
+    /// <summary>This process's own elevation, read once: it cannot change while the process runs.</summary>
+    private static readonly Lazy<bool?> SelfElevated = new(() => ProcessElevation((uint)Environment.ProcessId) switch
     {
         ForegroundElevation.Elevated => true,
         ForegroundElevation.NotElevated => false,
         _ => null,
-    };
+    });
 
     private static unsafe ForegroundElevation ProcessElevation(uint pid)
     {
