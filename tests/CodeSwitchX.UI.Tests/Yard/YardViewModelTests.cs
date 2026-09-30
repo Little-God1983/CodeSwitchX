@@ -43,6 +43,19 @@ public class YardViewModelTests : IDisposable
         _yard = new YardViewModel(_store, _registry, _engine, pricing, git, _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance);
     }
 
+    [Theory]
+    [InlineData(1.25, 1.25)]
+    [InlineData(0.1, YardViewModel.MinTileScale)]
+    [InlineData(9.0, YardViewModel.MaxTileScale)]
+    [InlineData(double.NaN, 1)]
+    [InlineData(0.9000000000000001, 0.9)]
+    public void The_tile_size_stays_in_the_sliders_range_and_to_two_decimals(double set, double kept)
+    {
+        _yard.TileScale = set;
+
+        _yard.TileScale.ShouldBe(kept);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempRoot))

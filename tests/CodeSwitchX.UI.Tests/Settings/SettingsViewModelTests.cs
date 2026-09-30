@@ -95,18 +95,27 @@ public class SettingsViewModelTests : IDisposable
         await _store.DidNotReceive().SetAsync(SettingKeys.TileScale, 1.25, Arg.Any<CancellationToken>());
     }
 
-    [Theory]
-    [InlineData(null, 1)]
-    [InlineData(0.1, SettingsViewModel.MinTileScale)]
-    [InlineData(9.0, SettingsViewModel.MaxTileScale)]
-    [InlineData(double.NaN, 1)]
-    public async Task A_missing_or_out_of_range_tile_size_loads_as_one_the_slider_can_show(double? stored, double shown)
+    [Fact]
+    public async Task A_stored_tile_size_that_is_not_a_number_loads_as_normal_size_without_a_message_or_losing_the_other_settings()
     {
-        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromException<double?>(new System.Text.Json.JsonException("not a number")));
 
         await _vm.LoadAsync(CancellationToken.None);
 
-        _vm.TileScale.ShouldBe(shown);
+        _vm.TileScale.ShouldBe(1);
+        _vm.LastMessage.ShouldBeNull();
+        _vm.FiveHourBudgetTokens.ShouldBe(5_000_000);
+    }
+
+    [Fact]
+    public async Task A_failure_reading_the_other_settings_keeps_the_stored_tile_size()
+    {
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.25));
+        _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromException<long?>(new InvalidOperationException("locked")));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.TileScale.ShouldBe(1.25);
     }
 
     /// <summary>Bounded: a queued save that never finishes must fail this test, not hang the run.</summary>

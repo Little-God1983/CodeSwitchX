@@ -5,6 +5,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using NSubstitute;
 
@@ -23,6 +24,24 @@ public class ShellViewModelTests
         _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
         _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(true, 1, null));
         return shop;
+    }
+
+    [Fact]
+    public async Task The_yard_starts_at_the_stored_tile_size_and_a_change_is_stored_without_one_at_startup()
+    {
+        _h.Settings.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.25));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Yard.TileScale.ShouldBe(1.25);
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.TileScale, Arg.Any<double>(), Arg.Any<CancellationToken>());
+
+        _h.Shell.Yard.TileScale = 0.9000000000000001;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+
+        await _h.Settings.Received(1).SetAsync(SettingKeys.TileScale, 0.9, Arg.Any<CancellationToken>());
     }
 
     [Fact]

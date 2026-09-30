@@ -30,7 +30,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _storePayloads;
     [ObservableProperty] private long? _fiveHourBudgetTokens;
 
-    /// <summary>How big the Yard draws its tiles: 1 is their normal size. The slider in the Yard's header sets it.</summary>
+    /// <summary>The Yard's tile size as stored; the Yard owns it (see <see cref="Yard.YardViewModel.TileScale"/>).</summary>
     [ObservableProperty] private double _tileScale = 1;
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, AppPaths paths, ClaudeCodePaths claude,
@@ -61,10 +61,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
             // the writer's flag rather than reading the row again, which could disagree with what the writer does.
+            TileScale = await LoadTileScaleAsync(ct);
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
-            TileScale = ClampTileScale(await _settings.GetAsync<double?>(SettingKeys.TileScale, ct));
         }
         catch (Exception ex)
         {
@@ -150,11 +150,22 @@ public sealed partial class SettingsViewModel : ObservableObject
         BudgetChanged?.Invoke(value);
     }
 
-    public const double MinTileScale = 0.75;
-    public const double MaxTileScale = 1.5;
-
-    /// <summary>A stored value outside the slider's range (edited by hand, or from a build with another range) is pulled into it.</summary>
-    public static double ClampTileScale(double? value) => value is { } v && double.IsFinite(v) ? Math.Clamp(v, MinTileScale, MaxTileScale) : 1;
+    /// <summary>
+    /// In a try of its own: a stored value that is not a number (edited by hand) leaves the tiles at their normal size
+    /// without a message in the Settings view, and a failure reading the other settings does not lose the size.
+    /// </summary>
+    private async Task<double> LoadTileScaleAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _settings.GetAsync<double?>(SettingKeys.TileScale, ct) ?? 1;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Reading the tile size failed; the tiles keep their normal size");
+            return 1;
+        }
+    }
 
     /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
     partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
