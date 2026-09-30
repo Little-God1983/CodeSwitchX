@@ -4,11 +4,11 @@ using System.Windows.Media;
 namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
-/// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing and a
-/// gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
+/// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing, dots
+/// that go round while Raven's brain thinks, and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
 /// and is asked to animate; with animations turned off in Windows it draws one still frame per change. Idle breathing
-/// also stops while its window is not the active one (VS Code docked in front, say): listening and transcribing keep
-/// animating, because they show what the microphone and the model are doing. The geometry follows the concept page's
+/// also stops while its window is not the active one (VS Code docked in front, say): listening, transcribing and
+/// thinking keep animating, because they show what the microphone and the models are doing. The geometry follows the concept page's
 /// canvas, whose 336 px square maps onto the element's size.
 /// <para>
 /// Each frame is drawn into a <see cref="DrawingGroup"/> that <see cref="OnRender"/> hands to WPF once. Redrawing that
@@ -51,6 +51,7 @@ public sealed class RavenOrb : FrameworkElement
     private double _shownLevel;
     private Size _coreBrushSize;
     private RadialGradientBrush? _coreBrush;
+    private SolidColorBrush? _dot;
     private readonly Dictionary<(byte Alpha, double Thickness), Pen> _pens = [];
     private readonly Dictionary<byte, Brush> _glows = [];
     private double _cachedScale = double.NaN;
@@ -214,7 +215,12 @@ public sealed class RavenOrb : FrameworkElement
 
         var center = new Point(ActualWidth / 2, ActualHeight / 2);
         var t = _hooked ? _seconds : 0;
-        var amp = State == RavenState.Listening ? (_hooked ? _shownLevel : Math.Clamp(Level, 0, 1)) : 0;
+        var amp = State switch
+        {
+            RavenState.Listening => _hooked ? _shownLevel : Math.Clamp(Level, 0, 1),
+            RavenState.Thinking => 0.18 + (Math.Sin(t * 2.4) * 0.12), // a slow ripple: no voice moves it
+            _ => 0,
+        };
         var breathe = State == RavenState.Idle ? Math.Sin(t * 1.4) * 3 : 0;
 
         DrawGlow(dc, center, scale, amp);
@@ -222,6 +228,10 @@ public sealed class RavenOrb : FrameworkElement
         if (State == RavenState.Transcribing)
         {
             DrawArcs(dc, center, scale, t);
+        }
+        else if (State == RavenState.Thinking)
+        {
+            DrawOrbit(dc, center, scale, t);
         }
         else
         {
@@ -302,6 +312,26 @@ public sealed class RavenOrb : FrameworkElement
             dc.DrawGeometry(null, VoicePen(0.8 - k * 0.22, Math.Max(1, 3 * scale)), _arcs[k]);
             dc.Pop();
         }
+    }
+
+    /// <summary>The outer ring, with three dots going round it: Raven's brain is at work.</summary>
+    private void DrawOrbit(DrawingContext dc, Point center, double scale, double t)
+    {
+        var radius = (Base + 44) * scale;
+        dc.DrawEllipse(null, VoicePen(0.25, Math.Max(0.75, 1.4 * scale)), center, radius, radius);
+        _dot ??= Frozen(new SolidColorBrush(Voice));
+        for (var k = 0; k < 3; k++)
+        {
+            var a = (t * 1.6) + (k * Math.PI * 2 / 3);
+            var dot = Math.Max(1.5, (3.5 - k * 0.6) * scale);
+            dc.DrawEllipse(_dot, null, new Point(center.X + (Math.Cos(a) * radius), center.Y + (Math.Sin(a) * radius)), dot, dot);
+        }
+    }
+
+    private static T Frozen<T>(T freezable) where T : Freezable
+    {
+        freezable.Freeze();
+        return freezable;
     }
 
     private static StreamGeometry ArcGeometry(int k, double scale)

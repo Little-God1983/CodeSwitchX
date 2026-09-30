@@ -118,10 +118,14 @@
         <DataTrigger Binding="{Binding State}" Value="Transcribing">
           <Setter Property="Text" Value="TRANSCRIBING" />
         </DataTrigger>
+        <DataTrigger Binding="{Binding State}" Value="Thinking">
+          <Setter Property="Text" Value="THINKING" />
+        </DataTrigger>
       </Style.Triggers>
     </Style>
 
-    <!-- Log entries: my words in a box, notes dim, warnings amber with a glyph. -->
+    <!-- Log entries: my words in a box, Raven's replies in a box of its colour, a card per tool it looked at, notes dim,
+         warnings amber with a glyph. -->
     <DataTemplate x:Key="YouEntry" DataType="{x:Type raven:RavenLogEntry}">
       <Border Background="#1F2937" CornerRadius="8,8,8,2" Padding="10,7,10,8">
         <StackPanel>
@@ -129,6 +133,36 @@
           <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Margin="0,3,0,0" Text="{Binding Text}" />
         </StackPanel>
       </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="RavenEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border Background="#1A62D0E8" BorderBrush="#3362D0E8" BorderThickness="1" CornerRadius="8,8,2,8" Padding="10,7,10,8">
+        <StackPanel>
+          <TextBlock FontSize="11" Foreground="#62D0E8" Text="{Binding At.LocalDateTime, StringFormat='Raven · {0:HH:mm}'}" />
+          <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Margin="0,3,0,0" Text="{Binding Text}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="ActionEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border x:Name="Card" HorizontalAlignment="Left" Background="#0F172A" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="6"
+              Padding="8,4,10,5" Margin="8,0,0,0" ToolTip="What Raven looked at">
+        <StackPanel Orientation="Horizontal">
+          <TextBlock x:Name="Glyph" FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#62D0E8" Text="&#xE721;"
+                     VerticalAlignment="Center" Margin="0,1,7,0" />
+          <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#D1D5DB" Text="{Binding Text}" VerticalAlignment="Center" />
+          <TextBlock x:Name="Detail" FontSize="12" Foreground="#9CA3AF" Text="{Binding Detail, StringFormat=' · {0}'}" VerticalAlignment="Center"
+                     TextTrimming="CharacterEllipsis" MaxWidth="180" ToolTip="{Binding Detail}" />
+          <TextBlock x:Name="FailedText" FontSize="12" Foreground="#F59E0B" Text=" · failed" VerticalAlignment="Center" Visibility="Collapsed" />
+        </StackPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Detail}" Value="{x:Null}">
+          <Setter TargetName="Detail" Property="Visibility" Value="Collapsed" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Failed}" Value="True">
+          <Setter TargetName="Glyph" Property="Foreground" Value="#F59E0B" />
+          <Setter TargetName="FailedText" Property="Visibility" Value="Visible" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
     </DataTemplate>
     <DataTemplate x:Key="NoteEntry" DataType="{x:Type raven:RavenLogEntry}">
       <TextBlock FontSize="13" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="2,0" Text="{Binding Text}" />
@@ -203,7 +237,8 @@
         </Border>
 
         <Grid Grid.Row="1">
-          <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+          <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"
+                        ScrollChanged="OnLogScrolled">
             <ItemsControl ItemsSource="{Binding Log}" Margin="14,12,14,4" Focusable="False">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type raven:RavenLogEntry}">
@@ -218,6 +253,12 @@
                           <DataTrigger Binding="{Binding Kind}" Value="Warning">
                             <Setter Property="ContentTemplate" Value="{StaticResource WarningEntry}" />
                           </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="Raven">
+                            <Setter Property="ContentTemplate" Value="{StaticResource RavenEntry}" />
+                          </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="Action">
+                            <Setter Property="ContentTemplate" Value="{StaticResource ActionEntry}" />
+                          </DataTrigger>
                         </Style.Triggers>
                       </Style>
                     </ContentControl.Style>
@@ -226,8 +267,9 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </ScrollViewer>
-          <TextBlock Text="What you say appears here." FontSize="13" Foreground="#4B5563" HorizontalAlignment="Center"
-                     VerticalAlignment="Center" IsHitTestVisible="False">
+          <TextBlock Text="Ask about your workspaces and chats: &#x201C;What's waiting on me?&#x201D;" FontSize="13" Foreground="#4B5563"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="24,0"
+                     IsHitTestVisible="False">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
                 <Setter Property="Visibility" Value="Collapsed" />
@@ -274,7 +316,7 @@
         <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
                         State="{Binding State}" Level="{Binding Level}">
           <raven:RavenOrb.Style>
-            <!-- At this size the idle breath is under a pixel: only listening and transcribing animate here. -->
+            <!-- At this size the idle breath is under a pixel: only listening, transcribing and thinking animate here. -->
             <Style TargetType="raven:RavenOrb">
               <Setter Property="IsAnimating" Value="True" />
               <Style.Triggers>

@@ -14,7 +14,7 @@ namespace CodeSwitchX.Conductor;
 /// turns, and nothing of it is saved as a session. A process that dies is started again for the next turn, which says so;
 /// one whose model no longer is the one set is replaced.
 /// </summary>
-public sealed class ClaudeCliBrain : IConductorBrain
+public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 {
     /// <summary>How long a turn waits for the next line before it gives the process up: a tool call into the app takes milliseconds.</summary>
     public static readonly TimeSpan Silence = TimeSpan.FromSeconds(90);
@@ -162,9 +162,12 @@ public sealed class ClaudeCliBrain : IConductorBrain
 
     public ValueTask DisposeAsync()
     {
-        Stop();
+        Dispose();
         return ValueTask.CompletedTask;
     }
+
+    /// <summary>The app's host disposes its services synchronously as it exits, and a service that only disposes asynchronously fails that.</summary>
+    public void Dispose() => Stop();
 
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
     internal IReadOnlyList<string> Arguments(string model) =>

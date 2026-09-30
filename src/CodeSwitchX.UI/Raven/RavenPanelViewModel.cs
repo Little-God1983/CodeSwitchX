@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -8,7 +10,10 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Raven;
 
-/// <summary>The Raven panel: push-to-talk dictation into a log, with the microphone choice and its failures explained.</summary>
+/// <summary>
+/// The Raven panel: push-to-talk dictation into a log, with the microphone choice and its failures explained, and Raven's
+/// answers to what was said or typed, with a card for each tool its brain looked at the Yard through.
+/// </summary>
 public sealed partial class RavenPanelViewModel : ObservableObject
 {
     /// <summary>Names the chord from <see cref="HotkeyService.PushToTalk"/>, so a new chord changes the hint with it.</summary>
@@ -36,6 +41,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IDictationService _dictation;
     private readonly IWhisperModelStore _models;
     private readonly IDictationVocabularyProvider _vocabulary;
+    private readonly IConductorBrain _brain;
     private readonly IUiDispatcher _dispatcher;
     private readonly TimeProvider _time;
     private readonly ILogger<RavenPanelViewModel> _logger;
@@ -93,8 +99,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private Task<bool> _started = Task.FromResult(false);
     private Task<DictationVocabulary> _vocabularyFetch = Task.FromResult(DictationVocabulary.Empty);
 
+    /// <summary>The last question in the brain's queue; UI thread, like the transcription queue.</summary>
+    private Task _conversation = Task.CompletedTask;
+
+    /// <summary>Questions asked and not yet answered, the one being answered included.</summary>
+    private int _asking;
+
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
-        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IUiDispatcher dispatcher, TimeProvider time,
+        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, IUiDispatcher dispatcher, TimeProvider time,
         ILogger<RavenPanelViewModel> logger)
     {
         _catalog = catalog;
@@ -102,6 +114,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _dictation = dictation;
         _models = models;
         _vocabulary = vocabulary;
+        _brain = brain;
         _dispatcher = dispatcher;
         _time = time;
         _logger = logger;
@@ -157,6 +170,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The last clip in the transcription queue; completes once every stopped clip is transcribed.</summary>
     internal Task PendingTranscriptions => _pipeline;
+
+    /// <summary>The last question to Raven's brain; completes once every question asked is answered.</summary>
+    internal Task PendingAnswers => _conversation;
 
     /// <summary>
     /// The recorder's Start of the current recording, which runs off the UI thread: opening a Bluetooth headset or a
@@ -451,6 +467,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         AddEntry(RavenLogKind.You, text);
         TypedText = "";
+        Ask(text);
     }
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
@@ -473,6 +490,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _recordingMic = mic;
+        _brain.WarmUp(); // while the user talks, so the answer does not wait for the brain to start
         _silentWarning = null;
         _droppedWarned = false;
         _droppedStands = false;
@@ -709,6 +727,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (text.Length > 0)
             {
                 AddEntry(RavenLogKind.You, text);
+                Ask(text);
             }
         }
         catch (DictationModelLoadException ex)
@@ -728,6 +747,101 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _pending--;
             UpdateState();
+        }
+    }
+
+    /// <summary>
+    /// Puts the words to Raven's brain, behind the questions asked before them, so the answers come in the order asked. The
+    /// panel thinks while any is unanswered; the mic stays free, so the next question can be asked meanwhile.
+    /// </summary>
+    private void Ask(string text)
+    {
+        _asking++;
+        UpdateState();
+        _conversation = AnswerInTurnAsync(_conversation, text);
+    }
+
+    /// <summary>
+    /// One question's turn: the reply grows in one entry as it streams in, each tool call gets a card, and text after a
+    /// card starts a new entry below it, so the log reads in the order things happened. The awaits resume on the UI
+    /// thread. Never faults, so the question behind it always gets its turn.
+    /// </summary>
+    private async Task AnswerInTurnAsync(Task previous, string text)
+    {
+        try
+        {
+            await previous;
+            RavenLogEntry? reply = null;
+            var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
+            await foreach (var e in _brain.AskAsync(text, CancellationToken.None))
+            {
+                switch (e)
+                {
+                    case BrainText { Delta: var piece } when reply is null:
+                        if (piece.TrimStart() is { Length: > 0 } start)
+                        {
+                            reply = AddEntry(RavenLogKind.Raven, start);
+                        }
+
+                        break;
+                    case BrainText { Delta: var piece }:
+                        reply!.Text += piece;
+                        break;
+                    case BrainToolCall call:
+                        reply = null;
+                        var card = AddEntry(RavenLogKind.Action, call.Tool);
+                        card.Detail = ActionDetail(call.Input);
+                        cards[call.Id] = card;
+                        break;
+                    case BrainToolResult { Failed: true, Id: var id } when cards.TryGetValue(id, out var failed):
+                        failed.Failed = true;
+                        break;
+                    case BrainNotice notice:
+                        AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text);
+                        break;
+                    case BrainFailed { Reason: var reason }:
+                        AddEntry(RavenLogKind.Warning, reason);
+                        break;
+                }
+            }
+
+            if (reply is not null)
+            {
+                reply.Text = reply.Text.TrimEnd();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Raven's brain failed");
+            AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}");
+        }
+        finally
+        {
+            _asking--;
+            UpdateState();
+        }
+    }
+
+    /// <summary>A tool call's arguments for its card: the values, in order ("needs_me, Diffusion-Full"); null for none.</summary>
+    internal static string? ActionDetail(string input)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(input);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var values = document.RootElement.EnumerateObject()
+                .Select(p => p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : p.Value.GetRawText())
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .ToList();
+            return values.Count > 0 ? string.Join(", ", values) : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -789,7 +903,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Transcribing while any
-    /// stopped clip is pending (the download, or how many wait behind the one transcribing, in the caption); otherwise Idle.
+    /// stopped clip is pending (the download, or how many wait behind the one transcribing, in the caption); otherwise
+    /// Thinking while a question is unanswered; otherwise Idle.
     /// </summary>
     private void UpdateState()
     {
@@ -801,6 +916,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Level = 0;
+        if (_pending == 0 && _asking > 0)
+        {
+            State = RavenState.Thinking;
+            Caption = _asking > 1 ? $"Thinking… ({_asking - 1} waiting)" : "Thinking…";
+            return;
+        }
+
         if (_pending == 0)
         {
             State = RavenState.Idle;

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using Path = System.IO.Path;
 using CodeSwitchX.Core.Persistence;
@@ -17,6 +18,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ClaudeHookInstaller _installer;
     private readonly ISettingsStore _settings;
     private readonly PersistenceWriterOptions _writerOptions;
+    private readonly BrainSettings _brain;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
     private readonly Lock _saveGate = new();
@@ -40,12 +42,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The microphone Raven records from, as stored; the panel owns the choice and falls back when it is gone.</summary>
     [ObservableProperty] private MicrophoneDevice? _ravenMicrophone;
 
-    public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, AppPaths paths, ClaudeCodePaths claude,
-        ILogger<SettingsViewModel> logger)
+    /// <summary>The model Raven's brain answers with; a change takes effect with the next question, which starts a new conversation.</summary>
+    [ObservableProperty] private string _ravenBrainModel = BrainSettings.DefaultModel;
+
+    public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain, AppPaths paths,
+        ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
     {
         _installer = installer;
         _settings = settings;
         _writerOptions = writerOptions;
+        _brain = brain;
         _logger = logger;
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
@@ -71,6 +77,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
             RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
             RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
+            RavenBrainModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenBrainModel, "the Raven brain model", ct) is { Length: > 0 } model
+                ? model
+                : BrainSettings.DefaultModel;
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
@@ -182,6 +191,16 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenPanelOpenChanged(bool value) => Persist(SettingKeys.RavenPanelOpen, value);
 
     partial void OnRavenMicrophoneChanged(MicrophoneDevice? value) => Persist(SettingKeys.RavenMicrophone, value);
+
+    /// <summary>Stored as typed, and not tidied in the box while it is typed in; the brain trims it, and runs the default model for a blank one.</summary>
+    partial void OnRavenBrainModelChanged(string value)
+    {
+        _brain.Model = value;
+        Persist(SettingKeys.RavenBrainModel, value);
+    }
+
+    /// <summary>The models the Settings view offers to pick from; any other id can be typed.</summary>
+    public static IReadOnlyList<string> KnownBrainModels => BrainSettings.KnownModels;
 
     partial void OnRelayExecutableChanged(string value)
     {

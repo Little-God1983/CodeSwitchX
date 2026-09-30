@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Threading;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using Microsoft.Extensions.Logging;
 using Path = System.IO.Path;
@@ -7,6 +8,7 @@ using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Ingest;
@@ -173,6 +175,15 @@ public partial class App : Application
         services.AddSingleton<IDictationVocabularyProvider>(sp =>
             new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf,
                 sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<TimeProvider>()));
+
+        // Raven's brain, and the Yard it looks at through the MCP tools the Event API serves.
+        services.AddSingleton<BrainSettings>();
+        services.AddSingleton<IBrainProcessLauncher, BrainProcessLauncher>();
+        services.AddSingleton<IConductorBrain>(sp => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<BrainSettings>(),
+            sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<ClaudeCliBrain>>()));
+        services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
+            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();

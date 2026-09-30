@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Data;
@@ -16,6 +17,7 @@ public class SettingsViewModelTests : IDisposable
     private readonly ClaudeCodePaths _claude;
     private readonly ISettingsStore _store = Substitute.For<ISettingsStore>();
     private readonly PersistenceWriterOptions _writerOptions = new();
+    private readonly BrainSettings _brain = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -23,7 +25,7 @@ public class SettingsViewModelTests : IDisposable
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
-        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
+        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
     }
 
     public void Dispose()
@@ -171,6 +173,46 @@ public class SettingsViewModelTests : IDisposable
         _vm.RavenMicrophone.ShouldBeNull();
         _vm.LastMessage.ShouldBeNull();
         _vm.FiveHourBudgetTokens.ShouldBe(5_000_000);
+    }
+
+    [Fact]
+    public async Task Ravens_model_is_loaded_into_the_brain_and_saved()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenBrainModel, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("claude-sonnet-5-5"));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenBrainModel.ShouldBe("claude-sonnet-5-5");
+        _brain.Model.ShouldBe("claude-sonnet-5-5");
+
+        _vm.RavenBrainModel = "claude-opus-5-5";
+        await FlushAsync();
+
+        _brain.Model.ShouldBe("claude-opus-5-5");
+        await _store.Received().SetAsync(SettingKeys.RavenBrainModel, "claude-opus-5-5", Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenBrainModel, "claude-sonnet-5-5", Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task No_stored_model_means_the_fast_default(string? stored)
+    {
+        _store.GetAsync<string>(SettingKeys.RavenBrainModel, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenBrainModel.ShouldBe(BrainSettings.DefaultModel);
+        _brain.Model.ShouldBe(BrainSettings.DefaultModel);
+    }
+
+    [Fact]
+    public async Task A_blank_model_typed_in_runs_the_default_without_the_box_being_rewritten()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenBrainModel = "  ";
+
+        _vm.RavenBrainModel.ShouldBe("  ");
+        _brain.Model.ShouldBe(BrainSettings.DefaultModel);
     }
 
     /// <summary>Bounded: a queued save that never finishes must fail this test, not hang the run.</summary>
