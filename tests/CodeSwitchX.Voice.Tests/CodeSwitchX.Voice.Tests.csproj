@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\..\src\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
     <ProjectReference Include="..\..\src\CodeSwitchX.Voice\CodeSwitchX.Voice.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.Speech" />
   </ItemGroup>
 </Project>

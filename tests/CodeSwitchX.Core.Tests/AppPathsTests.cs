@@ -13,6 +13,7 @@ public class AppPathsTests
         paths.TokenFile.ShouldBe(@"C:\data\csx\token");
         paths.EndpointFile.ShouldBe(@"C:\data\csx\endpoint.json");
         paths.LogsDirectory.ShouldBe(@"C:\data\csx\logs");
+        paths.ModelsDirectory.ShouldBe(Path.Combine(@"C:\data\csx", "models"));
     }
 
     [Fact]
