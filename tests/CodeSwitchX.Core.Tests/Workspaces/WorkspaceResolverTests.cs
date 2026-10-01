@@ -134,6 +134,66 @@ public class WorkspaceResolverTests
     }
 
     [Fact]
+    public void Of_two_code_workspaces_that_share_a_folder_the_one_that_opens_the_chats_window_owns_the_chat()
+    {
+        var full = Guid.Parse("77777777-7777-7777-7777-777777777777");
+        var installer = Guid.Parse("88888888-8888-8888-8888-888888888888");
+        var older = DateTimeOffset.Parse("2026-09-01T00:00:00Z");
+        var workspaces = new[]
+        {
+            new Workspace { Id = full, Name = "Diffusion-Full", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\full.code-workspace", CreatedAt = older, TrackId = Guid.NewGuid() },
+            new Workspace { Id = installer, Name = "DiffusionInstaller", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", CreatedAt = older.AddDays(1), TrackId = Guid.NewGuid() },
+        };
+        IReadOnlyList<WorkspaceFolder>? FoldersOf(string file) => file switch
+        {
+            @"c:\repo\full.code-workspace" => [new(@"c:\repo\sdk", null), new(@"c:\repo\nexus", null)],
+            @"c:\repo\installer.code-workspace" => [new(@"c:\repo\sdk", null), new(@"c:\repo\tools", null), new(@"c:\repo\catalog", null)],
+            _ => null,
+        };
+        var resolver = new WorkspaceResolver();
+
+        resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces, FoldersOf), WorkspaceResolver.WindowsOf(workspaces, FoldersOf));
+
+        resolver.Resolve(@"E:\elsewhere", [@"C:\Repo\Catalog", @"c:\repo\sdk\", @"C:/Repo/Tools"]).ShouldBe(installer, "the same folders in any order, case and form");
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\nexus"]).ShouldBe(full);
+        resolver.Resolve(@"c:\repo\sdk").ShouldBe(full);
+
+        // The user added a folder to the DiffusionInstaller window, or took one from it: still most like that workspace.
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\tools", @"c:\repo\catalog", @"c:\repo\docs"]).ShouldBe(installer);
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\tools"]).ShouldBe(installer);
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk"]).ShouldBe(full, "one folder of two is more like Diffusion-Full than one of three");
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\other"]).ShouldBe(full, "a window that shares no folder: the folder rule");
+    }
+
+    [Fact]
+    public void A_window_only_chooses_among_the_workspaces_that_hold_the_chats_folder()
+    {
+        var app = new Workspace { Id = App, Name = "App", RootPath = @"c:\repo\app", TrackId = Guid.NewGuid() };
+        var docs = new Workspace { Id = App2, Name = "Docs", RootPath = @"c:\repo\docs", TrackId = Guid.NewGuid() };
+        var resolver = new WorkspaceResolver();
+        resolver.SetRoots(WorkspaceResolver.RootsOf([app, docs]), WorkspaceResolver.WindowsOf([app, docs]));
+
+        // A window with both folders, a chat in the app's: the app's, though the window is as like the one as the other.
+        resolver.Resolve(@"c:\repo\app\src", [@"c:\repo\docs", @"c:\repo\app"]).ShouldBe(App);
+        // A chat in no workspace's folder takes a window only when one workspace opens exactly its folders.
+        resolver.Resolve(@"c:\elsewhere", [@"c:\repo\docs", @"c:\repo\app"]).ShouldBeNull();
+        resolver.Resolve(@"c:\elsewhere", [@"c:\repo\docs"]).ShouldBe(App2);
+    }
+
+    [Fact]
+    public void A_folder_workspace_opens_its_root_and_a_code_workspace_that_cannot_be_read_opens_nothing_known()
+    {
+        var folder = new Workspace { Id = App, Name = "App", RootPath = @"c:\repo\app", TrackId = Guid.NewGuid() };
+        var unread = new Workspace { Id = App2, Name = "App2", RootPath = @"c:\repo\app", WorkspaceFile = @"c:\repo\app.code-workspace", TrackId = Guid.NewGuid() };
+
+        var windows = WorkspaceResolver.WindowsOf([unread, folder], _ => null).ToList();
+
+        var window = windows.ShouldHaveSingleItem();
+        window.WorkspaceId.ShouldBe(App);
+        window.Folders.ShouldBe([@"c:\repo\app"]);
+    }
+
+    [Fact]
     public void A_code_workspace_whose_file_cannot_be_read_keeps_its_root()
     {
         var workspace = new Workspace { Id = App, Name = "App", RootPath = @"c:\repo\app", WorkspaceFile = @"c:\repo\app.code-workspace", TrackId = Guid.NewGuid() };

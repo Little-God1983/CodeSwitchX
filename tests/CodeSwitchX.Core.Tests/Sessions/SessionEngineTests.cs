@@ -891,4 +891,261 @@ public class SessionEngineTests
 
         _engine.Get("s1")!.WorkspaceId.ShouldBe(AppId);
     }
+
+    private static readonly Guid FullId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static readonly Guid InstallerId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private static readonly string[] FullFolders = [@"C:\Repo\App", @"C:\Repo\Docs"];
+    private static readonly string[] InstallerFolders = [@"C:\Repo\App", @"C:\Repo\Tools"];
+
+    /// <summary>Two multi-root workspaces that both start with C:\Repo\App, Full registered first (issue #80).</summary>
+    private (SessionEngine Engine, FakeIdeWindows Windows) SharedRootEngine(IProcessProbe? probe = null)
+    {
+        var resolver = new WorkspaceResolver();
+        resolver.SetRoots(
+            [new WorkspaceRoot(FullId, @"C:\Repo\App"), new WorkspaceRoot(InstallerId, @"C:\Repo\App")],
+            [new WorkspaceWindow(FullId, FullFolders), new WorkspaceWindow(InstallerId, InstallerFolders)]);
+        var windows = new FakeIdeWindows();
+        windows.Folders[100] = [@"c:\repo\app", @"c:\repo\tools"];
+        windows.Folders[200] = [@"C:\Repo\Docs", @"C:\Repo\App"];
+        return (new SessionEngine(_bus, resolver, _time, NullLogger<SessionEngine>.Instance, probe: probe, windows: windows), windows);
+    }
+
+    [Fact]
+    public void A_stored_PID_another_process_took_is_not_looked_up()
+    {
+        // The chat's lookups never got through while its claude ran; then the claude ended and Windows gave its PID away.
+        var probe = new FakeProcessProbe().Run(200, _time.GetUtcNow().AddMinutes(-5));
+        var (engine, windows) = SharedRootEngine(probe);
+        engine.Restore([Restored(InstallerId, claudePid: 200, windowFolders: null)]);
+        probe.Run(200, _time.GetUtcNow().AddMinutes(1));
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(0);
+        engine.Get("s1")!.WindowFolders.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_lookup_that_cannot_tell_is_tried_a_few_times_then_the_chat_keeps_its_window()
+    {
+        var (engine, windows) = SharedRootEngine();
+        windows.Unreadable = true;
+
+        for (var i = 0; i < SessionEngine.MaxWindowTries + 3; i++)
+        {
+            engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash", chain: [new ProcessRef(100, "claude.exe")]));
+        }
+
+        windows.Lookups.ShouldBe(SessionEngine.MaxWindowTries);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId, "no window known: the folder rule");
+
+        // A new claude for the chat (a resume) is looked up again.
+        windows.Unreadable = false;
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(200, "claude.exe")]));
+        windows.Lookups.ShouldBe(SessionEngine.MaxWindowTries + 1);
+    }
+
+    [Fact]
+    public void A_chat_in_the_window_of_the_second_of_two_workspaces_that_share_its_folder_shows_on_that_tile()
+    {
+        var (engine, _) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe"), new ProcessRef(90, "Code.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(200, "claude.exe")]));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s2")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_chat_outside_any_known_window_follows_its_folder()
+    {
+        var (engine, _) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(300, "claude.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2"));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId, "the first registered of the two");
+        engine.Get("s1")!.WindowFolders.ShouldBeNull();
+        engine.Get("s2")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_chat_on_the_tile_its_folder_gave_it_moves_to_its_window_once_its_claude_is_known()
+    {
+        var (engine, _) = SharedRootEngine();
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+    }
+
+    [Fact]
+    public void A_chat_stored_on_the_wrong_tile_moves_to_its_window_on_the_restart()
+    {
+        var (engine, _) = SharedRootEngine();
+        engine.Restore([Restored(FullId, claudePid: 100, windowFolders: null)]);
+
+        engine.ReResolveWorkspaces();
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe([@"c:\repo\app", @"c:\repo\tools"]);
+    }
+
+    [Fact]
+    public void A_chat_whose_claude_is_gone_stays_on_the_tile_of_its_window_after_a_restart()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: null, windowFolders: InstallerFolders)]);
+
+        engine.ReResolveWorkspaces();
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        windows.Lookups.ShouldBe(0);
+    }
+
+    [Fact]
+    public void The_window_is_looked_up_once_per_claude_process()
+    {
+        var (engine, windows) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe")]));
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+        engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash"));
+        engine.ReResolveWorkspaces();
+        windows.Lookups.ShouldBe(1);
+
+        // A resume of the chat in the other window.
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(200, "claude.exe")]));
+
+        windows.Lookups.ShouldBe(2);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_claimed_chat_is_not_looked_up_the_claim_decides_its_tile()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Claim("s1", FullId);
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe")]));
+        engine.ReResolveWorkspaces();
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+        windows.Lookups.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_lookup_that_could_not_read_the_system_keeps_the_chats_window_and_is_tried_again()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 100, windowFolders: InstallerFolders)]);
+        windows.Unreadable = true;
+
+        engine.ReResolveWorkspaces();
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe(InstallerFolders);
+
+        windows.Unreadable = false;
+        windows.Folders[100] = FullFolders; // to see the second lookup land
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+
+        windows.Lookups.ShouldBe(2);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_lookup_that_finds_no_window_keeps_the_chats_window()
+    {
+        // The chat resumed in a terminal, or its PID went to another process while the app was down.
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 300, windowFolders: InstallerFolders)]);
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(1);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe(InstallerFolders);
+    }
+
+    [Fact]
+    public void The_lookup_gets_the_processes_the_hook_event_names_above_the_claude()
+    {
+        var (engine, windows) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart,
+            chain: [new ProcessRef(7, "cmd.exe"), new ProcessRef(100, "claude.exe"), new ProcessRef(90, "Code.exe"), new ProcessRef(80, "Code.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(200, "claude.exe")]));
+
+        windows.AncestorsSeen.Count.ShouldBe(2);
+        windows.AncestorsSeen[0].ShouldBe([90, 80]);
+        windows.AncestorsSeen[1].ShouldBeNull("the chain ends at the claude: the lookup reads the processes itself");
+    }
+
+    [Fact]
+    public void The_window_is_looked_up_outside_the_engines_lock_so_the_UI_can_read_meanwhile()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 200, windowFolders: null)]);
+        var readsMeanwhile = new List<bool>();
+        windows.DuringLookup = () => readsMeanwhile.Add(Task.Run(() => engine.Snapshots).Wait(TimeSpan.FromSeconds(5)));
+
+        engine.ReResolveWorkspaces();
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(100, "claude.exe")]));
+
+        readsMeanwhile.ShouldBe([true, true]);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+        engine.Get("s2")!.WorkspaceId.ShouldBe(InstallerId);
+    }
+
+    [Fact]
+    public void The_same_folders_found_again_change_nothing()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 100, windowFolders: [@"c:\repo\app", @"c:\repo\tools"])]);
+        var before = _changes.Count;
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(1);
+        _changes.Count.ShouldBe(before);
+    }
+
+    private SessionSnapshot Restored(Guid workspaceId, int? claudePid, IReadOnlyList<string>? windowFolders) => new()
+    {
+        SessionId = "s1",
+        WorkspaceId = workspaceId,
+        State = SessionState.Idle,
+        StartedAt = _time.GetUtcNow(),
+        LastEventAt = _time.GetUtcNow(),
+        StateSince = _time.GetUtcNow(),
+        Cwd = @"C:\Repo\App",
+        Title = "Installer pull request",
+        ClaudePid = claudePid,
+        WindowFolders = windowFolders,
+    };
+
+    private sealed class FakeIdeWindows : IIdeWindows
+    {
+        public Dictionary<int, IReadOnlyList<string>> Folders { get; } = [];
+
+        public int Lookups { get; private set; }
+
+        public bool Unreadable { get; set; }
+
+        public List<IReadOnlyList<int>?> AncestorsSeen { get; } = [];
+
+        public Action? DuringLookup { get; set; }
+
+        public bool TryFoldersOf(int claudePid, IReadOnlyList<int>? ancestors, out IReadOnlyList<string>? folders)
+        {
+            Lookups++;
+            DuringLookup?.Invoke();
+            AncestorsSeen.Add(ancestors);
+            folders = Unreadable ? null : Folders.GetValueOrDefault(claudePid);
+            return !Unreadable;
+        }
+    }
 }

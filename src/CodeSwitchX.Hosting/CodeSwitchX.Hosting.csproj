@@ -12,4 +12,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.Hosting.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The hook's own process walker, so the two never differ: ClaudeIdeWindows walks up from a claude the way the hook does. -->
+    <Compile Include="..\CodeSwitchX.Hook\ProcessChain.cs" Link="Win32\ProcessChain.cs" />
+  </ItemGroup>
 </Project>

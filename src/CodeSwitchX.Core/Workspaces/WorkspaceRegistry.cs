@@ -31,7 +31,10 @@ public sealed class WorkspaceRegistry
             // Off the caller's thread before reading the .code-workspace files: SQLite answers synchronously, so this can
             // still be the UI thread of the Add dialog, and a file on an offline share blocks the read for about 20 s.
             await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
-            _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces, WorkspaceProbe.FoldersOf).ToList());
+            var read = new Dictionary<string, IReadOnlyList<WorkspaceFolder>?>(StringComparer.OrdinalIgnoreCase);
+            IReadOnlyList<WorkspaceFolder>? FoldersOf(string file) =>
+                read.TryGetValue(file, out var folders) ? folders : read[file] = WorkspaceProbe.FoldersOf(file);
+            _resolver.SetRoots(WorkspaceResolver.RootsOf(workspaces, FoldersOf).ToList(), WorkspaceResolver.WindowsOf(workspaces, FoldersOf).ToList());
             _bus.Publish(new WorkspaceRootsChanged());
             return workspaces;
         }

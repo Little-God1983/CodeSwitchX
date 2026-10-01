@@ -19,6 +19,9 @@ public sealed class SessionRecord
     public string? LastNotification { get; set; }
     public bool Inferred { get; set; }
     public int? ClaudePid { get; set; }
+
+    /// <summary><see cref="SessionSnapshot.WindowFolders"/>, one path per line (no Windows path holds a line break).</summary>
+    public string? WindowFolders { get; set; }
     public long ContextInput { get; set; }
     public long ContextOutput { get; set; }
     public long ContextCacheWrite { get; set; }
@@ -48,6 +51,7 @@ public sealed class SessionRecord
         LastNotification = s.LastNotification;
         Inferred = s.Inferred;
         ClaudePid = s.ClaudePid;
+        WindowFolders = s.WindowFolders is { } folders ? string.Join('\n', folders) : null;
         ContextInput = s.LatestContext.Input;
         ContextOutput = s.LatestContext.Output;
         ContextCacheWrite = s.LatestContext.CacheWrite;
@@ -72,6 +76,7 @@ public sealed class SessionRecord
         LastNotification = LastNotification,
         Inferred = Inferred,
         ClaudePid = ClaudePid,
+        WindowFolders = WindowFolders?.Split('\n', StringSplitOptions.RemoveEmptyEntries),
         LatestContext = new TokenUsage(ContextInput, ContextOutput, ContextCacheWrite, ContextCacheRead, ContextCacheWrite1h),
     };
 }

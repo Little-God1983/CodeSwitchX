@@ -735,6 +735,9 @@ public sealed class HostManager : IDisposable
     /// </summary>
     public bool IsShownInCab(nint hwnd) => hwnd != 0 && hwnd == Volatile.Read(ref _shownInCab);
 
+    /// <summary>The VS Code window the Cab shows; 0 when it shows none.</summary>
+    public nint ShownInCab => Volatile.Read(ref _shownInCab);
+
     /// <summary>Stops tracking a workspace (e.g. it was unregistered); its window is handed back to the desktop visible.</summary>
     public void Forget(Guid workspaceId)
     {

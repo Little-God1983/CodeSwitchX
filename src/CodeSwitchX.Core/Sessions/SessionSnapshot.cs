@@ -28,6 +28,12 @@ public sealed record SessionSnapshot
     /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
     public long Version { get; init; }
     public int? ClaudePid { get; init; }
+
+    /// <summary>
+    /// The folders of the VS Code window the chat runs in (<see cref="Workspaces.IIdeWindows"/>), null when it runs in none
+    /// or was never looked up. Persisted: the window still tells the chat's tile once its claude is gone.
+    /// </summary>
+    public IReadOnlyList<string>? WindowFolders { get; init; }
     public TokenUsage LatestContext { get; init; }
 
     /// <summary>

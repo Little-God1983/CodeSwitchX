@@ -25,6 +25,10 @@ public partial class MainWindow : Window
     private MouseBackButtonHook? _backButtonHook;
     private System.Windows.Threading.DispatcherTimer? _livenessTimer;
     private System.Windows.Threading.DispatcherTimer? _focusOnRelease;
+    private nint _hwnd;
+    private const int WmWindowPosChanging = 0x0046;
+    private const int WmWindowPosChanged = 0x0047;
+    private bool _raiseHostedWhenMoved;
 
     public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, IAgentLauncher agents,
         Func<AddWorkspaceViewModel> addWorkspaceFactory, ILogger<AddWorkspaceLauncher> addWorkspaceLogger, ILogger<WindowLocationWatcher> watcherLogger)
@@ -97,7 +101,9 @@ public partial class MainWindow : Window
     {
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
+        _hwnd = hwnd;
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
+        HwndSource.FromHwnd(hwnd)?.AddHook(StayUnderHostedWindow);
         _hotkeys.Attach(hwnd, _shell);
         foreach (var binding in _hotkeys.FailedBindings)
         {
@@ -125,11 +131,35 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Activating the shell raises it above the docked VS Code window; put VS Code back on top while in Cab mode. A click
-    /// that activated the shell must keep the foreground until it is released: VS Code, given the foreground while the
-    /// button was still down, took the mouse from the shell's button, which then never clicked (← Yard did nothing while
-    /// VS Code had the focus). So VS Code goes back on top at once without the foreground, and takes it on the release,
-    /// unless the click left the Cab. A drag of the shell's title bar is such a click too.
+    /// An activation of the shell does not lift it over the VS Code window its Cab shows, while the two are the front
+    /// windows (<see cref="ZOrder.KeepUnder"/>): VS Code vanished for a moment on every click on the shell (#82). From
+    /// behind another app the shell does go over VS Code, and VS Code is raised again as soon as the move is done, in
+    /// the same message rather than a dispatcher pass later.
+    /// </summary>
+    private nint StayUnderHostedWindow(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg == WmWindowPosChanging)
+        {
+            _raiseHostedWhenMoved = ZOrder.KeepUnder(lParam, hwnd, _host.ShownInCab) == FrontMove.Lifted;
+        }
+        else if (msg == WmWindowPosChanged && _raiseHostedWhenMoved)
+        {
+            _raiseHostedWhenMoved = false;
+            _shell.RaiseHostedWindow(focus: false);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Activating the shell from behind other windows raises it above the docked VS Code window; put VS Code back on top
+    /// while in Cab mode. Activated by the keyboard (Alt+Tab, the tray), VS Code takes the foreground too. A click that
+    /// activated the shell must keep the foreground until it is released: VS Code, given the foreground while the button
+    /// was still down, took the mouse from the shell's button, which then never clicked (← Yard did nothing while VS Code
+    /// had the focus). So VS Code goes back on top at once without the foreground. A click on the shell's content keeps
+    /// the foreground in the shell: the Raven panel's controls need the keyboard, and a list opened by the click would close
+    /// again as the shell lost it (#82). A click on the title bar, a drag of it included, hands it to VS Code on the
+    /// release, unless the click left the Cab.
     /// </summary>
     private void OnActivated(object? sender, EventArgs e)
     {
@@ -139,7 +169,19 @@ public partial class MainWindow : Window
             return;
         }
 
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () => _shell.RaiseHostedWindow(focus: false));
+        var onContent = ZOrder.CursorInClientArea(_hwnd);
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, () =>
+        {
+            if (!ZOrder.IsFrontPair(_host.ShownInCab, _hwnd))
+            {
+                _shell.RaiseHostedWindow(focus: false);
+            }
+        });
+        if (onContent)
+        {
+            return;
+        }
+
         if (_focusOnRelease is null)
         {
             _focusOnRelease = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background, Dispatcher)
