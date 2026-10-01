@@ -5,6 +5,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Listening;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -156,10 +157,38 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
 
+    private readonly IOpenMic? _openMic;
+
+    /// <summary>Open mic's microphone is open (UI thread).</summary>
+    private bool _attending;
+
+    /// <summary>Open mic is paused by the user, or by a failure until the next press.</summary>
+    private bool _attendPaused;
+
+    /// <summary>The user is talking in Open mic: <see cref="IOpenMic.SpeechStarted"/> came, the turn has not ended.</summary>
+    private bool _openSpeech;
+
+    /// <summary>Each start or stop of Open mic: one that finishes after a newer one began is undone (UI thread).</summary>
+    private long _openMicRun;
+
+    /// <summary>The microphone Open mic listens on, to restart it on another.</summary>
+    private string? _openMicDevice;
+
+    /// <summary>The last stop of Open mic's microphone, off the UI thread. A start waits for it: a stop that ran after the
+    /// next start would close the new run.</summary>
+    private Task _openMicStop = Task.CompletedTask;
+
+    /// <summary>Open mic was switched on before the first microphone listing arrived (the stored mode at startup): it
+    /// starts once the listing is applied.</summary>
+    private bool _openMicWaitsForList;
+
+    /// <summary>Open mic's own silent-microphone watch: one warning per start, as push to talk gives one per recording.</summary>
+    private readonly SilentMicWatch _openSilence = new();
+
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
-        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null)
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -200,6 +229,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 ScheduleNews();
             });
         }
+
+        _openMic = openMic;
+        if (openMic is not null)
+        {
+            openMic.SpeechStarted += (_, _) => _dispatcher.Post(OnOpenSpeech);
+            openMic.TurnEnded += (_, clip) => _dispatcher.Post(() => OnOpenTurn(clip));
+            openMic.Heard += (_, block) => _dispatcher.Post(() => OnOpenHeard(block));
+            openMic.Failed += (_, error) => _dispatcher.Post(() => OnOpenMicFailed(error));
+        }
     }
 
     /// <summary>Raised when the user clicks a chat's line on a digest card: the shell shows its tile.</summary>
@@ -230,6 +268,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Raven tells what the chats did; off, the digest cards are only written. The shell keeps it in step with Settings.</summary>
     [ObservableProperty]
     private bool _speakNews = true;
+
+    /// <summary>Push to talk, or Open mic. The panel owns it; the shell stores it in the settings.</summary>
+    [ObservableProperty]
+    private MicMode _micMode;
+
+    /// <summary>Talking over Raven stops it in Open mic; off, Open mic ignores speech while Raven speaks (Raven heard on
+    /// speakers). The shell keeps it in step with Settings.</summary>
+    [ObservableProperty]
+    private bool _bargeIn = true;
+
+    /// <summary>The mic button's name and tooltip: what a press does in the mode the panel is in.</summary>
+    public string MicButtonName => MicMode == MicMode.PushToTalk ? "Push to talk"
+        : _attendPaused ? "Resume Open mic" : "Pause Open mic";
+
+    /// <summary>The last start or stop of Open mic; completed when none runs.</summary>
+    internal Task PendingOpenMic { get; private set; } = Task.CompletedTask;
 
     /// <summary>0..1, live while listening or speaking.</summary>
     [ObservableProperty]
@@ -375,6 +429,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _refreshing = false;
         }
 
+        if (_openMicWaitsForList && MicMode == MicMode.OpenMic)
+        {
+            _openMicWaitsForList = false;
+            PendingOpenMic = StartOpenMicAsync();
+        }
+
         if (preferred is null || Equals(previous, choice.Device))
         {
             return;
@@ -418,6 +478,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             PreferredMicrophone = value;
         }
+
+        if (_attending && value is not null && value.Id != _openMicDevice)
+        {
+            StopOpenMic();
+            PendingOpenMic = StartOpenMicAsync();
+        }
     }
 
     [RelayCommand]
@@ -436,9 +502,211 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    partial void OnMicModeChanged(MicMode value)
+    {
+        if (value == MicMode.OpenMic)
+        {
+            if (_openMic is null)
+            {
+                AddEntry(RavenLogKind.Warning, "Open mic is not available.");
+                MicMode = MicMode.PushToTalk;
+                return;
+            }
+
+            if (_capturing)
+            {
+                // A held push-to-talk recording ends as a release would; its key's late release is forgotten.
+                ForgetHold();
+                _ = BeginStop();
+            }
+
+            _attendPaused = false;
+            PendingOpenMic = StartOpenMicAsync();
+        }
+        else
+        {
+            StopOpenMic();
+            _attendPaused = false;
+        }
+
+        OnPropertyChanged(nameof(MicButtonName));
+        UpdateState();
+    }
+
+    partial void OnBargeInChanged(bool value) => UpdateIgnoreSpeech();
+
+    private void UpdateIgnoreSpeech()
+    {
+        if (_openMic is not null)
+        {
+            _openMic.IgnoreSpeech = _speaking && !BargeIn;
+        }
+    }
+
+    /// <summary>
+    /// Opens Open mic on the selected microphone: downloads its models first if they are missing (the log shows the
+    /// progress), waits for a microphone listing still on its way, and starts the listener off the UI thread. A failed
+    /// download or a model that will not load goes back to push to talk with a warning; a microphone that will not open
+    /// leaves Open mic paused, for a press to try again.
+    /// </summary>
+    private async Task StartOpenMicAsync()
+    {
+        var run = ++_openMicRun;
+        UpdateState();
+        if (!_openMic!.ModelsPresent && !await DownloadOpenMicModelsAsync())
+        {
+            if (run == _openMicRun)
+            {
+                MicMode = MicMode.PushToTalk;
+            }
+
+            return;
+        }
+
+        try
+        {
+            await PendingRefresh;
+        }
+        catch (Exception)
+        {
+            // Logged where it happened; whatever was applied is what there is.
+        }
+
+        if (run != _openMicRun)
+        {
+            return;
+        }
+
+        if (SelectedMicrophone is not { } mic)
+        {
+            if (_appliedListing == 0)
+            {
+                _openMicWaitsForList = true; // the startup listing has not arrived: ApplyDevices starts it
+                return;
+            }
+
+            AddEntry(RavenLogKind.Warning, NoMicrophoneWarning);
+            PauseOpenMic();
+            return;
+        }
+
+        try
+        {
+            await _openMicStop; // never faults: see StopOpenMic
+            if (run != _openMicRun)
+            {
+                return;
+            }
+
+            await Task.Run(() => _openMic.Start(mic.Id));
+        }
+        catch (ListeningModelException ex)
+        {
+            _logger.LogWarning(ex, "Open mic's models would not load");
+            AddEntry(RavenLogKind.Warning, $"Open mic could not start: {ex.Message}. It is downloaded again the next time you switch to Open mic.");
+            if (run == _openMicRun)
+            {
+                MicMode = MicMode.PushToTalk;
+            }
+
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Open mic could not open {Microphone}", mic.Name);
+            AddEntry(RavenLogKind.Warning, WarningFor(ex is MicrophoneException failure ? failure.Kind : MicrophoneFailureKind.Unavailable, mic));
+            if (run == _openMicRun)
+            {
+                PauseOpenMic();
+            }
+
+            return;
+        }
+
+        if (run != _openMicRun)
+        {
+            _openMicStop = StopInBackground(); // switched away while it opened
+            return;
+        }
+
+        _attending = true;
+        _openMicDevice = mic.Id;
+        _openSilence.Reset();
+        UpdateIgnoreSpeech();
+        UpdateState();
+    }
+
+    private async Task<bool> DownloadOpenMicModelsAsync()
+    {
+        const string Prefix = "Downloading Open mic's models (11 MB)… ";
+        var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
+        var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{Prefix}{percent}%");
+        try
+        {
+            await _openMic!.DownloadModelsAsync(progress, CancellationToken.None);
+            entry.Text = "Open mic's models downloaded.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Open mic's models could not be downloaded");
+            ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message}. Back to push to talk.");
+            return false;
+        }
+    }
+
+    /// <summary>Closes Open mic's microphone (off the UI thread) and drops a turn being spoken.</summary>
+    private void StopOpenMic()
+    {
+        _openMicRun++;
+        _openSpeech = false;
+        if (_attending && _openMic is not null)
+        {
+            _attending = false;
+            _openMicDevice = null;
+            PendingOpenMic = _openMicStop = StopInBackground();
+        }
+    }
+
+    /// <summary>Stops the listener off the UI thread; never faults (a failed stop is logged), so a start can await it.</summary>
+    private Task StopInBackground() => Task.Run(() =>
+    {
+        try
+        {
+            _openMic!.Stop();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Stopping Open mic failed");
+        }
+    });
+
+    private void PauseOpenMic()
+    {
+        StopOpenMic();
+        _attendPaused = true;
+        OnPropertyChanged(nameof(MicButtonName));
+        UpdateState();
+    }
+
+    private void ToggleOpenMicPause()
+    {
+        if (_attendPaused)
+        {
+            _attendPaused = false;
+            OnPropertyChanged(nameof(MicButtonName));
+            PendingOpenMic = StartOpenMicAsync();
+        }
+        else
+        {
+            PauseOpenMic();
+        }
+    }
+
     private void OnSpeakingChanged(bool speaking)
     {
         _speaking = speaking;
+        UpdateIgnoreSpeech();
         UpdateState();
     }
 
@@ -536,6 +804,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// stops a latched one.</summary>
     private Task Press(TalkInput input, TimeSpan sinceKeyDown)
     {
+        if (MicMode == MicMode.OpenMic)
+        {
+            ToggleOpenMicPause(); // the button and the hotkey pause and resume Open mic
+            return Task.CompletedTask;
+        }
+
         if (_heldInputs.Count > 0)
         {
             _heldInputs.Add(input);
@@ -567,6 +841,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     public Task ReleaseMicAsync(TalkInput input)
     {
+        if (MicMode == MicMode.OpenMic && _heldInputs.Count == 0)
+        {
+            return Task.CompletedTask; // a press already paused or resumed; a release does nothing
+        }
+
         if (!_heldInputs.Remove(input) || _heldInputs.Count > 0)
         {
             return Task.CompletedTask;
@@ -660,13 +939,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _recordingMic = mic;
-        // The user talks: Raven stops speaking at once, and what it was saying is not said after. A digest stops too, also
-        // one that has not begun to speak; an answer is interrupted only by a question: a press that brings none leaves
-        // it to be written.
-        _digest?.Cancel();
-        _voice.Hush();
-        _voice.Expect();
-        _brain.WarmUp(); // while the user talks, so the answer does not wait for the brain to start
+        UserStartsTalking();
         _silentWarning = null;
         _droppedWarned = false;
         _droppedStands = false;
@@ -676,6 +949,83 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         UpdateState();
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
         _started = StartCaptureAsync(mic, ++_recording);
+    }
+
+    /// <summary>
+    /// The user talks (a press, or half a second of speech in Open mic): Raven stops speaking at once, and what it was
+    /// saying is not said after. A digest stops too, also one that has not begun to speak; an answer is interrupted only by
+    /// a question: talk that brings none leaves it to be written. The brain warms up while the user talks.
+    /// </summary>
+    private void UserStartsTalking()
+    {
+        _digest?.Cancel();
+        _voice.Hush();
+        _voice.Expect();
+        _brain.WarmUp();
+    }
+
+    private void OnOpenSpeech()
+    {
+        if (!_attending)
+        {
+            return; // stopped or paused since
+        }
+
+        _openSpeech = true;
+        UserStartsTalking();
+        _vocabularyFetch = Task.Run(FetchVocabularyAsync);
+        UpdateState();
+    }
+
+    /// <summary>The turn is over: its clip joins the transcription queue as a released recording's does.</summary>
+    private void OnOpenTurn(float[] clip)
+    {
+        if (!_attending || !_openSpeech)
+        {
+            return;
+        }
+
+        _openSpeech = false;
+        _pending++;
+        var length = TimeSpan.FromSeconds(clip.Length / 16_000.0);
+        var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
+        var number = ++_clipsQueued;
+        var turn = TranscribeInTurnAsync(_pipeline, number, Task.FromResult<RecordedClip?>(new RecordedClip(clip, length)), heard,
+            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), quiet: true);
+        _pipeline = turn;
+        UpdateState();
+    }
+
+    /// <summary>The orb's level, and the same watch push to talk keeps: a microphone that sends nothing is warned of once per start.</summary>
+    private void OnOpenHeard(CapturedFrames block)
+    {
+        if (!_attending)
+        {
+            return;
+        }
+
+        if (State is RavenState.Attending or RavenState.Listening)
+        {
+            Level = AudioMath.LevelOf(block.Rms);
+        }
+
+        if (_openSilence.Step(block.Rms, TimeSpan.FromSeconds(block.Samples16k.Length / 16_000.0)) == SignalEvent.Silent)
+        {
+            AddEntry(RavenLogKind.Warning, $"No sound from {SelectedMicrophone?.Name}. Check that it isn't muted.");
+        }
+    }
+
+    private void OnOpenMicFailed(MicrophoneException error)
+    {
+        _logger.LogWarning(error, "Open mic's microphone failed");
+        if (!_attending)
+        {
+            return;
+        }
+
+        AddEntry(RavenLogKind.Warning, WarningFor(error.Kind, SelectedMicrophone));
+        PauseOpenMic();
+        _ = RefreshMicrophonesAsync();
     }
 
     /// <summary>
@@ -857,8 +1207,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// and the state live. Never faults, so the clip behind it always gets its turn.
     /// </summary>
     /// <param name="ended">When the user's turn ended: the mic was let go.</param>
+    /// <param name="quiet">An Open mic turn: one too short or without words is only logged, never noted in the panel, as
+    /// the user pressed nothing.</param>
     private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, SpeechReading speech,
-        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended)
+        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended, bool quiet = false)
     {
         try
         {
@@ -871,6 +1223,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (clip.Length < MinimumClip)
             {
+                if (quiet)
+                {
+                    _logger.LogInformation("Open mic's turn was too short to transcribe ({Seconds:0.00} s)", clip.Length.TotalSeconds);
+                    return;
+                }
+
                 // A tap read as a hold (a late or lost key release) ends here as well: never silently.
                 AddEntry(RavenLogKind.Note, "That was too short. Hold the keys or the mic button while you talk.");
                 return;
@@ -901,6 +1259,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var words = await vocabulary;
             var result = await _dictation.TranscribeAsync(clip.Samples16k, words, CancellationToken.None);
             var text = result.Text.Trim();
+            if (text.Length == 0 && quiet)
+            {
+                _logger.LogInformation("Open mic's turn of {Seconds:0.0} s had no words", clip.Length.TotalSeconds);
+            }
+
             if (text.Length > 0)
             {
                 AddEntry(RavenLogKind.You, text);
@@ -1123,7 +1486,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Nobody talks: no recording, no clip or question unanswered, nothing being said.</summary>
-    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking;
+    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking && !_openSpeech;
 
     private void TellNewsIfFree()
     {
@@ -1349,11 +1712,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Speaking while Raven
     /// says something; otherwise Transcribing while any stopped clip is pending (the download, or how many wait behind
-    /// the one transcribing, in the caption); otherwise Thinking while a question is unanswered; otherwise Idle.
+    /// the one transcribing, in the caption); otherwise Thinking while a question is unanswered; otherwise Idle, or in
+    /// Open mic Attending (AttendingPaused while paused). Speech heard in Open mic shows Listening, as a press does.
     /// </summary>
     private void UpdateState()
     {
         if (_capturing)
+        {
+            State = RavenState.Listening;
+            Caption = "Listening…";
+            return;
+        }
+
+        if (_openSpeech)
         {
             State = RavenState.Listening;
             Caption = "Listening…";
@@ -1384,8 +1755,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (_pending == 0)
         {
-            State = RavenState.Idle;
-            Caption = IdleCaption;
+            if (MicMode == MicMode.OpenMic)
+            {
+                State = _attendPaused ? RavenState.AttendingPaused : RavenState.Attending;
+                Caption = _attendPaused ? "Open mic paused" : "Open mic";
+            }
+            else
+            {
+                State = RavenState.Idle;
+                Caption = IdleCaption;
+            }
+
             ScheduleNews();
             return;
         }
