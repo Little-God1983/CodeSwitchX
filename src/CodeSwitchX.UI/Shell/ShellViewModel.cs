@@ -102,7 +102,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
         Raven.BargeIn = Settings.RavenBargeIn;
-        Raven.MicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
+        // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
+        Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
         Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         Raven.PropertyChanged += (_, e) =>
@@ -119,9 +120,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 Settings.RavenMuted = Raven.IsMuted;
             }
-            else if (e.PropertyName == nameof(RavenPanelViewModel.MicMode))
+            else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicMode))
             {
-                Settings.RavenMicMode = Raven.MicMode.ToString();
+                Settings.RavenMicMode = Raven.PreferredMicMode.ToString();
             }
         };
         Settings.PropertyChanged += (_, e) =>

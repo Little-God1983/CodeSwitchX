@@ -86,10 +86,12 @@ samples it has been fed, so tests drive it frame by frame.
   while it is still the current one, so a late stop never closes a newer run. Both are serialised by the listener and
   called off the UI thread. `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
   microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
-  Raven speaks with voice barge-in off.
+  Raven speaks with voice barge-in off: no new turn starts then, but a turn already started goes on to its real pause
+  (the user may still be finishing a sentence when an earlier answer starts to play).
 - Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted(run)`,
-  `TurnEnded(run, clip)`, `Heard(CapturedBlock)` (the loudest RMS and the duration of about 50 ms of captured audio, for
-  the orb's level and the silent-microphone watch). `Failed(run)` comes on the capture thread, with the run's
+  `TurnEnded(run, clip)`, `Heard(HeardAudio)` (about 50 ms of captured audio: its loudest block's RMS for the orb's
+  level, its quietest block's RMS for the silent-microphone watch, so one click in a batch of digital zeros is not
+  50 ms of sound, and its duration). `Failed(run)` comes on the capture thread, with the run's
   `Failure` set first, and the listener then stops that run itself. The panel ignores events of a run that is not its
   current one, and reads `Failure` on the run a start returns, for a microphone that died while it opened.
 - If the worker falls behind and the queue is full, blocks are dropped; that is logged once per run.
@@ -108,7 +110,9 @@ samples it has been fed, so tests drive it frame by frame.
 `RavenPanelViewModel`, `RavenPanelView.xaml`.
 
 - **Mode picker:** a two-way switch "Push to talk | Open mic" next to the microphone list, saved as `raven.micMode`
-  (`SettingKeys.RavenMicMode`); Push to talk is the default and what an unknown value reads as.
+  (`SettingKeys.RavenMicMode`); Push to talk is the default and what an unknown value reads as. What is saved is the
+  user's choice (`PreferredMicMode`): a fall back to Push to talk after a failure changes the mode, not the choice, so
+  the next launch tries Open mic again.
 - **Switching to Open mic:** downloads the models if they are missing, with the progress in the log as the Whisper
   model's download shows it, then starts the listener on the selected microphone. A failed download warns and switches
   back to Push to talk.
@@ -148,6 +152,8 @@ samples it has been fed, so tests drive it frame by frame.
 - **`RavenSpeaking`** follows `ReplyVoice`: the listener is told when Raven starts and stops being heard.
 - **Barge-in setting:** under Raven in Settings, "Stop Raven when I talk over it", on by default, saved as
   `raven.bargeIn` (`SettingKeys.RavenBargeIn`). Off, the listener ignores speech while Raven speaks.
+- **The Speaking caption** says "Speaking… Talk to interrupt." only where talking does: push to talk, and an Open mic
+  that listens with barge-in on. Paused, starting, or with barge-in off, it says "Speaking… Type to interrupt.".
 
 ## 3. Failures
 

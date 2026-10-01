@@ -534,6 +534,174 @@ public sealed partial class RavenPanelViewModelTests
         changes.ShouldBe(1);
     }
 
+    // Second review of #89: a stale start fails into the log only
+    [Fact]
+    public async Task A_start_that_fails_after_the_user_paused_is_only_logged()
+    {
+        var vm = await NewOpenMicVmAsync();
+        _openMic.StartGate = new TaskCompletionSource();
+        _openMic.StartFails = new DllNotFoundException("onnxruntime.dll was not found");
+        vm.MicMode = MicMode.OpenMic;
+        var opening = vm.PendingOpenMic;
+        await Until(() => _openMic.Opening);
+
+        await vm.TapMic(TalkInput.MicButton); // pause while it opens
+        _openMic.StartGate.SetResult();
+        await WithinAsync(opening);
+
+        vm.MicMode.ShouldBe(MicMode.OpenMic);
+        vm.State.ShouldBe(RavenState.AttendingPaused);
+        vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.Warning);
+    }
+
+    // Second review of #89: a stale start fails into the log only
+    [Fact]
+    public async Task A_microphone_that_fails_to_open_after_the_user_switched_away_is_not_warned_of()
+    {
+        var vm = await NewOpenMicVmAsync();
+        _openMic.StartGate = new TaskCompletionSource();
+        _openMic.StartFails = new MicrophoneException(MicrophoneFailureKind.Missing, "gone", new Exception());
+        vm.MicMode = MicMode.OpenMic;
+        var opening = vm.PendingOpenMic;
+        await Until(() => _openMic.Opening);
+
+        vm.MicMode = MicMode.PushToTalk;
+        _openMic.StartGate.SetResult();
+        await WithinAsync(opening);
+
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.Warning);
+    }
+
+    // Second review of #89: a fallback is not the user's choice
+    [Fact]
+    public async Task A_failed_download_falls_back_to_push_to_talk_but_the_choice_stays_Open_mic()
+    {
+        _openMic.ModelsPresent = false;
+        _openMic.DownloadFails = new HttpRequestException("no network");
+        var vm = await NewOpenMicVmAsync();
+
+        vm.MicModeSwitch = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+        vm.MicModeSwitch.ShouldBe(MicMode.PushToTalk);
+        vm.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+
+        _openMic.DownloadFails = null;
+        vm.MicModeSwitch = MicMode.OpenMic; // the user tries again: the choice has not changed, the mode does
+        await WithinAsync(vm.PendingOpenMic);
+        vm.MicMode.ShouldBe(MicMode.OpenMic);
+        _openMic.Listening.ShouldBe(Headset.Id);
+    }
+
+    // Second review of #89: a fallback is not the user's choice
+    [Fact]
+    public async Task The_user_s_switch_is_their_choice_and_a_stored_choice_sets_the_mode()
+    {
+        var vm = await NewOpenMicVmAsync();
+
+        vm.PreferredMicMode = MicMode.OpenMic; // as the shell restores it
+        await WithinAsync(vm.PendingOpenMic);
+        vm.MicMode.ShouldBe(MicMode.OpenMic);
+
+        vm.MicModeSwitch = MicMode.PushToTalk;
+        await WithinAsync(vm.PendingOpenMic);
+        vm.PreferredMicMode.ShouldBe(MicMode.PushToTalk);
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+    }
+
+    // Second review of #89: the Speaking caption tells what interrupts
+    [Fact]
+    public async Task While_Raven_speaks_in_push_to_talk_the_caption_says_talk_to_interrupt()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await NewOpenMicVmAsync(voice);
+
+        Type(vm, "What's waiting on me?");
+        await Until(() => vm.State == RavenState.Speaking);
+
+        vm.Caption.ShouldBe("Speaking… Talk to interrupt.");
+    }
+
+    // Second review of #89: the Speaking caption tells what interrupts
+    [Fact]
+    public async Task While_Raven_speaks_in_Open_mic_the_caption_says_talk_to_interrupt_only_while_talking_does()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync(voice);
+
+        Type(vm, "What's waiting on me?");
+        await Until(() => vm.State == RavenState.Speaking);
+        vm.Caption.ShouldBe("Speaking… Talk to interrupt.");
+
+        vm.BargeIn = false; // speech is ignored while Raven speaks
+        vm.Caption.ShouldBe("Speaking… Type to interrupt.");
+
+        vm.BargeIn = true;
+        vm.Caption.ShouldBe("Speaking… Talk to interrupt.");
+    }
+
+    // Second review of #89: the Speaking caption tells what interrupts
+    [Fact]
+    public async Task While_Raven_speaks_with_Open_mic_paused_the_caption_says_type_to_interrupt()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync(voice);
+        await vm.TapMic(TalkInput.MicButton); // pause: a press only pauses or resumes
+        await WithinAsync(vm.PendingOpenMic);
+
+        Type(vm, "What's waiting on me?");
+        await Until(() => vm.State == RavenState.Speaking);
+
+        vm.Caption.ShouldBe("Speaking… Type to interrupt.");
+    }
+
+    // Second review of #89: a failed startup listing pauses a waiting Open mic
+    [Fact]
+    public async Task Open_mic_waiting_for_a_listing_that_fails_pauses_and_a_press_tries_again()
+    {
+        Exception? failure = new System.Runtime.InteropServices.COMException("The audio service is not running.");
+        _catalog.List().Returns(_ => failure is null ? [Headset, Desk] : throw failure);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech,
+            new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic);
+
+        vm.MicMode = MicMode.OpenMic; // the stored mode, set before the first listing
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        await WithinAsync(vm.PendingOpenMic);
+
+        vm.State.ShouldBe(RavenState.AttendingPaused);
+        vm.Caption.ShouldBe("Open mic paused");
+        vm.Log.Single().Text.ShouldBe("Windows audio is not available: The audio service is not running.");
+
+        failure = null; // the service is back
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        await vm.TapMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingOpenMic);
+        _openMic.Listening.ShouldBe(Headset.Id);
+    }
+
+    // Second review of #89: one click in a batch is not 50 ms of sound
+    [Fact]
+    public async Task Digital_zeros_with_a_click_in_every_batch_in_Open_mic_are_still_no_sound()
+    {
+        var vm = await InOpenMicAsync();
+
+        for (var i = 0; i < 100; i++) // 5 s of 50 ms batches of zeros, each with one loud 10 ms block (a click)
+        {
+            _openMic.Hear(0.2f, quietest: 0f);
+        }
+
+        vm.Log.Count(e => e.Kind == RavenLogKind.Warning && e.Text.StartsWith("No sound from")).ShouldBe(1);
+    }
+
     /// <summary>A player whose audio never runs out: Raven speaks until something stops it.</summary>
     private sealed class HoldingPlayer : ISpeechPlayer
     {

@@ -243,7 +243,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             openMic.SpeechStarted += (_, run) => _dispatcher.Post(() => OnOpenSpeech(run));
             openMic.TurnEnded += (_, turn) => _dispatcher.Post(() => OnOpenTurn(turn));
-            openMic.Heard += (_, block) => _dispatcher.Post(() => OnOpenHeard(block));
+            openMic.Heard += (_, heard) => _dispatcher.Post(() => OnOpenHeard(heard));
             openMic.Failed += (_, run) => _dispatcher.Post(() => OnOpenMicFailed(run));
         }
     }
@@ -277,9 +277,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private bool _speakNews = true;
 
-    /// <summary>Push to talk, or Open mic. The panel owns it; the shell stores it in the settings.</summary>
+    /// <summary>Push to talk, or Open mic: the mode the panel is in. A failure may drop it back to push to talk; the
+    /// user's own choice is <see cref="PreferredMicMode"/>.</summary>
     [ObservableProperty]
     private MicMode _micMode;
+
+    /// <summary>
+    /// The user's choice of mode, which the shell stores: setting it puts the panel in that mode. Only the user's switch
+    /// changes it (<see cref="MicModeSwitch"/>), never a fallback after a failure, as with <see cref="PreferredMicrophone"/>:
+    /// a download that failed once while offline must not turn Open mic off for good.
+    /// </summary>
+    [ObservableProperty]
+    private MicMode _preferredMicMode;
+
+    /// <summary>The mode switch: it shows <see cref="MicMode"/>, and the user's flip of it is their choice. A flip back to
+    /// a choice a failure undid sets the mode again, though the choice itself has not changed.</summary>
+    public MicMode MicModeSwitch
+    {
+        get => MicMode;
+        set
+        {
+            PreferredMicMode = value;
+            MicMode = value;
+        }
+    }
 
     /// <summary>Talking over Raven stops it in Open mic; off, Open mic ignores speech while Raven speaks (Raven heard on
     /// speakers). The shell keeps it in step with Settings.</summary>
@@ -407,6 +428,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 AddEntry(RavenLogKind.Warning, $"Windows audio is not available: {ex.Message}");
             }
 
+            if (_openMicWaitsForList && MicMode == MicMode.OpenMic)
+            {
+                // Open mic was waiting for this listing: with no microphones it pauses (the warning above says why), and
+                // a press tries again.
+                PauseOpenMic();
+            }
+
             return;
         }
 
@@ -512,8 +540,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    partial void OnPreferredMicModeChanged(MicMode value) => MicMode = value;
+
     partial void OnMicModeChanged(MicMode value)
     {
+        OnPropertyChanged(nameof(MicModeSwitch));
         if (value == MicMode.OpenMic)
         {
             if (_openMic is null)
@@ -544,7 +575,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         UpdateState();
     }
 
-    partial void OnBargeInChanged(bool value) => UpdateIgnoreSpeech();
+    partial void OnBargeInChanged(bool value)
+    {
+        UpdateIgnoreSpeech();
+        if (_speaking)
+        {
+            UpdateState(); // the Speaking caption says whether talking interrupts
+        }
+    }
 
     private void UpdateIgnoreSpeech()
     {
@@ -627,19 +665,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             run = opened;
         }
+        // A start the user has moved on from (paused, switched mode or microphone) fails into the log only: its warning
+        // would be about a mic or mode no longer in use, and "Back to push to talk" would not happen.
         catch (ListeningModelException ex)
         {
             _logger.LogWarning(ex, "Open mic's models would not load");
-            AddEntry(RavenLogKind.Warning, $"Open mic could not start: {ex.Message}. It is downloaded again the next time you switch to Open mic.");
-            BackToPushToTalk(request);
+            BackToPushToTalk(request,
+                $"Open mic could not start: {ex.Message}. It is downloaded again the next time you switch to Open mic.");
             return;
         }
         catch (MicrophoneException ex)
         {
             _logger.LogWarning(ex, "Open mic could not open {Microphone}", mic.Name);
-            AddEntry(RavenLogKind.Warning, WarningFor(ex.Kind, mic));
             if (request == _openMicRequest)
             {
+                AddEntry(RavenLogKind.Warning, WarningFor(ex.Kind, mic));
                 PauseOpenMic();
             }
 
@@ -649,8 +689,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Not the model file's fault (the native runtime would not load, say): nothing is deleted or downloaded again.
             _logger.LogWarning(ex, "Open mic could not start");
-            AddEntry(RavenLogKind.Warning, $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. Back to push to talk.");
-            BackToPushToTalk(request);
+            BackToPushToTalk(request, $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. Back to push to talk.");
             return;
         }
 
@@ -693,10 +732,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return request == _openMicRequest ? await Task.Run(() => _openMic!.Start(deviceId)) : null;
     }
 
-    private void BackToPushToTalk(long request)
+    /// <summary>A start that failed for good: if it is still the current request, the warning and back to push to talk
+    /// (the user's stored choice stays Open mic, for the next launch).</summary>
+    private void BackToPushToTalk(long request, string warning)
     {
         if (request == _openMicRequest)
         {
+            AddEntry(RavenLogKind.Warning, warning);
             MicMode = MicMode.PushToTalk;
         }
     }
@@ -1055,7 +1097,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var clip = turn.Clip;
         _openSpeech = false;
         _pending++;
-        var length = TimeSpan.FromSeconds(clip.Length / 16_000.0);
+        var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
         var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
         var number = ++_clipsQueued;
         var transcribed = TranscribeInTurnAsync(_pipeline, number, Task.FromResult<RecordedClip?>(new RecordedClip(clip, length)), heard,
@@ -1067,9 +1109,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// The orb's level, and the watch push to talk keeps (<see cref="WatchSignal"/>). A batch of about 50 ms
     /// (<see cref="OpenMicListener.HeardBatch"/>). The level changes only when it would show: an idle room must not
-    /// redraw the orb twenty times a second for hours.
+    /// redraw the orb twenty times a second for hours. The level is the loudest block's; the watch gets the quietest, so
+    /// one click in a batch of digital zeros is not 50 ms of sound.
     /// </summary>
-    private void OnOpenHeard(CapturedBlock block)
+    private void OnOpenHeard(HeardAudio heard)
     {
         if (_openRun is null)
         {
@@ -1078,14 +1121,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (State is RavenState.Attending or RavenState.Listening)
         {
-            var level = AudioMath.LevelOf(block.Rms);
+            var level = AudioMath.LevelOf(heard.Loudest);
             if (Math.Abs(level - Level) >= VisibleLevelChange)
             {
                 Level = level;
             }
         }
 
-        WatchSignal(block, SelectedMicrophone?.Name);
+        WatchSignal(heard.Quietest, heard.Duration, SelectedMicrophone?.Name);
     }
 
     /// <summary>A run's microphone died. One the panel never took (still opening: its start reads the failure) or has
@@ -1203,16 +1246,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         Level = AudioMath.LevelOf(block.Rms);
         _speech.Step(block.Rms, block.Duration);
-        WatchSignal(block, _recordingMic?.Name);
+        WatchSignal(block.Rms, block.Duration, _recordingMic?.Name);
     }
 
     /// <summary>
     /// Is the microphone sending sound at all? Both modes' watch: push to talk's per recording, Open mic's per start (for
     /// hours, so a mic muted or asleep mid-session is the likely case). <see cref="ResetSignalWatch"/> begins each.
     /// </summary>
-    private void WatchSignal(CapturedBlock block, string? mic)
+    private void WatchSignal(float rms, TimeSpan duration, string? mic)
     {
-        switch (_silence.Step(block.Rms, block.Duration))
+        switch (_silence.Step(rms, duration))
         {
             case SignalEvent.Silent: // at most once a recording: the watch reports it only before anything was heard
                 _silentWarning = AddEntry(RavenLogKind.Warning, $"No sound from {mic}. Check that it isn't muted.");
@@ -1837,7 +1880,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_speaking)
         {
             State = RavenState.Speaking;
-            Caption = "Speaking… Talk to interrupt.";
+            // Talking interrupts in push to talk (a press) and in an Open mic that listens with barge-in on. Otherwise
+            // (Open mic paused or starting, or ignoring speech while Raven talks; a press there only pauses) a typed
+            // question is what interrupts.
+            var talkInterrupts = MicMode == MicMode.PushToTalk || (_openRun is not null && !_attendPaused && BargeIn);
+            Caption = talkInterrupts ? "Speaking… Talk to interrupt." : "Speaking… Type to interrupt.";
             return;
         }
 

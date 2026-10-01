@@ -329,9 +329,9 @@
                 <!-- Push to talk or Open mic: two radio buttons styled as one switch. -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                   <RadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
-                               IsChecked="{Binding MicMode, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}" />
+                               IsChecked="{Binding MicModeSwitch, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}" />
                   <RadioButton Style="{StaticResource ModeSwitch}" Content="Open mic" AutomationProperties.Name="Open mic mode"
-                               IsChecked="{Binding MicMode, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}" />
+                               IsChecked="{Binding MicModeSwitch, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}" />
                 </StackPanel>
                 <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,0,0,4" />
                 <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"

@@ -681,10 +681,26 @@ public class ShellViewModelTests
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.Shell.Raven.MicMode.ShouldBe(MicMode.OpenMic);
 
-        _h.Shell.Raven.MicMode = MicMode.PushToTalk;
+        _h.Shell.Raven.MicModeSwitch = MicMode.PushToTalk; // the user's switch
 
         await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenMicMode, "PushToTalk", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_fall_back_to_push_to_talk_after_a_failed_download_leaves_the_stored_Open_mic_alone()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
+        _h.OpenMic.ModelsPresent = false;
+        _h.OpenMic.DownloadFails = new System.Net.Http.HttpRequestException("offline");
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingOpenMic.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _h.Shell.Raven.MicMode.ShouldBe(MicMode.PushToTalk);
+        _h.Shell.Raven.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicMode, "PushToTalk", Arg.Any<CancellationToken>());
     }
 
     [Fact]

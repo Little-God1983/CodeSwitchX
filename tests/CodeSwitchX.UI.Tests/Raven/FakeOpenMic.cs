@@ -47,7 +47,7 @@ internal sealed class FakeOpenMic : IOpenMic
 
     public event EventHandler<OpenMicTurn>? TurnEnded;
 
-    public event EventHandler<CapturedBlock>? Heard;
+    public event EventHandler<HeardAudio>? Heard;
 
     public event EventHandler<OpenMicRun>? Failed;
 
@@ -70,14 +70,15 @@ internal sealed class FakeOpenMic : IOpenMic
 
     public OpenMicRun Start(string deviceId)
     {
-        if (StartFails is { } error)
-        {
-            throw error;
-        }
-
         var run = new OpenMicRun(deviceId);
         Volatile.Write(ref _opening, run);
         StartGate?.Task.Wait();
+        if (StartFails is { } error)
+        {
+            Volatile.Write(ref _opening, null);
+            throw error; // after the gate: a start can fail once the user has moved on
+        }
+
         lock (_gate)
         {
             _run = run.Failure is null ? run : null; // one that died while it opened has stopped itself
@@ -117,8 +118,10 @@ internal sealed class FakeOpenMic : IOpenMic
     public void EndTurn(OpenMicRun? run = null, double seconds = 2) =>
         TurnEnded?.Invoke(this, new OpenMicTurn(run ?? Run!, new float[(int)(seconds * 16_000)]));
 
-    /// <summary>A batch of 50 ms at this level, as the listener raises them.</summary>
-    public void Hear(float rms) => Heard?.Invoke(this, new CapturedBlock(rms, TimeSpan.FromMilliseconds(50)));
+    /// <summary>A batch of 50 ms at this level, as the listener raises them; <paramref name="quietest"/> is its quietest
+    /// block (the whole batch at <paramref name="rms"/> unless given).</summary>
+    public void Hear(float rms, float? quietest = null) =>
+        Heard?.Invoke(this, new HeardAudio(rms, quietest ?? rms, TimeSpan.FromMilliseconds(50)));
 
     /// <summary>The detector failed mid-turn: the listener ends the turn with an empty clip.</summary>
     public void LoseTurn() => TurnEnded?.Invoke(this, new OpenMicTurn(Run!, []));
