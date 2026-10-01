@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Workspaces;
 using Microsoft.Extensions.Logging;
@@ -31,10 +32,16 @@ public sealed class SessionEngine : IDisposable
     private readonly Dictionary<string, Agents> _agents = new(StringComparer.Ordinal);
 
     /// <summary>Chats whose tile the app chose when it started them (<see cref="Claim"/>); their folder does not move them.</summary>
-    private readonly Dictionary<string, Guid> _claims = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Guid> _claims = new(StringComparer.Ordinal);
 
     /// <summary>Per chat, the claude process whose VS Code window was looked up (<see cref="LookUp"/>); not stored.</summary>
-    private readonly Dictionary<string, int> _windowLookups = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _windowLookups = new(StringComparer.Ordinal);
+
+    /// <summary>Per chat, the claude process whose window lookup could not tell yet, and how often (<see cref="MaxWindowTries"/>).</summary>
+    private readonly ConcurrentDictionary<string, (int Pid, int Tries)> _windowMisses = new(StringComparer.Ordinal);
+
+    /// <summary>How often a lookup that cannot tell yet is tried for one claude before the chat keeps what it has.</summary>
+    internal const int MaxWindowTries = 5;
     private readonly IIdeWindows? _windows;
     private const int OpenToolsKept = 32;
     private readonly List<IDisposable> _subscriptions = [];
@@ -146,7 +153,8 @@ public sealed class SessionEngine : IDisposable
     public void Apply(HookEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
-        var lookup = LookUp(e.SessionId, PickClaudePid(e.ParentChain), e.ParentChain);
+        var chainPid = PickClaudePid(e.ParentChain);
+        var lookup = LookUp(e.SessionId, chainPid, e.ParentChain, seenAt: null);
         lock (_gate)
         {
             var previous = _sessions.GetValueOrDefault(e.SessionId);
@@ -167,7 +175,7 @@ public sealed class SessionEngine : IDisposable
             }
 
             var cwd = e.Cwd ?? s.Cwd;
-            var claudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid;
+            var claudePid = chainPid ?? s.ClaudePid;
             var window = WindowOfLocked(s, claudePid, lookup);
             var windowChanged = !SameFolders(window, s.WindowFolders);
             var awaitingToolResult = e.EventName switch
@@ -478,7 +486,7 @@ public sealed class SessionEngine : IDisposable
         var lookups = new Dictionary<string, WindowLookup>(StringComparer.Ordinal);
         foreach (var s in sessions)
         {
-            if (LookUp(s.SessionId, s.ClaudePid, chain: null) is { } lookup)
+            if (LookUp(s.SessionId, s.ClaudePid, chain: null, seenAt: s.LastEventAt) is { } lookup)
             {
                 lookups[s.SessionId] = lookup;
             }
@@ -563,28 +571,30 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>
     /// Looks up the VS Code window of the chat's claude, once per claude process: two workspaces can share a folder, and
-    /// only the window tells which one the chat belongs to. Called outside <see cref="_gate"/>: the lookup reads the lock
-    /// folder and the system's tables, and the UI reads snapshots under that lock. Null when there is nothing to look up
-    /// (no process, a claimed chat, a process already looked up) or the system could not be read; that last lookup is
-    /// tried again with the next event.
+    /// only the window tells which one the chat belongs to. Called outside <see cref="_gate"/>, which it never takes: the
+    /// lookup reads the lock folder and the system's tables, and the UI reads snapshots under that lock. Null when there is
+    /// nothing to look up (no process, a claimed chat, a process already looked up, a stored PID whose claude is gone) or
+    /// the lookup cannot tell yet; that one is tried again with the next event, up to <see cref="MaxWindowTries"/> times,
+    /// after which the chat keeps the window it had.
     /// </summary>
     /// <param name="chain">The event's processes, from the hook up: the ones above the claude spare reading every process.</param>
-    private WindowLookup? LookUp(string sessionId, int? claudePid, IReadOnlyList<ProcessRef>? chain)
+    /// <param name="seenAt">For a PID taken from the chat rather than an event: its last event, to tell a reused PID.</param>
+    private WindowLookup? LookUp(string sessionId, int? claudePid, IReadOnlyList<ProcessRef>? chain, DateTimeOffset? seenAt)
     {
-        if (_windows is null || claudePid is not { } pid)
+        if (_windows is null || claudePid is not { } pid || _claims.ContainsKey(sessionId)
+            || (_windowLookups.TryGetValue(sessionId, out var looked) && looked == pid)
+            || (seenAt is { } at && !ProcessStillRuns(pid, at)))
         {
             return null;
         }
 
-        lock (_gate)
+        if (_windows.TryFoldersOf(pid, Above(chain, pid), out var folders))
         {
-            if (_claims.ContainsKey(sessionId) || (_windowLookups.TryGetValue(sessionId, out var looked) && looked == pid))
-            {
-                return null;
-            }
+            return new WindowLookup(pid, folders);
         }
 
-        return _windows.TryFoldersOf(pid, Above(chain, pid), out var folders) ? new WindowLookup(pid, folders) : null;
+        var misses = _windowMisses.AddOrUpdate(sessionId, (pid, 1), (_, m) => m.Pid == pid ? (pid, m.Tries + 1) : (pid, 1));
+        return misses.Tries >= MaxWindowTries ? new WindowLookup(pid, Folders: null) : null;
     }
 
     /// <summary>

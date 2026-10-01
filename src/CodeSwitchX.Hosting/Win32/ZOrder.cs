@@ -50,37 +50,48 @@ public static unsafe class ZOrder
     /// </summary>
     public static bool IsFrontPair(nint upper, nint lower) => IsFrontPair(upper, lower, Above, Seen, IsTopmost);
 
+    /// <remarks>
+    /// One walk up from <paramref name="lower"/>, at most <see cref="MaxSteps"/> windows: a walk that runs out (a z-order
+    /// changing under it, more hidden windows than that) proves nothing and answers false, as does any window seen between.
+    /// </remarks>
     internal static bool IsFrontPair(nint upper, nint lower, Func<nint, nint> above, Func<nint, bool> seen, Func<nint, bool> topmost)
     {
-        if (upper == 0 || lower == 0 || upper == lower || NextSeen(lower) != upper)
+        if (upper == 0 || lower == 0 || upper == lower)
         {
             return false;
         }
 
-        var steps = 0;
-        for (var window = NextSeen(upper); window != 0; window = NextSeen(window))
+        var passedUpper = false;
+        var window = lower;
+        for (var steps = 0; steps < MaxSteps; steps++)
         {
-            if (!topmost(window) || ++steps > MaxSteps)
+            window = above(window);
+            if (window == 0)
             {
-                return false;
+                return passedUpper; // the top of the z-order
             }
-        }
 
-        return true;
-
-        nint NextSeen(nint window)
-        {
-            for (var i = 0; i < MaxSteps; i++)
+            if (!seen(window))
             {
-                window = above(window);
-                if (window == 0 || seen(window))
+                continue;
+            }
+
+            if (!passedUpper)
+            {
+                if (window != upper)
                 {
-                    return window;
+                    return false; // a window between them
                 }
-            }
 
-            return 0;
+                passedUpper = true;
+            }
+            else if (!topmost(window))
+            {
+                return false; // a window over the pair
+            }
         }
+
+        return false;
     }
 
     private static nint Above(nint hwnd) => PInvoke.GetWindow(new HWND(hwnd), GET_WINDOW_CMD.GW_HWNDPREV);

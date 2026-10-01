@@ -898,7 +898,7 @@ public class SessionEngineTests
     private static readonly string[] InstallerFolders = [@"C:\Repo\App", @"C:\Repo\Tools"];
 
     /// <summary>Two multi-root workspaces that both start with C:\Repo\App, Full registered first (issue #80).</summary>
-    private (SessionEngine Engine, FakeIdeWindows Windows) SharedRootEngine()
+    private (SessionEngine Engine, FakeIdeWindows Windows) SharedRootEngine(IProcessProbe? probe = null)
     {
         var resolver = new WorkspaceResolver();
         resolver.SetRoots(
@@ -907,7 +907,42 @@ public class SessionEngineTests
         var windows = new FakeIdeWindows();
         windows.Folders[100] = [@"c:\repo\app", @"c:\repo\tools"];
         windows.Folders[200] = [@"C:\Repo\Docs", @"C:\Repo\App"];
-        return (new SessionEngine(_bus, resolver, _time, NullLogger<SessionEngine>.Instance, windows: windows), windows);
+        return (new SessionEngine(_bus, resolver, _time, NullLogger<SessionEngine>.Instance, probe: probe, windows: windows), windows);
+    }
+
+    [Fact]
+    public void A_stored_PID_another_process_took_is_not_looked_up()
+    {
+        // The chat's lookups never got through while its claude ran; then the claude ended and Windows gave its PID away.
+        var probe = new FakeProcessProbe().Run(200, _time.GetUtcNow().AddMinutes(-5));
+        var (engine, windows) = SharedRootEngine(probe);
+        engine.Restore([Restored(InstallerId, claudePid: 200, windowFolders: null)]);
+        probe.Run(200, _time.GetUtcNow().AddMinutes(1));
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(0);
+        engine.Get("s1")!.WindowFolders.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_lookup_that_cannot_tell_is_tried_a_few_times_then_the_chat_keeps_its_window()
+    {
+        var (engine, windows) = SharedRootEngine();
+        windows.Unreadable = true;
+
+        for (var i = 0; i < SessionEngine.MaxWindowTries + 3; i++)
+        {
+            engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash", chain: [new ProcessRef(100, "claude.exe")]));
+        }
+
+        windows.Lookups.ShouldBe(SessionEngine.MaxWindowTries);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId, "no window known: the folder rule");
+
+        // A new claude for the chat (a resume) is looked up again.
+        windows.Unreadable = false;
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(200, "claude.exe")]));
+        windows.Lookups.ShouldBe(SessionEngine.MaxWindowTries + 1);
     }
 
     [Fact]

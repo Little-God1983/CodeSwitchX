@@ -10,7 +10,7 @@ namespace CodeSwitchX.Hosting.Tests;
 public sealed class ClaudeIdeWindowsTests : IDisposable
 {
     private readonly string _locks = Directory.CreateTempSubdirectory("csx-ide-").FullName;
-    private readonly List<(int Port, int Pid)> _listeners = [];
+    private readonly List<(int Port, int Pid, DateTime? Since)> _listeners = [];
     private readonly Dictionary<int, (int Parent, string Name)> _processes = [];
     private readonly FakeTimeProvider _time = new();
     private int _listenerReads;
@@ -38,7 +38,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     private void Window(int port, int extensionHost, params string[] folders)
     {
         Lock(port, $$"""{"pid":500,"workspaceFolders":[{{string.Join(",", folders.Select(f => $"\"{f.Replace(@"\", @"\\")}\""))}}],"ideName":"Visual Studio Code","transport":"ws","authToken":"x"}""");
-        _listeners.Add((port, extensionHost));
+        _listeners.Add((port, extensionHost, null));
     }
 
     /// <summary>A process line from <paramref name="pid"/> up: each process's parent is the next one.</summary>
@@ -116,7 +116,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     public void A_lock_without_folders_tells_no_window(string json)
     {
         Lock(14108, json);
-        _listeners.Add((14108, 31));
+        _listeners.Add((14108, 31, null));
 
         FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBeNull();
     }
@@ -127,7 +127,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     public void A_lock_caught_while_the_extension_writes_it_tells_nothing_yet(string json)
     {
         Lock(14108, json);
-        _listeners.Add((14108, 31));
+        _listeners.Add((14108, 31, null));
         var windows = Windows();
 
         windows.TryFoldersOf(1000, [31, 500], out var folders).ShouldBeFalse();
@@ -164,7 +164,6 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     [Fact]
     public void Of_two_locks_on_ports_of_one_process_the_newer_one_tells_its_window()
     {
-        // An old lock of a closed window whose port number the extension host's other server took.
         Window(51234, extensionHost: 31, @"e:\Repos\Old");
         File.SetLastWriteTimeUtc(Path.Combine(_locks, "51234.lock"), DateTime.UtcNow.AddDays(-3));
         Window(14108, extensionHost: 31, @"e:\Repos\App");
@@ -173,10 +172,42 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     }
 
     [Fact]
+    public void A_lock_written_before_its_ports_listener_began_is_not_that_listeners_however_new()
+    {
+        // Window B's lock at 09:00; window C wrote 51234.lock at 10:00 and crashed; at 11:00 another server in B's
+        // extension host took port 51234. C's lock is the newer one, but it is older than the listener on its port.
+        var nine = new DateTime(2026, 10, 1, 9, 0, 0, DateTimeKind.Utc);
+        Window(14108, extensionHost: 31, @"e:\Repos\B");
+        File.SetLastWriteTimeUtc(Path.Combine(_locks, "14108.lock"), nine);
+        _listeners[^1] = (14108, 31, nine.AddSeconds(-1));
+        Window(51234, extensionHost: 31, @"e:\Repos\C");
+        File.SetLastWriteTimeUtc(Path.Combine(_locks, "51234.lock"), nine.AddHours(1));
+        _listeners[^1] = (51234, 31, nine.AddHours(2));
+
+        FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\B"]);
+    }
+
+    [Fact]
+    public void A_claude_the_editor_started_whose_lock_is_missing_tells_nothing_yet()
+    {
+        // The extension is rewriting its window's lock: the file is gone for a moment.
+        _processes[1000] = (31, "claude.exe");
+        _processes[31] = (500, "Code.exe");
+        _processes[500] = (0, "Code.exe");
+        var windows = Windows();
+
+        windows.TryFoldersOf(1000, [31, 500], out _).ShouldBeFalse();
+
+        _time.Advance(ClaudeIdeWindows.MaxAge);
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+        FoldersOf(windows, 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\App"]);
+    }
+
+    [Fact]
     public void A_port_two_processes_hold_on_the_two_stacks_counts_for_both()
     {
         Window(14108, extensionHost: 31, @"e:\Repos\App");
-        _listeners.Insert(0, (14108, 777)); // an unrelated process on 127.0.0.1, the extension host on [::1]
+        _listeners.Insert(0, (14108, 777, null)); // an unrelated process on 127.0.0.1, the extension host on [::1]
 
         FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\App"]);
     }
@@ -232,7 +263,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
         {
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
-            ProcessTable.Listeners().ShouldContain((port, Environment.ProcessId));
+            ProcessTable.Listeners().ShouldContain(l => l.Port == port && l.Pid == Environment.ProcessId && l.Since <= DateTime.UtcNow.AddSeconds(5));
         }
         finally
         {

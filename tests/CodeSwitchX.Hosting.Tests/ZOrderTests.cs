@@ -54,6 +54,14 @@ public sealed class ZOrderTests
     }
 
     [Fact]
+    public void A_walk_that_runs_out_of_steps_proves_no_pair()
+    {
+        // The z-order changes under the walk and a hidden window keeps coming back above itself.
+        const nint hidden = 99;
+        ZOrder.IsFrontPair(VsCode, Shell, h => h == Shell ? VsCode : hidden, h => h != hidden, _ => false).ShouldBeFalse();
+    }
+
+    [Fact]
     public void Without_a_VS_Code_window_in_the_Cab_there_is_no_pair()
     {
         IsFrontPair(0, Shell, (Shell, true, false)).ShouldBeFalse();
