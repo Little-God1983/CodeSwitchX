@@ -83,6 +83,21 @@ public sealed class ChatNewsTests : IDisposable
     }
 
     [Fact]
+    public void Chats_that_share_a_title_are_numbered_for_the_teller_so_it_tells_them_apart()
+    {
+        ChatNewsLine Line(string id, string title) => new(id, Guid.Empty, "AudioVisualizer", title, ChatNewsKind.Finished, null, null, false);
+
+        var prompt = RavenPanelViewModel.DigestPrompt([Line("a", "Weather discussion"), Line("b", "Tea"), Line("c", "Weather discussion")]);
+
+        prompt.Split('\n').ShouldBe([
+            "News of the chats:",
+            "- AudioVisualizer, chat \"Weather discussion\" (1 of 2): finished",
+            "- AudioVisualizer, chat \"Tea\": finished",
+            "- AudioVisualizer, chat \"Weather discussion\" (2 of 2): finished",
+        ]);
+    }
+
+    [Fact]
     public async Task A_turn_that_ended_on_an_API_error_is_a_failure_not_a_finish()
     {
         _yard.Now("a", SessionState.Idle);

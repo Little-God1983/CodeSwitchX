@@ -1152,11 +1152,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             await previous;
+            var began = _time.GetUtcNow();
             var lines = await news.TakeAsync(CancellationToken.None);
             if (lines.Count == 0)
             {
                 return;
             }
+
+            var taken = _time.GetUtcNow();
 
             var card = AddEntry(RavenLogKind.News, lines.Count == 1 ? "Chat news" : $"Chat news · {lines.Count}");
             card.Lines = lines;
@@ -1171,8 +1174,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             _voice.Expect();
-            spoken = _voice.Begin();
+            var asking = default(DateTimeOffset);
+            spoken = _voice.Begin(heard => _logger.LogInformation(
+                "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
+                (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
             asked = _teller is not null;
+            asking = _time.GetUtcNow();
             var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, quiet: true);
             if (!said && !floor.IsCancellationRequested)
             {
@@ -1203,9 +1210,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     internal static string DigestPrompt(IReadOnlyList<ChatNewsLine> lines)
     {
         var text = new System.Text.StringBuilder("News of the chats:");
+        // Chats that share a workspace and title are numbered, or the teller takes them for one ("Weather discussion" twice).
+        var same = lines.GroupBy(l => (l.Workspace, l.Title)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.ToList());
         foreach (var line in lines)
         {
-            text.Append('\n').Append($"- {line.Workspace}, chat \"{line.Title}\": {line.What}");
+            var title = same.TryGetValue((line.Workspace, line.Title), out var twins)
+                ? $"\"{line.Title}\" ({twins.IndexOf(line) + 1} of {twins.Count})"
+                : $"\"{line.Title}\"";
+            text.Append('\n').Append($"- {line.Workspace}, chat {title}: {line.What}");
             if (line.Detail is { Length: > 0 } detail)
             {
                 text.Append($": \"{detail}\"");
