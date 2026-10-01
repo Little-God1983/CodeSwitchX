@@ -1,4 +1,5 @@
 using System.Speech.Synthesis;
+using CodeSwitchX.Tests;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Listening;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,7 +18,7 @@ public sealed class OpenMicListenerTests
         var started = new TaskCompletionSource();
         var ended = new TaskCompletionSource<float[]>();
         listener.SpeechStarted += (_, _) => started.TrySetResult();
-        listener.TurnEnded += (_, clip) => ended.TrySetResult(clip);
+        listener.TurnEnded += (_, turn) => ended.TrySetResult(turn.Clip);
 
         listener.Start("mic");
         stream.Feed(0.5f, seconds: 1.0, block: 441); // speech, in odd blocks
@@ -94,12 +95,12 @@ public sealed class OpenMicListenerTests
     }
 
     [Fact]
-    public async Task What_is_heard_comes_in_batches_whose_samples_add_up_to_the_audio()
+    public async Task What_is_heard_comes_in_batches_whose_durations_add_up_to_the_audio()
     {
         var stream = new FakeStream();
         using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
             () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
-        var batches = new List<CapturedFrames>();
+        var batches = new List<CapturedBlock>();
         listener.Heard += (_, batch) => { lock (batches) { batches.Add(batch); } };
 
         listener.Start("mic");
@@ -110,7 +111,7 @@ public sealed class OpenMicListenerTests
         lock (batches)
         {
             batches.Count.ShouldBeLessThanOrEqualTo(25);
-            batches.Sum(b => b.Samples16k.Length).ShouldBe(16_000);
+            batches.Sum(b => b.Duration.Ticks).ShouldBe(TimeSpan.FromSeconds(1).Ticks);
             batches.ShouldAllBe(b => b.Rms == 0.01f);
         }
     }
@@ -129,7 +130,7 @@ public sealed class OpenMicListenerTests
             vad.ThrowOnce = true; // the next frame fails, while the turn is under way
             started.TrySetResult();
         };
-        listener.TurnEnded += (_, clip) => ended.TrySetResult(clip);
+        listener.TurnEnded += (_, turn) => ended.TrySetResult(turn.Clip);
 
         listener.Start("mic");
         stream.Feed(0.5f, seconds: 1.0, block: 160);
@@ -147,7 +148,7 @@ public sealed class OpenMicListenerTests
         using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
             () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
         var failed = new TaskCompletionSource<MicrophoneException>();
-        listener.Failed += (_, error) => failed.TrySetResult(error);
+        listener.Failed += (_, run) => failed.TrySetResult(run.Failure!);
 
         listener.Start("mic");
         stream.Running.ShouldBeTrue();
@@ -209,14 +210,131 @@ public sealed class OpenMicListenerTests
         var folder = Path.Combine(Path.GetTempPath(), "csx-om-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         var store = new ListeningModelStore(folder, new HttpClient());
-        using var listener = new OpenMicListener(new FakeStream(), store, () => vad,
-            () => throw new InvalidOperationException("no"), NullLogger<OpenMicListener>.Instance);
+        var path = store.PathOf(ListeningModelStore.SmartTurn);
+        File.WriteAllBytes(path, [1, 2, 3]); // ONNX Runtime refuses it
+        using var listener = new OpenMicListener(new FakeStream(), store, () => vad, () => new SmartTurn(path),
+            NullLogger<OpenMicListener>.Instance);
 
         var error = Should.Throw<ListeningModelException>(() => listener.Start("mic"));
 
         error.Model.ShouldBe(ListeningModelStore.SmartTurn);
         vad.Disposed.ShouldBeTrue();
+        File.Exists(path).ShouldBeFalse();
         Directory.Delete(folder, recursive: true);
+    }
+
+    [Fact]
+    public void A_load_failure_that_is_not_the_file_s_fault_keeps_the_file_and_is_thrown_as_it_is()
+    {
+        var vad = new LevelVad();
+        var folder = Path.Combine(Path.GetTempPath(), "csx-om-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var store = new ListeningModelStore(folder, new HttpClient());
+        var path = store.PathOf(ListeningModelStore.SmartTurn);
+        File.WriteAllBytes(path, [1, 2, 3]);
+        using var listener = new OpenMicListener(new FakeStream(), store, () => vad,
+            () => throw new DllNotFoundException("onnxruntime.dll"), NullLogger<OpenMicListener>.Instance);
+
+        Should.Throw<DllNotFoundException>(() => listener.Start("mic"));
+
+        File.Exists(path).ShouldBeTrue("a good model must not be deleted for a failure that is not the file's");
+        vad.Disposed.ShouldBeTrue();
+        Directory.Delete(folder, recursive: true);
+    }
+
+    [Fact]
+    public async Task Audio_dropped_because_the_worker_fell_behind_is_logged_once()
+    {
+        var stream = new FakeStream();
+        var logger = new ListLogger<OpenMicListener>();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), logger);
+        using var stalled = new ManualResetEventSlim();
+        listener.Heard += (_, _) => stalled.Wait(TimeSpan.FromSeconds(5)); // the worker stalls on its first batch
+
+        listener.Start("mic");
+        stream.Feed(0.01f, seconds: 30.0, block: 160); // 3000 blocks: three times what the queue holds
+        stalled.Set();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        listener.Stop();
+
+        logger.Entries.Count(e => e.Message.Contains("fell behind")).ShouldBe(1);
+    }
+
+    [Fact]
+    public void Blocks_that_arrive_after_a_stop_are_not_taken_for_dropped_audio()
+    {
+        var stream = new FakeStream();
+        var logger = new ListLogger<OpenMicListener>();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), logger);
+
+        var run = listener.Start("mic");
+        listener.Stop(run);
+        stream.Feed(0.01f, seconds: 0.1, block: 160); // late blocks from the capture thread
+
+        logger.Entries.ShouldNotContain(e => e.Message.Contains("fell behind"));
+    }
+
+    [Fact]
+    public void A_stop_of_an_old_run_leaves_the_newer_run_open()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+
+        var old = listener.Start("mic");
+        var current = listener.Start("mic");
+        listener.Stop(old);
+
+        stream.Running.ShouldBeTrue();
+        listener.Stop(current);
+        stream.Running.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_stop_from_the_worker_s_own_handler_disposes_the_run_s_token_once_the_worker_ends()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        OpenMicRun? run = null;
+        var stopped = new TaskCompletionSource();
+        listener.Heard += (_, _) =>
+        {
+            listener.Stop(run!);
+            stopped.TrySetResult();
+        };
+
+        run = listener.Start("mic");
+        var token = CurrentToken(listener);
+        stream.Feed(0.01f, seconds: 0.1, block: 160);
+        await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        for (var i = 0; i < 100 && !Disposed(token); i++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        Disposed(token).ShouldBeTrue();
+    }
+
+    private static CancellationTokenSource CurrentToken(OpenMicListener listener) =>
+        (CancellationTokenSource)typeof(OpenMicListener).GetField("_cts", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(listener)!;
+
+    /// <summary>A disposed source throws when its token is asked for.</summary>
+    private static bool Disposed(CancellationTokenSource source)
+    {
+        try
+        {
+            _ = source.Token;
+            return false;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
     }
 
     // Needs the models in %LOCALAPPDATA%\CodeSwitchX\models\listening.
@@ -234,8 +352,8 @@ public sealed class OpenMicListenerTests
         using var listener = new OpenMicListener(new FileMicrophoneStream(path, realTime: true), store, NullLogger<OpenMicListener>.Instance);
         var turns = new List<(float[] Clip, long At)>();
         long heard = 0; // samples the worker has taken in: Heard and TurnEnded are both raised on it, in order
-        listener.Heard += (_, batch) => heard += batch.Samples16k.Length;
-        listener.TurnEnded += (_, clip) => { lock (turns) { turns.Add((clip, heard)); } };
+        listener.Heard += (_, batch) => heard += batch.Duration.Ticks / 625; // 625 ticks a sample at 16 kHz
+        listener.TurnEnded += (_, turn) => { lock (turns) { turns.Add((turn.Clip, heard)); } };
 
         listener.Start("file");
         await Task.Delay(TimeSpan.FromSeconds(audio.Length / 16_000.0 + 1), TestContext.Current.CancellationToken);

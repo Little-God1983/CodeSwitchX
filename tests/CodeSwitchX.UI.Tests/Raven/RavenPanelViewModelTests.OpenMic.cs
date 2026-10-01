@@ -285,6 +285,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.StartGate = new TaskCompletionSource();
         vm.MicMode = MicMode.OpenMic;
         var opening = vm.PendingOpenMic;
+        await Until(() => _openMic.Opening);
 
         _openMic.Fail();
         _openMic.StartGate.SetResult();
@@ -292,6 +293,127 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.State.ShouldBe(RavenState.AttendingPaused);
         vm.Log.Count(e => e.Kind == RavenLogKind.Warning).ShouldBe(1);
+    }
+
+    // PR #89 review: the silent-mic watch
+    [Fact]
+    public async Task A_microphone_that_goes_digitally_silent_in_Open_mic_is_warned_of_and_its_return_noted()
+    {
+        var vm = await InOpenMicAsync();
+
+        HearFor(0.02f, seconds: 1); // heard
+        HearFor(0f, seconds: 11); // a mute key: exact zeros
+        vm.Log.Count(e => e.Kind == RavenLogKind.Warning && e.Text == $"{Headset.Name} stopped sending sound. Check that it isn't muted or gone to sleep.")
+            .ShouldBe(1);
+
+        HearFor(0.02f, seconds: 1);
+        vm.Log.Last().Text.ShouldBe($"{Headset.Name} is sending sound again.");
+    }
+
+    // PR #89 review: the silent-mic watch
+    [Fact]
+    public async Task A_microphone_that_starts_late_in_Open_mic_replaces_the_No_sound_warning()
+    {
+        var vm = await InOpenMicAsync();
+
+        HearFor(0f, seconds: 3);
+        HearFor(0.02f, seconds: 1); // the Bluetooth headset has switched to its microphone
+
+        vm.Log.ShouldNotContain(e => e.Text.StartsWith("No sound from"));
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Note && e.Text.StartsWith($"{Headset.Name} took a moment to start sending sound."));
+    }
+
+    // PR #89 review: each start watches afresh
+    [Fact]
+    public async Task Each_start_of_Open_mic_watches_the_microphone_afresh()
+    {
+        var vm = await InOpenMicAsync();
+        HearFor(0f, seconds: 3);
+
+        await vm.TapMic(TalkInput.MicButton); // pause
+        await vm.TapMic(TalkInput.MicButton); // resume
+        await WithinAsync(vm.PendingOpenMic);
+        HearFor(0f, seconds: 3);
+
+        vm.Log.Count(e => e.Kind == RavenLogKind.Warning && e.Text.StartsWith("No sound from")).ShouldBe(2);
+    }
+
+    // PR #89 review: only a bad model file is downloaded again
+    [Fact]
+    public async Task A_listener_that_will_not_start_for_another_reason_goes_back_to_push_to_talk_without_promising_a_download()
+    {
+        _openMic.StartFails = new DllNotFoundException("onnxruntime.dll was not found");
+        var vm = await NewOpenMicVmAsync();
+
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+        var warning = vm.Log.Last();
+        warning.Kind.ShouldBe(RavenLogKind.Warning);
+        warning.Text.ShouldBe("Open mic could not start: onnxruntime.dll was not found. Back to push to talk.");
+        warning.Text.ShouldNotContain("downloaded");
+    }
+
+    // PR #89 review: Open mic's wording
+    [Fact]
+    public async Task A_failed_speech_model_download_in_Open_mic_says_to_speak_again_not_to_press_the_mic()
+    {
+        _models.IsPresent.Returns(false);
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new IOException("disk full")));
+        var vm = await InOpenMicAsync();
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.Log.Last().Text.ShouldBe("The speech model could not be downloaded: disk full. Speak again to try again.");
+    }
+
+    // PR #89 review: Open mic's wording
+    [Fact]
+    public async Task A_speech_model_that_will_not_load_in_Open_mic_is_downloaded_again_with_the_next_turn()
+    {
+        _models.ModelPath.Returns(@"c:\m\ggml.bin");
+        Transcribes(Task.FromException<DictationResult>(
+            new DictationModelLoadException(@"c:\m\ggml.bin", "Vulkan", new InvalidOperationException("out of memory."))));
+        var vm = await InOpenMicAsync();
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.Log.Last().Text.ShouldBe(@"The speech model could not be loaded: out of memory. Delete c:\m\ggml.bin; it is downloaded again with your next turn.");
+    }
+
+    // PR #89 review: runs
+    [Fact]
+    public async Task What_an_old_run_raises_after_Open_mic_moved_on_is_ignored()
+    {
+        var vm = await InOpenMicAsync();
+        var old = _openMic.Run!;
+        vm.SelectedMicrophone = Desk;
+        await WithinAsync(vm.PendingOpenMic);
+        var before = vm.Log.Count;
+
+        _openMic.Speak(old);
+        _openMic.EndTurn(old);
+        _openMic.Fail(old);
+
+        vm.State.ShouldBe(RavenState.Attending);
+        vm.Log.Count.ShouldBe(before);
+        _openMic.Listening.ShouldBe(Desk.Id);
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>Batches of 50 ms at one level for <paramref name="seconds"/>, as the listener raises them.</summary>
+    private void HearFor(float rms, double seconds)
+    {
+        for (var i = 0; i < (int)(seconds * 20); i++)
+        {
+            _openMic.Hear(rms);
+        }
     }
 
     // Final review 1

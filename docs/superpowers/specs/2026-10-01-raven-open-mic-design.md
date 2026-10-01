@@ -82,12 +82,17 @@ samples it has been fed, so tests drive it frame by frame.
 
 - Ties the stream to the detector. The capture thread only queues frames (a bounded channel); one worker thread cuts
   them into 512-sample frames and runs the detector, so ONNX never runs on the capture thread and never on the UI thread.
-- `Start(deviceId)`, `Stop()`, `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
+- `Start(deviceId)` returns the new run (an `OpenMicRun`, ending the run before it); `Stop(run)` closes that run only
+  while it is still the current one, so a late stop never closes a newer run. Both are serialised by the listener and
+  called off the UI thread. `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
   microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
   Raven speaks with voice barge-in off.
-- Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted`, `TurnEnded(clip)`,
-  `Heard(frames)` (each captured block, for the orb's level and the silent-microphone watch). `Failed(MicrophoneException)`
-  comes on the capture thread, and the listener then stops itself.
+- Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted(run)`,
+  `TurnEnded(run, clip)`, `Heard(CapturedBlock)` (the loudest RMS and the duration of about 50 ms of captured audio, for
+  the orb's level and the silent-microphone watch). `Failed(run)` comes on the capture thread, with the run's
+  `Failure` set first, and the listener then stops that run itself. The panel ignores events of a run that is not its
+  current one, and reads `Failure` on the run a start returns, for a microphone that died while it opened.
+- If the worker falls behind and the queue is full, blocks are dropped; that is logged once per run.
 - A Smart Turn failure is logged once per listener and the turn falls back to the 3 s rule: a turn is never lost to it.
 
 ### ListeningModelStore
@@ -95,7 +100,8 @@ samples it has been fed, so tests drive it frame by frame.
 - The two model files in the models folder next to the Whisper model, each with its pinned URL, length and SHA-256.
 - `IsPresent`, `DownloadAsync(progress, ct)`: downloaded to a temporary file, checked, then moved into place; a failed,
   cancelled or mismatching download leaves nothing behind.
-- A file that fails to load is deleted, so the next switch to Open mic downloads it again.
+- A file that ONNX Runtime refuses (invalid or corrupt) is deleted, so the next switch to Open mic downloads it again.
+  Any other load failure (the native runtime missing, out of memory) deletes nothing.
 
 ## 2. The panel
 
@@ -127,9 +133,10 @@ samples it has been fed, so tests drive it frame by frame.
   passes; the room's sound lights the dots unevenly, each by its own flicker, so a sound shows as a sparkle round the
   ring. The wave ring rests inside at a lower alpha (0.55). When speech starts the dots fade out as the wave ring takes
   the level, an eased blend rather than a cut. Paused draws the dots still at half their alpha, with no glint.
-  `RavenState` gets two states for it, `Attending` (waiting) and `AttendingPaused`. Unlike Idle, the waiting ring keeps
-  moving in a background window (the microphone is live), at the idle frame rate as Thinking does; with Windows'
-  animations off it draws one still frame.
+  `RavenState` gets two states for it, `Attending` (waiting) and `AttendingPaused`. The waiting ring moves at the idle
+  frame rate while CodeSwitchX is the active window and, like Idle, stops on a still frame in a background window: Open
+  mic waits for hours. With Windows' animations off it draws one still frame; a hidden orb draws nothing. The panel's
+  header reads "OPEN MIC" while waiting and "PAUSED" while paused.
 
 
 - **`SpeechStarted`** does what a press does: Raven stops speaking, a digest stops, the voice expects an answer, the brain
@@ -145,10 +152,15 @@ samples it has been fed, so tests drive it frame by frame.
 ## 3. Failures
 
 - **The models cannot be downloaded:** a warning with the reason, and the mode goes back to Push to talk.
-- **A model will not load:** the file is deleted, a warning says so, and the mode goes back to Push to talk.
+- **A model will not load:** a file ONNX Runtime refuses is deleted, a warning says so, and the mode goes back to Push
+  to talk. Any other failure to start the listener warns with its message and goes back to Push to talk, deleting
+  nothing.
 - **The microphone fails** (unplugged, gone): the same warning as today; the listener stops, the mode stays Open mic and
-  shows paused, and the mic button tries again. A silent microphone gets today's "No sound from …" warning, once per
-  start.
+  shows paused, and the mic button tries again. The silent-microphone watch is push to talk's, per start: "No sound
+  from …" (taken back when a late microphone starts sending), and "… stopped sending sound" when a microphone that was
+  heard goes digitally silent (a mute key, a headset asleep), with a note when it is back.
+- **The speech model fails in an Open mic turn:** the warnings say the next turn tries again ("Speak again to try
+  again."), not to press the mic, which would pause Open mic.
 - **Smart Turn fails mid-turn:** logged once; the 3 s rule ends the turn.
 - **The transcript is empty:** logged only.
 
