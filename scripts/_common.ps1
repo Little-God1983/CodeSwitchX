@@ -52,34 +52,56 @@ function Resolve-FullPath {
     return [System.IO.Path]::GetFullPath([System.IO.Path]::Combine((Get-Location).ProviderPath, $Path))
 }
 
-# The path with every alias taken out of it: an 8.3 name (E:\STABLE~1), a junction or symlink, a
-# subst drive. Windows only resolves those for something that exists, so the nearest existing
-# ancestor is asked and whatever is not there yet is put back on the end. Falls back to the plain
-# full path when Windows cannot say. The C# is kept to what Windows PowerShell 5.1 compiles.
-function Resolve-RealPath {
-    param([string]$Path)
-    $full = Resolve-FullPath $Path
-    if (-not ('BuildScripts.RealPath' -as [type])) {
+# The compiled helper behind Resolve-RealPath and Get-FolderId. A type added with Add-Type stays in
+# the PowerShell window until it closes, so the name is this repo's own and carries a number: change
+# the number whenever the C# changes, or a window that ran an older copy keeps using that one. The
+# C# is kept to what Windows PowerShell 5.1 compiles.
+function Get-PathInfoType {
+    $name = 'CodeSwitchX.BuildScripts.PathInfoV2'
+    if (-not ($name -as [type])) {
         Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
-namespace BuildScripts
+namespace CodeSwitchX.BuildScripts
 {
-    public static class RealPath
+    public static class PathInfoV2
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileInformation
+        {
+            public uint Attributes;
+            public long Created;
+            public long Accessed;
+            public long Written;
+            public uint VolumeSerial;
+            public uint SizeHigh;
+            public uint SizeLow;
+            public uint Links;
+            public uint IndexHigh;
+            public uint IndexLow;
+        }
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint length, uint flags);
 
-        public static string Of(string path)
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
+
+        // No access asked for, every kind of sharing allowed, and BACKUP_SEMANTICS so a folder opens.
+        private static SafeFileHandle Open(string path)
         {
-            // No access asked for, every kind of sharing allowed, and BACKUP_SEMANTICS so a folder opens.
-            using (SafeFileHandle handle = CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero))
+            return CreateFile(path, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        }
+
+        public static string RealPath(string path)
+        {
+            using (SafeFileHandle handle = Open(path))
             {
                 if (handle.IsInvalid) { return null; }
                 StringBuilder buffer = new StringBuilder(4096);
@@ -91,11 +113,33 @@ namespace BuildScripts
                 return real;
             }
         }
+
+        // Which file or folder it is, however the path is spelled: the serial number of the volume
+        // and the number of the file on that volume.
+        public static string Id(string path)
+        {
+            using (SafeFileHandle handle = Open(path))
+            {
+                if (handle.IsInvalid) { return null; }
+                FileInformation information;
+                if (!GetFileInformationByHandle(handle, out information)) { return null; }
+                return information.VolumeSerial.ToString("x8") + ":" + information.IndexHigh.ToString("x8") + information.IndexLow.ToString("x8");
+            }
+        }
     }
 }
 '@
     }
+    return ($name -as [type])
+}
 
+# The path with every alias taken out of it: an 8.3 name (E:\STABLE~1), a junction or symlink, a
+# subst drive. Windows only resolves those for something that exists, so the nearest existing
+# ancestor is asked and whatever is not there yet is put back on the end. Falls back to the plain
+# full path when Windows cannot say.
+function Resolve-RealPath {
+    param([string]$Path)
+    $full = Resolve-FullPath $Path
     $existing = $full
     $missing  = @()
     while ($existing -and -not (Test-Path -LiteralPath $existing)) {
@@ -103,20 +147,49 @@ namespace BuildScripts
         $existing = [System.IO.Path]::GetDirectoryName($existing.TrimEnd('\'))
     }
     if (-not $existing) { return $full }
-    $real = [BuildScripts.RealPath]::Of($existing)
+    $real = (Get-PathInfoType)::RealPath($existing)
     if (-not $real) { return $full }
     foreach ($name in $missing) { $real = Join-Path $real $name }
     return $real
 }
 
-# Compares real paths, so an alias of the parent - E:\STABLE~1, a junction, a subst drive - is still
-# under it, whether or not the folder itself exists yet.
+# Which file or folder a path leads to, as an ID that is the same through every spelling of it, or
+# $null for something that does not exist. A real path cannot do this for a share that leads back
+# to this PC: \\localhost\E$\StableVersion stays a share path, and only the ID says it is
+# E:\StableVersion.
+function Get-FolderId {
+    param([string]$Path)
+    return (Get-PathInfoType)::Id((Resolve-FullPath $Path))
+}
+
+# True when two paths lead to the same file or folder, whether or not it exists yet.
+function Test-SamePath {
+    param([string]$Path, [string]$Other)
+    if ((Resolve-RealPath $Path).TrimEnd('\') -ieq (Resolve-RealPath $Other).TrimEnd('\')) { return $true }
+    $id = Get-FolderId $Path
+    return ($null -ne $id) -and ($id -eq (Get-FolderId $Other))
+}
+
+# Asks where the path really goes, not how it is spelled, so an alias of the parent is still under
+# it, whether or not the folder itself exists yet. Two questions, because each sees what the other
+# cannot: the real path takes out an 8.3 name (E:\STABLE~1), a junction and a subst drive; the ID
+# of each folder above the path catches a share or a mapped drive that leads back to this PC.
 function Test-PathUnder {
     param([string]$Path, [string]$Parent, [switch]$OrEqual)
     $full   = (Resolve-RealPath $Path).TrimEnd('\')
     $parent = (Resolve-RealPath $Parent).TrimEnd('\')
     if ($OrEqual -and $full.Equals($parent, [StringComparison]::OrdinalIgnoreCase)) { return $true }
-    return $full.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)
+    if ($full.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+
+    $parentId = Get-FolderId $Parent
+    if (-not $parentId) { return $false }
+    $folder = (Resolve-FullPath $Path).TrimEnd('\')
+    if (-not $OrEqual) { $folder = [System.IO.Path]::GetDirectoryName($folder) }
+    while ($folder) {
+        if ((Get-FolderId $folder) -eq $parentId) { return $true }
+        $folder = [System.IO.Path]::GetDirectoryName($folder.TrimEnd('\'))
+    }
+    return $false
 }
 
 # CodeSwitchX processes started from this install folder - the ones our scripts own. With -AnyVersion,
@@ -127,19 +200,21 @@ function Get-AppProcess {
     param([string]$InstallDir, [switch]$AnyVersion, [string]$InstallRoot = $DefaultInstallRoot)
     $all = @(Get-CimInstance Win32_Process -Filter "Name = '$AppExeName'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath })
+    # Windows reports the exe path the way the process was started - through an 8.3 name, a
+    # junction, a subst drive - so real paths are compared, never the spelling.
     if ($AnyVersion) {
         # Exactly our folders, not a neighbour whose name happens to start the same way
         # (CodeSwitchX_old, CodeSwitchXBackup): the current link itself, or a versioned
         # folder, which always has a dash after the app name.
         $current   = Get-CurrentLinkPath $InstallRoot
-        $versioned = $current + '-'
+        $versioned = (Join-Path (Resolve-RealPath $InstallRoot) $AppName) + '-'
         return @($all | Where-Object {
             (Test-PathUnder $_.ExecutablePath $current) -or
-            $_.ExecutablePath.StartsWith($versioned, [StringComparison]::OrdinalIgnoreCase)
+            (Resolve-RealPath $_.ExecutablePath).StartsWith($versioned, [StringComparison]::OrdinalIgnoreCase)
         })
     }
     $exePath = Join-Path (Resolve-FullPath $InstallDir) $AppExeName
-    return @($all | Where-Object { $_.ExecutablePath -ieq $exePath })
+    return @($all | Where-Object { Test-SamePath $_.ExecutablePath $exePath })
 }
 
 # Every CodeSwitchX.exe that is not one of ours - a Debug build from the repo, as a rule. Reported, never stopped.
@@ -281,7 +356,7 @@ function Test-InstallCurrent {
     param([string]$InstallDir)
     $target = Get-DirectoryLinkTarget (Get-CurrentLinkPath (Split-Path -Parent $InstallDir))
     if (-not $target) { return $false }
-    return (Resolve-FullPath $target).TrimEnd('\') -ieq (Resolve-FullPath $InstallDir).TrimEnd('\')
+    return (Test-SamePath $target $InstallDir)
 }
 
 # A stable build never republishes over a version folder that was made current. The current link and
@@ -314,11 +389,12 @@ function Assert-StableTargetFree {
 
 # Deletes an install folder with its marker last. The marker is what lets a later run clean the
 # folder, so a delete that stops half-way - a file still held open - must not have taken it first.
+# The name is compared, not the full path: Get-ChildItem writes an 8.3 name out long, so a full
+# path built from C:\Users\LITTLE~1\... never matches.
 function Remove-InstallFolder {
     param([string]$InstallDir)
-    $marker = Join-Path $InstallDir $InstallMarkerName
     Get-ChildItem -LiteralPath $InstallDir -Force |
-        Where-Object { $_.FullName -ine $marker } |
+        Where-Object { $_.Name -ine $InstallMarkerName } |
         Remove-Item -Recurse -Force
     Remove-Item -LiteralPath $InstallDir -Recurse -Force
 }
@@ -440,14 +516,20 @@ function Set-PropsVersion {
     [IO.File]::WriteAllText($PropsPath, $text, (New-Object Text.UTF8Encoding $hasBom))
 }
 
-# True when the one commit this checkout is ahead of origin is the bump Push-VersionBump made and
-# could not push. That commit belongs to a build that is already installed, so the advice for it is
-# to push it - resetting it away is what hands the same version number out twice.
-function Test-OnlyBumpAhead {
-    $subjects = @(Invoke-Git @('log', '--format=%s', "origin/$ReleaseBranch..HEAD") -Quiet)
-    if ($LASTEXITCODE -ne 0 -or $subjects.Count -ne 1 -or $subjects[0] -notmatch '^chore: bump version to \d') { return $false }
-    $files = @(Invoke-Git @('diff', '--name-only', "origin/$ReleaseBranch...HEAD") -Quiet)
-    return ($LASTEXITCODE -eq 0 -and $files.Count -eq 1 -and $files[0] -eq 'Directory.Build.props')
+# The bump Push-VersionBump made and could not push, looked for among the commits this checkout is
+# ahead of origin. That commit belongs to a build that was published, so the advice for it is to
+# push it - resetting it away is what hands the same version number out twice. Returns $null when
+# there is none; otherwise its short hash, and whether it is the only thing ahead.
+function Get-UnpushedBump {
+    $commits = @(Invoke-Git @('log', '--format=%h %s', "origin/$ReleaseBranch..HEAD") -Quiet)
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $bump = @($commits | Where-Object { $_ -match '^\S+ chore: bump version to \d' }) | Select-Object -First 1
+    if (-not $bump) { return $null }
+    $commit = ($bump -split ' ')[0]
+    # The bump touches one file. A commit that only borrowed the subject line is not it.
+    $files = @(Invoke-Git @('show', '--name-only', '--format=', $commit) -Quiet | Where-Object { $_ })
+    if ($LASTEXITCODE -ne 0 -or $files.Count -ne 1 -or $files[0] -ne 'Directory.Build.props') { return $null }
+    return [pscustomobject]@{ Commit = $commit; Alone = ($commits.Count -eq 1) }
 }
 
 # Everything that has to be true before a build may go into the stable root. This refuses rather
@@ -504,10 +586,21 @@ function Assert-ReleaseReady {
     $ahead  = [int]$Matches[1]
     $behind = [int]$Matches[2]
     # Asked before "behind", whose plain git pull would wrap the bump in a merge commit.
-    if ($ahead -gt 0 -and (Test-OnlyBumpAhead)) {
+    $bump = if ($ahead -gt 0) { Get-UnpushedBump } else { $null }
+    if ($bump -and $bump.Alone) {
         Fail "The version bump of the last stable build was never pushed." @(
-            "$ReleaseBranch is one commit ahead of origin/$ReleaseBranch, and that commit is the bump. Do not reset it away: its build is installed.",
+            "$ReleaseBranch is one commit ahead of origin/$ReleaseBranch, and that commit is the bump. Do not reset it away:",
+            "the build it belongs to was published, and a reset hands the same version number out again.",
             "Push it:  git pull --rebase origin $ReleaseBranch; git push origin $ReleaseBranch",
+            "If $ReleaseBranch is protected, open a PR for the bump commit instead. Then run this script again."
+        )
+    }
+    if ($bump) {
+        Fail "The version bump of the last stable build was never pushed, and other commits sit beside it." @(
+            "$ReleaseBranch is $ahead commits ahead of origin/$ReleaseBranch. One of them ($($bump.Commit)) is the bump. Do not lose it:",
+            "the build it belongs to was published, and a reset hands the same version number out again.",
+            "Keep the other commits on a branch, leave only the bump on $ReleaseBranch, and push it:",
+            "  git branch feature/<name>; git reset --hard origin/$ReleaseBranch; git cherry-pick $($bump.Commit); git push origin $ReleaseBranch",
             "If $ReleaseBranch is protected, open a PR for the bump commit instead. Then run this script again."
         )
     }

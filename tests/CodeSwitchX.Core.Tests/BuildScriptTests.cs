@@ -86,13 +86,32 @@ public class BuildScriptTests
             "function Invoke-Git { param([string[]]$Arguments, [switch]$Quiet) " +
             "$global:LASTEXITCODE = 0; " +
             "switch ($Arguments[0]) { 'rev-parse' { 'main' } 'rev-list' { \"1`t0\" } " +
-            $"'log' {{ '{subject}' }} 'diff' {{ {files} }} }} }}";
+            $"'log' {{ 'abc1234 {subject}' }} 'show' {{ {files} }} }} }}";
 
         var result = Pwsh.RunCommon($"{fakeGit}; Assert-ReleaseReady");
 
         result.ExitCode.ShouldBe(1);
         result.Output.Contains("was never pushed").ShouldBe(isTheBump);
         result.Output.Contains("reset --hard").ShouldBe(!isTheBump);
+    }
+
+    [Fact]
+    public void An_unpushed_bump_with_other_commits_beside_it_is_still_kept()
+    {
+        // The push was rejected, and one more commit was made on main before the next run. A plain
+        // "reset --hard origin/main" would take the bump away together with that commit.
+        var fakeGit =
+            "function Invoke-Git { param([string[]]$Arguments, [switch]$Quiet) " +
+            "$global:LASTEXITCODE = 0; " +
+            "switch ($Arguments[0]) { 'rev-parse' { 'main' } 'rev-list' { \"2`t0\" } " +
+            "'log' { 'def5678 fix: one more thing'; 'abc1234 chore: bump version to 0.1.0.11' } " +
+            "'show' { 'Directory.Build.props' } } }";
+
+        var result = Pwsh.RunCommon($"{fakeGit}; Assert-ReleaseReady");
+
+        result.ExitCode.ShouldBe(1);
+        result.Output.ShouldContain("other commits sit beside it");
+        result.Output.ShouldContain("git cherry-pick abc1234");
     }
 
     [Theory]
@@ -187,6 +206,117 @@ public class BuildScriptTests
             $"Test-PathUnder '{Path.Combine(temp.Path, path)}' '{root}' -OrEqual");
 
         result.Output.Trim().ShouldBe(under.ToString(), StringCompareShould.IgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(@"\\localhost\")]
+    [InlineData(@"\\127.0.0.1\")]
+    [InlineData(@"\\?\UNC\localhost\")]
+    public void A_path_through_a_share_to_this_PC_is_still_under_the_root(string server)
+    {
+        // \\localhost\E$\StableVersion\... is E:\StableVersion\..., but Windows keeps a share path a share
+        // path, so no spelling of it ever starts with the root. Which folder it is decides.
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+        Directory.CreateDirectory(Path.Combine(temp.Path, "rootOld"));
+        var share = server + temp.Path[0] + "$" + temp.Path[2..];
+        if (!Directory.Exists(share))
+        {
+            Assert.Skip("No admin share to this drive for this user.");
+        }
+
+        var result = Pwsh.RunCommon(
+            $"Test-PathUnder '{share}\\root\\CodeSwitchX-0.1.0.11' '{root}' -OrEqual; " +
+            $"Test-PathUnder '{share}\\root' '{root}' -OrEqual; " +
+            $"Test-PathUnder '{share}\\root' '{root}'; " +
+            $"Test-PathUnder '{share}\\rootOld\\CodeSwitchX-0.1.0.11' '{root}' -OrEqual");
+
+        Lines(result.Output).ShouldBe(["True", "True", "False", "False"]);
+    }
+
+    [Fact]
+    public void The_folder_the_current_link_points_at_is_current_however_the_link_spells_it()
+    {
+        // A link remade by hand, or by a run with another spelling of the root, still points at the same
+        // folder. "alias" stands in for E:\STABLE~1 or a subst drive.
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+        var folder = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.11")).FullName;
+        var other = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.10")).FullName;
+        var alias = Path.Combine(temp.Path, "alias");
+
+        var result = Pwsh.RunCommon(
+            $"New-Item -ItemType Junction -Path '{alias}' -Target '{root}' | Out-Null; " +
+            $"New-Item -ItemType Junction -Path '{Path.Combine(root, "CodeSwitchX")}' -Target '{alias}\\CodeSwitchX-0.1.0.11' | Out-Null; " +
+            $"Test-InstallCurrent '{folder}'; Test-InstallCurrent '{other}'");
+
+        Lines(result.Output).ShouldBe(["True", "False"]);
+    }
+
+    [Fact]
+    public void A_running_app_is_found_by_its_real_folder_however_it_was_started()
+    {
+        // The real lookup, with a stand-in that keeps running: a copy of ping.exe under the app's name. It
+        // is started through the current link, the way the Start Menu starts CodeSwitchX, and Windows then
+        // reports the link's path - not the version folder's - as where it runs from.
+        using var temp = new TempFolder();
+        var root = Directory.CreateDirectory(Path.Combine(temp.Path, "root")).FullName;
+        var folder = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.11")).FullName;
+        var neighbour = Directory.CreateDirectory(Path.Combine(root, "CodeSwitchX-0.1.0.10")).FullName;
+        var link = Path.Combine(root, "CodeSwitchX");
+        File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), Path.Combine(folder, "CodeSwitchX.exe"));
+        Pwsh.Run($"New-Item -ItemType Junction -Path '{link}' -Target '{folder}' | Out-Null").ExitCode.ShouldBe(0);
+
+        var start = new ProcessStartInfo(Path.Combine(link, "CodeSwitchX.exe"), "-n 120 127.0.0.1")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var app = Process.Start(start)!;
+        try
+        {
+            var result = Pwsh.RunCommon(
+                $"(Get-AppProcess '{folder}').ProcessId; 'by folder'; " +
+                $"(Get-AppProcess -AnyVersion -InstallRoot '{root}').ProcessId; 'by root'; " +
+                $"(Get-AppProcess '{neighbour}').ProcessId; 'neighbour'; " +
+                $"(Get-AppProcess -AnyVersion -InstallRoot '{temp.Path}').ProcessId; 'other root'");
+
+            Lines(result.Output).ShouldBe(
+                [app.Id.ToString(), "by folder", app.Id.ToString(), "by root", "neighbour", "other root"]);
+        }
+        finally
+        {
+            app.Kill();
+            app.WaitForExit();
+        }
+    }
+
+    [Fact]
+    public void A_clean_that_stops_half_way_leaves_the_marker_also_through_a_short_path()
+    {
+        // C:\Users\LITTLE~1\... is what %TEMP% looks like for a user name with a space in it. The folder
+        // listing writes that name out long, so a marker looked for by its full path is never found, and
+        // goes with everything else.
+        using var temp = new TempFolder();
+        var folder = Path.Combine(temp.Path, "a long folder name", "CodeSwitchX-0.1.0.11");
+
+        var result = Pwsh.RunCommon(
+            $"Write-InstallMarker '{folder}' '0.1.0.11'; " +
+            $"Set-Content '{folder}\\a-free.dll' x; Set-Content '{folder}\\CodeSwitchX.exe' x; " +
+            $"$short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder('{folder}').ShortPath; " +
+            $"if ($short -ieq '{folder}') {{ 'no short names here'; return }}; " +
+            $"$held = [IO.File]::Open('{folder}\\CodeSwitchX.exe', 'Open', 'Read', 'None'); " +
+            $"try {{ Remove-InstallFolder $short; 'cleaned' }} catch {{ 'stopped' }} finally {{ $held.Dispose() }}");
+
+        if (result.Output.Trim() == "no short names here")
+        {
+            Assert.Skip("The volume keeps no 8.3 names, so there is no short spelling to pass.");
+        }
+
+        result.Output.Trim().ShouldBe("stopped");
+        File.Exists(Path.Combine(folder, "codeswitchx-install.json")).ShouldBeTrue();
+        File.Exists(Path.Combine(folder, "a-free.dll")).ShouldBeFalse();
     }
 
     [Fact]
@@ -292,6 +422,88 @@ public class BuildScriptTests
     }
 
     [Fact]
+    public void The_closed_version_is_started_again_from_its_own_folder_not_through_the_link()
+    {
+        // Started from the Start Menu, the running version reports the link's path. The link step can
+        // take the old link away and then fail to make the new one: nothing is at that path any more.
+        // The old version's folder is never deleted, so that is where the restart has to come from.
+        using var repo = new FakeRepo("0.1.0.10");
+        var oldFolder = Directory.CreateDirectory(repo.VersionFolder("0.1.0.10")).FullName;
+        File.WriteAllText(Path.Combine(oldFolder, "CodeSwitchX.exe"), "x");
+
+        var result = repo.Build(before:
+            $"New-Item -ItemType Junction -Path '{repo.CurrentLink}' -Target '{oldFolder}' | Out-Null; " +
+            $"$env:FAKE_RUNNING_FROM = '{Path.Combine(repo.CurrentLink, "CodeSwitchX.exe")}'; $env:FAKE_LINK_FAILS = 'removed'");
+
+        result.ExitCode.ShouldBe(1);
+        result.Output.ShouldContain("Could not make 0.1.0.11 the current version");
+        repo.CurrentLinkTarget.ShouldBeNull();
+        repo.Calls.Where(call => call.StartsWith("start ")).ShouldBe(["start " + Path.Combine(oldFolder, "CodeSwitchX.exe")]);
+    }
+
+    [Fact]
+    public void A_second_process_that_will_not_close_does_not_leave_the_first_one_closed()
+    {
+        using var repo = new FakeRepo("0.1.0.10");
+        var first = Path.Combine(repo.VersionFolder("0.1.0.9"), "CodeSwitchX.exe");
+        var second = Path.Combine(repo.VersionFolder("0.1.0.10"), "CodeSwitchX.exe");
+
+        var result = repo.Build(before: $"$env:FAKE_RUNNING_FROM = '{first};{second}'; $env:FAKE_STUCK = '{second}'");
+
+        result.ExitCode.ShouldBe(1);
+        result.Output.ShouldContain("did not close");
+        result.Output.ShouldContain("was started again from " + first);
+        repo.Calls.Where(call => call.StartsWith("start ")).ShouldBe(["start " + first]);
+        repo.Version.ShouldBe("0.1.0.10");
+    }
+
+    [Fact]
+    public void A_new_version_that_will_not_start_does_not_leave_nobody_running()
+    {
+        // The link has moved and the folder is marked finished, so the hint is to record the version by
+        // hand - and the closed version runs again meanwhile.
+        using var repo = new FakeRepo("0.1.0.10");
+        var oldExe = Path.Combine(repo.VersionFolder("0.1.0.10"), "CodeSwitchX.exe");
+        var newExe = Path.Combine(repo.CurrentLink, "CodeSwitchX.exe");
+
+        var result = repo.Build(before: $"$env:FAKE_RUNNING_FROM = '{oldExe}'; $env:FAKE_START_FAILS = '{newExe}'");
+
+        result.ExitCode.ShouldBe(1);
+        result.Output.ShouldContain("CodeSwitchX 0.1.0.11 did not start");
+        result.Output.ShouldContain("set <Version> to 0.1.0.11");
+        repo.Calls.ShouldContain("start " + oldExe);
+        repo.Version.ShouldBe("0.1.0.10");
+    }
+
+    [Fact]
+    public void A_build_whose_clean_stops_half_way_leaves_a_folder_the_next_run_can_clean()
+    {
+        // build.ps1 itself has to delete the marker last, not only the helper it calls: one file in the
+        // folder is held open, the clean stops there, and the next run must still own the folder.
+        using var repo = new FakeRepo("0.1.0.10");
+        var folder = Path.Combine(repo.Outside, "CodeSwitchX-test");
+        repo.Build($"-InstallDir '{folder}'").ExitCode.ShouldBe(0);
+        var held = Path.Combine(folder, "zz-held.dll");
+        File.WriteAllText(held, "x");
+
+        ScriptResult stopped;
+        using (new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            stopped = repo.Build($"-InstallDir '{folder}' -Clean");
+        }
+
+        stopped.ExitCode.ShouldBe(1);
+        stopped.Output.ShouldContain("Could not clean");
+        File.Exists(Path.Combine(folder, "codeswitchx-install.json")).ShouldBeTrue();
+        File.Exists(Path.Combine(folder, "CodeSwitchX.exe")).ShouldBeFalse();
+
+        var result = repo.Build($"-InstallDir '{folder}' -Clean");
+
+        result.ExitCode.ShouldBe(0, result.Output);
+        File.Exists(held).ShouldBeFalse();
+    }
+
+    [Fact]
     public void A_build_somebody_started_by_hand_before_it_was_current_is_not_cleaned_under_them()
     {
         // The folder is not finished, so the guard would let the next run clean it - and the clean would
@@ -384,13 +596,51 @@ public class BuildScriptTests
     [Theory]
     [InlineData("always", "-?", true)]
     [InlineData("never", "-Part nonsense", false)]
+    [InlineData("never ", "-Part nonsense", false)]
+    [InlineData(" Always", "-?", true)]
     public void The_wait_can_be_forced_or_switched_off(string setting, string arguments, bool waits)
     {
-        // "always" is what a double click amounts to; "never" is for a caller that must not hang.
+        // "always" is what a double click amounts to; "never" is for a caller that must not hang. The
+        // space is what "set CODESWITCHX_BUILD_PAUSE=never && build.cmd" stores at the end of the value.
         var result = Cmd.Run($"/c \"\"{BuildCmd}\" {arguments}\"", ("CODESWITCHX_BUILD_PAUSE", setting));
 
         result.Output.Contains(PauseLine).ShouldBe(waits);
     }
+
+    [Fact]
+    public void A_setting_that_is_neither_word_is_ignored_out_loud()
+    {
+        var result = Cmd.Run($"/c \"\"{BuildCmd}\" -Part nonsense\"", ("CODESWITCHX_BUILD_PAUSE", "off"));
+
+        result.Output.ShouldContain("neither never nor always");
+        result.Output.ShouldContain(PauseLine);
+    }
+
+    [Theory]
+    [InlineData("/c", true, 0)]
+    [InlineData("/c", false, 1)]
+    [InlineData("/k", true, 1)]
+    public void Started_by_Explorer_means_a_cmd_slash_c_whose_parent_is_Explorer(string cmdSwitch, bool parentIsTheStarter, int expected)
+    {
+        // A test cannot have Explorer as its parent, so the helper is told to look for this test process
+        // instead. The chain is a double click's: helper, cmd /c "<file>", starter. cmd /k is an open
+        // Command Prompt, which runs a typed .cmd inside itself: Explorer's child too, but no double click.
+        using var temp = new TempFolder();
+        using var self = Process.GetCurrentProcess();
+        var starter = parentIsTheStarter ? Path.GetFileName(self.MainModule!.FileName) : "somebody-else.exe";
+        var wrapper = Path.Combine(temp.Path, "wrapper.cmd");
+        File.WriteAllText(
+            wrapper,
+            $"@pwsh -NoProfile -ExecutionPolicy Bypass -File \"{Path.Combine(Pwsh.ScriptsFolder, "_started-by-explorer.ps1")}\" -StarterName \"{starter}\"\r\n" +
+            "@echo result=%ERRORLEVEL%\r\n");
+
+        var result = Cmd.Run($"{cmdSwitch} \"\"{wrapper}\"\"");
+
+        result.Output.ShouldContain($"result={expected}");
+    }
+
+    private static string[] Lines(string output) =>
+        output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static string BuildCmd => Path.Combine(Pwsh.ScriptsFolder, "build.cmd");
 
@@ -483,18 +733,31 @@ public class BuildScriptTests
             function Get-AppProcess {
                 param([string]$InstallDir, [switch]$AnyVersion, [string]$InstallRoot)
                 if (-not $env:FAKE_RUNNING_FROM) { return @() }
-                if (-not $AnyVersion -and $env:FAKE_RUNNING_FROM -ine (Join-Path (Resolve-FullPath $InstallDir) $AppExeName)) { return @() }
-                return @([pscustomobject]@{ ProcessId = 4242; ExecutablePath = $env:FAKE_RUNNING_FROM })
+                $id = 4241
+                return @($env:FAKE_RUNNING_FROM -split ';' | ForEach-Object { $id++; [pscustomobject]@{ ProcessId = $id; ExecutablePath = $_ } } |
+                    Where-Object { $AnyVersion -or $_.ExecutablePath -ieq (Join-Path (Resolve-FullPath $InstallDir) $AppExeName) })
             }
             function Get-OtherAppProcess { return @() }
             function Stop-AppProcess {
                 param($Process)
                 Write-FakeCall "close $($Process.ExecutablePath)"
+                if ($env:FAKE_STUCK -eq $Process.ExecutablePath) { return 'timeout' }
                 if ($env:FAKE_CLOSE_RESULT) { return $env:FAKE_CLOSE_RESULT }
                 return 'closed'
             }
-            function Start-App { param([string]$ExePath) Write-FakeCall "start $ExePath"; return [pscustomobject]@{ Id = 4243 } }
-            if ($env:FAKE_LINK_FAILS) { function Set-CurrentLink { throw 'the junction could not be made' } }
+            function Start-App {
+                param([string]$ExePath)
+                if ($env:FAKE_START_FAILS -eq $ExePath) { throw 'the exe is held by a scanner' }
+                Write-FakeCall "start $ExePath"
+                return [pscustomobject]@{ Id = 4243 }
+            }
+            if ($env:FAKE_LINK_FAILS) {
+                function Set-CurrentLink {
+                    param([string]$InstallRoot, [string]$Target)
+                    if ($env:FAKE_LINK_FAILS -eq 'removed') { Remove-DirectoryLink (Get-CurrentLinkPath $InstallRoot) }
+                    throw 'the junction could not be made'
+                }
+            }
 
             """;
     }

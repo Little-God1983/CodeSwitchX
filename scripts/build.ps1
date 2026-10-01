@@ -143,16 +143,42 @@ if ((Test-DirectoryHasContent $InstallDir) -and -not (Test-OurInstall $InstallDi
     )
 }
 
+# Where each running CodeSwitchX really runs from, asked before anything is closed or moved. Windows
+# reports the path the process was started through, and for a start from the Start Menu that is the
+# current link - which may be gone, or point at the new build, by the time a restart is needed. The
+# version folder behind it is never deleted, so its path always starts the version that was closed.
+function Get-RestartPath {
+    param([object[]]$Running)
+    return @($Running | ForEach-Object { Resolve-RealPath $_.ExecutablePath } | Select-Object -Unique)
+}
+
+# Starts each closed CodeSwitchX again and says, one line per exe, how that went.
+function Restart-ClosedApp {
+    param([string[]]$ExePaths)
+    $lines = @()
+    foreach ($exe in $ExePaths) {
+        try { Start-App $exe | Out-Null; $lines += "The CodeSwitchX that was closed for this build was started again from $exe." }
+        catch { $lines += "The CodeSwitchX that was closed for this build could not be started again - start it by hand: $exe" }
+    }
+    return $lines
+}
+
 # Closes each process this build replaces; a failure stops the script with what to do about it. On
-# success the caller starts the new build again, so nobody is left without CodeSwitchX.
+# success the caller starts the new build again, so nobody is left without CodeSwitchX. One that will
+# not close after others did must not leave those closed: they are started again first.
 function Close-RunningApp {
     param([object[]]$Running, [string[]]$ExtraHints = @())
     if ($Running.Count -eq 0) { return }
     Write-Step "Closing the running CodeSwitchX"
+    $closed = @()
     foreach ($proc in $Running) {
+        $restartPath = Resolve-RealPath $proc.ExecutablePath
         $result = Stop-AppProcess $proc
-        if ($result -eq 'closed') { Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))" }
-        else { Fail "PID $($proc.ProcessId) did not close." (@(Get-StopFailureHints $result) + $ExtraHints) }
+        if ($result -eq 'closed') {
+            Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))"
+            if ($closed -notcontains $restartPath) { $closed += $restartPath }
+        }
+        else { Fail "PID $($proc.ProcessId) did not close." (@(Get-StopFailureHints $result) + @(Restart-ClosedApp $closed) + $ExtraHints) }
     }
 }
 
@@ -232,6 +258,7 @@ Write-Ok "published to $InstallDir"
 $shortcutDir = $InstallDir
 if ($stable) {
     $running = @(Get-AppProcess -AnyVersion -InstallRoot $InstallRoot)
+    $restartPaths = Get-RestartPath $running
     Close-RunningApp $running @(
         "$version is published in $InstallDir but not made current, and the version is not bumped.",
         "Run the build again once it is closed; it rebuilds $version."
@@ -271,11 +298,7 @@ if ($stable) {
     }
     catch {
         $problem = $_.Exception.Message
-        $hints = @()
-        foreach ($closedExe in @($running | ForEach-Object { $_.ExecutablePath } | Select-Object -Unique)) {
-            try { Start-App $closedExe | Out-Null; $hints += "The CodeSwitchX that was closed for this build was started again from $closedExe." }
-            catch { $hints += "The CodeSwitchX that was closed for this build could not be started again - start it by hand: $closedExe" }
-        }
+        $hints = @(Restart-ClosedApp $restartPaths)
         if ((Test-InstallComplete $InstallDir) -or (Test-InstallCurrent $InstallDir)) {
             $hints += "$version is installed and current, but the version is not bumped: set <Version> to $version in Directory.Build.props, commit that and push $ReleaseBranch."
         }
@@ -292,7 +315,19 @@ if ($stable) {
 $exePath = Join-Path $shortcutDir $AppExeName
 if ($running.Count -gt 0) {
     Write-Step "Starting CodeSwitchX $version"
-    $started = Start-App $exePath
+    try { $started = Start-App $exePath }
+    catch {
+        # A new exe that will not start - a virus scanner holding it - must not leave nobody running
+        # either. A stable build still has the closed version's folder; a one-off overwrote it.
+        $problem = $_.Exception.Message
+        $hints = @()
+        if ($stable) {
+            $hints += @(Restart-ClosedApp $restartPaths)
+            $hints += "$version is installed and current, but the version is not bumped: set <Version> to $version in Directory.Build.props, commit that and push $ReleaseBranch."
+        }
+        else { $hints += "The build itself is in place. Start it by hand: $exePath" }
+        Fail "CodeSwitchX $version did not start - $problem" $hints
+    }
     Write-Ok "started PID $($started.Id)"
 }
 
