@@ -131,6 +131,23 @@
         <DataTrigger Binding="{Binding State}" Value="Thinking">
           <Setter Property="Text" Value="THINKING" />
         </DataTrigger>
+        <DataTrigger Binding="{Binding State}" Value="Speaking">
+          <Setter Property="Text" Value="SPEAKING" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Speaker on: Raven says its answers. Crossed out: it only writes them. -->
+    <Style x:Key="MuteButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+      <Setter Property="Content" Value="&#xE767;" />
+      <Setter Property="ToolTip" Value="Raven speaks its answers. Click to mute." />
+      <Setter Property="AutomationProperties.Name" Value="Mute Raven" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsMuted}" Value="True">
+          <Setter Property="Content" Value="&#xE74F;" />
+          <Setter Property="ToolTip" Value="Raven is muted: it only writes its answers. Click to hear them." />
+          <Setter Property="AutomationProperties.Name" Value="Unmute Raven" />
+        </DataTrigger>
       </Style.Triggers>
     </Style>
 
@@ -206,10 +223,12 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
               <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
               <TextBlock Grid.Column="1" Style="{StaticResource StateText}" Margin="10,1,0,0" />
-              <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}"
+              <Button Grid.Column="2" Style="{StaticResource MuteButton}" Command="{Binding ToggleMuteCommand}" Margin="0,0,4,0" />
+              <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}"
                       ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
             </Grid>
 
@@ -235,7 +254,17 @@
                           ToolTip="{Binding SelectedMicrophone.Name}" />
                 <Border Height="4" CornerRadius="2" Background="#1F2937" Margin="0,8,0,0" ClipToBounds="True"
                         ToolTip="Mic level">
+                  <!-- The level is Raven's voice while it speaks: not the mic's. -->
                   <Border Background="#62D0E8" CornerRadius="2" RenderTransformOrigin="0,0.5">
+                    <Border.Style>
+                      <Style TargetType="Border">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding State}" Value="Speaking">
+                            <Setter Property="Visibility" Value="Hidden" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
                     <Border.RenderTransform>
                       <ScaleTransform ScaleX="{Binding Level}" />
                     </Border.RenderTransform>
@@ -338,7 +367,7 @@
         <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
                         State="{Binding State}" Level="{Binding Level}">
           <raven:RavenOrb.Style>
-            <!-- At this size the idle breath is under a pixel: only listening, transcribing and thinking animate here. -->
+            <!-- At this size the idle breath is under a pixel: only listening, transcribing, thinking and speaking animate here. -->
             <Style TargetType="raven:RavenOrb">
               <Setter Property="IsAnimating" Value="True" />
               <Style.Triggers>

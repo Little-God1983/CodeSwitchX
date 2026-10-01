@@ -21,6 +21,9 @@ public sealed class AppPaths
     public string LogsDirectory => Path.Combine(Root, "logs");
     public string ModelsDirectory => Path.Combine(Root, "models");
 
+    /// <summary>Raven's voice: the Python environment its text-to-speech sidecar runs in (several GB).</summary>
+    public string VoiceDirectory => Path.Combine(Root, "voice");
+
     /// <summary>Where Claude Code finds CodeSwitchX's MCP server: its address and the token. Readable by the current user only.</summary>
     public string McpConfigFile => Path.Combine(Root, "mcp.json");
 

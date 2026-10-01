@@ -3,6 +3,7 @@ using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -21,9 +22,12 @@ public sealed partial class RavenPanelViewModelTests
     private readonly IDictationVocabularyProvider _vocabulary = Substitute.For<IDictationVocabularyProvider>();
     private readonly FakeTimeProvider _time = new();
     private readonly FakeBrain _brain = new();
+    private readonly FakeSpeech _speech = new();
+    private readonly ReplyVoice _voice;
 
     public RavenPanelViewModelTests()
     {
+        _voice = _speech.NewVoice();
         _catalog.List().Returns([Headset, Desk]);
         _catalog.Default().Returns(Headset);
         _models.IsPresent.Returns(true);
@@ -39,7 +43,7 @@ public sealed partial class RavenPanelViewModelTests
 
     private async Task<RavenPanelViewModel> NewVmAsync(IUiDispatcher? dispatcher = null)
     {
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, dispatcher ?? new ImmediateDispatcher(), _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher ?? new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         return vm;
@@ -722,7 +726,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_devices_are_listed_outside_the_ui_thread_and_the_result_applied_on_it()
     {
         var dispatcher = new QueueingDispatcher();
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, dispatcher, _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher, _time,
             NullLogger<RavenPanelViewModel>.Instance);
         var refresh = vm.RefreshMicrophonesAsync();
         await WithinAsync(dispatcher.Posted);
@@ -751,7 +755,7 @@ public sealed partial class RavenPanelViewModelTests
             return [Headset, Desk];
         });
         var dispatcher = new QueueingDispatcher();
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, dispatcher, _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher, _time,
             NullLogger<RavenPanelViewModel>.Instance);
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
@@ -775,7 +779,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_press_while_the_first_listing_is_pending_records_once_it_arrives()
     {
         var dispatcher = new QueueingDispatcher();
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, dispatcher, _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher, _time,
             NullLogger<RavenPanelViewModel>.Instance);
         var refresh = vm.RefreshMicrophonesAsync();
         await WithinAsync(dispatcher.Posted);
@@ -805,7 +809,7 @@ public sealed partial class RavenPanelViewModelTests
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
         var dispatcher = new QueueingDispatcher();
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, dispatcher, _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher, _time,
             NullLogger<RavenPanelViewModel>.Instance);
         var refresh = vm.RefreshMicrophonesAsync();
         await WithinAsync(dispatcher.Posted);
@@ -828,7 +832,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_failure_applying_the_listing_is_logged_and_faults_the_refresh()
     {
         var logger = new CodeSwitchX.Tests.ListLogger<RavenPanelViewModel>();
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, new ImmediateDispatcher(), _time, logger);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time, logger);
         vm.Microphones.CollectionChanged += (_, _) => throw new InvalidOperationException("binding broke");
 
         await Should.ThrowAsync<InvalidOperationException>(() => vm.RefreshMicrophonesAsync().WaitAsync(TimeSpan.FromSeconds(5),
@@ -853,7 +857,7 @@ public sealed partial class RavenPanelViewModelTests
 
             return [Desk];
         });
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, new ImmediateDispatcher(), _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance);
 
         var older = vm.RefreshMicrophonesAsync();

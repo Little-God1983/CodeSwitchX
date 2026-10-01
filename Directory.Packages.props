@@ -17,6 +17,7 @@
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageVersion Include="NAudio.Core" Version="2.4.0" />
     <PackageVersion Include="NAudio.Wasapi" Version="2.4.0" />
+    <PackageVersion Include="NAudio.WinMM" Version="2.4.0" />
     <PackageVersion Include="Serilog" Version="4.4.0" />
     <PackageVersion Include="Serilog.Extensions.Hosting" Version="10.0.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />

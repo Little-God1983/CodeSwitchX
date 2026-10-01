@@ -8,6 +8,7 @@ using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Voice.Audio;
+using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ISettingsStore _settings;
     private readonly PersistenceWriterOptions _writerOptions;
     private readonly BrainSettings _brain;
+    private readonly SpeechSettings _speech;
     private readonly ChatSettings _chats;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
@@ -56,17 +58,27 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The alias table as typed: one <c>Name = model id</c> a line.</summary>
     [ObservableProperty] private string _ravenModelAliases = ChatModels.FormatAliases(ChatModels.DefaultAliases);
 
+    /// <summary>Whether Raven keeps its replies to itself, as stored; the panel owns it (see <see cref="Raven.RavenPanelViewModel.IsMuted"/>).</summary>
+    [ObservableProperty] private bool _ravenMuted;
+
+    /// <summary>The preset voice Raven speaks with: an id of <see cref="SpeechSettings.Voices"/>.</summary>
+    [ObservableProperty] private string _ravenVoice = SpeechSettings.DefaultVoice;
+
+    /// <summary>The Qwen3-TTS model Raven speaks with; a change restarts the voice.</summary>
+    [ObservableProperty] private SpeechModel _ravenVoiceModel = SpeechModel.Small;
+
     /// <summary>What the model and effort boxes show for "leave it to Claude Code"; stored as blank.</summary>
     public const string ClaudeDefault = "default";
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
-        ChatSettings chats, AppPaths paths, ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
+        ChatSettings chats, SpeechSettings speech, AppPaths paths, ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
     {
         _installer = installer;
         _settings = settings;
         _writerOptions = writerOptions;
         _brain = brain;
         _chats = chats;
+        _speech = speech;
         _logger = logger;
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
@@ -100,6 +112,15 @@ public sealed partial class SettingsViewModel : ObservableObject
                 : ChatModels.FormatAliases(ChatModels.DefaultAliases);
             RavenChatModel = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatModel, "the chat model", ct));
             RavenChatEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatEffort, "the chat effort", ct));
+            RavenMuted = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenMuted, "whether Raven is muted", ct) ?? false;
+            RavenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) is { Length: > 0 } voice
+                && SpeechSettings.Voices.Any(v => v.Id == voice)
+                ? voice
+                : SpeechSettings.DefaultVoice;
+            RavenVoiceModel = await LoadOrDefaultAsync<SpeechModel?>(SettingKeys.RavenVoiceModel, "Raven's voice model", ct) is { } speechModel
+                && Enum.IsDefined(speechModel)
+                ? speechModel
+                : SpeechModel.Small;
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
@@ -211,6 +232,30 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenPanelOpenChanged(bool value) => Persist(SettingKeys.RavenPanelOpen, value);
 
     partial void OnRavenMicrophoneChanged(MicrophoneDevice? value) => Persist(SettingKeys.RavenMicrophone, value);
+
+    partial void OnRavenMutedChanged(bool value) => Persist(SettingKeys.RavenMuted, value);
+
+    partial void OnRavenVoiceChanged(string value)
+    {
+        _speech.Voice = value;
+        Persist(SettingKeys.RavenVoice, _speech.Voice);
+    }
+
+    partial void OnRavenVoiceModelChanged(SpeechModel value)
+    {
+        _speech.Model = value;
+        Persist(SettingKeys.RavenVoiceModel, value);
+    }
+
+    /// <summary>The voices the Settings view offers.</summary>
+    public static IReadOnlyList<SpeechVoice> VoiceChoices => SpeechSettings.Voices;
+
+    /// <summary>The voice models the Settings view offers.</summary>
+    public static IReadOnlyList<VoiceModelChoice> VoiceModelChoices { get; } =
+    [
+        new(SpeechModel.Small, "Qwen3-TTS 0.6B (faster)"),
+        new(SpeechModel.Large, "Qwen3-TTS 1.7B (sounds better, a little slower)"),
+    ];
 
     /// <summary>Stored as typed, and not tidied in the box while it is typed in; the brain trims it, and runs the default model for a blank one.</summary>
     partial void OnRavenBrainModelChanged(string value)
@@ -351,3 +396,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 }
+
+/// <summary>A voice model as the Settings view offers it.</summary>
+public sealed record VoiceModelChoice(SpeechModel Model, string Label);

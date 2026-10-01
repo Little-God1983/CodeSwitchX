@@ -18,6 +18,7 @@ using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -40,6 +41,7 @@ public sealed class ShellTestHarness
     public IMicrophoneCatalog Microphones { get; } = Substitute.For<IMicrophoneCatalog>();
     public IMicrophoneRecorder Recorder { get; } = Substitute.For<IMicrophoneRecorder>();
     public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
+    internal Raven.FakeSpeech Voice { get; } = new();
     public IWhisperModelStore Models { get; } = Substitute.For<IWhisperModelStore>();
     public WorkspaceResolver Resolver { get; } = new();
     public SessionEngine Engine { get; }
@@ -71,11 +73,11 @@ public sealed class ShellTestHarness
         var cab = new CabViewModel();
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
-        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats, paths, claude, NullLogger<SettingsViewModel>.Instance);
+        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats, new SpeechSettings(), paths, claude, NullLogger<SettingsViewModel>.Instance);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
-            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance);
+            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance);
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
     }
 

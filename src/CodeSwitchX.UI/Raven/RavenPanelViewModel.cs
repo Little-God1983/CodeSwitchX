@@ -4,6 +4,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -12,7 +13,8 @@ namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
 /// The Raven panel: push-to-talk dictation into a log, with the microphone choice and its failures explained, and Raven's
-/// answers to what was said or typed, with a card for each tool its brain looked at the Yard through.
+/// answers to what was said or typed, with a card for each tool its brain looked at the Yard through. The answers are
+/// spoken as they stream in, unless muted; talking again stops that at once.
 /// </summary>
 public sealed partial class RavenPanelViewModel : ObservableObject
 {
@@ -42,6 +44,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IWhisperModelStore _models;
     private readonly IDictationVocabularyProvider _vocabulary;
     private readonly IConductorBrain _brain;
+    private readonly ReplyVoice _voice;
+    private readonly ITextToSpeech _tts;
     private readonly IUiDispatcher _dispatcher;
     private readonly TimeProvider _time;
     private readonly ILogger<RavenPanelViewModel> _logger;
@@ -105,9 +109,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Questions asked and not yet answered, the one being answered included.</summary>
     private int _asking;
 
+    /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
+    private bool _speaking;
+
+    /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
+    private RavenLogEntry? _voiceNote;
+
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
-        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, IUiDispatcher dispatcher, TimeProvider time,
-        ILogger<RavenPanelViewModel> logger)
+        IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
+        IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -115,6 +125,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _models = models;
         _vocabulary = vocabulary;
         _brain = brain;
+        _voice = voice;
+        _tts = speech;
         _dispatcher = dispatcher;
         _time = time;
         _logger = logger;
@@ -127,6 +139,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // back on the thread pool, which lists the devices there; only the result goes to the UI thread.
         _deviceRefresh = time.CreateTimer(_ => ListAndPostDevices(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _catalog.DevicesChanged += (_, _) => _deviceRefresh.Change(DeviceChangeSettle, Timeout.InfiniteTimeSpan);
+        _voice.SpeakingChanged += (_, speaking) => _dispatcher.Post(() => OnSpeakingChanged(speaking));
+        _voice.LevelChanged += (_, level) => _dispatcher.Post(() => OnSpeechLevel(level));
+        _voice.Unspoken += (_, why) => _dispatcher.Post(() => AddEntry(RavenLogKind.Note, why));
+        _tts.StatusChanged += (_, status) => _dispatcher.Post(() => OnVoiceStatus(status));
     }
 
     [ObservableProperty]
@@ -147,7 +163,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private RavenState _state;
 
-    /// <summary>0..1, live while listening.</summary>
+    /// <summary>Raven keeps its answers to itself: they are only written. The shell keeps it in step with Settings.</summary>
+    [ObservableProperty]
+    private bool _isMuted;
+
+    /// <summary>0..1, live while listening or speaking.</summary>
     [ObservableProperty]
     private double _level;
 
@@ -339,9 +359,73 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void TogglePanel() => IsOpen = !IsOpen;
 
+    [RelayCommand]
+    private void ToggleMute() => IsMuted = !IsMuted;
+
+    /// <summary>Muting stops what is being said; unmuting gets the voice ready, so the next answer is spoken.</summary>
+    partial void OnIsMutedChanged(bool value)
+    {
+        _voice.Muted = value;
+        if (!value)
+        {
+            _tts.Prepare(install: false);
+        }
+    }
+
+    private void OnSpeakingChanged(bool speaking)
+    {
+        _speaking = speaking;
+        UpdateState();
+    }
+
+    private void OnSpeechLevel(float rms)
+    {
+        if (State == RavenState.Speaking)
+        {
+            Level = AudioMath.LevelOf(rms);
+        }
+    }
+
+    /// <summary>
+    /// The voice's install and its first load after it are told in one note that follows them; the warm-up of a voice
+    /// installed before is quiet. A failure is a warning, once: the voice is not tried again until the settings change.
+    /// </summary>
+    private void OnVoiceStatus(TextToSpeechStatus status)
+    {
+        switch (status.State)
+        {
+            case TextToSpeechState.Installing:
+                SetVoiceNote($"Installing Raven's voice (about 5 GB, a few minutes): {status.Detail}…");
+                break;
+            case TextToSpeechState.Loading when _voiceNote is not null:
+                SetVoiceNote($"Loading Raven's voice: {status.Detail}…");
+                break;
+            case TextToSpeechState.Ready when _voiceNote is not null:
+                _voiceNote.Text = "Raven's voice is ready.";
+                _voiceNote = null;
+                break;
+            case TextToSpeechState.Failed:
+                _voiceNote = null;
+                AddEntry(RavenLogKind.Warning, $"Raven cannot speak: {status.Detail}");
+                break;
+        }
+    }
+
+    private void SetVoiceNote(string text)
+    {
+        if (_voiceNote is null)
+        {
+            _voiceNote = AddEntry(RavenLogKind.Note, text);
+        }
+        else
+        {
+            _voiceNote.Text = text;
+        }
+    }
+
     /// <summary>
     /// Warms the model up <see cref="StartupWarmUpDelay"/> from now, if it is on disk by then, so that the first clip
-    /// after launch does not pay seconds for loading it. Whether the panel is open or not: the hotkey works either way.
+    /// after launch does not pay seconds for loading it; the voice too, if it is installed and not muted. Whether the panel is open or not: the hotkey works either way.
     /// The shell calls this once it has initialised.
     /// </summary>
     public void ScheduleWarmUp()
@@ -352,6 +436,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (_models.IsPresent)
             {
                 WarmUpInBackground();
+            }
+
+            // Only a voice installed before: the install itself waits for the first answer to speak.
+            if (!_voice.Muted)
+            {
+                _tts.Prepare(install: false);
             }
         }, null, StartupWarmUpDelay, Timeout.InfiniteTimeSpan);
     }
@@ -451,6 +541,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _capturing = false;
+        var ended = _time.GetUtcNow();
         _pending++;
         UpdateState();
         var speech = _speech.Read();
@@ -459,7 +550,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var stop = StopCaptureAsync(_started);
         PendingStop = stop;
         var number = ++_clipsQueued;
-        var turn = TranscribeInTurnAsync(_pipeline, number, stop, speech, mic, words);
+        var turn = TranscribeInTurnAsync(_pipeline, number, stop, speech, mic, words, ended);
         _pipeline = turn;
         return turn;
     }
@@ -475,7 +566,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         AddEntry(RavenLogKind.You, text);
         TypedText = "";
-        Ask(text);
+        _voice.Expect();
+        Ask(text, _time.GetUtcNow());
     }
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
@@ -500,6 +592,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _recordingMic = mic;
+        _voice.Hush(); // the user talks: Raven stops at once, and what it was saying is not said after
+        _voice.Expect();
         _brain.WarmUp(); // while the user talks, so the answer does not wait for the brain to start
         _silentWarning = null;
         _droppedWarned = false;
@@ -690,8 +784,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// in the log in recording order. The awaits resume on the UI thread (its synchronisation context), where the log
     /// and the state live. Never faults, so the clip behind it always gets its turn.
     /// </summary>
+    /// <param name="ended">When the user's turn ended: the mic was let go.</param>
     private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, SpeechReading speech,
-        string? mic, Task<DictationVocabulary> vocabulary)
+        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended)
     {
         try
         {
@@ -737,7 +832,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (text.Length > 0)
             {
                 AddEntry(RavenLogKind.You, text);
-                Ask(text);
+                Ask(text, ended);
             }
         }
         catch (DictationModelLoadException ex)
@@ -764,23 +859,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Puts the words to Raven's brain, behind the questions asked before them, so the answers come in the order asked. The
     /// panel thinks while any is unanswered; the mic stays free, so the next question can be asked meanwhile.
     /// </summary>
-    private void Ask(string text)
+    /// <param name="ended">When the user's turn ended, for the time to Raven's first word in the log.</param>
+    private void Ask(string text, DateTimeOffset ended)
     {
         _asking++;
         UpdateState();
-        _conversation = AnswerInTurnAsync(_conversation, text);
+        _conversation = AnswerInTurnAsync(_conversation, text, ended);
     }
 
     /// <summary>
     /// One question's turn: the reply grows in one entry as it streams in, each tool call gets a card, and text after a
-    /// card starts a new entry below it, so the log reads in the order things happened. The awaits resume on the UI
-    /// thread. Never faults, so the question behind it always gets its turn.
+    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken as it comes,
+    /// the words before a card ("Let me check.") too. The awaits resume on the UI thread. Never faults, so the question
+    /// behind it always gets its turn.
     /// </summary>
-    private async Task AnswerInTurnAsync(Task previous, string text)
+    private async Task AnswerInTurnAsync(Task previous, string text, DateTimeOffset ended)
     {
+        ReplyVoice.SpokenReply? spoken = null;
         try
         {
             await previous;
+            var asked = _time.GetUtcNow();
+            spoken = _voice.Begin(heard => _logger.LogInformation(
+                "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
+                (heard - ended).TotalMilliseconds, (heard - asked).TotalMilliseconds));
             RavenLogEntry? reply = null;
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
             await foreach (var e in _brain.AskAsync(text, CancellationToken.None))
@@ -791,13 +893,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
                             reply = AddEntry(RavenLogKind.Raven, start);
+                            spoken.Add(start);
                         }
 
                         break;
                     case BrainText { Delta: var piece }:
                         reply!.Text += piece;
+                        spoken.Add(piece);
                         break;
                     case BrainToolCall call:
+                        spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
                         // The part of the reply before the card is done: "Let me check.\n\n" keeps no empty lines.
                         if (reply is not null)
                         {
@@ -833,6 +938,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
+            spoken?.Complete();
             _asking--;
             UpdateState();
         }
@@ -918,9 +1024,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     } + " Press the mic to try again.";
 
     /// <summary>
-    /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Transcribing while any
-    /// stopped clip is pending (the download, or how many wait behind the one transcribing, in the caption); otherwise
-    /// Thinking while a question is unanswered; otherwise Idle.
+    /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Speaking while Raven
+    /// says something; otherwise Transcribing while any stopped clip is pending (the download, or how many wait behind
+    /// the one transcribing, in the caption); otherwise Thinking while a question is unanswered; otherwise Idle.
     /// </summary>
     private void UpdateState()
     {
@@ -928,6 +1034,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             State = RavenState.Listening;
             Caption = "Listening…";
+            return;
+        }
+
+        if (_speaking)
+        {
+            State = RavenState.Speaking;
+            Caption = "Speaking… Talk to interrupt.";
             return;
         }
 
