@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 
@@ -204,7 +205,9 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
 
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(server.Address, "v1/audio/speech"))
         {
-            Content = JsonContent.Create(new { input = text, voice = _settings.Voice, language = "English", response_format = "pcm" }),
+            // Buffered, so it goes with a Content-Length: the sidecar's plain HTTP server reads no chunked bodies.
+            Content = new StringContent(JsonSerializer.Serialize(new { input = text, voice = _settings.Voice, language = "English", response_format = "pcm" }),
+                Encoding.UTF8, "application/json"),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", server.Token);
 

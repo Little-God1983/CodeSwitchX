@@ -54,7 +54,7 @@ public sealed partial class RavenPanelViewModelTests
         await AskedAsync("What's waiting on me?");
 
         await Until(() => _speech.Spoken.Count == 2);
-        _speech.Spoken.ShouldBe(["Let me look", "One chat."]);
+        _speech.Spoken.ShouldBe(["Let me look.", "One chat."]);
     }
 
     [Fact]

@@ -428,7 +428,7 @@ public sealed class ReplyVoice : IDisposable
                 if (spoken.Any(char.IsLetterOrDigit))
                 {
                     _queued++;
-                    _voice.Queue(new Sentence(this, spoken));
+                    _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
                 }
             }
         }

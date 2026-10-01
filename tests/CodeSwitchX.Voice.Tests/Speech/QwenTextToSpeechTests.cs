@@ -124,6 +124,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         _handler.Request!.RootElement.GetProperty("input").GetString().ShouldBe("Hello there.");
         _handler.Request.RootElement.GetProperty("voice").GetString().ShouldBe("aiden");
         _handler.Authorization.ShouldBe("Bearer token");
+        _handler.ContentLength.ShouldNotBeNull("the sidecar reads no chunked request bodies");
     }
 
     [Fact]
@@ -241,9 +242,12 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public string? Authorization { get; private set; }
 
+        public long? ContentLength { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            Request = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+            ContentLength = request.Content!.Headers.ContentLength; // before the read below, which buffers it and so gives it one
+            Request = JsonDocument.Parse(await request.Content.ReadAsStringAsync(ct));
             Authorization = request.Headers.Authorization?.ToString();
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Trickle(Body, ReadSize)) };
             response.Headers.Add("X-Sample-Rate", "24000");

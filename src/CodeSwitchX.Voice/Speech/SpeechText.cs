@@ -48,6 +48,23 @@ public static partial class SpeechText
         return SpaceBeforePunctuation().Replace(cleaned, "$1");
     }
 
+    /// <summary>
+    /// Ends a sentence with a full stop when it has no end of its own ("Let me check", "Workspaces:"): Qwen3-TTS often
+    /// misses the end of a sentence without one, and babbles on until it is stopped. Closing quotes and brackets stay last.
+    /// </summary>
+    public static string EndSentence(string sentence)
+    {
+        var body = sentence.TrimEnd();
+        var closers = body.Length - body.TrimEnd('"', '\'', ')').Length;
+        var core = body[..^closers].TrimEnd(',', ';', ':', '-', ' ');
+        if (core.Length == 0)
+        {
+            return body;
+        }
+
+        return (".!?".Contains(core[^1]) || core.EndsWith("...", StringComparison.Ordinal) ? core : core + ".") + body[^closers..];
+    }
+
     [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)")]
     private static partial Regex MarkdownLink();
 

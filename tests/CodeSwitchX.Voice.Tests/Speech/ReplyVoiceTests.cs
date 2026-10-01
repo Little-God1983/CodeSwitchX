@@ -52,7 +52,7 @@ public sealed class ReplyVoiceTests : IDisposable
         reply.Add("**Done** ✅\n---\nSee `auth.cs`.");
         reply.Complete();
         await _voice.WhenQuietAsync();
-        _tts.Spoken.ShouldBe(["Done", "See auth.cs."]);
+        _tts.Spoken.ShouldBe(["Done.", "See auth.cs."]);
     }
 
     [Fact]

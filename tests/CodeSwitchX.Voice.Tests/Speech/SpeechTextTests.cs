@@ -88,6 +88,20 @@ public sealed class SpeechTextTests
         SpeechText.CleanForSpeech("Frontend - two chats").ShouldBe("Frontend - two chats");
     }
 
+    [Theory]
+    [InlineData("Let me check", "Let me check.")]
+    [InlineData("Workspaces:", "Workspaces.")]
+    [InlineData("Two chats,", "Two chats.")]
+    [InlineData("Done!", "Done!")]
+    [InlineData("Want me to open it?", "Want me to open it?")]
+    [InlineData("Where was I...", "Where was I...")]
+    [InlineData("It said \"done\"", "It said \"done.\"")]
+    [InlineData("It said \"done.\"", "It said \"done.\"")]
+    public void A_sentence_without_an_end_gets_a_full_stop(string sentence, string ended)
+    {
+        SpeechText.EndSentence(sentence).ShouldBe(ended);
+    }
+
     [Fact]
     public void A_bare_address_is_left_out()
     {

@@ -26,7 +26,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TOKEN = os.environ.get("CSX_TTS_TOKEN", "")
 SAMPLE_RATE = 24000
 
+# Sampled cooler than the model's 0.9: measured with Whisper on short replies ("Okay.", "Let me check."), 0.9 and 0.7
+# babble or add fillers ("Hmm", "Haha") in about one sentence in eight, 0.5 in none of 56; 0.3 drones again.
+TEMPERATURE = 0.5
+
 state = {"model": None, "ready": False}
+
+
+def max_frames(text):
+    """Speech takes about one frame (1/12 s) per character: half again and two seconds, so a run-away generation stops
+    soon after the sentence should have ended."""
+    return min(2048, 24 + (3 * len(text)) // 2)
 generate_lock = threading.Lock()
 
 
@@ -102,11 +112,9 @@ class Handler(BaseHTTPRequestHandler):
     def _speak(self, text, voice, language):
         import numpy as np
 
-        # A sentence takes about one frame (1/12 s) per character; twice that and a margin, so a run-away generation
-        # (it happens on very short inputs) stops within seconds instead of after minutes of babble.
-        max_frames = min(2048, 48 + 2 * len(text))
         chunks = state["model"].generate_custom_voice_streaming(
-            text=text, speaker=voice, language=language, chunk_size=4, max_new_tokens=max_frames)
+            text=text, speaker=voice, language=language, chunk_size=4, max_new_tokens=max_frames(text),
+            temperature=TEMPERATURE)
         self.send_response(200)
         self.send_header("Content-Type", "audio/pcm")
         self.send_header("X-Sample-Rate", str(SAMPLE_RATE))
@@ -153,7 +161,7 @@ def main():
         # the first reply.
         for text in ("Ready.", "The voice is warming up, and this sentence is long enough to take a while."):
             for _ in model.generate_custom_voice_streaming(text=text, speaker="ryan", language="English", chunk_size=4,
-                                                           max_new_tokens=48 + 2 * len(text)):
+                                                           max_new_tokens=max_frames(text), temperature=TEMPERATURE):
                 pass
         state["model"] = model
         state["ready"] = True
