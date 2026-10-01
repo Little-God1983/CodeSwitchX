@@ -2703,6 +2703,10 @@ Add `using CodeSwitchX.Voice.Listening;`. Then:
     /// <summary>The microphone Open mic listens on, to restart it on another.</summary>
     private string? _openMicDevice;
 
+    /// <summary>The last stop of Open mic's microphone, off the UI thread. A start waits for it: a stop that ran after the
+    /// next start would close the new run.</summary>
+    private Task _openMicStop = Task.CompletedTask;
+
     /// <summary>Open mic was switched on before the first microphone listing arrived (the stored mode at startup): it
     /// starts once the listing is applied.</summary>
     private bool _openMicWaitsForList;
@@ -2841,6 +2845,12 @@ Add `using CodeSwitchX.Voice.Listening;`. Then:
 
         try
         {
+            await _openMicStop; // never faults: see StopOpenMic
+            if (run != _openMicRun)
+            {
+                return;
+            }
+
             await Task.Run(() => _openMic.Start(mic.Id));
         }
         catch (ListeningModelException ex)
@@ -2868,7 +2878,7 @@ Add `using CodeSwitchX.Voice.Listening;`. Then:
 
         if (run != _openMicRun)
         {
-            _ = Task.Run(_openMic.Stop); // switched away while it opened
+            _openMicStop = StopInBackground(); // switched away while it opened
             return;
         }
 
@@ -2907,10 +2917,22 @@ Add `using CodeSwitchX.Voice.Listening;`. Then:
         {
             _attending = false;
             _openMicDevice = null;
-            var stop = Task.Run(_openMic.Stop);
-            PendingOpenMic = stop;
+            PendingOpenMic = _openMicStop = StopInBackground();
         }
     }
+
+    /// <summary>Stops the listener off the UI thread; never faults (a failed stop is logged), so a start can await it.</summary>
+    private Task StopInBackground() => Task.Run(() =>
+    {
+        try
+        {
+            _openMic!.Stop();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Stopping Open mic failed");
+        }
+    });
 
     private void PauseOpenMic()
     {
@@ -3136,8 +3158,8 @@ git push
 ### Task 9: The picker, the settings and the shell
 
 **Files:**
-- Modify: `src/CodeSwitchX.UI/Settings/SettingKeys.cs`, `SettingsViewModel.cs`, `SettingsView.xaml`, `src/CodeSwitchX.UI/Shell/ShellViewModel.cs`, `src/CodeSwitchX.UI/Raven/RavenPanelView.xaml`
-- Test: `tests/CodeSwitchX.UI.Tests/Shell/ShellViewModelTests.cs`
+- Modify: `src/CodeSwitchX.UI/Settings/SettingKeys.cs`, `SettingsViewModel.cs`, `SettingsView.xaml`, `src/CodeSwitchX.UI/Shell/ShellViewModel.cs`, `src/CodeSwitchX.UI/Raven/RavenPanelView.xaml`, `src/CodeSwitchX.UI/Raven/RavenPanelViewModel.cs` (`MicButtonToolTip`)
+- Test: `tests/CodeSwitchX.UI.Tests/Shell/ShellViewModelTests.cs`, `tests/CodeSwitchX.UI.Tests/ShellTestHarness.cs`
 
 **Interfaces:**
 - Consumes: `RavenPanelViewModel.MicMode`, `BargeIn`, `MicButtonName` (Task 8).
@@ -3188,7 +3210,7 @@ Append to `ShellViewModelTests`:
     }
 ```
 
-(Add `using CodeSwitchX.UI.Raven;` if the file lacks it. The shell harness builds the panel without an `IOpenMic`: switching to Open mic there warns "Open mic is not available." and falls back. If the harness can supply one, register a `FakeOpenMic`; otherwise assert the restored mode only before the panel processes it — read the harness (`_h`) first and pick the one that fits; the panel's own tests cover the start.)
+(Add `using CodeSwitchX.UI.Raven;` if the file lacks it.) The shell harness (`tests/CodeSwitchX.UI.Tests/ShellTestHarness.cs`, line ~79) builds the panel itself: give it a `public FakeOpenMic OpenMic { get; } = new();` and pass `openMic: OpenMic` to its `new RavenPanelViewModel(…)`, so a restored Open mic starts there as in the app (`FakeOpenMic` is Task 8's, in the same test project).
 
 - [ ] **Step 2: Run them to see them fail**
 
