@@ -21,14 +21,25 @@ internal sealed class FakeBrain : IConductorBrain
         Asked.Add(text);
         if (Gate is { } gate)
         {
-            await gate.Task;
+            await gate.Task.WaitAsync(ct); // a cancelled turn ends at once, as the real one is interrupted
         }
 
+        var first = true;
         foreach (var e in Answer(text))
         {
+            ct.ThrowIfCancellationRequested();
+            if (!first && Pause is { } pause)
+            {
+                await pause.Task.WaitAsync(ct);
+            }
+
+            first = false;
             yield return e;
         }
     }
+
+    /// <summary>While set and not completed, an answer stops after its first event and waits for it.</summary>
+    public TaskCompletionSource? Pause { get; set; }
 
     public void WarmUp() => WarmUps++;
 

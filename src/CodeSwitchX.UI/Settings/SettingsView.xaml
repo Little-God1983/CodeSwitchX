@@ -54,6 +54,9 @@
                   SelectedValue="{Binding RavenVoiceModel}"
                   ToolTip="Raven speaks with Qwen3-TTS on your graphics card. It is installed the first time Raven speaks (about 5 GB)." />
       </DockPanel>
+      <CheckBox Margin="140,10,0,0" IsChecked="{Binding RavenSpeakNews}" AutomationProperties.Name="Speak chat news"
+                Content="Speak chat news"
+                ToolTip="When chats finish, fail or need you, Raven tells you in one remark once nobody is talking. Off, the news is only written in Raven's log." />
 
       <TextBlock Text="Chats Raven starts" FontSize="13" FontWeight="SemiBold" Margin="0,16,0,4" />
       <TextBlock TextWrapping="Wrap" Opacity="0.8"

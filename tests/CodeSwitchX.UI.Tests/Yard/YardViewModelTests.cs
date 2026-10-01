@@ -797,4 +797,19 @@ public class YardViewModelTests : IDisposable
 
         _yard.FindTile(_shop.Id)!.Chats.Single().IsVoice.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_spotlit_tile_is_lit_for_a_moment_and_only_one_at_a_time()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.Spotlight(_app.Id).ShouldBeTrue();
+        _yard.Spotlight(_shop.Id).ShouldBeTrue();
+
+        _yard.FindTile(_app.Id)!.IsSpotlit.ShouldBeFalse();
+        _yard.FindTile(_shop.Id)!.IsSpotlit.ShouldBeTrue();
+        _time.Advance(YardViewModel.SpotlightTime);
+        _yard.FindTile(_shop.Id)!.IsSpotlit.ShouldBeFalse();
+        _yard.Spotlight(Guid.NewGuid()).ShouldBeFalse("no such tile");
+    }
 }

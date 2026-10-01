@@ -13,6 +13,7 @@ using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Ingest;
+using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Infrastructure;
@@ -200,6 +201,8 @@ public partial class App : Application
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
+        services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
+            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path)));
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();

@@ -159,25 +159,43 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task Questions_asked_while_one_is_answered_wait_their_turn_and_are_answered_in_order()
+    public async Task A_question_asked_while_one_is_answered_interrupts_it_and_only_the_new_one_is_answered()
     {
         var vm = await NewVmAsync();
-        var gate = new TaskCompletionSource();
-        _brain.Gate = gate;
+        _brain.Gate = new TaskCompletionSource();
         _brain.Answer = question => [new BrainText($"Answer to {question}.")];
 
         Type(vm, "one");
         Type(vm, "two");
-
-        vm.Caption.ShouldBe("Thinking… (1 waiting)");
-        _brain.Asked.ShouldBe(["one"], "the second waits for the first to be answered");
-        gate.SetResult();
+        _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldBe(["one", "two"]);
         Lines(vm).ShouldBe([
             (RavenLogKind.You, "one"),
             (RavenLogKind.You, "two"),
-            (RavenLogKind.Raven, "Answer to one."),
             (RavenLogKind.Raven, "Answer to two."),
+        ]);
+    }
+
+    [Fact]
+    public async Task An_answer_cut_off_by_a_new_question_ends_with_interrupted()
+    {
+        var vm = await NewVmAsync();
+        _brain.Pause = new TaskCompletionSource();
+        _brain.Answer = question => [new BrainText($"Start of {question}"), new BrainText(" and its end.")];
+        Type(vm, "one");
+        await Until(() => Lines(vm).Contains((RavenLogKind.Raven, "Start of one")));
+
+        _brain.Pause = null;
+        Type(vm, "two");
+        await WithinAsync(vm.PendingAnswers);
+
+        Lines(vm).ShouldBe([
+            (RavenLogKind.You, "one"),
+            (RavenLogKind.Raven, "Start of one (interrupted)"),
+            (RavenLogKind.You, "two"),
+            (RavenLogKind.Raven, "Start of two and its end."),
         ]);
     }
 

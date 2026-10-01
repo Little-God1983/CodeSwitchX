@@ -132,6 +132,30 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
 
+    /// <summary>How long a tile stays lit after <see cref="Spotlight"/>.</summary>
+    public static readonly TimeSpan SpotlightTime = TimeSpan.FromSeconds(2);
+
+    private ITimer? _spotlightTimer;
+
+    /// <summary>Lights the workspace's tile for <see cref="SpotlightTime"/>, so the eye finds it; false when the board has no such tile (UI thread).</summary>
+    public bool Spotlight(Guid workspaceId)
+    {
+        if (FindTile(workspaceId) is not { } tile)
+        {
+            return false;
+        }
+
+        _spotlightTimer?.Dispose();
+        foreach (var lit in Tiles.Where(t => t.IsSpotlit))
+        {
+            lit.IsSpotlit = false;
+        }
+
+        tile.IsSpotlit = true;
+        _spotlightTimer = _time.CreateTimer(_ => _ui.Post(() => tile.IsSpotlit = false), null, SpotlightTime, Timeout.InfiniteTimeSpan);
+        return true;
+    }
+
     /// <summary>The voice label of each chat the app runs for Raven (UI thread); a row that comes later gets it as it is added.</summary>
     private readonly Dictionary<string, string> _voiceLabels = new(StringComparer.Ordinal);
 

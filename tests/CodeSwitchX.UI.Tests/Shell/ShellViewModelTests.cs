@@ -643,4 +643,33 @@ public class ShellViewModelTests
         _h.Shell.Settings.RavenModelAliases = "Opus = claude-opus-5-5";
         _h.Shell.Raven.ChatModelChip.ShouldBe("Default model");
     }
+
+    [Fact]
+    public async Task A_line_of_Ravens_digest_card_shows_the_Yard_with_its_tile_lit_for_a_moment()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 0, 100, 100);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Shell.ShowTile(_h.App.Id);
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.Yard.FindTile(_h.App.Id)!.IsSpotlit.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Speaking_chat_news_follows_the_setting()
+    {
+        _h.Settings.GetAsync<bool?>(SettingKeys.RavenSpeakNews, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.SpeakNews.ShouldBeFalse();
+
+        _h.Shell.Settings.RavenSpeakNews = true;
+
+        _h.Shell.Raven.SpeakNews.ShouldBeTrue();
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenSpeakNews, true, Arg.Any<CancellationToken>());
+    }
 }
