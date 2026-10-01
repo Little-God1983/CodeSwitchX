@@ -213,6 +213,21 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_whose_turn_failed_is_not_asked_again_with_a_later_one()
+    {
+        var vm = await NewVmAsync();
+        _brain.FailsBeforeSent = true;
+        Type(vm, "start a chat in CodeSwitchX to delete the build folder");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.FailsBeforeSent = false;
+        Type(vm, "what's running?");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe(["what's running?"]);
+    }
+
+    [Fact]
     public async Task An_answer_cut_off_by_a_new_question_ends_with_interrupted()
     {
         var vm = await NewVmAsync();

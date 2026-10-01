@@ -83,10 +83,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IConductorBrain? _teller;
 
     /// <summary>
-    /// What Raven last told of the chats, in facts only (workspace, title, what happened), for the brain that acts to
-    /// know with the user's next question; null once given (UI thread). Never what the chats said.
+    /// The chat news the user was given (a card written, a digest told), in facts only (workspace, title, what happened),
+    /// for the brain that acts to know with the user's next question. Never what the chats said. An item goes once the
+    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread).
     /// </summary>
-    private string? _toldNews;
+    private readonly List<(DateTimeOffset At, string Fact)> _toldNews = [];
+
+    /// <summary>How long news the user was given stays worth telling the brain with a question.</summary>
+    public static readonly TimeSpan ToldNewsLifetime = TimeSpan.FromMinutes(10);
 
     /// <summary>The key of the brain that words chat news (<see cref="ClaudeCliBrain.TellerPrompt"/>) among the app's services.</summary>
     public const string TellerKey = "raven-teller";
@@ -183,11 +187,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         if (news is not null)
         {
-            news.Arrived += (_, _) =>
+            news.Arrived += (_, _) => _dispatcher.Post(() =>
             {
-                _teller?.WarmUp(); // its start is hidden in the wait for the floor
-                _dispatcher.Post(ScheduleNews);
-            };
+                if (SpeakNews && !IsMuted)
+                {
+                    _teller?.WarmUp(); // its start is hidden in the wait for the floor
+                }
+
+                ScheduleNews();
+            });
         }
     }
 
@@ -928,7 +936,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </remarks>
     private void Ask(string text, DateTimeOffset ended)
     {
-        if (_lastQuestion is { Sent: false } waiting)
+        if (_lastQuestion is { Sent: false, Ended: false } waiting)
         {
             waiting.Merged = true;
             text = waiting.Text + "\n" + text;
@@ -948,7 +956,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// A question on its way to the brain: <see cref="Sent"/> once the brain says it has it (<see cref="BrainQuestionSent"/>),
-    /// <see cref="Merged"/> when a later one took it along, because it had not (UI thread).
+    /// <see cref="Merged"/> when a later one took it along, because it had not, and <see cref="Ended"/> once its turn is over
+    /// (answered, failed): a question that failed is not asked again with a later one (UI thread).
     /// </summary>
     private sealed class Question(string text)
     {
@@ -957,6 +966,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         public bool Sent { get; set; }
 
         public bool Merged { get; set; }
+
+        public bool Ended { get; set; }
+
+        /// <summary>The news facts that went with it; given once it is sent.</summary>
+        public IReadOnlyList<(DateTimeOffset At, string Fact)> Told { get; set; } = [];
     }
 
     /// <summary>The user takes the floor: whatever holds it stops, its speech too. Returns the new floor's token (UI thread).</summary>
@@ -990,12 +1004,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             asked.Value = _time.GetUtcNow();
-            var text = _toldNews is { } told ? told + "\n" + question.Text : question.Text;
-            _toldNews = null;
-            await StreamAnswerAsync(_brain, text, spoken, floor, question);
+            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question);
         }
         finally
         {
+            question.Ended = true;
             spoken.Complete();
             _asking--;
             UpdateState();
@@ -1007,8 +1020,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// an interruption ends the reply with "(interrupted)". Returns whether any of the reply came.
     /// </summary>
     /// <param name="question">Marked sent once the brain has it; null for a digest.</param>
+    /// <param name="quiet">The teller's: what it says about itself goes to the app's log, not the panel's (the fallback sentence covers a failure).</param>
     private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ReplyVoice.SpokenReply spoken, CancellationToken floor,
-        Question? question = null)
+        Question? question = null, bool quiet = false)
     {
         RavenLogEntry? reply = null;
         var said = false;
@@ -1021,6 +1035,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 {
                     case BrainQuestionSent when question is not null:
                         question.Sent = true;
+                        foreach (var told in question.Told)
+                        {
+                            _toldNews.Remove(told); // the brain has it now
+                        }
+
                         break;
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
@@ -1051,6 +1070,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainToolResult { Failed: true, Id: var id } when cards.TryGetValue(id, out var failed):
                         failed.Failed = true;
                         break;
+                    case BrainNotice or BrainFailed when quiet:
+                        _logger.LogWarning("Raven's news teller: {What}", e);
+                        break;
                     case BrainNotice notice:
                         AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text);
                         break;
@@ -1071,6 +1093,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 reply.Text = reply.Text.TrimEnd() + " (interrupted)";
             }
+        }
+        catch (Exception ex) when (quiet)
+        {
+            _logger.LogWarning(ex, "Raven's news teller failed");
         }
         catch (Exception ex)
         {
@@ -1130,6 +1156,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             var card = AddEntry(RavenLogKind.News, lines.Count == 1 ? "Chat news" : $"Chat news · {lines.Count}");
             card.Lines = lines;
+            // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
+            // facts with the next question either way, so "open it" finds what "it" is.
+            var at = _time.GetUtcNow();
+            _toldNews.AddRange(lines.Select(l => (at, Fact(l))));
             var fresh = lines.Where(l => !l.Stale).ToList();
             if (fresh.Count == 0 || !SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
@@ -1138,7 +1168,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             spoken = _voice.Begin();
-            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor);
+            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, quiet: true);
             if (!said && !floor.IsCancellationRequested)
             {
                 var sentence = FallbackSentence(fresh);
@@ -1146,10 +1176,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 spoken.Add(sentence);
             }
 
-            if (!floor.IsCancellationRequested)
-            {
-                _toldNews = ToldNews(fresh);
-            }
         }
         catch (Exception ex)
         {
@@ -1184,12 +1210,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return text.ToString();
     }
 
+    /// <summary>One line of news as the brain that acts is told it: the facts only, never what the chat said or asked.</summary>
+    private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\": {line.What}";
+
     /// <summary>
-    /// What the brain that acts is told with the user's next question, so "open the one that needs me" works: the facts
-    /// of the digest only, never what the chats said or asked.
+    /// The question as it goes to the brain that acts: after the chat news the user was given since its last question,
+    /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
+    /// along is kept until the brain has it, so a question merged into the next or failed before it went loses none.
     /// </summary>
-    internal static string ToldNews(IReadOnlyList<ChatNewsLine> lines) =>
-        "[Raven just told the user this chat news: " + string.Join("; ", lines.Select(l => $"{l.Workspace}, chat \"{l.Title}\": {l.What}")) + ".]";
+    private string WithToldNews(Question question)
+    {
+        var now = _time.GetUtcNow();
+        _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
+        question.Told = [.. _toldNews];
+        return question.Told.Count == 0
+            ? question.Text
+            : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + question.Text;
+    }
 
     /// <summary>The digest when the brain gives none: "ContentAutomatorX finished, and CodeSwitchX needs you."</summary>
     internal static string FallbackSentence(IReadOnlyList<ChatNewsLine> lines)

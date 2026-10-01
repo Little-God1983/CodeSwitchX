@@ -22,14 +22,20 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public string ErrorTail => "error: something broke";
 
-    /// <summary>Its input is full and it reads no more: a write waits until it is cancelled.</summary>
+    /// <summary>
+    /// Its input is full and it reads no more: a write hangs, deaf to its token as a pipe write blocked in WriteFile is,
+    /// until the process is killed, which breaks the pipe.
+    /// </summary>
     public bool WritesHang { get; set; }
+
+    private readonly TaskCompletionSource _broken = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public Task WriteLineAsync(string line, CancellationToken ct)
     {
         if (WritesHang)
         {
-            return Task.Delay(Timeout.Infinite, ct);
+            Written.Add(line);
+            return _broken.Task;
         }
 
         ct.ThrowIfCancellationRequested(); // as StreamWriter does, before it writes
@@ -73,6 +79,7 @@ internal sealed class FakeBrainProcess : IBrainProcess
     public void Dispose()
     {
         Disposed = true;
+        _broken.TrySetException(new IOException("The pipe has been ended."));
         Die(1);
     }
 }

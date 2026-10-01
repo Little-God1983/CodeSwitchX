@@ -92,10 +92,101 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldBe([
-            "[Raven just told the user this chat news: ContentAutomatorX, chat \"Fix the upload retry\": finished.]\nOpen it",
+            Told + "ContentAutomatorX, chat \"Fix the upload retry\": finished.]\nOpen it",
             "Thanks",
         ]);
         _brain.Asked.ShouldAllBe(q => !q.Contains("stop_chat"));
+    }
+
+    private const string Told = "[Chat news the user was given since their last question: ";
+
+    [Fact]
+    public async Task A_digest_stopped_by_a_press_still_tells_the_brain_what_the_user_saw()
+    {
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user presses
+        _brain.Answer = _ => [new BrainText("Opening it.")];
+        Transcribes(Task.FromResult(new CodeSwitchX.Voice.Dictation.DictationResult("open it", TimeSpan.FromSeconds(1))));
+        var (vm, _) = await NewsVmAsync();
+        Changes("b", SessionState.Working, SessionState.Waiting);
+        _time.Advance(RavenPanelViewModel.NewsGrace);
+        await Until(() => _teller.Asked.Count == 1);
+
+        await HoldAsync(vm);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe([Told + "CodeSwitchX, chat \"Release notes\": needs you.]\nopen it"]);
+    }
+
+    [Fact]
+    public async Task The_news_goes_along_with_a_question_merged_into_the_next_and_is_kept_until_the_brain_has_it()
+    {
+        _brain.Answer = _ => [new BrainText("On it.")];
+        var (vm, _) = await NewsVmAsync();
+        vm.SpeakNews = false;
+        Changes("b", SessionState.Working, SessionState.Waiting);
+        await GraceAsync(vm);
+        _brain.BeforeSent = new TaskCompletionSource(); // a cold start
+        Type(vm, "open the one that needs me");
+        await Until(() => _brain.Asked.Count == 1);
+
+        Type(vm, "in the Cab");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "thanks");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe([
+            Told + "CodeSwitchX, chat \"Release notes\": needs you.]\nopen the one that needs me\nin the Cab",
+            "thanks",
+        ]);
+    }
+
+    [Fact]
+    public async Task The_news_of_several_digests_piles_up_and_news_too_old_is_left_out()
+    {
+        _brain.Answer = _ => [new BrainText("Sure.")];
+        var (vm, _) = await NewsVmAsync();
+        vm.SpeakNews = false;
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        _time.Advance(RavenPanelViewModel.ToldNewsLifetime);
+        Changes("b", SessionState.Working, SessionState.Waiting);
+        await GraceAsync(vm);
+        Changes("c", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+
+        Type(vm, "what now?");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe([
+            Told + "CodeSwitchX, chat \"Release notes\": needs you; DiffusionNexus, chat \"Speed up the loader\": finished.]\nwhat now?",
+        ]);
+    }
+
+    [Fact]
+    public async Task The_teller_is_not_started_for_news_that_is_not_spoken()
+    {
+        var (vm, _) = await NewsVmAsync();
+        vm.IsMuted = true;
+        Changes("a", SessionState.Working, SessionState.Idle);
+        vm.IsMuted = false;
+        vm.SpeakNews = false;
+        Changes("b", SessionState.Working, SessionState.Idle);
+
+        _teller.WarmUps.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_teller_that_fails_leaves_no_warning_in_the_log_only_the_plain_sentence()
+    {
+        _teller.FailsBeforeSent = true;
+        var (vm, _) = await NewsVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle);
+
+        await GraceAsync(vm);
+
+        vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.Warning);
+        vm.Log[^1].Text.ShouldBe("ContentAutomatorX finished.");
     }
 
     [Fact]

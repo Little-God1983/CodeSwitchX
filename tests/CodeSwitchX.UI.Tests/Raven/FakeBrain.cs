@@ -24,6 +24,12 @@ internal sealed class FakeBrain : IConductorBrain
             await before.Task.WaitAsync(ct); // cancelled here, the question never went in, as with the real one
         }
 
+        if (FailsBeforeSent)
+        {
+            yield return new BrainFailed("Claude Code is not installed, so Raven cannot answer. Install it (claude.ai/code) and ask again.");
+            yield break;
+        }
+
         Sent.Add(text);
         yield return new BrainQuestionSent();
         if (Gate is { } gate)
@@ -44,6 +50,9 @@ internal sealed class FakeBrain : IConductorBrain
             yield return e;
         }
     }
+
+    /// <summary>Every turn fails before its question goes in (no Claude Code, a process that will not start).</summary>
+    public bool FailsBeforeSent { get; set; }
 
     /// <summary>The questions that went in (<see cref="BrainQuestionSent"/>), in order.</summary>
     public List<string> Sent { get; } = [];

@@ -86,6 +86,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     private readonly BrainRole _role;
 
+    /// <summary>Who it is in the log: the two brains run side by side.</summary>
+    private readonly string _name;
+
     /// <summary>Why the last process went, when it went on its own: the next start says so.</summary>
     private string? _lost;
 
@@ -94,6 +97,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven)
     {
         _role = role;
+        _name = role == BrainRole.Teller ? "Raven's news teller" : "Raven's brain";
         _paths = paths;
         _settings = settings;
         _launcher = launcher;
@@ -128,14 +132,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
 
             process = _process;
-            // Cancelled before the question went in: the process is idle, with nothing to interrupt. The write itself is
-            // not cancelled, so an idle process is never left with half a line; only a process that stopped reading
-            // makes it time out, and that process is given up.
+            // Cancelled before the question went in: the process is idle, with nothing to interrupt. The write is given no
+            // token, so an idle process is never left with half a line. A process that stopped reading would hold it for
+            // good (a write blocked in the pipe sees no token): it is waited for from outside, for Silence, and a process
+            // that took no line by then is given up, which kills it and ends the write.
             ct.ThrowIfCancellationRequested();
-            using (var writing = new CancellationTokenSource(Silence, _time))
-            {
-                sent = await SendAsync(process, text, writing.Token).ConfigureAwait(false);
-            }
+            sent = await WithinAsync(SendAsync(process, text, CancellationToken.None), Silence).ConfigureAwait(false);
 
             if (!sent)
             {
@@ -201,7 +203,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         finished = true;
                         if (over.Error is { } error)
                         {
-                            _logger.LogWarning("Raven's brain could not answer: {Error}", error);
+                            _logger.LogWarning("{Brain} could not answer: {Error}", _name, error);
                             yield return new BrainFailed($"Raven's brain could not answer: {error}");
                         }
 
@@ -223,6 +225,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 _replaceAfterTurn = false;
                 _yardRetries++;
+                Stop();
+            }
+
+            // Each digest stands on its own: what earlier chats said must not stay in the teller's mind to sway the next.
+            if (_role == BrainRole.Teller)
+            {
                 Stop();
             }
 
@@ -253,7 +261,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Warming up Raven's brain failed");
+            _logger.LogWarning(ex, "Warming up {Brain} failed", _name);
         }
     });
 
@@ -275,38 +283,32 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }
 
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
-    internal IReadOnlyList<string> Arguments(string model) => _role == BrainRole.Teller
-        ? [
+    internal IReadOnlyList<string> Arguments(string model)
+    {
+        var teller = _role == BrainRole.Teller;
+        List<string> arguments =
+        [
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
             "--model", model,
-            "--mcp-config", NoMcpServers,
+            "--mcp-config", teller ? NoMcpServers : _paths.McpConfigFile,
             "--strict-mcp-config",
             "--tools", "",
             "--permission-mode", "dontAsk",
             "--settings", NoHooks,
             "--no-session-persistence",
-            "--system-prompt", TellerPrompt,
-        ]
-        : [
-        "-p",
-        "--input-format", "stream-json",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--include-partial-messages",
-        "--model", model,
-        "--mcp-config", _paths.McpConfigFile,
-        "--strict-mcp-config",
-        "--tools", "",
-        "--allowedTools", AllowedTools,
-        "--permission-mode", "dontAsk",
-        "--settings", NoHooks,
-        "--no-session-persistence",
-        "--system-prompt", BrainSettings.SystemPrompt,
-    ];
+            "--system-prompt", teller ? TellerPrompt : BrainSettings.SystemPrompt,
+        ];
+        if (!teller)
+        {
+            arguments.AddRange(["--allowedTools", AllowedTools]);
+        }
+
+        return arguments;
+    }
 
     /// <summary>Starts the process when none runs or its model is not the one set; null when one runs, else why none could start.</summary>
     private string? EnsureRunning()
@@ -366,7 +368,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            _logger.LogWarning(ex, "Could not start Raven's brain from {Claude}", claude);
+            _logger.LogWarning(ex, "Could not start {Brain} from {Claude}", _name, claude);
             return $"Raven's brain could not be started from {claude}: {ex.Message}";
         }
 
@@ -379,7 +381,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         _processModel = model;
         _lastTurnAt = _time.GetUtcNow();
-        _logger.LogInformation("Started Raven's brain: {Claude} with {Model}", claude, model);
+        _logger.LogInformation("Started {Brain}: {Claude} with {Model}", _name, claude, model);
         if (_lost is not null)
         {
             Notice($"Raven's brain {_lost} and was started again. It has forgotten the conversation so far.");
@@ -431,7 +433,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         try
         {
             using var timeout = new CancellationTokenSource(InterruptTimeout, _time);
-            await process.WriteLineAsync(line, timeout.Token).ConfigureAwait(false);
+            // As the question's: a blocked pipe write sees no token, so it is waited for from outside.
+            if (!await WithinAsync(WriteAsync(process, line), InterruptTimeout).ConfigureAwait(false))
+            {
+                _logger.LogWarning("{Brain} did not take the interrupt; it is stopped", _name);
+                return false;
+            }
+
             while (true)
             {
                 var next = await process.Lines.ReadAsync(timeout.Token).ConfigureAwait(false);
@@ -444,7 +452,37 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         catch (Exception ex) when (ex is OperationCanceledException or System.Threading.Channels.ChannelClosedException or IOException
             or ObjectDisposedException or InvalidOperationException)
         {
-            _logger.LogWarning("Raven's brain did not end an interrupted turn; it is stopped");
+            _logger.LogWarning("{Brain} did not end an interrupted turn; it is stopped", _name);
+            return false;
+        }
+    }
+
+    /// <summary>Writes a line; false when the process would not take it.</summary>
+    private static async Task<bool> WriteAsync(IBrainProcess process, string line)
+    {
+        try
+        {
+            await process.WriteLineAsync(line, CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// What a write gave, or false once <paramref name="limit"/> has passed without it ending. A write left behind ends
+    /// when its process is stopped, which breaks the pipe; nothing waits for it.
+    /// </summary>
+    private async Task<bool> WithinAsync(Task<bool> write, TimeSpan limit)
+    {
+        try
+        {
+            return await write.WaitAsync(limit, _time).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
             return false;
         }
     }
@@ -481,7 +519,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     private void Lose(IBrainProcess process, string why)
     {
-        _logger.LogWarning("Raven's brain {Why}. Its last errors: {Errors}", why, process.ErrorTail);
+        _logger.LogWarning("{Brain} {Why}. Its last errors: {Errors}", _name, why, process.ErrorTail);
         _lost = why;
         Stop();
     }

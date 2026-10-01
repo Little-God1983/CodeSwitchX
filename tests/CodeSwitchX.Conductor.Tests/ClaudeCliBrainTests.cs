@@ -65,8 +65,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         await AskAsync("One");
         _launcher.Last.WritesHang = true;
         var turn = AskAsync("Two");
-        await WaitUntil(() => _launcher.Last.WritesHang);
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
 
         // The write times out after Silence, then the turn waits up to 2 s for the exit code: time goes on until it ends.
         _time.Advance(ClaudeCliBrain.Silence);
@@ -79,6 +78,44 @@ public sealed class ClaudeCliBrainTests : IDisposable
         (await turn).ShouldHaveSingleItem().ShouldBeOfType<BrainFailed>().Reason.ShouldStartWith("Raven's brain stopped before it could take the question");
         _launcher.Started[0].Process.Disposed.ShouldBeTrue();
         Reply(await AskAsync("Three")).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task An_interrupt_the_process_does_not_take_stops_it()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = AskUntilAsync("One", cancel.Token);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+        _launcher.Last.WritesHang = true;
+
+        await cancel.CancelAsync();
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+        for (var i = 0; i < 100 && !turn.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_teller_starts_a_fresh_conversation_for_every_digest()
+    {
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+
+        await foreach (var _ in teller.AskAsync("News one", TestContext.Current.CancellationToken))
+        {
+        }
+
+        await foreach (var _ in teller.AskAsync("News two", TestContext.Current.CancellationToken))
+        {
+        }
+
+        _launcher.Started.Count.ShouldBe(2);
+        _launcher.Started.ShouldAllBe(s => s.Process.Disposed && s.Process.Written.Count == 1, "what one digest's chats said is gone before the next");
     }
 
     [Fact]
