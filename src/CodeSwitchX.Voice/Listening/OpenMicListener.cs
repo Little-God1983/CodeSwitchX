@@ -31,7 +31,7 @@ public interface IOpenMic
     /// <summary>Each captured block, for the orb's level and the silent-microphone watch. On the worker thread.</summary>
     event EventHandler<CapturedFrames>? Heard;
 
-    /// <summary>The microphone died; the listener has stopped. On the capture thread.</summary>
+    /// <summary>The microphone died; the listener then stops itself, so a consumer need not call Stop (and must never from inside this handler). On the capture thread.</summary>
     event EventHandler<MicrophoneException>? Failed;
 }
 
@@ -49,11 +49,14 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     private readonly Func<IVoiceActivity> _newVad;
     private readonly Func<ITurnEnd> _newTurnEnd;
     private readonly ILogger<OpenMicListener> _logger;
+    private static readonly AsyncLocal<bool> _onWorker = new();
+
     private readonly object _gate = new();
     private TurnDetector? _detector;
     private IVoiceActivity? _vad;
     private ITurnEnd? _turnEnd;
     private Channel<CapturedFrames>? _queue;
+    private CancellationTokenSource? _cts;
     private Task _worker = Task.CompletedTask;
     private volatile bool _ignoreSpeech;
     private bool _overflowLogged;
@@ -106,7 +109,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     {
         lock (_gate)
         {
-            Stop();
+            StopRun();
             _detector ??= LoadDetector();
             _detector.Reset();
             _detector.IgnoreSpeech = _ignoreSpeech;
@@ -116,8 +119,18 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                 SingleReader = true,
                 FullMode = BoundedChannelFullMode.DropWrite,
             });
-            _worker = Task.Run(() => WorkAsync(queue, _detector));
-            _stream.Start(deviceId); // throws MicrophoneException; the worker then ends with Stop
+            var cts = _cts = new CancellationTokenSource();
+            var detector = _detector;
+            _worker = Task.Run(() => WorkAsync(queue, detector, cts.Token));
+            try
+            {
+                _stream.Start(deviceId);
+            }
+            catch
+            {
+                StopRun(); // no idle worker or queue is left behind
+                throw;
+            }
         }
     }
 
@@ -125,15 +138,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     {
         lock (_gate)
         {
-            _stream.Stop();
-            _queue?.Writer.TryComplete();
-            _queue = null;
-            if (!_worker.Wait(StopTimeout))
-            {
-                _logger.LogWarning("Open mic's worker did not stop within {Seconds} s", StopTimeout.TotalSeconds);
-            }
-
-            _detector?.Reset();
+            StopRun();
         }
     }
 
@@ -146,11 +151,64 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         _turnEnd?.Dispose();
     }
 
+    /// <summary>
+    /// Ends the current run. Nothing is raised after this: the run's token is cancelled before the queue is completed. A
+    /// worker that will not end is abandoned with the detector it is stepping, which is never reused; the next start loads
+    /// fresh models and the old ones are disposed when that worker finally ends.
+    /// </summary>
+    private void StopRun()
+    {
+        _stream.Stop();
+        _cts?.Cancel();
+        _queue?.Writer.TryComplete();
+        _queue = null;
+        var worker = _worker;
+        if (_onWorker.Value)
+        {
+            // A handler called Stop from the worker thread: waiting would wait on itself. The worker ends by its token.
+            _detector?.Reset();
+            return;
+        }
+
+        if (worker.Wait(StopTimeout))
+        {
+            _cts?.Dispose();
+            _cts = null;
+            _detector?.Reset();
+            return;
+        }
+
+        _logger.LogWarning("Open mic's worker did not stop within {Seconds} s; its models are replaced", StopTimeout.TotalSeconds);
+        var vad = _vad;
+        var turnEnd = _turnEnd;
+        _detector = null;
+        _vad = null;
+        _turnEnd = null;
+        _cts = null;
+        _ = worker.ContinueWith(_ =>
+        {
+            vad?.Dispose();
+            turnEnd?.Dispose();
+        }, TaskScheduler.Default);
+    }
+
     private TurnDetector LoadDetector()
     {
-        _vad = Load(ListeningModelStore.Silero, _newVad);
-        _turnEnd = Load(ListeningModelStore.SmartTurn, _newTurnEnd);
-        return new TurnDetector(_vad, _turnEnd, _logger);
+        var vad = Load(ListeningModelStore.Silero, _newVad);
+        ITurnEnd turnEnd;
+        try
+        {
+            turnEnd = Load(ListeningModelStore.SmartTurn, _newTurnEnd);
+        }
+        catch
+        {
+            vad.Dispose();
+            throw;
+        }
+
+        _vad = vad;
+        _turnEnd = turnEnd;
+        return new TurnDetector(vad, turnEnd, _logger);
     }
 
     private T Load<T>(ListeningModel model, Func<T> load)
@@ -176,19 +234,40 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         }
     }
 
-    private void OnFailed(object? sender, MicrophoneException error) => Failed?.Invoke(this, error);
-
-    private async Task WorkAsync(Channel<CapturedFrames> queue, TurnDetector detector)
+    private void OnFailed(object? sender, MicrophoneException error)
     {
-        var frame = new float[SileroVad.FrameSamples];
-        var filled = 0;
+        Raise(() => Failed?.Invoke(this, error), "Failed");
+
+        // The listener closes itself, off the capture thread: stopping from here would wait on the thread that is calling.
+        _ = Task.Run(Stop);
+    }
+
+    /// <summary>A handler's bug must not end listening.</summary>
+    private void Raise(Action raise, string name)
+    {
         try
         {
-            await foreach (var block in queue.Reader.ReadAllAsync().ConfigureAwait(false))
+            raise();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "A handler of Open mic's {Event} event threw", name);
+        }
+    }
+
+    private async Task WorkAsync(Channel<CapturedFrames> queue, TurnDetector detector, CancellationToken token)
+    {
+        _onWorker.Value = true;
+        var frame = new float[SileroVad.FrameSamples];
+        var filled = 0;
+        var stepLogged = false;
+        try
+        {
+            await foreach (var block in queue.Reader.ReadAllAsync(token).ConfigureAwait(false))
             {
-                Heard?.Invoke(this, block);
+                Raise(() => Heard?.Invoke(this, block), "Heard");
                 var samples = block.Samples16k.AsSpan();
-                while (samples.Length > 0)
+                while (samples.Length > 0 && !token.IsCancellationRequested)
                 {
                     var take = Math.Min(samples.Length, frame.Length - filled);
                     samples[..take].CopyTo(frame.AsSpan(filled));
@@ -200,17 +279,42 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                     }
 
                     filled = 0;
-                    switch (detector.Step(frame))
+                    TurnEvent? result = null;
+                    try
+                    {
+                        result = detector.Step(frame);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!stepLogged)
+                        {
+                            stepLogged = true;
+                            _logger.LogError(ex, "Open mic's turn detector failed; it starts over");
+                        }
+
+                        detector.Reset();
+                    }
+
+                    if (token.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    switch (result)
                     {
                         case TurnEvent.Started:
-                            SpeechStarted?.Invoke(this, EventArgs.Empty);
+                            Raise(() => SpeechStarted?.Invoke(this, EventArgs.Empty), "SpeechStarted");
                             break;
                         case TurnEvent.Ended ended:
-                            TurnEnded?.Invoke(this, ended.Clip);
+                            Raise(() => TurnEnded?.Invoke(this, ended.Clip), "TurnEnded");
                             break;
                     }
                 }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped.
         }
         catch (Exception ex)
         {

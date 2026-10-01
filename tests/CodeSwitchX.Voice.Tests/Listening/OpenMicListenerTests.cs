@@ -69,6 +69,70 @@ public sealed class OpenMicListenerTests
         Directory.Delete(folder, recursive: true);
     }
 
+    [Fact]
+    public async Task A_handler_that_throws_does_not_stop_later_events()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var heard = 0;
+        var ended = new TaskCompletionSource();
+        listener.Heard += (_, _) =>
+        {
+            Interlocked.Increment(ref heard);
+            throw new InvalidOperationException("handler bug");
+        };
+        listener.TurnEnded += (_, _) => ended.TrySetResult();
+
+        listener.Start("mic");
+        stream.Feed(0.5f, seconds: 1.0, block: 160);
+        stream.Feed(0f, seconds: 0.5, block: 160);
+
+        await ended.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        heard.ShouldBeGreaterThan(10);
+        listener.Stop();
+    }
+
+    [Fact]
+    public async Task A_failed_microphone_is_reported_and_the_listener_stops_itself()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var failed = new TaskCompletionSource<MicrophoneException>();
+        listener.Failed += (_, error) => failed.TrySetResult(error);
+
+        listener.Start("mic");
+        stream.Running.ShouldBeTrue();
+        stream.Fail();
+
+        (await failed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).Kind.ShouldBe(MicrophoneFailureKind.Missing);
+        for (var i = 0; i < 100 && stream.Running; i++)
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        stream.Running.ShouldBeFalse();
+        listener.Stop(); // a second stop is harmless
+    }
+
+    [Fact]
+    public void A_turn_end_model_that_will_not_load_disposes_the_voice_activity_model_that_did()
+    {
+        var vad = new LevelVad();
+        var folder = Path.Combine(Path.GetTempPath(), "csx-om-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var store = new ListeningModelStore(folder, new HttpClient());
+        using var listener = new OpenMicListener(new FakeStream(), store, () => vad,
+            () => throw new InvalidOperationException("no"), NullLogger<OpenMicListener>.Instance);
+
+        var error = Should.Throw<ListeningModelException>(() => listener.Start("mic"));
+
+        error.Model.ShouldBe(ListeningModelStore.SmartTurn);
+        vad.Disposed.ShouldBeTrue();
+        Directory.Delete(folder, recursive: true);
+    }
+
     // Needs the models in %LOCALAPPDATA%\CodeSwitchX\models\listening.
     [Fact(Explicit = true)]
     public async Task A_sentence_with_a_one_second_pause_in_the_middle_is_one_turn()
@@ -166,11 +230,11 @@ public sealed class OpenMicListenerTests
             return frame[0] > 0.1f ? 0.9f : 0.05f;
         }
 
+        public bool Disposed { get; private set; }
+
         public void Reset() => Resets++;
 
-        public void Dispose()
-        {
-        }
+        public void Dispose() => Disposed = true;
     }
 
     private sealed class AlwaysComplete : ITurnEnd

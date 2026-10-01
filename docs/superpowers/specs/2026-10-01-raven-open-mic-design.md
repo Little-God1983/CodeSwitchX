@@ -86,7 +86,8 @@ samples it has been fed, so tests drive it frame by frame.
   microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
   Raven speaks with voice barge-in off.
 - Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted`, `TurnEnded(clip)`,
-  `Level(rms)` for the orb, `Failed(MicrophoneException)`.
+  `Heard(frames)` (each captured block, for the orb's level and the silent-microphone watch). `Failed(MicrophoneException)`
+  comes on the capture thread, and the listener then stops itself.
 - A Smart Turn failure is logged once per listener and the turn falls back to the 3 s rule: a turn is never lost to it.
 
 ### ListeningModelStore
