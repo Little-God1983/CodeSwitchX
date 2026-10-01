@@ -18,8 +18,8 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
 
     public ClaudeAgentLauncherTests()
     {
-        // A chat that answers: its mode, then its first words.
-        _launcher.Answer = _ => [StreamJson.Init(mode: "auto"), StreamJson.AssistantText("On it.")];
+        // A chat that answers: its mode, the line it takes, then its first words.
+        _launcher.Answer = line => [StreamJson.Init(mode: "auto"), StreamJson.Taken(line), StreamJson.AssistantText("On it.")];
         _agents = new ClaudeAgentLauncher(_launcher, () => _claude, _time, NullLogger<ClaudeAgentLauncher>.Instance);
         _agents.Changed += c =>
         {
@@ -63,6 +63,7 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         executable.ShouldBe(Claude);
         folder.ShouldBe(_folder);
         arguments.Take(6).ShouldBe(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]);
+        arguments.ShouldContain("--replay-user-messages");
         Value(arguments, "--permission-mode").ShouldBe("auto");
         Value(arguments, "--session-id").ShouldBe("11111111-aaaa-bbbb-cccc-000000000001");
         Value(arguments, "--model").ShouldBe("claude-fable-5-1");
@@ -111,7 +112,7 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
     [Fact]
     public async Task A_model_it_refuses_fails_the_start_and_the_chat_is_gone()
     {
-        _launcher.Answer = _ => [StreamJson.Init(mode: "auto"), StreamJson.ErrorResult];
+        _launcher.Answer = line => [StreamJson.Init(mode: "auto"), StreamJson.Taken(line), StreamJson.ErrorResult];
 
         var start = await StartAsync();
 
@@ -119,6 +120,30 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         _launcher.Last.InputClosed.ShouldBeTrue();
         _agents.Chats.ShouldBeEmpty();
         _failures.ShouldBeEmpty(); // the start says it
+    }
+
+    [Fact]
+    public async Task A_model_that_does_not_exist_fails_the_start_though_Claude_Code_answers_for_it()
+    {
+        // An alias table edited to a wrong id: Claude Code writes an assistant message of its own, then the failed result.
+        _launcher.Answer = line => [StreamJson.Init(mode: "auto"), StreamJson.Taken(line), StreamJson.ModelNotFound, StreamJson.ModelNotFoundResult];
+
+        var start = await StartAsync();
+
+        start.Failure.ShouldBe("The chat could not start: There's an issue with the selected model (claude-opus-5-6).");
+        _agents.Chats.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_turn_that_fails_right_after_the_chat_began_is_reported()
+    {
+        // The failure is read before the start has returned: it is news all the same, as the start says "started".
+        _launcher.Answer = line => [StreamJson.Init(mode: "auto"), StreamJson.Taken(line), StreamJson.AssistantText("On it."), StreamJson.ErrorResult];
+
+        (await StartAsync()).Failure.ShouldBeNull();
+
+        await WaitUntil(() => _failures.Count == 1);
+        _failures[0].Why.ShouldBe("API Error: 529 Overloaded");
     }
 
     [Fact]
@@ -238,15 +263,67 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
     public async Task A_turn_sent_while_one_runs_keeps_the_chat_working_until_it_is_over_too()
     {
         await StartAsync();
+        _launcher.Last.Answer = _ => []; // queued: taken once the running turn is over
         await _agents.SendAsync("11111111", "Add tests too.", TestContext.Current.CancellationToken);
 
-        _launcher.Last.Emit(StreamJson.Result("Done."));
-        _launcher.Last.Emit(StreamJson.Init(mode: "seen")); // the first result is read by now
-        await WaitUntil(() => _agents.Chats.Single().PermissionMode == "seen");
+        await ReadAsync(StreamJson.Result("Done."));
 
         _agents.Chats.Single().Working.ShouldBeTrue();
+        await ReadAsync(StreamJson.Init(mode: "auto"));
+        _launcher.Last.Emit(StreamJson.Taken(_launcher.Last.Written[^1]));
         _launcher.Last.Emit(StreamJson.Result("Tests added."));
         await WaitUntil(() => !_agents.Chats.Single().Working);
+    }
+
+    [Fact]
+    public async Task A_line_sent_during_a_tool_call_is_folded_into_that_turn_and_its_end_leaves_the_chat_idle()
+    {
+        // Seen with CLI 2.1.286: two lines, one result.
+        await StartAsync();
+        _launcher.Last.Answer = _ => [];
+        await _agents.SendAsync("11111111", "Add tests too.", TestContext.Current.CancellationToken);
+
+        _launcher.Last.Emit(StreamJson.Taken(_launcher.Last.Written[^1]));
+        await ReadAsync(StreamJson.Result("Done, tests too."));
+
+        _agents.Chats.Single().Working.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_turn_Claude_Code_starts_by_itself_is_work_until_it_is_over()
+    {
+        // A background task that ends starts a turn with no line sent: its init, then its result.
+        await StartAsync();
+        await ReadAsync(StreamJson.Result("Started the build in the background."));
+        _agents.Chats.Single().Working.ShouldBeFalse();
+
+        await ReadAsync(StreamJson.Init(mode: "auto"));
+        _agents.Chats.Single().Working.ShouldBeTrue();
+
+        await ReadAsync(StreamJson.Result("The build passed."));
+        _agents.Chats.Single().Working.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_Claude_Code_that_does_not_echo_its_lines_is_idle_once_its_turn_is_over()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(mode: "auto"), StreamJson.AssistantText("On it.")];
+        await StartAsync();
+
+        await ReadAsync(StreamJson.Result("Done."));
+
+        _agents.Chats.Single().Working.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_send_given_up_on_leaves_an_idle_chat_idle()
+    {
+        await StartAsync();
+        await ReadAsync(StreamJson.Result("Done."));
+
+        await Should.ThrowAsync<OperationCanceledException>(() => _agents.SendAsync("11111111", "Add tests too.", new CancellationToken(canceled: true)));
+
+        _agents.Chats.Single().Working.ShouldBeFalse();
     }
 
     [Fact]
@@ -330,6 +407,25 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         _launcher.Last.Disposed.ShouldBeTrue();
         await Should.ThrowAsync<YardActionException>(() => StartAsync(Request(id: "22222222")));
         _failures.ShouldBeEmpty();
+    }
+
+    /// <summary>The chat writes the line; returns once it is read, which tells of the chat.</summary>
+    private async Task ReadAsync(string line)
+    {
+        int told;
+        lock (_changes)
+        {
+            told = _changes.Count;
+        }
+
+        _launcher.Last.Emit(line);
+        await WaitUntil(() =>
+        {
+            lock (_changes)
+            {
+                return _changes.Count > told;
+            }
+        });
     }
 
     private static async Task WaitUntil(Func<bool> condition)

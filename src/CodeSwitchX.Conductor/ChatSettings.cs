@@ -27,5 +27,6 @@ public sealed class ChatSettings
     /// <summary>The full id of the default model, through the alias table; null for Claude Code's default, or a name it no longer knows.</summary>
     public string? DefaultModelId => Defaults.Model is { } model ? ChatModels.ResolveModel(model, Aliases) : null;
 
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    /// <summary>A model or effort as given, trimmed; none for an empty one, which tool callers and empty boxes send for "none".</summary>
+    public static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

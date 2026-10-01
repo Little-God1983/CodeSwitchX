@@ -36,6 +36,27 @@ public sealed class ChatModelsTests
     }
 
     [Fact]
+    public void An_alias_whose_id_has_a_tag_after_its_version_is_named_by_that_version()
+    {
+        // Claude Code takes a context tag on a full id.
+        IReadOnlyList<ModelAlias> aliases = [new("Opus", "claude-opus-5-5[1m]")];
+
+        ChatModels.ResolveModel("Opus 5.5", aliases).ShouldBe("claude-opus-5-5[1m]");
+        ChatModels.ResolveModel("Opus 5", aliases).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("opus", "Opus")]
+    [InlineData("Opus.", "Opus")]
+    [InlineData("Opus 5.5", null)]
+    [InlineData("claude-opus-5-5", null)]
+    [InlineData("", null)]
+    public void An_alias_is_named_only_by_its_name_said_by_itself(string said, string? name)
+    {
+        (ChatModels.AliasNamed(said, Aliases)?.Name).ShouldBe(name);
+    }
+
+    [Fact]
     public void The_table_is_read_one_alias_a_line_and_lines_of_another_shape_are_left_out()
     {
         var aliases = ChatModels.ParseAliases("Fable = claude-fable-5-2\r\nOpus: claude-opus-5-5\nnonsense\n= claude-x\nFable = claude-old\nBad = two words\n");
@@ -86,6 +107,7 @@ public sealed class ChatModelsTests
     [InlineData("claude-opus-5-5", "Opus 5.5")]
     [InlineData("claude-haiku-4-5-20251001", "Haiku 4.5")]
     [InlineData("claude-sonnet-5", "Sonnet 5")]
+    [InlineData("claude-opus-5-5[1m]", "Opus 5.5 [1m]")]
     [InlineData("gpt-5", "gpt-5")]
     [InlineData("claude-3-5-sonnet", "claude-3-5-sonnet")]
     public void An_id_reads_as_its_name_and_version(string id, string shown)

@@ -255,8 +255,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         Persist(SettingKeys.RavenModelAliases, value);
     }
 
+    /// <summary>As <see cref="ChatSettings.Blank"/>, and the choice that stands for Claude Code's default is none too.</summary>
     private static string? Blank(string? value) =>
-        string.IsNullOrWhiteSpace(value) || value.Trim().Equals(ClaudeDefault, StringComparison.OrdinalIgnoreCase) ? null : value.Trim();
+        ChatSettings.Blank(value) is { } given && !given.Equals(ClaudeDefault, StringComparison.OrdinalIgnoreCase) ? given : null;
 
     private static string OrDefault(string? value) => Blank(value) ?? ClaudeDefault;
 

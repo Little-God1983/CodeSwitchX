@@ -96,7 +96,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         }
 
         var worker = new Worker(request, process);
-        worker.TurnTaken();
+        worker.LineSent();
         lock (_gate)
         {
             _workers[request.Id] = worker;
@@ -122,7 +122,9 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
                 }
                 catch (TimeoutException)
                 {
-                    failure = null; // still thinking: under way
+                    // Still thinking: under way, unless the chat said otherwise just now.
+                    worker.FirstSign.TrySetResult(null);
+                    failure = await worker.FirstSign.Task.ConfigureAwait(false);
                 }
             }
         }
@@ -140,17 +142,28 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
             return new AgentStart(worker.Snapshot(), failure);
         }
 
-        worker.Started = true;
         return new AgentStart(worker.Snapshot(), null);
     }
 
     public async Task<AgentChat> SendAsync(string chatId, string text, CancellationToken ct)
     {
         var worker = FindWorker(chatId) ?? throw NotOurs(chatId);
-        worker.TurnTaken();
-        if (!await SendLineAsync(worker.Process, text, ct).ConfigureAwait(false))
+        worker.LineSent();
+        var sent = false;
+        try
         {
-            worker.TurnOver();
+            sent = await SendLineAsync(worker.Process, text, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (!sent)
+            {
+                worker.LineUnsent(); // cancelled or failed: it will not be taken, and must not keep the chat working
+            }
+        }
+
+        if (!sent)
+        {
             throw new YardActionException("That chat has stopped, so it cannot take anything more.");
         }
 
@@ -191,6 +204,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
+            "--replay-user-messages",
             "--permission-mode", "auto",
             "--session-id", request.Id,
         ];
@@ -213,8 +227,8 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
     };
 
     /// <summary>
-    /// Reads the chat's output as long as it runs: its mode, when a turn begins to answer and when it is over. Standard
-    /// output must be read all the time anyway, or a full pipe would stop the process.
+    /// Reads the chat's output as long as it runs: its mode, the lines it takes, when a turn begins, begins to answer and is
+    /// over. Standard output must be read all the time anyway, or a full pipe would stop the process.
     /// </summary>
     private async Task PumpAsync(Worker worker)
     {
@@ -226,7 +240,11 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
                 {
                     case ClaudeInit init:
                         worker.PermissionMode = init.PermissionMode;
+                        worker.TurnBegun();
                         Raise(worker);
+                        break;
+                    case ClaudeTaken:
+                        worker.LineTaken();
                         break;
                     case ClaudeTurnOver over:
                         worker.TurnOver();
@@ -234,7 +252,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
                         if (over.Error is { } error)
                         {
                             _logger.LogWarning("Chat {Id} failed a turn: {Error}", worker.Id, error);
-                            if (worker.Started)
+                            if (worker.Begun)
                             {
                                 Failed?.Invoke(worker.Snapshot(), error);
                             }
@@ -265,7 +283,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         if (!worker.StoppedByUs)
         {
             _logger.LogWarning("Chat {Id} {Why}. Its last errors: {Errors}", worker.Id, why, worker.Process.ErrorTail);
-            if (worker.Started)
+            if (worker.Begun)
             {
                 Failed?.Invoke(worker.Snapshot(), $"Claude Code {why}.");
             }
@@ -347,7 +365,9 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
 
     private sealed class Worker(AgentRequest request, IBrainProcess process)
     {
-        private volatile int _turns;
+        private volatile int _unread;
+        private volatile bool _inTurn;
+        private bool _echoes;
 
         public Lock Gate { get; } = new();
 
@@ -360,27 +380,57 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
 
         public Task? Pump { get; set; }
 
-        /// <summary>The start has reported it as started: failures from here on are news for the user.</summary>
-        public volatile bool Started;
+        /// <summary>
+        /// The chat began: its start says, or has said, it started, so failures from here on are news for the user. A
+        /// failure that settles the first sign itself is the start's to tell.
+        /// </summary>
+        public bool Begun => FirstSign.Task is { IsCompletedSuccessfully: true, Result: null };
 
         /// <summary>The app stopped it: its end is no failure.</summary>
         public volatile bool StoppedByUs;
 
         /// <summary>
-        /// Some turn is still to end. A line sent while one runs is a turn of its own, queued after it, and each ends with
-        /// a <c>result</c> (seen with CLI 2.1.286): the end of the first leaves the chat working.
+        /// A line written to it is not taken yet, or a turn runs. Not a count of lines against <c>result</c>s: Claude Code
+        /// folds a line sent during a tool call into the running turn, and starts a turn by itself when a background task
+        /// ends (seen with CLI 2.1.286). Each turn begins with an <c>init</c>, and each line is echoed as it is taken.
         /// </summary>
-        public bool Working => _turns > 0;
+        public bool Working => _unread > 0 || _inTurn;
 
         public volatile string? PermissionMode;
 
         public volatile bool Ended;
 
-        public void TurnTaken()
+        public void LineSent()
         {
             lock (Gate)
             {
-                _turns++;
+                _unread++;
+            }
+        }
+
+        public void LineUnsent()
+        {
+            lock (Gate)
+            {
+                _unread = Math.Max(0, _unread - 1);
+            }
+        }
+
+        public void LineTaken()
+        {
+            lock (Gate)
+            {
+                _echoes = true;
+                _unread = Math.Max(0, _unread - 1);
+                _inTurn = true;
+            }
+        }
+
+        public void TurnBegun()
+        {
+            lock (Gate)
+            {
+                _inTurn = true;
             }
         }
 
@@ -388,7 +438,11 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         {
             lock (Gate)
             {
-                _turns = Math.Max(0, _turns - 1);
+                _inTurn = false;
+                if (!_echoes)
+                {
+                    _unread = 0; // a Claude Code that does not echo the lines it takes: no line would ever count as taken
+                }
             }
         }
 
@@ -396,7 +450,8 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         {
             lock (Gate)
             {
-                _turns = 0;
+                _unread = 0;
+                _inTurn = false;
                 Ended = true;
             }
         }

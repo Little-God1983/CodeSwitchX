@@ -93,8 +93,8 @@ public sealed class RavenActions : IYardActions
 
     public async Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder folder, string prompt, string? model, string? effort, CancellationToken ct)
     {
-        var modelId = Said(model) is { } m ? ModelIdOf(m) : _chats.DefaultModelId;
-        var level = Said(effort) is { } e ? EffortOf(e) : _chats.Defaults.Effort;
+        var modelId = ChatSettings.Blank(model) is { } m ? ModelIdOf(m) : _chats.DefaultModelId;
+        var level = ChatSettings.Blank(effort) is { } e ? EffortOf(e) : _chats.Defaults.Effort;
         var id = Guid.NewGuid().ToString();
         _claim(id, workspace.Id);
         var start = await _agents.StartAsync(new AgentRequest(id, workspace.Id, workspace.Name, folder.Path, prompt, modelId, level), ct).ConfigureAwait(false);
@@ -119,8 +119,8 @@ public sealed class RavenActions : IYardActions
     {
         var current = _chats.Defaults;
         var next = new ChatDefaults(
-            Said(model) is { } m ? NameOf(m) : current.Model,
-            Said(effort) is { } e ? EffortOf(e) : current.Effort);
+            ChatSettings.Blank(model) is { } m ? NameOf(m) : current.Model,
+            ChatSettings.Blank(effort) is { } e ? EffortOf(e) : current.Effort);
         await OnUiAsync(() => _shell().SetChatDefaults(next), ct).ConfigureAwait(false);
         return _chats.Defaults;
     }
@@ -148,11 +148,13 @@ public sealed class RavenActions : IYardActions
             return $"{name} is open.";
         }
 
-        // Only one process may write to the chat: Raven's stops before VS Code takes it over.
+        // Only one process may write to the chat: Raven's stops before VS Code takes it over. From here on the hand-over
+        // is seen through even when the brain's call is cancelled, or the chat would run neither here nor there. Each step
+        // is bounded: the stop by its waits, the look for the front by FrontWait.
         bool cutOff;
         try
         {
-            cutOff = (await _agents.StopAsync(chat.Id, ct).ConfigureAwait(false)).Working;
+            cutOff = (await _agents.StopAsync(chat.Id, CancellationToken.None).ConfigureAwait(false)).Working;
         }
         catch (YardActionException)
         {
@@ -162,13 +164,13 @@ public sealed class RavenActions : IYardActions
         // VS Code gives the link to the window focused last. When the user is in another app, CodeSwitchX cannot take
         // the front, and the link would open the chat in whichever VS Code window they used last: it waits for them.
         var goOn = cutOff ? " It was still working, and that turn was cut off; its input box says to go on." : "";
-        if (!await InFrontWithinAsync(workspaceId, FrontWait, ct).ConfigureAwait(false))
+        if (!await InFrontWithinAsync(workspaceId, FrontWait, CancellationToken.None).ConfigureAwait(false))
         {
             PendingHandOverTask = HandOverWhenInFrontAsync(chat, workspaceId, cutOff);
             return $"{name} is open in CodeSwitchX, which is not in front: the chat opens in VS Code as soon as the user switches to it.{goOn}";
         }
 
-        if (await HandOverAsync(chat.Id, cutOff, ct).ConfigureAwait(false) is { } failed)
+        if (await HandOverAsync(chat.Id, cutOff, CancellationToken.None).ConfigureAwait(false) is { } failed)
         {
             throw new YardActionException($"{name} is open, but VS Code could not be asked to open the chat: {failed} It can be resumed in its Claude Code panel.");
         }
@@ -275,15 +277,11 @@ public sealed class RavenActions : IYardActions
     private string ModelIdOf(string said) => ChatModels.ResolveModel(said, _chats.Aliases)
         ?? throw new YardActionException($"'{said}' is no model Raven knows. Say {string.Join(", ", _chats.Aliases.Select(a => a.Name))}, or a full model id.");
 
-    /// <summary>The alias name when the model is one (so a new id for it in the table applies), else the id.</summary>
-    private string NameOf(string said)
-    {
-        var id = ModelIdOf(said);
-        return _chats.Aliases.FirstOrDefault(a => a.Id == id && ChatModels.ResolveModel(said, [a]) is not null)?.Name ?? id;
-    }
-
-    /// <summary>What the brain said for an optional name; an empty one, which tool callers send for "none", is none.</summary>
-    private static string? Said(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+    /// <summary>
+    /// The alias name when the user said just that ("Opus"), so a new id for it in the table applies; else the id. A
+    /// version or id said ("Opus 5.5") names that one model, which a later change of the table must not swap.
+    /// </summary>
+    private string NameOf(string said) => ChatModels.AliasNamed(said, _chats.Aliases)?.Name ?? ModelIdOf(said);
 
     private static string EffortOf(string said) => ChatModels.ResolveEffort(said)
         ?? throw new YardActionException($"'{said}' is no effort level. Say {string.Join(", ", ChatModels.EffortLevels)}.");

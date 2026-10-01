@@ -96,4 +96,17 @@ public sealed class ClaudeStreamTests
         ClaudeStream.Read(StreamJson.AssistantText("On it.")).ShouldBeOfType<ClaudeAnswer>();
         ClaudeStream.Read(StreamJson.AssistantText("On it.").Replace("\"parent_tool_use_id\":null", "\"parent_tool_use_id\":\"toolu_1\"")).ShouldBeNull();
     }
+
+    [Fact]
+    public void The_message_Claude_Code_writes_for_a_failed_API_call_is_no_answer()
+    {
+        ClaudeStream.Read(StreamJson.ModelNotFound).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_line_echoed_back_is_taken_and_a_tool_result_is_not()
+    {
+        ClaudeStream.Read(StreamJson.Taken("""{"type":"user","message":{"role":"user","content":"Add tests."}}""")).ShouldBeOfType<ClaudeTaken>();
+        ClaudeStream.Read(StreamJson.ToolResult("t1")).ShouldBeOfType<ClaudeEvents>();
+    }
 }

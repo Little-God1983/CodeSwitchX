@@ -20,6 +20,12 @@ internal sealed record ClaudeTurnOver(string? Error) : ClaudeLine;
 internal sealed record ClaudeAnswer : ClaudeLine;
 
 /// <summary>
+/// A line written to it, echoed back as it takes it into a turn (<c>--replay-user-messages</c>): when that turn begins, or
+/// when the running one folds it in at a tool call (seen with CLI 2.1.286).
+/// </summary>
+internal sealed record ClaudeTaken : ClaudeLine;
+
+/// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
 /// CLI 2.1.285): the reply comes as <c>stream_event</c> text deltas, a tool call in the <c>assistant</c> message that
 /// holds it, its result in the next <c>user</c> message, and the turn ends with a <c>result</c> line. Lines of a
@@ -49,6 +55,7 @@ internal static class ClaudeStream
                 "system" when Text(root, "subtype") == "init" => Init(root),
                 "stream_event" => Delta(root),
                 "assistant" => (ClaudeLine?)ToolCalls(root) ?? Answer(root),
+                "user" when root.TryGetProperty("isReplay", out var replay) && replay.ValueKind == JsonValueKind.True => new ClaudeTaken(),
                 "user" => ToolResults(root),
                 "result" => new ClaudeTurnOver(Error(root)),
                 _ => null,
@@ -110,8 +117,15 @@ internal static class ClaudeStream
         return events.Count > 0 ? new ClaudeEvents(events) : null;
     }
 
+    /// <summary>
+    /// Not the message Claude Code writes itself when the API call failed (model <c>&lt;synthetic&gt;</c>, with an
+    /// <c>error</c>, such as for a model that does not exist): the <c>result</c> after it says the turn failed.
+    /// </summary>
     private static ClaudeAnswer? Answer(JsonElement root) =>
-        root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object ? new ClaudeAnswer() : null;
+        root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
+        && Text(root, "error") is null && Text(message, "model") != "<synthetic>"
+            ? new ClaudeAnswer()
+            : null;
 
     private static ClaudeEvents? ToolResults(JsonElement root)
     {

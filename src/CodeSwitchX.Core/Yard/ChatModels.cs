@@ -63,7 +63,7 @@ public static class ChatModels
             return null;
         }
 
-        if (aliases.FirstOrDefault(a => WorkspaceMatcher.Squash(a.Name) == key || WorkspaceMatcher.Squash(a.Id) == key) is { } exact)
+        if ((AliasNamed(said, aliases) ?? aliases.FirstOrDefault(a => WorkspaceMatcher.Squash(a.Id) == key)) is { } exact)
         {
             return exact.Id;
         }
@@ -71,13 +71,20 @@ public static class ChatModels
         // "opus55", "fable 5.1": the alias, then its own version. Another version ("Opus 4.1") is another model, which
         // the alias does not stand for.
         if (aliases.FirstOrDefault(a => WorkspaceMatcher.Squash(a.Name) is { Length: > 0 } name && key.StartsWith(name, StringComparison.Ordinal)
-                && key[name.Length..] is { Length: > 0 } version && version == string.Concat(VersionOf(a.Id))) is { } versioned)
+                && key[name.Length..] is { Length: > 0 } version && version == string.Concat(VersionOf(a.Id).Version)) is { } versioned)
         {
             return versioned.Id;
         }
 
         var id = said!.Trim().ToLowerInvariant();
         return id.StartsWith("claude-", StringComparison.Ordinal) && !id.Any(char.IsWhiteSpace) ? id : null;
+    }
+
+    /// <summary>The alias whose name it is, said by itself ("opus", "Opus."); null for a version or an id said.</summary>
+    public static ModelAlias? AliasNamed(string? said, IReadOnlyList<ModelAlias> aliases)
+    {
+        var key = WorkspaceMatcher.Squash(said ?? "");
+        return key.Length == 0 ? null : aliases.FirstOrDefault(a => WorkspaceMatcher.Squash(a.Name) == key);
     }
 
     /// <summary>
@@ -92,15 +99,37 @@ public static class ChatModels
             return modelId;
         }
 
-        var version = VersionOf(modelId);
-        var rest = parts.Skip(2 + version.Count).Where(p => !(p.Length == 8 && p.All(char.IsDigit))).ToList();
+        var (version, after) = VersionOf(modelId);
+        var rest = after.Select(p => p.Length >= 8 && p[..8].All(char.IsAsciiDigit) ? p[8..] : p).ToList(); // the date left out
         var name = char.ToUpperInvariant(parts[1][0]) + parts[1][1..].ToLowerInvariant();
         return string.Join(" ", new[] { name, string.Join(".", version) }.Concat(rest).Where(p => p.Length > 0));
     }
 
-    /// <summary>The parts of an id's version: <c>claude-haiku-4-5-20251001</c> has 4 and 5, the date being no part of it.</summary>
-    private static List<string> VersionOf(string modelId) =>
-        modelId.Trim().Split('-', StringSplitOptions.RemoveEmptyEntries).Skip(2).TakeWhile(p => p.Length < 8 && p.All(char.IsDigit)).ToList();
+    /// <summary>
+    /// The parts of an id's version, and what comes after them: <c>claude-haiku-4-5-20251001</c> has 4 and 5, then the
+    /// date, which is no part of it; <c>claude-opus-5-5[1m]</c> has 5 and 5, then "[1m]".
+    /// </summary>
+    private static (List<string> Version, List<string> After) VersionOf(string modelId)
+    {
+        var parts = modelId.Trim().Split('-', StringSplitOptions.RemoveEmptyEntries).Skip(2).ToList();
+        List<string> version = [];
+        for (var i = 0; i < parts.Count; i++)
+        {
+            var digits = parts[i].TakeWhile(char.IsAsciiDigit).Count();
+            if (digits is 0 or >= 8)
+            {
+                return (version, parts[i..]);
+            }
+
+            version.Add(parts[i][..digits]);
+            if (digits < parts[i].Length)
+            {
+                return (version, [parts[i][digits..], .. parts[(i + 1)..]]);
+            }
+        }
+
+        return (version, []);
+    }
 
     /// <summary>
     /// The effort level a spoken or typed word means: the level itself, or how it is said out loud ("extra high",

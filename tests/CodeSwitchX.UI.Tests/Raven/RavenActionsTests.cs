@@ -132,10 +132,22 @@ public sealed class RavenActionsTests
     {
         _chats.Defaults = new ChatDefaults(null, "low");
 
-        var set = await _actions.SetDefaultsAsync("claude-opus-5-5", null, Ct);
+        var set = await _actions.SetDefaultsAsync("opus", null, Ct);
 
         _shell.Defaults.ShouldBe([new ChatDefaults("Opus", "low")]);
         set.ShouldBe(new ChatDefaults("Opus", "low"));
+    }
+
+    [Theory]
+    [InlineData("Opus 5.5")]
+    [InlineData("claude-opus-5-5")]
+    public async Task A_default_said_by_its_version_or_id_is_that_model_whatever_the_alias_becomes(string said)
+    {
+        (await _actions.SetDefaultsAsync(said, null, Ct)).Model.ShouldBe("claude-opus-5-5");
+
+        _chats.Aliases = [new ModelAlias("Opus", "claude-opus-6-0")];
+
+        _chats.DefaultModelId.ShouldBe("claude-opus-5-5");
     }
 
     [Fact]
@@ -167,6 +179,23 @@ public sealed class RavenActionsTests
         _sequence.ShouldBe(["stop dddddddd-0004"]);
         _shell.Opened.ShouldBe([Diffusion.Id]);
         _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", working)]);
+    }
+
+    [Fact]
+    public async Task A_hand_over_once_the_chat_is_stopped_is_seen_through_though_the_call_is_cancelled()
+    {
+        // Raven's chat is stopped by then: given up, it would run neither here nor in VS Code.
+        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
+        _actions.HandOverDelay = TimeSpan.FromSeconds(1);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", cancel.Token);
+        _sequence.ShouldContain("stop dddddddd-0004");
+
+        await cancel.CancelAsync();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        (await open).ShouldBe("Diffusion-Full is open, and the chat opens in VS Code's Claude Code panel.");
+        _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", cutOff: false)]);
     }
 
     [Fact]

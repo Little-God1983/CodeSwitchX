@@ -23,6 +23,7 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public Task WriteLineAsync(string line, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested(); // as StreamWriter does, before it writes
         if (_exited.Task.IsCompleted)
         {
             throw new IOException("The pipe has been ended.");
@@ -119,6 +120,23 @@ internal static class StreamJson
 
     public static string Result(string text = "Hi.") =>
         $$"""{"type":"result","subtype":"success","is_error":false,"result":"{{text}}","session_id":"s"}""";
+
+    /// <summary>The message Claude Code writes itself for a model that does not exist (CLI 2.1.286), before the failed result.</summary>
+    public const string ModelNotFound =
+        """{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"There's an issue with the selected model (claude-opus-5-6)."}]},"parent_tool_use_id":null,"error":"model_not_found"}""";
+
+    public const string ModelNotFoundResult =
+        """{"type":"result","subtype":"success","is_error":true,"result":"There's an issue with the selected model (claude-opus-5-6).","session_id":"s"}""";
+
+    /// <summary>A line written to it, echoed as it is taken into a turn (<c>--replay-user-messages</c>).</summary>
+    public static string Taken(string written)
+    {
+        var line = System.Text.Json.Nodes.JsonNode.Parse(written)!.AsObject();
+        line["parent_tool_use_id"] = null;
+        line["session_id"] = "s";
+        line["isReplay"] = true;
+        return line.ToJsonString();
+    }
 
     public const string ErrorResult =
         """{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded","session_id":"s"}""";
