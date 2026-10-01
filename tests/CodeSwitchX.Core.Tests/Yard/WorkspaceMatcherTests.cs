@@ -137,4 +137,43 @@ public sealed class WorkspaceMatcherTests
     {
         WorkspaceMatcher.Find("Bücher Regal", [Workspace("BücherRegal")]).ShouldHaveSingleItem().Score.ShouldBe(1);
     }
+
+    [Fact]
+    public void A_chat_for_a_folder_s_name_runs_in_that_folder()
+    {
+        var match = WorkspaceMatcher.Find("Diffusion Nexus", Yard)[0];
+
+        WorkspaceMatcher.FolderOf(match).Path.ShouldBe(@"E:\Repos\DiffusionNexus");
+    }
+
+    [Fact]
+    public void A_chat_for_the_workspace_s_own_name_runs_in_its_root()
+    {
+        var match = WorkspaceMatcher.Find("Diffusion Full", Yard)[0];
+
+        WorkspaceMatcher.FolderOf(match).Path.ShouldBe(@"E:\Repos\DiffusionNexus.Installer.SDK");
+    }
+
+    [Fact]
+    public void A_workspace_without_folders_runs_its_chats_in_its_root_path()
+    {
+        var match = WorkspaceMatcher.Find("ContentAutomatorX", Yard)[0];
+
+        WorkspaceMatcher.FolderOf(match).Path.ShouldBe(@"E:\Repos\ContentAutomatorX");
+    }
+
+    [Theory]
+    [InlineData("installer SDK", @"E:\Repos\DiffusionNexus.Installer.SDK")]
+    [InlineData("diffusion nexus", @"E:\Repos\DiffusionNexus")]
+    public void A_folder_named_apart_from_the_workspace_is_found_among_its_folders(string said, string path)
+    {
+        WorkspaceMatcher.FindFolder(said, DiffusionFull).ShouldNotBeNull().Path.ShouldBe(path);
+    }
+
+    [Fact]
+    public void A_folder_the_workspace_does_not_have_is_none()
+    {
+        WorkspaceMatcher.FindFolder("Photoshop", DiffusionFull).ShouldBeNull();
+        WorkspaceMatcher.FindFolder("", DiffusionFull).ShouldBeNull();
+    }
 }

@@ -21,7 +21,8 @@ public sealed class TrayIconService
             WindowActivation.BringUp(window);
         }));
         menu.Items.Add(new Separator());
-        menu.Items.Add(MenuItem("Exit", () => Application.Current.Shutdown()));
+        // Through the window, not a shutdown: closing it asks first while a chat Raven started is working.
+        menu.Items.Add(MenuItem("Exit", window.Close));
 
         _image = LoadAppIcon(TrayIconSize());
         _icon = new TaskbarIcon

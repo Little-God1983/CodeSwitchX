@@ -9,4 +9,7 @@ public static class SettingKeys
     public const string RavenPanelOpen = "raven.panelOpen";
     public const string RavenMicrophone = "raven.microphone";
     public const string RavenBrainModel = "raven.brainModel";
+    public const string RavenChatModel = "raven.chatModel";
+    public const string RavenChatEffort = "raven.chatEffort";
+    public const string RavenModelAliases = "raven.modelAliases";
 }

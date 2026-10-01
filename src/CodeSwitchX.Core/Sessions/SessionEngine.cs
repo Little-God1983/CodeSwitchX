@@ -29,6 +29,9 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>Per chat, what its agents are up to (see <see cref="Agents"/>); a chat without an entry is treated as before agents were told apart.</summary>
     private readonly Dictionary<string, Agents> _agents = new(StringComparer.Ordinal);
+
+    /// <summary>Chats whose tile the app chose when it started them (<see cref="Claim"/>); their folder does not move them.</summary>
+    private readonly Dictionary<string, Guid> _claims = new(StringComparer.Ordinal);
     private const int OpenToolsKept = 32;
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _sweepTimer;
@@ -118,6 +121,23 @@ public sealed class SessionEngine : IDisposable
         _sweepTimer = _time.CreateTimer(_ => SweepStale(), null, _options.SweepInterval, _options.SweepInterval);
     }
 
+    /// <summary>
+    /// Puts a chat the app starts itself on the tile of <paramref name="workspaceId"/>, before its first event: a folder
+    /// two workspaces share, or one a folder workspace registers too, would otherwise put it on the other tile. Applies to
+    /// a chat already known as well. Not stored: the claim lasts as long as this process, as does the chat it started.
+    /// </summary>
+    public void Claim(string sessionId, Guid workspaceId)
+    {
+        lock (_gate)
+        {
+            _claims[sessionId] = workspaceId;
+            if (_sessions.GetValueOrDefault(sessionId) is { } s && s.WorkspaceId != workspaceId)
+            {
+                Commit(s, s with { WorkspaceId = workspaceId });
+            }
+        }
+    }
+
     public void Apply(HookEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
@@ -153,7 +173,8 @@ public sealed class SessionEngine : IDisposable
                 StateSince = state == s.State && previous is not null ? s.StateSince : e.At,
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
                 Cwd = cwd,
-                WorkspaceId = cwd != s.Cwd || s.WorkspaceId is null ? _resolver.Resolve(cwd) : s.WorkspaceId,
+                WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
+                    : cwd != s.Cwd || s.WorkspaceId is null ? _resolver.Resolve(cwd) : s.WorkspaceId,
                 TranscriptPath = e.TranscriptPath ?? s.TranscriptPath,
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
@@ -358,7 +379,7 @@ public sealed class SessionEngine : IDisposable
                 StateSince = stateSince,
                 LastEventAt = lastEvent,
                 Cwd = cwd,
-                WorkspaceId = s.WorkspaceId ?? _resolver.Resolve(cwd),
+                WorkspaceId = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : s.WorkspaceId ?? _resolver.Resolve(cwd),
                 TranscriptPath = s.TranscriptPath ?? u.TranscriptPath,
                 Model = model,
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
@@ -442,7 +463,7 @@ public sealed class SessionEngine : IDisposable
         {
             foreach (var s in _sessions.Values.ToArray())
             {
-                var resolved = _resolver.Resolve(s.Cwd);
+                var resolved = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : _resolver.Resolve(s.Cwd);
                 if (resolved != s.WorkspaceId)
                 {
                     Commit(s, s with { WorkspaceId = resolved });

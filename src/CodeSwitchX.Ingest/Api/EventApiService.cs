@@ -16,8 +16,9 @@ namespace CodeSwitchX.Ingest.Api;
 
 /// <summary>
 /// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus. Given the Yard, it also
-/// serves the read-only MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), on the loopback port under
-/// <see cref="YardMcp.Route"/>, behind the same token, and writes <c>mcp.json</c> for Claude Code to find them.
+/// serves the MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), and given what can be done on it,
+/// those it acts through (<see cref="YardActionTools"/>), on the loopback port under <see cref="YardMcp.Route"/>, behind the
+/// same token, and writes <c>mcp.json</c> for Claude Code to find them.
 /// </summary>
 public sealed class EventApiService : IHostedService
 {
@@ -29,10 +30,11 @@ public sealed class EventApiService : IHostedService
     private readonly ILogger _logger;
     private readonly EventApiOptions _options;
     private readonly IYardDirectory? _yard;
+    private readonly IYardActions? _actions;
     private WebApplication? _app;
 
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
-        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null)
+        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null)
     {
         _paths = paths;
         _bus = bus;
@@ -42,6 +44,7 @@ public sealed class EventApiService : IHostedService
         _logger = loggerFactory.CreateLogger<EventApiService>();
         _options = options;
         _yard = yard;
+        _actions = actions;
     }
 
     public EndpointDescriptor? Endpoint { get; private set; }
@@ -80,9 +83,14 @@ public sealed class EventApiService : IHostedService
         {
             // Stateless: every request stands alone, so a restarted brain or app needs no session to be re-established.
             builder.Services.AddSingleton(_yard);
-            builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })
+            var mcp = builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })
                 .WithHttpTransport(http => http.Stateless = true)
                 .WithTools<YardTools>();
+            if (_actions is not null)
+            {
+                builder.Services.AddSingleton(_actions);
+                mcp.WithTools<YardActionTools>();
+            }
         }
 
         var app = builder.Build();

@@ -59,6 +59,42 @@ public static class WorkspaceMatcher
         return matches.OrderByDescending(m => m.Score).ThenBy(m => m.Workspace.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>
+    /// The folder a match was made through: the one whose name matched, or the workspace's first folder (its root) when
+    /// its own name did. Where a chat for the name runs: "Diffusion Nexus" in Diffusion-Full's DiffusionNexus folder.
+    /// </summary>
+    public static YardFolder FolderOf(WorkspaceMatch match)
+    {
+        var workspace = match.Workspace;
+        var root = workspace.Folders.Count > 0 ? workspace.Folders[0] : new YardFolder(workspace.Name, workspace.RootPath);
+        if (match.MatchedName == workspace.Name)
+        {
+            return root;
+        }
+
+        return workspace.Folders.FirstOrDefault(f => f.Name == match.MatchedName || OwnName(f) == match.MatchedName) ?? root;
+    }
+
+    /// <summary>The workspace's folder a name means best, matched like a workspace name; null when none matches.</summary>
+    public static YardFolder? FindFolder(string query, YardWorkspace workspace)
+    {
+        var key = Squash(query);
+        if (key.Length == 0)
+        {
+            return null;
+        }
+
+        var words = Words(query);
+        return workspace.Folders
+            .Select(f => (Folder: f, Score: Math.Max(Score(key, words, Squash(f.Name)), Score(key, words, Squash(OwnName(f))))))
+            .Where(f => f.Score >= Threshold)
+            .OrderByDescending(f => f.Score)
+            .Select(f => f.Folder)
+            .FirstOrDefault();
+    }
+
+    private static string OwnName(YardFolder folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder.Path));
+
     /// <summary>The workspace's name, then each folder's name and, where the workspace file names it differently, its own.</summary>
     private static IEnumerable<string> NamesOf(YardWorkspace workspace)
     {

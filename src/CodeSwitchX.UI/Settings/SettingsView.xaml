@@ -26,13 +26,35 @@
 
       <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
       <TextBlock TextWrapping="Wrap" Opacity="0.8"
-                 Text="Raven answers with Claude Code, which can only look at the Yard. A faster model answers sooner; a change starts a new conversation." />
+                 Text="Raven answers with Claude Code, which works only through the Yard's tools. A faster model answers sooner; a change starts a new conversation." />
       <DockPanel Margin="0,8,0,0">
         <TextBlock Text="Model" VerticalAlignment="Center" Width="140" />
         <ComboBox IsEditable="True" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Raven model"
                   ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
                   Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
                   ToolTip="A full model id. Pick one or type another." />
+      </DockPanel>
+
+      <TextBlock Text="Chats Raven starts" FontSize="13" FontWeight="SemiBold" Margin="0,16,0,4" />
+      <TextBlock TextWrapping="Wrap" Opacity="0.8"
+                 Text="They run in auto mode with this model and effort, unless you name others for one chat. &quot;From now on Opus&quot; changes them by voice; default leaves it to Claude Code." />
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Model" VerticalAlignment="Center" Width="140" />
+        <ComboBox IsEditable="True" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Chat model"
+                  ItemsSource="{Binding ChatModelChoices}"
+                  Text="{Binding RavenChatModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                  ToolTip="An alias from the table below, a full model id, or default." />
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Effort" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Chat effort"
+                  ItemsSource="{Binding EffortChoices, Mode=OneTime}" SelectedItem="{Binding RavenChatEffort}" />
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Model names" VerticalAlignment="Top" Width="140" Margin="0,4,0,0" />
+        <TextBox Text="{Binding RavenModelAliases, UpdateSourceTrigger=LostFocus}" AcceptsReturn="True" MinLines="4" Width="360"
+                 HorizontalAlignment="Left" FontFamily="Cascadia Mono, Consolas" AutomationProperties.Name="Model names"
+                 ToolTip="One per line: the name you say = the full model id it starts. Edit a line when a new model comes out." />
       </DockPanel>
 
       <TextBlock Text="Telemetry" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />

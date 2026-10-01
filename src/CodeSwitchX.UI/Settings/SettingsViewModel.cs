@@ -4,6 +4,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using Path = System.IO.Path;
 using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Voice.Audio;
@@ -19,6 +20,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ISettingsStore _settings;
     private readonly PersistenceWriterOptions _writerOptions;
     private readonly BrainSettings _brain;
+    private readonly ChatSettings _chats;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
     private readonly Lock _saveGate = new();
@@ -45,13 +47,26 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The model Raven's brain answers with; a change takes effect with the next question, which starts a new conversation.</summary>
     [ObservableProperty] private string _ravenBrainModel = BrainSettings.DefaultModel;
 
-    public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain, AppPaths paths,
-        ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
+    /// <summary>What a chat Raven starts runs with unless said otherwise: an alias name or model id, or <see cref="ClaudeDefault"/>.</summary>
+    [ObservableProperty] private string _ravenChatModel = ClaudeDefault;
+
+    /// <summary>The effort level such a chat runs at, or <see cref="ClaudeDefault"/>.</summary>
+    [ObservableProperty] private string _ravenChatEffort = ClaudeDefault;
+
+    /// <summary>The alias table as typed: one <c>Name = model id</c> a line.</summary>
+    [ObservableProperty] private string _ravenModelAliases = ChatModels.FormatAliases(ChatModels.DefaultAliases);
+
+    /// <summary>What the model and effort boxes show for "leave it to Claude Code"; stored as blank.</summary>
+    public const string ClaudeDefault = "default";
+
+    public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
+        ChatSettings chats, AppPaths paths, ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
     {
         _installer = installer;
         _settings = settings;
         _writerOptions = writerOptions;
         _brain = brain;
+        _chats = chats;
         _logger = logger;
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
@@ -80,6 +95,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenBrainModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenBrainModel, "the Raven brain model", ct) is { Length: > 0 } model
                 ? model
                 : BrainSettings.DefaultModel;
+            RavenModelAliases = await LoadOrDefaultAsync<string>(SettingKeys.RavenModelAliases, "the model aliases", ct) is { Length: > 0 } aliases
+                ? aliases
+                : ChatModels.FormatAliases(ChatModels.DefaultAliases);
+            RavenChatModel = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatModel, "the chat model", ct));
+            RavenChatEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatEffort, "the chat effort", ct));
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
@@ -201,6 +221,45 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The models the Settings view offers to pick from; any other id can be typed.</summary>
     public static IReadOnlyList<string> KnownBrainModels => BrainSettings.KnownModels;
+
+    /// <summary>The effort levels the Settings view offers, Claude Code's own default first.</summary>
+    public static IReadOnlyList<string> EffortChoices { get; } = [ClaudeDefault, .. ChatModels.EffortLevels];
+
+    /// <summary>The model names the Settings view offers for chats: Claude Code's default, then the aliases.</summary>
+    public IReadOnlyList<string> ChatModelChoices => [ClaudeDefault, .. _chats.Aliases.Select(a => a.Name)];
+
+    /// <summary>Raven changed the defaults by voice ("from now on Opus"): shown here, stored, and used from the next chat on. UI thread.</summary>
+    public void SetChatDefaults(ChatDefaults defaults)
+    {
+        RavenChatModel = OrDefault(defaults.Model);
+        RavenChatEffort = OrDefault(defaults.Effort);
+    }
+
+    partial void OnRavenChatModelChanged(string value)
+    {
+        _chats.Defaults = _chats.Defaults with { Model = Blank(value) };
+        Persist(SettingKeys.RavenChatModel, Blank(value) ?? "");
+    }
+
+    partial void OnRavenChatEffortChanged(string value)
+    {
+        _chats.Defaults = _chats.Defaults with { Effort = Blank(value) };
+        Persist(SettingKeys.RavenChatEffort, Blank(value) ?? "");
+    }
+
+    /// <summary>Stored as typed; a table with no line of the right shape counts as the default one.</summary>
+    partial void OnRavenModelAliasesChanged(string value)
+    {
+        _chats.Aliases = ChatModels.ParseAliases(value);
+        OnPropertyChanged(nameof(ChatModelChoices));
+        Persist(SettingKeys.RavenModelAliases, value);
+    }
+
+    /// <summary>As <see cref="ChatSettings.Blank"/>, and the choice that stands for Claude Code's default is none too.</summary>
+    private static string? Blank(string? value) =>
+        ChatSettings.Blank(value) is { } given && !given.Equals(ClaudeDefault, StringComparison.OrdinalIgnoreCase) ? given : null;
+
+    private static string OrDefault(string? value) => Blank(value) ?? ClaudeDefault;
 
     partial void OnRelayExecutableChanged(string value)
     {

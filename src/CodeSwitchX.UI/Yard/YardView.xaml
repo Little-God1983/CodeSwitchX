@@ -20,11 +20,21 @@
         <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0">
           <TextBlock.ToolTip>
             <TextBlock>
-              <Run Text="{Binding State, Mode=OneWay}" /> · last tool: <Run Text="{Binding LastToolName, Mode=OneWay}" />
+              <Run Text="{Binding State, Mode=OneWay}" /> · <Run Text="{Binding Model, Mode=OneWay}" /> · last tool: <Run Text="{Binding LastToolName, Mode=OneWay}" />
             </TextBlock>
           </TextBlock.ToolTip>
         </TextBlock>
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+          <!-- A chat Raven started: the app runs it, and this says with what. -->
+          <Border CornerRadius="4" Background="#2662D0E8" Padding="4,0" Margin="0,0,6,0" VerticalAlignment="Center"
+                  Visibility="{Binding IsVoice, Converter={StaticResource BoolVisible}}"
+                  ToolTip="Started by Raven: CodeSwitchX runs this chat. Say &quot;open it&quot; to go on in VS Code.">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="9" Foreground="#62D0E8" VerticalAlignment="Center"
+                         Margin="0,0,3,0" />
+              <TextBlock Text="{Binding VoiceLabel}" FontSize="10" Foreground="#62D0E8" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
           <TextBlock Text="inferred" FontSize="10" Opacity="0.6" Margin="0,0,6,0"
                      Visibility="{Binding Inferred, Converter={StaticResource BoolVisible}}" ToolTip="Hooks not installed: state guessed from the transcript" />
           <TextBlock Text="{Binding ElapsedText}" FontSize="11" Opacity="0.7" MinWidth="34" TextAlignment="Right" />

@@ -11,6 +11,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Ingest;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
@@ -183,7 +184,17 @@ public partial class App : Application
             sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<ClaudeCliBrain>>()));
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
-            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf));
+            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IAgentLauncher>().Find(id) is not null));
+
+        // The chats Raven starts, and what else it does on the Yard through the MCP tools. The shell is asked for when an
+        // action first needs it: the Event API that serves the tools starts before the window is made.
+        services.AddSingleton<ChatSettings>();
+        services.AddSingleton<IAgentLauncher>(sp => new ClaudeAgentLauncher(sp.GetRequiredService<IBrainProcessLauncher>(),
+            () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeAgentLauncher>>()));
+        services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IAgentLauncher>(), sp.GetRequiredService<ChatSettings>(),
+            sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
+            sp.GetRequiredService<IVsCodeLauncher>().OpenUrl,
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();

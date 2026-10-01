@@ -23,6 +23,7 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public Task WriteLineAsync(string line, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested(); // as StreamWriter does, before it writes
         if (_exited.Task.IsCompleted)
         {
             throw new IOException("The pipe has been ended.");
@@ -38,6 +39,20 @@ internal sealed class FakeBrainProcess : IBrainProcess
     }
 
     public void Emit(string line) => _lines.Writer.TryWrite(line);
+
+    public bool InputClosed { get; private set; }
+
+    /// <summary>Whether closing the input ends it, as it ends the real one between turns; true by default.</summary>
+    public bool ExitsOnClosedInput { get; set; } = true;
+
+    public void CloseInput()
+    {
+        InputClosed = true;
+        if (ExitsOnClosedInput)
+        {
+            Die(0);
+        }
+    }
 
     /// <summary>The process dies: its output closes and it exits.</summary>
     public void Die(int code)
@@ -57,6 +72,9 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 {
     public List<(string Executable, IReadOnlyList<string> Arguments, string Folder, FakeBrainProcess Process)> Started { get; } = [];
 
+    /// <summary>The environment each process was started with, in the order of <see cref="Started"/>.</summary>
+    public List<IReadOnlyDictionary<string, string?>?> Environments { get; } = [];
+
     /// <summary>What each new process answers with.</summary>
     public Func<string, IEnumerable<string>> Answer { get; set; } = StreamJson.Reply("Hi.");
 
@@ -64,7 +82,8 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 
     public FakeBrainProcess Last => Started[^1].Process;
 
-    public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory)
+    public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         if (Failure is not null)
         {
@@ -73,6 +92,7 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 
         var process = new FakeBrainProcess { Answer = Answer };
         Started.Add((executable, arguments, workingDirectory, process));
+        Environments.Add(environment);
         return process;
     }
 }
@@ -80,8 +100,8 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 /// <summary>Lines shaped like CLI 2.1.285's (captured 2026-09-30), cut down to what the brain reads.</summary>
 internal static class StreamJson
 {
-    public static string Init(string status = "connected") =>
-        $$"""{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","permissionMode":"dontAsk","mcp_servers":[{"name":"codeswitchx","status":"{{status}}"}],"tools":["mcp__codeswitchx__list_chats"]}""";
+    public static string Init(string status = "connected", string mode = "dontAsk") =>
+        $$"""{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","permissionMode":"{{mode}}","mcp_servers":[{"name":"codeswitchx","status":"{{status}}"}],"tools":["mcp__codeswitchx__list_chats"]}""";
 
     public static string Text(string text, string? parent = null) =>
         $$$"""{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"{{{text}}}"}},"parent_tool_use_id":{{{Parent(parent)}}}}""";
@@ -100,6 +120,23 @@ internal static class StreamJson
 
     public static string Result(string text = "Hi.") =>
         $$"""{"type":"result","subtype":"success","is_error":false,"result":"{{text}}","session_id":"s"}""";
+
+    /// <summary>The message Claude Code writes itself for a model that does not exist (CLI 2.1.286), before the failed result.</summary>
+    public const string ModelNotFound =
+        """{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"There's an issue with the selected model (claude-opus-5-6)."}]},"parent_tool_use_id":null,"error":"model_not_found"}""";
+
+    public const string ModelNotFoundResult =
+        """{"type":"result","subtype":"success","is_error":true,"result":"There's an issue with the selected model (claude-opus-5-6).","session_id":"s"}""";
+
+    /// <summary>A line written to it, echoed as it is taken into a turn (<c>--replay-user-messages</c>).</summary>
+    public static string Taken(string written)
+    {
+        var line = System.Text.Json.Nodes.JsonNode.Parse(written)!.AsObject();
+        line["parent_tool_use_id"] = null;
+        line["session_id"] = "s";
+        line["isReplay"] = true;
+        return line.ToJsonString();
+    }
 
     public const string ErrorResult =
         """{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded","session_id":"s"}""";

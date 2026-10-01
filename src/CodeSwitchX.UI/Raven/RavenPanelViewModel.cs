@@ -157,6 +157,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private string _typedText = "";
 
+    /// <summary>The model a chat Raven starts runs with, as its chip reads ("Fable 5.1"); the shell keeps it in step with Settings.</summary>
+    [ObservableProperty]
+    private string _chatModelChip = "Default model";
+
+    /// <summary>The effort such a chat runs at, as its chip reads ("high effort").</summary>
+    [ObservableProperty]
+    private string _chatEffortChip = "Default effort";
+
     public ObservableCollection<MicrophoneDevice> Microphones { get; } = [];
 
     public ObservableCollection<RavenLogEntry> Log { get; } = [];
@@ -471,6 +479,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
+
+    public void Warn(string text) => AddEntry(RavenLogKind.Warning, text);
 
     private const string NoMicrophoneWarning = "No microphone found. Plug one in or check Windows sound settings.";
 

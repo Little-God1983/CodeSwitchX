@@ -157,4 +157,40 @@ public sealed class McpEndpointTests : IAsyncLifetime
         File.Exists(_paths.McpConfigFile).ShouldBeFalse();
         await _api.StartAsync(CancellationToken.None);
     }
+
+    [Fact]
+    public async Task Given_what_can_be_done_the_brain_also_sees_the_action_tools_and_their_refusals()
+    {
+        var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-mcp-" + Guid.NewGuid().ToString("N")));
+        paths.EnsureCreated();
+        var tokens = new AccessTokenStore(paths);
+        var actions = new FakeActions { Refusal = "No chat Raven started runs with the id 'x'." };
+        var api = new EventApiService(paths, new EventBus(NullLogger<EventBus>.Instance), tokens, TimeProvider.System, NullLoggerFactory.Instance,
+            new EventApiOptions { PipeName = "csx-test-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, _yard, actions);
+        try
+        {
+            await api.StartAsync(CancellationToken.None);
+            await using var client = await McpClient.CreateAsync(new HttpClientTransport(new HttpClientTransportOptions
+            {
+                Endpoint = new Uri($"http://127.0.0.1:{api.Endpoint!.Port}{YardMcp.Route}"),
+                TransportMode = HttpTransportMode.StreamableHttp,
+                AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {tokens.GetOrCreate()}" },
+            }), cancellationToken: TestContext.Current.CancellationToken);
+
+            var tools = await client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            var stop = await client.CallToolAsync("stop_chat", new Dictionary<string, object?> { ["chat"] = "x" },
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            tools.Select(t => t.Name).Order().ShouldBe(["back_to_yard", "find_workspace", "get_chat", "list_chats", "list_workspaces", "open_workspace",
+                "send_to_chat", "set_defaults", "start_chat", "stop_chat"]);
+            tools.Single(t => t.Name == "stop_chat").ProtocolTool.Annotations!.DestructiveHint.ShouldBe(true);
+            stop.IsError.ShouldBe(true);
+            stop.Content.OfType<TextContentBlock>().ShouldHaveSingleItem().Text.ShouldContain("No chat Raven started runs with the id 'x'.");
+        }
+        finally
+        {
+            await api.StopAsync(CancellationToken.None);
+            Directory.Delete(paths.Root, recursive: true);
+        }
+    }
 }

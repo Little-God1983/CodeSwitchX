@@ -856,4 +856,39 @@ public class SessionEngineTests
         _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash") with { AgentId = "a", ToolUseId = "tA" });
         _engine.Get("s1")!.State.ShouldBe(SessionState.Idle, "the prompt is answered and the main turn had already ended");
     }
+
+    [Fact]
+    public void A_claimed_chat_shows_on_the_claimed_tile_whatever_its_folder()
+    {
+        var other = Guid.NewGuid();
+        _engine.Claim("s1", other);
+
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", cwd: @"C:\Repo\App\other"));
+        _engine.ReResolveWorkspaces();
+
+        _engine.Get("s1")!.WorkspaceId.ShouldBe(other);
+    }
+
+    [Fact]
+    public void A_claim_moves_a_chat_already_known()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        var other = Guid.NewGuid();
+
+        _engine.Claim("s1", other);
+
+        _engine.Get("s1")!.WorkspaceId.ShouldBe(other);
+        _changes[^1].Current.WorkspaceId.ShouldBe(other);
+    }
+
+    [Fact]
+    public void A_claim_leaves_the_other_chats_to_their_folders()
+    {
+        _engine.Claim("s2", Guid.NewGuid());
+
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+
+        _engine.Get("s1")!.WorkspaceId.ShouldBe(AppId);
+    }
 }

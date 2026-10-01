@@ -1,4 +1,6 @@
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
@@ -13,10 +15,14 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Shell;
 
-/// <summary>Owns the Yard/Cab/Settings mode switch and drives the HostManager for the active workspace.</summary>
-public sealed partial class ShellViewModel : ObservableObject
+/// <summary>
+/// Owns the Yard/Cab/Settings mode switch and drives the HostManager for the active workspace. It is also the window
+/// Raven's actions act on (<see cref="IRavenShell"/>).
+/// </summary>
+public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 {
     private readonly HostManager _host;
+    private readonly ChatSettings _chats;
     private readonly ILogger<ShellViewModel> _logger;
 
     [ObservableProperty]
@@ -34,8 +40,9 @@ public sealed partial class ShellViewModel : ObservableObject
     private int _openAttempt;
 
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
-        RavenPanelViewModel raven, HostManager host, ILogger<ShellViewModel> logger)
+        RavenPanelViewModel raven, ChatSettings chats, HostManager host, ILogger<ShellViewModel> logger)
     {
+        _chats = chats;
         Yard = yard;
         Cab = cab;
         Settings = settings;
@@ -58,6 +65,9 @@ public sealed partial class ShellViewModel : ObservableObject
     public SettingsViewModel Settings { get; }
     public PerformanceBarViewModel PerformanceBar { get; }
     public RavenPanelViewModel Raven { get; }
+
+    /// <summary>Raven opens a workspace: the window comes forward, from behind other windows or minimised.</summary>
+    public event Action? ForwardRequested;
 
     public async Task InitializeAsync(CancellationToken ct)
     {
@@ -101,8 +111,25 @@ public sealed partial class ShellViewModel : ObservableObject
                 Settings.RavenMicrophone = Raven.PreferredMicrophone;
             }
         };
+        // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.
+        ShowChatDefaults();
+        Settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(SettingsViewModel.RavenChatModel) or nameof(SettingsViewModel.RavenChatEffort)
+                or nameof(SettingsViewModel.RavenModelAliases))
+            {
+                ShowChatDefaults();
+            }
+        };
         Raven.ScheduleWarmUp();
         _ = AutoStartAsync();
+    }
+
+    private void ShowChatDefaults()
+    {
+        // What the next chat really starts with: a name the alias table no longer knows starts Claude Code's default.
+        Raven.ChatModelChip = _chats.DefaultModelId is { } id ? ChatModels.DisplayName(id) : "Default model";
+        Raven.ChatEffortChip = _chats.Defaults.Effort is { } effort ? $"{effort} effort" : "Default effort";
     }
 
     /// <summary>Installed, or Partial (every installed event reaches us); Outdated entries point elsewhere and reach nobody.</summary>
@@ -226,6 +253,34 @@ public sealed partial class ShellViewModel : ObservableObject
             StatusMessage = message;
         }
     }
+
+    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
+    {
+        if (Yard.FindTile(workspaceId) is null)
+        {
+            return "it is not on the Yard any more.";
+        }
+
+        ForwardRequested?.Invoke();
+        await EnterCabAsync(workspaceId);
+        return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
+    }
+
+    bool IRavenShell.IsVsCodeInFront(Guid workspaceId) => _host.IsInFront(workspaceId);
+
+    void IRavenShell.ShowYard()
+    {
+        if (Mode != ShellMode.Yard)
+        {
+            BackToYard();
+        }
+    }
+
+    void IRavenShell.SetChatDefaults(ChatDefaults defaults) => Settings.SetChatDefaults(defaults);
+
+    void IRavenShell.MarkVoice(string sessionId, string? label) => Yard.MarkVoice(sessionId, label);
+
+    void IRavenShell.Warn(string text) => Raven.Warn(text);
 
     [RelayCommand]
     public void BackToYard()

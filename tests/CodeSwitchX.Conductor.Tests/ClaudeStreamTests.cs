@@ -9,11 +9,11 @@ public sealed class ClaudeStreamTests
     }
 
     [Fact]
-    public void Thinking_and_the_whole_assistant_text_are_no_news()
+    public void Thinking_is_no_news_and_the_whole_assistant_text_only_says_the_model_answers()
     {
         // The reply already came in pieces; the assistant message repeats it whole.
         ClaudeStream.Read(StreamJson.Thinking).ShouldBeNull();
-        ClaudeStream.Read(StreamJson.AssistantText("Hey")).ShouldBeNull();
+        ClaudeStream.Read(StreamJson.AssistantText("Hey")).ShouldBeOfType<ClaudeAnswer>();
     }
 
     [Fact]
@@ -82,5 +82,31 @@ public sealed class ClaudeStreamTests
     public void The_provider_s_prefix_comes_off_a_tool_name(string name, string tool)
     {
         ClaudeStream.ToolName(name).ShouldBe(tool);
+    }
+
+    [Fact]
+    public void The_init_line_says_the_mode_the_chat_runs_in()
+    {
+        ClaudeStream.Read(StreamJson.Init(mode: "default")).ShouldBeOfType<ClaudeInit>().PermissionMode.ShouldBe("default");
+    }
+
+    [Fact]
+    public void A_message_of_the_main_agent_is_the_model_answering_and_a_subagent_s_is_not()
+    {
+        ClaudeStream.Read(StreamJson.AssistantText("On it.")).ShouldBeOfType<ClaudeAnswer>();
+        ClaudeStream.Read(StreamJson.AssistantText("On it.").Replace("\"parent_tool_use_id\":null", "\"parent_tool_use_id\":\"toolu_1\"")).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_message_Claude_Code_writes_for_a_failed_API_call_is_no_answer()
+    {
+        ClaudeStream.Read(StreamJson.ModelNotFound).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_line_echoed_back_is_taken_and_a_tool_result_is_not()
+    {
+        ClaudeStream.Read(StreamJson.Taken("""{"type":"user","message":{"role":"user","content":"Add tests."}}""")).ShouldBeOfType<ClaudeTaken>();
+        ClaudeStream.Read(StreamJson.ToolResult("t1")).ShouldBeOfType<ClaudeEvents>();
     }
 }

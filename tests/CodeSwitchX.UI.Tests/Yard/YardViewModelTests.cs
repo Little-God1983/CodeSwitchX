@@ -765,4 +765,36 @@ public class YardViewModelTests : IDisposable
 
         requested.ShouldBe([null, @"c:\repo\shop\Shop.code-workspace"]);
     }
+
+    [Fact]
+    public async Task A_chat_Raven_started_is_marked_with_how_it_runs_when_its_row_comes_and_while_it_stays()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.MarkVoice("s1", "Fable 5.1 · high");
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working) with { Model = "claude-fable-5-1" }));
+        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Working)));
+
+        var rows = _yard.FindTile(_shop.Id)!.Chats;
+        rows.Single(r => r.SessionId == "s1").VoiceLabel.ShouldBe("Fable 5.1 · high");
+        rows.Single(r => r.SessionId == "s1").IsVoice.ShouldBeTrue();
+        rows.Single(r => r.SessionId == "s1").Model.ShouldBe("claude-fable-5-1");
+        rows.Single(r => r.SessionId == "s2").IsVoice.ShouldBeFalse();
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle) with { Version = 5 }));
+        rows.Single(r => r.SessionId == "s1").IsVoice.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_chat_handed_over_to_VS_Code_loses_its_mark()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _yard.MarkVoice("s1", "Opus 5.5 · max");
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+
+        _yard.MarkVoice("s1", null);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle) with { Version = 5 }));
+
+        _yard.FindTile(_shop.Id)!.Chats.Single().IsVoice.ShouldBeFalse();
+    }
 }

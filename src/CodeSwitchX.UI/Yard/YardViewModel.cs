@@ -132,6 +132,30 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
 
+    /// <summary>The voice label of each chat the app runs for Raven (UI thread); a row that comes later gets it as it is added.</summary>
+    private readonly Dictionary<string, string> _voiceLabels = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Marks a chat as one the app runs because Raven started it, with how it runs; null when it no longer does (stopped,
+    /// handed over to VS Code). Its row may not be there yet: the chat shows once its hooks report it.
+    /// </summary>
+    public void MarkVoice(string sessionId, string? label)
+    {
+        if (label is null)
+        {
+            _voiceLabels.Remove(sessionId);
+        }
+        else
+        {
+            _voiceLabels[sessionId] = label;
+        }
+
+        foreach (var row in Tiles.SelectMany(t => t.Chats).Where(c => c.SessionId == sessionId))
+        {
+            row.VoiceLabel = label;
+        }
+    }
+
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
     public async Task UnregisterAsync(Guid workspaceId)
@@ -368,6 +392,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         tile?.Upsert(snapshot, _pricing.Pricing);
+        if (tile?.Chats.FirstOrDefault(c => c.SessionId == snapshot.SessionId) is { } row)
+        {
+            row.VoiceLabel = _voiceLabels.GetValueOrDefault(snapshot.SessionId);
+        }
         if (NeedsMeFirst)
         {
             Resort();

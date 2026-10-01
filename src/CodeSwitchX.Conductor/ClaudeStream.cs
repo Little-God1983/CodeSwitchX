@@ -7,13 +7,23 @@ internal abstract record ClaudeLine;
 
 /// <summary><c>system/init</c>, sent at the start of every turn.</summary>
 /// <param name="McpServers">Each MCP server's name and whether it connected ("connected", "failed", "pending").</param>
-internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers) : ClaudeLine;
+/// <param name="PermissionMode">The mode it runs in: "auto" asked for with a model that cannot do it runs as "default".</param>
+internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers, string? PermissionMode = null) : ClaudeLine;
 
 /// <summary>What the line says the brain did.</summary>
 internal sealed record ClaudeEvents(IReadOnlyList<BrainEvent> Events) : ClaudeLine;
 
 /// <summary><c>result</c>: the turn is over; <paramref name="Error"/> says why it failed, null when it did not.</summary>
 internal sealed record ClaudeTurnOver(string? Error) : ClaudeLine;
+
+/// <summary>An <c>assistant</c> message of the main agent's without a tool call: the model is answering.</summary>
+internal sealed record ClaudeAnswer : ClaudeLine;
+
+/// <summary>
+/// A line written to it, echoed back as it takes it into a turn (<c>--replay-user-messages</c>): when that turn begins, or
+/// when the running one folds it in at a tool call (seen with CLI 2.1.286).
+/// </summary>
+internal sealed record ClaudeTaken : ClaudeLine;
 
 /// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
@@ -44,7 +54,8 @@ internal static class ClaudeStream
             {
                 "system" when Text(root, "subtype") == "init" => Init(root),
                 "stream_event" => Delta(root),
-                "assistant" => ToolCalls(root),
+                "assistant" => (ClaudeLine?)ToolCalls(root) ?? Answer(root),
+                "user" when root.TryGetProperty("isReplay", out var replay) && replay.ValueKind == JsonValueKind.True => new ClaudeTaken(),
                 "user" => ToolResults(root),
                 "result" => new ClaudeTurnOver(Error(root)),
                 _ => null,
@@ -82,7 +93,7 @@ internal static class ClaudeStream
             }
         }
 
-        return new ClaudeInit(Text(root, "model"), servers);
+        return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"));
     }
 
     private static ClaudeEvents? Delta(JsonElement root)
@@ -105,6 +116,16 @@ internal static class ClaudeStream
             .ToList();
         return events.Count > 0 ? new ClaudeEvents(events) : null;
     }
+
+    /// <summary>
+    /// Not the message Claude Code writes itself when the API call failed (model <c>&lt;synthetic&gt;</c>, with an
+    /// <c>error</c>, such as for a model that does not exist): the <c>result</c> after it says the turn failed.
+    /// </summary>
+    private static ClaudeAnswer? Answer(JsonElement root) =>
+        root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
+        && Text(root, "error") is null && Text(message, "model") != "<synthetic>"
+            ? new ClaudeAnswer()
+            : null;
 
     private static ClaudeEvents? ToolResults(JsonElement root)
     {
