@@ -9,6 +9,9 @@ internal sealed class FakeActions : IYardActions
 
     public string? Refusal { get; set; }
 
+    /// <summary>What every action throws instead, when set: the app failed, it did not refuse.</summary>
+    public Exception? Failure { get; set; }
+
     public (YardWorkspace Workspace, YardFolder Folder, string Prompt, string? Model, string? Effort)? Started { get; private set; }
 
     public (YardWorkspace? Workspace, string? Chat)? Opened { get; private set; }
@@ -62,6 +65,11 @@ internal sealed class FakeActions : IYardActions
     private void Act(string call)
     {
         Calls.Add(call);
+        if (Failure is { } failure)
+        {
+            throw failure;
+        }
+
         if (Refusal is { } refusal)
         {
             throw new YardActionException(refusal);

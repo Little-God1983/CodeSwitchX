@@ -637,5 +637,10 @@ public class ShellViewModelTests
 
         _h.Shell.Settings.RavenChatModel = "claude-custom-1";
         _h.Shell.Raven.ChatModelChip.ShouldBe("Custom 1");
+
+        // A name the table no longer has starts Claude Code's default, and the chip says so.
+        _h.Shell.Settings.RavenChatModel = "Fable";
+        _h.Shell.Settings.RavenModelAliases = "Opus = claude-opus-5-5";
+        _h.Shell.Raven.ChatModelChip.ShouldBe("Default model");
     }
 }

@@ -68,9 +68,10 @@ public static class ChatModels
             return exact.Id;
         }
 
-        // "opus55", "fable 5.1": the alias, then only its version.
+        // "opus55", "fable 5.1": the alias, then its own version. Another version ("Opus 4.1") is another model, which
+        // the alias does not stand for.
         if (aliases.FirstOrDefault(a => WorkspaceMatcher.Squash(a.Name) is { Length: > 0 } name && key.StartsWith(name, StringComparison.Ordinal)
-                && key[name.Length..].All(char.IsDigit)) is { } versioned)
+                && key[name.Length..] is { Length: > 0 } version && version == string.Concat(VersionOf(a.Id))) is { } versioned)
         {
             return versioned.Id;
         }
@@ -91,15 +92,15 @@ public static class ChatModels
             return modelId;
         }
 
-        var version = parts.Skip(2).TakeWhile(p => p.Length < 8 && p.All(char.IsDigit)).ToList();
+        var version = VersionOf(modelId);
         var rest = parts.Skip(2 + version.Count).Where(p => !(p.Length == 8 && p.All(char.IsDigit))).ToList();
         var name = char.ToUpperInvariant(parts[1][0]) + parts[1][1..].ToLowerInvariant();
         return string.Join(" ", new[] { name, string.Join(".", version) }.Concat(rest).Where(p => p.Length > 0));
     }
 
-    /// <summary>The alias name an id has in the table, for the panel's chip; the id itself when it has none.</summary>
-    public static string NameOf(string modelOrAlias, IReadOnlyList<ModelAlias> aliases) =>
-        aliases.FirstOrDefault(a => Same(a.Id, modelOrAlias) || Same(a.Name, modelOrAlias))?.Name ?? modelOrAlias;
+    /// <summary>The parts of an id's version: <c>claude-haiku-4-5-20251001</c> has 4 and 5, the date being no part of it.</summary>
+    private static List<string> VersionOf(string modelId) =>
+        modelId.Trim().Split('-', StringSplitOptions.RemoveEmptyEntries).Skip(2).TakeWhile(p => p.Length < 8 && p.All(char.IsDigit)).ToList();
 
     /// <summary>
     /// The effort level a spoken or typed word means: the level itself, or how it is said out loud ("extra high",

@@ -11,6 +11,8 @@ public sealed class ChatModelsTests
     [InlineData("fable", "claude-fable-5-1")]
     [InlineData("Opus", "claude-opus-5-5")]
     [InlineData("Opus 5.5", "claude-opus-5-5")]
+    [InlineData("fable 5.1", "claude-fable-5-1")]
+    [InlineData("Haiku 4.5", "claude-haiku-4-5-20251001")]
     [InlineData("sonnet.", "claude-sonnet-5-5")]
     [InlineData("Haiku", "claude-haiku-4-5-20251001")]
     [InlineData("claude-opus-5-5", "claude-opus-5-5")]
@@ -25,6 +27,9 @@ public sealed class ChatModelsTests
     [InlineData("GPT")]
     [InlineData("Opus Max")]
     [InlineData("claude opus")]
+    [InlineData("Opus 4.1")] // an older Opus, not the one the alias stands for
+    [InlineData("Sonnet 4.5")]
+    [InlineData("Haiku 4.5.1")]
     public void Anything_else_is_no_model(string said)
     {
         ChatModels.ResolveModel(said, Aliases).ShouldBeNull();
@@ -86,14 +91,5 @@ public sealed class ChatModelsTests
     public void An_id_reads_as_its_name_and_version(string id, string shown)
     {
         ChatModels.DisplayName(id).ShouldBe(shown);
-    }
-
-    [Theory]
-    [InlineData("claude-opus-5-5", "Opus")]
-    [InlineData("opus", "Opus")]
-    [InlineData("claude-other-1", "claude-other-1")]
-    public void An_id_is_named_by_its_alias(string model, string name)
-    {
-        ChatModels.NameOf(model, Aliases).ShouldBe(name);
     }
 }

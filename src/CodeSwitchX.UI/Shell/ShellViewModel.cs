@@ -1,3 +1,4 @@
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Hosting;
@@ -21,6 +22,7 @@ namespace CodeSwitchX.UI.Shell;
 public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 {
     private readonly HostManager _host;
+    private readonly ChatSettings _chats;
     private readonly ILogger<ShellViewModel> _logger;
 
     [ObservableProperty]
@@ -38,8 +40,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     private int _openAttempt;
 
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
-        RavenPanelViewModel raven, HostManager host, ILogger<ShellViewModel> logger)
+        RavenPanelViewModel raven, ChatSettings chats, HostManager host, ILogger<ShellViewModel> logger)
     {
+        _chats = chats;
         Yard = yard;
         Cab = cab;
         Settings = settings;
@@ -124,12 +127,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     private void ShowChatDefaults()
     {
-        var model = Settings.RavenChatModel;
-        var effort = Settings.RavenChatEffort;
-        Raven.ChatModelChip = model == SettingsViewModel.ClaudeDefault
-            ? "Default model"
-            : ChatModels.ResolveModel(model, ChatModels.ParseAliases(Settings.RavenModelAliases)) is { } id ? ChatModels.DisplayName(id) : model;
-        Raven.ChatEffortChip = effort == SettingsViewModel.ClaudeDefault ? "Default effort" : $"{effort} effort";
+        // What the next chat really starts with: a name the alias table no longer knows starts Claude Code's default.
+        Raven.ChatModelChip = _chats.DefaultModelId is { } id ? ChatModels.DisplayName(id) : "Default model";
+        Raven.ChatEffortChip = _chats.Defaults.Effort is { } effort ? $"{effort} effort" : "Default effort";
     }
 
     /// <summary>Installed, or Partial (every installed event reaches us); Outdated entries point elsewhere and reach nobody.</summary>

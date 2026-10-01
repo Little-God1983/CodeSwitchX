@@ -146,6 +146,11 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
         {
             throw new McpException(ex.Message);
         }
+        catch (TimeoutException)
+        {
+            // The app's window was busy past the wait: the brain gets something to tell the user, not a raw error.
+            throw new McpException("CodeSwitchX's window did not respond in time, so that was not done. Say it again in a moment.");
+        }
     }
 
     private static VoiceChatInfo VoiceChatOf(VoiceChatView chat) => new(chat.Id, chat.Workspace, Path.GetFileName(Path.TrimEndingDirectorySeparator(chat.Folder)),

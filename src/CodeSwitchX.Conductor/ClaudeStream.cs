@@ -16,6 +16,9 @@ internal sealed record ClaudeEvents(IReadOnlyList<BrainEvent> Events) : ClaudeLi
 /// <summary><c>result</c>: the turn is over; <paramref name="Error"/> says why it failed, null when it did not.</summary>
 internal sealed record ClaudeTurnOver(string? Error) : ClaudeLine;
 
+/// <summary>An <c>assistant</c> message of the main agent's without a tool call: the model is answering.</summary>
+internal sealed record ClaudeAnswer : ClaudeLine;
+
 /// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
 /// CLI 2.1.285): the reply comes as <c>stream_event</c> text deltas, a tool call in the <c>assistant</c> message that
@@ -45,7 +48,7 @@ internal static class ClaudeStream
             {
                 "system" when Text(root, "subtype") == "init" => Init(root),
                 "stream_event" => Delta(root),
-                "assistant" => ToolCalls(root),
+                "assistant" => (ClaudeLine?)ToolCalls(root) ?? Answer(root),
                 "user" => ToolResults(root),
                 "result" => new ClaudeTurnOver(Error(root)),
                 _ => null,
@@ -54,22 +57,6 @@ internal static class ClaudeStream
         catch (JsonException)
         {
             return null;
-        }
-    }
-
-    /// <summary>Whether the line is a message of the main agent's: the model is answering. Never throws.</summary>
-    public static bool IsAssistant(string line)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(line);
-            var root = document.RootElement;
-            return root.ValueKind == JsonValueKind.Object && Text(root, "type") == "assistant"
-                && !(root.TryGetProperty("parent_tool_use_id", out var parent) && parent.ValueKind == JsonValueKind.String);
-        }
-        catch (JsonException)
-        {
-            return false;
         }
     }
 
@@ -122,6 +109,9 @@ internal static class ClaudeStream
             .ToList();
         return events.Count > 0 ? new ClaudeEvents(events) : null;
     }
+
+    private static ClaudeAnswer? Answer(JsonElement root) =>
+        root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object ? new ClaudeAnswer() : null;
 
     private static ClaudeEvents? ToolResults(JsonElement root)
     {

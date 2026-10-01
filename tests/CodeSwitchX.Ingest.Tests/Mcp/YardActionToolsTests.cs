@@ -82,6 +82,16 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task A_window_too_busy_to_answer_reaches_the_brain_as_something_to_say()
+    {
+        _actions.Failure = new TimeoutException("The operation has timed out.");
+
+        var error = await Should.ThrowAsync<McpException>(() => Tools.BackToYard(Ct));
+
+        error.Message.ShouldBe("CodeSwitchX's window did not respond in time, so that was not done. Say it again in a moment.");
+    }
+
+    [Fact]
     public async Task Words_for_a_chat_are_sent_on()
     {
         var chat = await Tools.SendToChat("dddddddd", " Add tests too. ", Ct);

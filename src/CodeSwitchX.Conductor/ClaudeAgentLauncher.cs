@@ -95,7 +95,8 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
             throw new YardActionException($"Claude Code could not be started from {claude}: {ex.Message}");
         }
 
-        var worker = new Worker(request, process) { Working = true };
+        var worker = new Worker(request, process);
+        worker.TurnTaken();
         lock (_gate)
         {
             _workers[request.Id] = worker;
@@ -107,20 +108,30 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         Raise(worker);
 
         string? failure;
-        if (!await SendLineAsync(process, request.Prompt, ct).ConfigureAwait(false))
+        try
         {
-            failure = "Claude Code stopped before it took the prompt.";
+            if (!await SendLineAsync(process, request.Prompt, ct).ConfigureAwait(false))
+            {
+                failure = "Claude Code stopped before it took the prompt.";
+            }
+            else
+            {
+                try
+                {
+                    failure = await worker.FirstSign.Task.WaitAsync(StartWait, _time, ct).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    failure = null; // still thinking: under way
+                }
+            }
         }
-        else
+        catch
         {
-            try
-            {
-                failure = await worker.FirstSign.Task.WaitAsync(StartWait, _time, ct).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                failure = null; // still thinking: under way
-            }
+            // The caller gave up (the brain's turn was stopped): it was told the start failed, so the chat must not go
+            // on working in the folder, unseen, while the brain starts another for the same task.
+            await StopWorkerAsync(worker).ConfigureAwait(false);
+            throw;
         }
 
         if (failure is not null)
@@ -136,9 +147,10 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
     public async Task<AgentChat> SendAsync(string chatId, string text, CancellationToken ct)
     {
         var worker = FindWorker(chatId) ?? throw NotOurs(chatId);
-        worker.Working = true;
+        worker.TurnTaken();
         if (!await SendLineAsync(worker.Process, text, ct).ConfigureAwait(false))
         {
+            worker.TurnOver();
             throw new YardActionException("That chat has stopped, so it cannot take anything more.");
         }
 
@@ -217,7 +229,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
                         Raise(worker);
                         break;
                     case ClaudeTurnOver over:
-                        worker.Working = false;
+                        worker.TurnOver();
                         worker.FirstSign.TrySetResult(over.Error is null ? null : $"The chat could not start: {over.Error}");
                         if (over.Error is { } error)
                         {
@@ -230,12 +242,8 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
 
                         Raise(worker);
                         break;
-                    default:
-                        if (ClaudeStream.IsAssistant(line))
-                        {
-                            worker.FirstSign.TrySetResult(null);
-                        }
-
+                    case ClaudeAnswer or ClaudeEvents:
+                        worker.FirstSign.TrySetResult(null);
                         break;
                 }
             }
@@ -247,8 +255,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
 
         var exited = await Task.WhenAny(worker.Process.Exited, Task.Delay(TimeSpan.FromSeconds(2), _time)).ConfigureAwait(false) == worker.Process.Exited;
         var why = exited ? $"stopped (exit code {worker.Process.Exited.Result})" : "stopped";
-        worker.Working = false;
-        worker.Ended = true;
+        worker.End();
         lock (_gate)
         {
             _workers.Remove(worker.Id);
@@ -326,10 +333,24 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
     private static YardActionException NotOurs(string chatId) => new(
         $"No chat Raven started runs with the id '{chatId}'. Only those can be told something or stopped; the others run in VS Code.");
 
-    private void Raise(Worker worker) => Changed?.Invoke(worker.Snapshot());
+    /// <summary>
+    /// Tells of the chat as it is now. The start, a send and the pump raise from their own threads: one at a time per
+    /// chat, so the listener gets them in the order they were taken, and the last one is never older than the end.
+    /// </summary>
+    private void Raise(Worker worker)
+    {
+        lock (worker.Gate)
+        {
+            Changed?.Invoke(worker.Snapshot());
+        }
+    }
 
     private sealed class Worker(AgentRequest request, IBrainProcess process)
     {
+        private volatile int _turns;
+
+        public Lock Gate { get; } = new();
+
         public string Id => request.Id;
 
         public IBrainProcess Process { get; } = process;
@@ -345,11 +366,40 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         /// <summary>The app stopped it: its end is no failure.</summary>
         public volatile bool StoppedByUs;
 
-        public volatile bool Working;
+        /// <summary>
+        /// Some turn is still to end. A line sent while one runs is a turn of its own, queued after it, and each ends with
+        /// a <c>result</c> (seen with CLI 2.1.286): the end of the first leaves the chat working.
+        /// </summary>
+        public bool Working => _turns > 0;
 
         public volatile string? PermissionMode;
 
         public volatile bool Ended;
+
+        public void TurnTaken()
+        {
+            lock (Gate)
+            {
+                _turns++;
+            }
+        }
+
+        public void TurnOver()
+        {
+            lock (Gate)
+            {
+                _turns = Math.Max(0, _turns - 1);
+            }
+        }
+
+        public void End()
+        {
+            lock (Gate)
+            {
+                _turns = 0;
+                Ended = true;
+            }
+        }
 
         public AgentChat Snapshot() => new(request.Id, request.WorkspaceId, request.Workspace, request.Folder, request.Model, request.Effort, Working,
             PermissionMode, Ended);

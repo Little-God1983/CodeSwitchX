@@ -193,7 +193,7 @@ public partial class App : Application
             () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeAgentLauncher>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IAgentLauncher>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
-            url => sp.GetRequiredService<IVsCodeLauncher>() is VsCodeLauncher vscode ? vscode.OpenUrl(url) : "VS Code cannot be reached from here.",
+            sp.GetRequiredService<IVsCodeLauncher>().OpenUrl,
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 
         services.AddSingleton<YardViewModel>();

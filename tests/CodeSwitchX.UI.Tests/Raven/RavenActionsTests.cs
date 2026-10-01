@@ -73,6 +73,18 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
+    public async Task An_empty_model_or_effort_is_the_default()
+    {
+        // Tool callers often send "" for an optional parameter they leave out.
+        _chats.Defaults = new ChatDefaults("Fable", "high");
+
+        await StartAsync("", " ");
+        (await _actions.SetDefaultsAsync("", "low", Ct)).ShouldBe(new ChatDefaults("Fable", "low"));
+
+        (_agents.Requests[0].Model, _agents.Requests[0].Effort).ShouldBe(("claude-fable-5-1", "high"));
+    }
+
+    [Fact]
     public async Task A_model_and_effort_said_for_this_one_are_read_through_the_names()
     {
         _chats.Defaults = new ChatDefaults("Fable", "high");
@@ -109,6 +121,7 @@ public sealed class RavenActionsTests
         var started = await StartAsync("Haiku");
 
         started.Note.ShouldNotBeNull().ShouldStartWith("Haiku 4.5 cannot run in auto mode, so the chat runs in default mode");
+        started.Note.ShouldContain("is refused"); // in -p nothing can approve it: it is no question for VS Code
         (await StartAsync("Opus")).Note.ShouldNotBeNull(); // the mode is what counts
         _agents.Mode = "auto";
         (await StartAsync("Opus")).Note.ShouldBeNull();
@@ -173,6 +186,33 @@ public sealed class RavenActionsTests
         var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, null, Ct));
 
         error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not start.");
+    }
+
+    [Fact]
+    public async Task A_chat_whose_workspace_does_not_open_goes_on_running()
+    {
+        _agents.Add("dddddddd-0004", Diffusion.Id, working: true);
+        _shell.OpenProblem = "It is not on the Yard any more.";
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(null, "dddddddd", Ct));
+
+        error.Message.ShouldBe("Diffusion-Full could not be opened: It is not on the Yard any more. The chat goes on running here.");
+        _sequence.ShouldBeEmpty();
+        _urls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_workspace_that_takes_too_long_to_show_is_said_and_its_chat_goes_on_running()
+    {
+        _agents.Add("dddddddd-0004", Diffusion.Id, working: true);
+        _shell.Showing = new TaskCompletionSource<string?>().Task; // VS Code never shows its window
+        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
+        await AdvanceUntil(() => open.IsCompleted, RavenActions.OpenTimeout);
+
+        var error = await Should.ThrowAsync<YardActionException>(() => open);
+
+        error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not show its window within 90 seconds. The chat goes on running here.");
+        _sequence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -282,10 +322,13 @@ public sealed class RavenActionsTests
         public List<(string, string?)> Marks { get; } = [];
         public List<string> Warnings { get; } = [];
 
+        /// <summary>The showing itself, when a test holds it up; else it is done at once, with <see cref="OpenProblem"/>.</summary>
+        public Task<string?>? Showing { get; set; }
+
         public Task<string?> OpenInCabAsync(Guid workspaceId)
         {
             Opened.Add(workspaceId);
-            return Task.FromResult(OpenProblem);
+            return Showing ?? Task.FromResult(OpenProblem);
         }
 
         public void ShowYard()

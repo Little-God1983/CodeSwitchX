@@ -140,10 +140,59 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         var start = StartAsync();
         await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
 
-        _time.Advance(ClaudeAgentLauncher.StartWait);
+        // Again until it is over: the start sets its timer only after the prompt is written.
+        for (var i = 0; i < 200 && !start.IsCompleted; i++)
+        {
+            _time.Advance(ClaudeAgentLauncher.StartWait);
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
 
         (await start).Failure.ShouldBeNull();
         _agents.Chats.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_start_the_caller_gives_up_on_stops_the_chat()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(mode: "auto")]; // thinking, no word yet
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var start = _agents.StartAsync(Request(), cancel.Token);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        await cancel.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => start);
+        _launcher.Last.Disposed.ShouldBeTrue();
+        _agents.Chats.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_claude_that_exits_while_its_start_is_told_of_is_last_told_of_as_ended()
+    {
+        // claude exits straight after launch (an auth error), while the start's own news is on its way: that older news
+        // must not arrive after the end, or the row would show a chat no process runs.
+        List<AgentChat> told = [];
+        _agents.Changed += c =>
+        {
+            if (told.Count == 0 && !c.Ended)
+            {
+                _launcher.Last.Die(1);
+                Thread.Sleep(200); // the pump reads the end meanwhile
+            }
+
+            lock (told)
+            {
+                told.Add(c);
+            }
+        };
+
+        (await StartAsync()).Failure.ShouldNotBeNull();
+
+        await WaitUntil(() => told.Any(c => c.Ended));
+        lock (told)
+        {
+            told[^1].Ended.ShouldBeTrue();
+        }
     }
 
     [Theory]
@@ -183,6 +232,21 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         chat.Working.ShouldBeTrue();
         using var line = JsonDocument.Parse(_launcher.Last.Written[^1]);
         line.RootElement.GetProperty("message").GetProperty("content").GetString().ShouldBe("Add tests too.");
+    }
+
+    [Fact]
+    public async Task A_turn_sent_while_one_runs_keeps_the_chat_working_until_it_is_over_too()
+    {
+        await StartAsync();
+        await _agents.SendAsync("11111111", "Add tests too.", TestContext.Current.CancellationToken);
+
+        _launcher.Last.Emit(StreamJson.Result("Done."));
+        _launcher.Last.Emit(StreamJson.Init(mode: "seen")); // the first result is read by now
+        await WaitUntil(() => _agents.Chats.Single().PermissionMode == "seen");
+
+        _agents.Chats.Single().Working.ShouldBeTrue();
+        _launcher.Last.Emit(StreamJson.Result("Tests added."));
+        await WaitUntil(() => !_agents.Chats.Single().Working);
     }
 
     [Fact]

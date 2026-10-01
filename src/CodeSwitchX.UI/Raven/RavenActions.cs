@@ -93,8 +93,8 @@ public sealed class RavenActions : IYardActions
 
     public async Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder folder, string prompt, string? model, string? effort, CancellationToken ct)
     {
-        var modelId = model is null ? _chats.DefaultModelId : ModelIdOf(model);
-        var level = effort is null ? _chats.Defaults.Effort : EffortOf(effort);
+        var modelId = Said(model) is { } m ? ModelIdOf(m) : _chats.DefaultModelId;
+        var level = Said(effort) is { } e ? EffortOf(e) : _chats.Defaults.Effort;
         var id = Guid.NewGuid().ToString();
         _claim(id, workspace.Id);
         var start = await _agents.StartAsync(new AgentRequest(id, workspace.Id, workspace.Name, folder.Path, prompt, modelId, level), ct).ConfigureAwait(false);
@@ -103,10 +103,11 @@ public sealed class RavenActions : IYardActions
             throw new YardActionException(failure);
         }
 
-        // Haiku 4.5 cannot run in auto mode: Claude Code runs it in default mode, which asks before each edit.
+        // Haiku 4.5 cannot run in auto mode: Claude Code runs it in default mode, and in -p nothing can approve a request,
+        // so each edit or command the user's settings do not allow is refused, and the turn goes on without it.
         var note = start.Chat.PermissionMode is { } mode && mode != "auto"
-            ? $"{(modelId is null ? "This model" : ChatModels.DisplayName(modelId))} cannot run in auto mode, so the chat runs in {mode} mode: it "
-                + "asks before it edits, and only VS Code can answer that. Open it to allow its edits."
+            ? $"{(modelId is null ? "This model" : ChatModels.DisplayName(modelId))} cannot run in auto mode, so the chat runs in {mode} mode: "
+                + "each edit or command the user's settings do not allow is refused, as nothing can approve it. For changes, start it with another model."
             : null;
         return new StartedChat(View(start.Chat), note);
     }
@@ -118,8 +119,8 @@ public sealed class RavenActions : IYardActions
     {
         var current = _chats.Defaults;
         var next = new ChatDefaults(
-            model is null ? current.Model : NameOf(model),
-            effort is null ? current.Effort : EffortOf(effort));
+            Said(model) is { } m ? NameOf(m) : current.Model,
+            Said(effort) is { } e ? EffortOf(e) : current.Effort);
         await OnUiAsync(() => _shell().SetChatDefaults(next), ct).ConfigureAwait(false);
         return _chats.Defaults;
     }
@@ -135,24 +136,27 @@ public sealed class RavenActions : IYardActions
         // The chat's own tile wins: "open it" is about where it runs.
         var workspaceId = chat?.WorkspaceId ?? workspace!.Id;
         var name = chat?.Workspace ?? workspace!.Name;
-        var cutOff = false;
-        if (chat is not null)
-        {
-            cutOff = (await _agents.StopAsync(chat.Id, ct).ConfigureAwait(false)).Working;
-        }
 
-        var shown = await _ui.InvokeAsync(() => _shell().OpenInCabAsync(workspaceId), UiTimeout, ct).ConfigureAwait(false);
-        var problem = await shown.WaitAsync(OpenTimeout, _time, ct).ConfigureAwait(false);
-        if (problem is not null)
+        // The workspace first: when it cannot be shown, Raven's chat goes on as it was, and nothing is lost.
+        if (await ShowInCabAsync(workspaceId, ct).ConfigureAwait(false) is { } problem)
         {
-            throw new YardActionException(chat is null
-                ? $"{name} could not be opened: {problem}"
-                : $"The chat was handed over, but {name} could not be opened: {problem} It can be resumed in VS Code's Claude Code panel.");
+            throw new YardActionException($"{name} could not be opened: {problem}" + (chat is null ? "" : " The chat goes on running here."));
         }
 
         if (chat is null)
         {
             return $"{name} is open.";
+        }
+
+        // Only one process may write to the chat: Raven's stops before VS Code takes it over.
+        bool cutOff;
+        try
+        {
+            cutOff = (await _agents.StopAsync(chat.Id, ct).ConfigureAwait(false)).Working;
+        }
+        catch (YardActionException)
+        {
+            cutOff = false; // it ended by itself in the meantime
         }
 
         // VS Code gives the link to the window focused last. When the user is in another app, CodeSwitchX cannot take
@@ -170,6 +174,29 @@ public sealed class RavenActions : IYardActions
         }
 
         return $"{name} is open, and the chat opens in VS Code's Claude Code panel.{goOn}";
+    }
+
+    /// <summary>Shows the workspace in the Cab; null once it is shown, else why not. Never throws for a window that is slow.</summary>
+    private async Task<string?> ShowInCabAsync(Guid workspaceId, CancellationToken ct)
+    {
+        Task<string?> shown;
+        try
+        {
+            shown = await _ui.InvokeAsync(() => _shell().OpenInCabAsync(workspaceId), UiTimeout, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return "CodeSwitchX's window did not respond.";
+        }
+
+        try
+        {
+            return await shown.WaitAsync(OpenTimeout, _time, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return $"VS Code did not show its window within {OpenTimeout.TotalSeconds:0} seconds.";
+        }
     }
 
     /// <summary>True once the workspace's VS Code is in front, looked at every <see cref="FrontPoll"/>; false when it was not within the time.</summary>
@@ -254,6 +281,9 @@ public sealed class RavenActions : IYardActions
         var id = ModelIdOf(said);
         return _chats.Aliases.FirstOrDefault(a => a.Id == id && ChatModels.ResolveModel(said, [a]) is not null)?.Name ?? id;
     }
+
+    /// <summary>What the brain said for an optional name; an empty one, which tool callers send for "none", is none.</summary>
+    private static string? Said(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static string EffortOf(string said) => ChatModels.ResolveEffort(said)
         ?? throw new YardActionException($"'{said}' is no effort level. Say {string.Join(", ", ChatModels.EffortLevels)}.");

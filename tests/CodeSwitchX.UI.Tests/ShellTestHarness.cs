@@ -35,6 +35,8 @@ public sealed class ShellTestHarness
     public IWindowEnumerator Windows { get; } = Substitute.For<IWindowEnumerator>();
     public IWindowDocker Docker { get; } = Substitute.For<IWindowDocker>();
     public IVsCodeLauncher Launcher { get; } = Substitute.For<IVsCodeLauncher>();
+
+    public ChatSettings Chats { get; } = new();
     public IMicrophoneCatalog Microphones { get; } = Substitute.For<IMicrophoneCatalog>();
     public IMicrophoneRecorder Recorder { get; } = Substitute.For<IMicrophoneRecorder>();
     public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
@@ -69,12 +71,12 @@ public sealed class ShellTestHarness
         var cab = new CabViewModel();
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
-        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), new ChatSettings(), paths, claude, NullLogger<SettingsViewModel>.Instance);
+        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats, paths, claude, NullLogger<SettingsViewModel>.Instance);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance);
-        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Host, NullLogger<ShellViewModel>.Instance);
+        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
     }
 
     public static YardViewModel CreateYardWithoutInit() => new ShellTestHarness().Shell.Yard;
