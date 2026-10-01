@@ -38,6 +38,10 @@ internal sealed class FakeSpeech : ITextToSpeech
 
     public void Prepare(bool install) => Prepares++;
 
+    public void Recover()
+    {
+    }
+
     public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)
     {
         lock (_spoken)

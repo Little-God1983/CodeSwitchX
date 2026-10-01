@@ -26,13 +26,16 @@ public interface ITextToSpeech
     /// <exception cref="TextToSpeechNotReadyException">The engine is not ready yet (or failed); it is getting ready, if it can.</exception>
     /// <exception cref="TextToSpeechException">The engine failed while speaking.</exception>
     IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, CancellationToken ct);
+
+    /// <summary>
+    /// The engine hung (a sentence got no audio in time): it is stopped and started again, so the next sentences do not
+    /// wait behind the hung one. Returns at once and never throws.
+    /// </summary>
+    void Recover();
 }
 
 /// <summary>A piece of speech: 16-bit little-endian mono PCM.</summary>
-public sealed record SpeechChunk(ReadOnlyMemory<byte> Pcm16, int SampleRate)
-{
-    public TimeSpan Length => TimeSpan.FromSeconds(Pcm16.Length / 2.0 / SampleRate);
-}
+public sealed record SpeechChunk(ReadOnlyMemory<byte> Pcm16, int SampleRate);
 
 public enum TextToSpeechState
 {
@@ -47,7 +50,7 @@ public enum TextToSpeechState
 
     Ready,
 
-    /// <summary>Installing or loading failed; it is not tried again until the settings change or the app restarts.</summary>
+    /// <summary>Installing or loading failed; it is tried again by the next answer once a while has passed, or a new model.</summary>
     Failed,
 }
 

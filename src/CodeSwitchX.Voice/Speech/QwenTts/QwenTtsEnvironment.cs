@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.IO.Compression;
 using Microsoft.Extensions.Logging;
 
@@ -52,7 +51,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
     private readonly ILogger<QwenTtsEnvironment> _logger;
 
     /// <param name="root">The voice folder: everything the engine needs goes in here.</param>
-    /// <param name="findUv">uv of <see cref="UvVersion"/> on the PATH, if any; the pinned uv is downloaded otherwise.</param>
+    /// <param name="findUv">uv on the PATH, if any: used if it is <see cref="UvVersion"/>, else the pinned uv is downloaded.</param>
     public QwenTtsEnvironment(string root, string modelCache, IProcessRunner runner, HttpClient http, Func<string?> findUv,
         ILogger<QwenTtsEnvironment> logger)
     {
@@ -96,7 +95,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
             Directory.Delete(Venv, recursive: true);
         }
 
-        var uv = _findUv() ?? await DownloadUvAsync(progress, ct).ConfigureAwait(false);
+        var uv = await PinnedUvOnPathAsync(ct).ConfigureAwait(false) ?? await DownloadUvAsync(progress, ct).ConfigureAwait(false);
         await File.WriteAllTextAsync(Path.Combine(_root, ConstraintsFile), Resource(ConstraintsFile), ct).ConfigureAwait(false);
 
         progress.Report("getting Python " + PythonVersion);
@@ -181,45 +180,45 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
         return reader.ReadToEnd();
     }
 
-    /// <summary>The first uv.exe on the PATH, if it is <see cref="UvVersion"/>: an older one lacks flags the recipe uses.</summary>
-    public static string? FindPinnedUvOnPath()
-    {
-        var uv = (Environment.GetEnvironmentVariable("PATH") ?? "")
+    /// <summary>uv.exe on the PATH, if any.</summary>
+    public static string? FindUvOnPath() =>
+        (Environment.GetEnvironmentVariable("PATH") ?? "")
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(folder => Path.Combine(folder, "uv.exe"))
             .FirstOrDefault(File.Exists);
-        return uv is not null && IsPinnedVersion(VersionOf(uv)) ? uv : null;
-    }
 
-    /// <summary>What <c>uv --version</c> says ("uv 0.11.6 (65950801c 2026-04-09 ...)"); empty if it says nothing in 5 s.</summary>
-    private static string VersionOf(string uv)
+    /// <summary>The uv on the PATH if it says it is <see cref="UvVersion"/> within 5 s: an older one lacks flags the recipe uses.</summary>
+    private async Task<string?> PinnedUvOnPathAsync(CancellationToken ct)
     {
+        if (_findUv() is not { } uv)
+        {
+            return null;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        var said = "";
         try
         {
-            using var process = Process.Start(new ProcessStartInfo(uv, "--version")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-            });
-            if (process is null)
-            {
-                return "";
-            }
-
-            var output = process.StandardOutput.ReadToEndAsync();
-            if (!process.WaitForExit(5000))
-            {
-                process.Kill();
-                return "";
-            }
-
-            return output.Result.Trim();
+            await _runner.RunAsync(uv, ["--version"], _root, new Dictionary<string, string>(), line => said = said.Length == 0 ? line.Trim() : said,
+                timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return "";
+            // Said nothing in time.
         }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Not runnable.
+        }
+
+        if (IsPinnedVersion(said))
+        {
+            return uv;
+        }
+
+        _logger.LogInformation("Voice install: the uv on the PATH says \"{Version}\", not {Pinned}; the pinned one is used", said, UvVersion);
+        return null;
     }
 
     internal static bool IsPinnedVersion(string versionOutput) =>

@@ -137,6 +137,18 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_load_that_fails_after_the_install_turns_its_note_into_the_warning()
+    {
+        var vm = await NewVmAsync();
+
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading Qwen3-TTS"));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Loading, "loading the model"));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Failed, "CUDA out of memory"));
+
+        Lines(vm).ShouldBe([(RavenLogKind.Warning, "Raven cannot speak: CUDA out of memory")], "not \"Loading…\" above the warning");
+    }
+
+    [Fact]
     public async Task Loading_a_voice_installed_before_is_quiet_and_a_failure_is_a_warning()
     {
         var vm = await NewVmAsync();

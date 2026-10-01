@@ -9,17 +9,27 @@ namespace CodeSwitchX.Voice.Speech.QwenTts;
 
 /// <summary>
 /// Qwen3-TTS behind <see cref="ITextToSpeech"/>: a local sidecar the app starts, installed on first need, stopped with the
-/// app or when the model changes. One sidecar at a time; it speaks one request at a time, so a sentence asked while
-/// another is generated waits for it there.
+/// app or when the model changes, and started again when it crashes or hangs. One sidecar at a time; it speaks one
+/// request at a time, so a sentence asked while another is generated waits for it there.
 /// </summary>
 public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
 {
     private const int SampleRate = 24000;
 
+    /// <summary>
+    /// How long the sidecar may take to load before it counts as failed: the first start downloads the model (1.2 or
+    /// 3.5 GB) on top of the load and the CUDA graph capture, which take under a minute.
+    /// </summary>
+    public static readonly TimeSpan LoadTimeout = TimeSpan.FromMinutes(20);
+
+    /// <summary>How long a failure stands before the next answer tries again (a network that was down, a busy GPU).</summary>
+    public static readonly TimeSpan RetryAfter = TimeSpan.FromMinutes(10);
+
     private readonly IQwenTtsEnvironment _environment;
     private readonly IQwenTtsServerLauncher _launcher;
     private readonly SpeechSettings _settings;
     private readonly HttpClient _http;
+    private readonly TimeProvider _time;
     private readonly ILogger<QwenTextToSpeech> _logger;
     private readonly Lock _lock = new();
 
@@ -33,19 +43,27 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
 
     /// <summary>The preparation is installing: that does not depend on the model, so a new model does not cancel it.</summary>
     private bool _installing;
+
+    /// <summary>
+    /// Some caller asked for an install (an answer), so the preparation in flight installs if it finds none, even if
+    /// it was started by a warm-up that would not have.
+    /// </summary>
+    private bool _mayInstall;
     private CancellationTokenSource _lifetime = new();
 
-    /// <summary>The model the last attempt failed with: not tried again until the model changes or the app restarts.</summary>
+    /// <summary>The model the last attempt failed with, and when: not tried again until <see cref="RetryAfter"/> has passed or the model changes.</summary>
     private SpeechModel? _failedModel;
+    private DateTimeOffset _failedAt;
     private bool _disposed;
 
     public QwenTextToSpeech(IQwenTtsEnvironment environment, IQwenTtsServerLauncher launcher, SpeechSettings settings, HttpClient http,
-        ILogger<QwenTextToSpeech> logger)
+        TimeProvider time, ILogger<QwenTextToSpeech> logger)
     {
         _environment = environment;
         _launcher = launcher;
         _settings = settings;
         _http = http;
+        _time = time;
         _logger = logger;
         _settings.ModelChanged += (_, _) => Restart();
     }
@@ -80,17 +98,18 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
     {
         lock (_lock)
         {
-            if (_disposed || _preparing is not null || _server is not null || _failedModel == _settings.Model)
+            if (_disposed || _server is not null || (_failedModel == _settings.Model && _time.GetUtcNow() - _failedAt < RetryAfter))
             {
                 return;
             }
 
-            _preparing = PrepareAsync(install, _lifetime.Token);
+            _mayInstall |= install; // also for the preparation already in flight
+            _preparing ??= PrepareAsync(_lifetime.Token);
         }
     }
 
-    /// <summary>Installs if needed and allowed, then starts the model the settings name by then: one picked during the install is loaded.</summary>
-    private async Task PrepareAsync(bool install, CancellationToken ct)
+    /// <summary>Installs if needed and asked for, then starts the model the settings name by then: one picked during the install is loaded.</summary>
+    private async Task PrepareAsync(CancellationToken ct)
     {
         await Task.Yield(); // never on the caller's thread: checking the install reads files
         IQwenTtsServer? server = null;
@@ -101,12 +120,13 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
             {
                 lock (_lock)
                 {
-                    if (!install)
+                    if (!_mayInstall)
                     {
                         _preparing = null; // a warm-up of a voice not installed: nothing to do
                         return;
                     }
 
+                    _mayInstall = false;
                     _installing = true;
                 }
 
@@ -126,8 +146,20 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
             }
 
             Report(new TextToSpeechStatus(TextToSpeechState.Loading, "starting"), ct);
-            server = await _launcher.StartAsync(_environment, SpeechSettings.ModelId(model),
-                detail => Report(new TextToSpeechStatus(TextToSpeechState.Loading, detail), ct), ct).ConfigureAwait(false);
+            using (var loading = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            using (var deadline = _time.CreateTimer(_ => Cancel(loading), null, LoadTimeout, Timeout.InfiniteTimeSpan))
+            {
+                try
+                {
+                    server = await _launcher.StartAsync(_environment, SpeechSettings.ModelId(model),
+                        detail => Report(new TextToSpeechStatus(TextToSpeechState.Loading, detail), ct), loading.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new TextToSpeechException($"The voice did not finish loading in {LoadTimeout.TotalMinutes:0} minutes.");
+                }
+            }
+
             lock (_lock)
             {
                 if (ct.IsCancellationRequested)
@@ -139,6 +171,8 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
                 _server = server;
                 _serverModel = model;
                 _preparing = null;
+                _mayInstall = false;
+                _failedModel = null;
             }
 
             _ = WatchAsync(server);
@@ -161,10 +195,24 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
                 }
 
                 _failedModel = model;
+                _failedAt = _time.GetUtcNow();
                 _preparing = null;
+                _mayInstall = false;
             }
 
             Report(new TextToSpeechStatus(TextToSpeechState.Failed, ex is TextToSpeechException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}"), ct);
+        }
+    }
+
+    private static void Cancel(CancellationTokenSource source)
+    {
+        try
+        {
+            source.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Loaded meanwhile.
         }
     }
 
@@ -172,18 +220,52 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
     private async Task WatchAsync(IQwenTtsServer server)
     {
         await server.Exited.ConfigureAwait(false);
+        if (Drop(server))
+        {
+            _logger.LogWarning("Raven's voice ended by itself; it starts again when it is next needed");
+        }
+    }
+
+    public void Recover()
+    {
+        IQwenTtsServer? server;
         lock (_lock)
         {
-            if (_server != server)
-            {
-                return; // stopped on purpose
-            }
-
-            _server = null;
+            server = _server;
         }
 
-        _logger.LogWarning("Raven's voice ended by itself; it starts again when it is next needed");
-        Report(TextToSpeechStatus.Off);
+        if (server is null || !Drop(server))
+        {
+            return;
+        }
+
+        _logger.LogWarning("Raven's voice hung; it is started again");
+        _ = Task.Run(server.Dispose);
+        Prepare(install: false);
+    }
+
+    /// <summary>
+    /// Forgets <paramref name="server"/> if it is still the one in use, and says Off, in one step under the telling lock:
+    /// a preparation can start only once it is forgotten, so its Loading always comes after this Off.
+    /// </summary>
+    private bool Drop(IQwenTtsServer server)
+    {
+        lock (_telling)
+        {
+            lock (_lock)
+            {
+                if (_server != server)
+                {
+                    return false; // stopped on purpose, or dropped already
+                }
+
+                _server = null;
+                _status = TextToSpeechStatus.Off;
+            }
+
+            StatusChanged?.Invoke(this, TextToSpeechStatus.Off);
+            return true;
+        }
     }
 
     /// <summary>
@@ -261,7 +343,7 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
         }
         catch (HttpRequestException ex)
         {
-            throw new TextToSpeechException($"The voice did not answer: {ex.Message}", ex);
+            throw Interrupted(server) ?? new TextToSpeechException($"The voice did not answer: {ex.Message}", ex);
         }
 
         using (response)
@@ -292,7 +374,7 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException && !ct.IsCancellationRequested)
                 {
-                    throw new TextToSpeechException($"The voice stopped mid-sentence: {ex.Message}", ex);
+                    throw Interrupted(server) ?? new TextToSpeechException($"The voice stopped mid-sentence: {ex.Message}", ex);
                 }
 
                 if (read == 0)
@@ -313,6 +395,18 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
                     buffer[0] = (byte)carry;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// A request cut off because its sidecar was stopped on purpose (a new model) or after a hang is no failure: the
+    /// voice is getting ready again. Null when the sidecar is still the one in use.
+    /// </summary>
+    private TextToSpeechNotReadyException? Interrupted(IQwenTtsServer server)
+    {
+        lock (_lock)
+        {
+            return _server == server ? null : new TextToSpeechNotReadyException(new TextToSpeechStatus(TextToSpeechState.Loading));
         }
     }
 

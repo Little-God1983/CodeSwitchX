@@ -157,6 +157,26 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_sentence_that_hangs_restarts_the_voice_and_drops_the_reply_with_one_note()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        using var voice = new ReplyVoice(_tts, _player, _keepAlive, time, NullLogger<ReplyVoice>.Instance);
+        var notes = new List<string>();
+        voice.Unspoken += (_, why) => { lock (notes) { notes.Add(why); } };
+        _tts.Gate = new TaskCompletionSource(); // a generation that never ends
+        _tts.HonorsCancel = true;
+        var reply = voice.Begin();
+        reply.Add("One. Two. ");
+        await Until(() => _tts.Spoken.Count == 1);
+
+        time.Advance(ReplyVoice.FirstAudioTimeout);
+        await Until(() => _tts.Recoveries == 1);
+
+        await Until(() => { lock (notes) { return notes.Count == 1; } });
+        notes.ShouldBe(["Raven's voice hung and is starting again, so the rest of this answer is not spoken."]);
+    }
+
+    [Fact]
     public async Task The_first_audio_is_told_once()
     {
         var heard = 0;
@@ -355,6 +375,9 @@ public sealed class ReplyVoiceTests : IDisposable
         /// <summary>When set, a sentence's audio waits for it.</summary>
         public TaskCompletionSource? Gate { get; set; }
 
+        /// <summary>A sentence held by <see cref="Gate"/> gives up when cancelled, as the real voice does.</summary>
+        public bool HonorsCancel { get; set; }
+
         public TextToSpeechStatus? NotReady { get; set; }
 
         public bool Cancelled { get; private set; }
@@ -371,6 +394,10 @@ public sealed class ReplyVoiceTests : IDisposable
         {
         }
 
+        public int Recoveries;
+
+        public void Recover() => Interlocked.Increment(ref Recoveries);
+
         public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)
         {
             lock (_spoken)
@@ -386,7 +413,7 @@ public sealed class ReplyVoiceTests : IDisposable
             if (Gate is { } gate)
             {
                 using var _ = ct.Register(() => Cancelled = true);
-                await gate.Task;
+                await (HonorsCancel ? gate.Task.WaitAsync(ct) : gate.Task);
             }
 
             ct.ThrowIfCancellationRequested();

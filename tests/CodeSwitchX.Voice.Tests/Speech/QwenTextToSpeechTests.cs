@@ -5,6 +5,7 @@ using System.Text.Json;
 using CodeSwitchX.Voice.Speech;
 using CodeSwitchX.Voice.Speech.QwenTts;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 public sealed class QwenTextToSpeechTests : IDisposable
 {
@@ -12,12 +13,13 @@ public sealed class QwenTextToSpeechTests : IDisposable
     private readonly FakeLauncher _launcher = new();
     private readonly SpeechSettings _settings = new();
     private readonly FakeHandler _handler = new();
+    private readonly FakeTimeProvider _time = new();
     private readonly QwenTextToSpeech _tts;
     private readonly List<TextToSpeechState> _states = [];
 
     public QwenTextToSpeechTests()
     {
-        _tts = new QwenTextToSpeech(_environment, _launcher, _settings, new HttpClient(_handler), NullLogger<QwenTextToSpeech>.Instance);
+        _tts = new QwenTextToSpeech(_environment, _launcher, _settings, new HttpClient(_handler), _time, NullLogger<QwenTextToSpeech>.Instance);
         _tts.StatusChanged += (_, status) => { lock (_states) { _states.Add(status.State); } };
     }
 
@@ -64,6 +66,91 @@ public sealed class QwenTextToSpeechTests : IDisposable
         await _tts.Preparing;
         _environment.Installs.ShouldBe(0);
         _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task A_failure_is_tried_again_once_a_while_has_passed()
+    {
+        _environment.InstallFails = true;
+        _tts.Prepare(install: true);
+        await _tts.Preparing;
+        _environment.InstallFails = false;
+
+        _time.Advance(QwenTextToSpeech.RetryAfter - TimeSpan.FromSeconds(1));
+        _tts.Prepare(install: true);
+        await _tts.Preparing;
+        _environment.Installs.ShouldBe(1);
+
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _tts.Prepare(install: true);
+        await _tts.Preparing;
+        _environment.Installs.ShouldBe(2);
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task A_load_that_never_finishes_fails_after_the_timeout()
+    {
+        _environment.Installed = true;
+        _launcher.Gate = new TaskCompletionSource(); // a download that stalls, a graph capture that never ends
+        _launcher.HonorsCancel = true;
+        _tts.Prepare(install: false);
+        await Until(() => _launcher.Starts.Count == 1);
+
+        _time.Advance(QwenTextToSpeech.LoadTimeout);
+        await _tts.Preparing;
+
+        _tts.Status.ShouldBe(new TextToSpeechStatus(TextToSpeechState.Failed, "The voice did not finish loading in 20 minutes."));
+    }
+
+    [Fact]
+    public async Task A_hung_voice_is_started_again()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+        var hung = _launcher.Servers.Single();
+
+        _tts.Recover();
+        await Until(() => _launcher.Starts.Count == 2);
+        await _tts.Preparing;
+
+        await Until(() => hung.Disposed);
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+        States.ShouldBe([TextToSpeechState.Loading, TextToSpeechState.Ready, TextToSpeechState.Off, TextToSpeechState.Loading, TextToSpeechState.Ready]);
+    }
+
+    [Fact]
+    public async Task An_answer_during_a_warm_up_gets_the_voice_installed()
+    {
+        _environment.CheckGate = new TaskCompletionSource();
+        _tts.Prepare(install: false); // the warm-up, held while it looks at the disk
+
+        _tts.Prepare(install: true); // the first answer
+        _environment.CheckGate.TrySetResult();
+        await Until(() => _tts.Status.State == TextToSpeechState.Ready);
+
+        _environment.Installs.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_sentence_cut_off_by_a_new_model_is_not_a_failure()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+        _handler.Body = new byte[64];
+        _handler.ReadSize = 16;
+        _handler.FailAfterFirstRead = () => _settings.Model = SpeechModel.Large; // the sidecar is killed under the request
+
+        var error = await Should.ThrowAsync<TextToSpeechException>(async () =>
+        {
+            await foreach (var _ in _tts.SpeakAsync("Hello there.", CancellationToken.None))
+            {
+            }
+        });
+
+        error.ShouldBeOfType<TextToSpeechNotReadyException>("the user changed the model: no \"could not speak\"");
     }
 
     [Fact]
@@ -246,6 +333,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         _tts.Prepare(install: false);
         await _tts.Preparing;
         _launcher.Starts.Count.ShouldBe(2);
+        States.ShouldBe([TextToSpeechState.Loading, TextToSpeechState.Ready, TextToSpeechState.Off, TextToSpeechState.Loading, TextToSpeechState.Ready]);
     }
 
     private static async Task Until(Func<bool> condition)
@@ -313,8 +401,11 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public List<FakeServer> Servers { get; } = [];
 
-        /// <summary>When set, the next start waits for it before it is ready, cancelled or not.</summary>
+        /// <summary>When set, the next start waits for it before it is ready, cancelled or not (see <see cref="HonorsCancel"/>).</summary>
         public TaskCompletionSource? Gate { get; set; }
+
+        /// <summary>A start held by <see cref="Gate"/> gives up when cancelled, as the real one does.</summary>
+        public bool HonorsCancel { get; set; }
 
         /// <summary>The gate the last start waits for.</summary>
         public TaskCompletionSource? Pending { get; private set; }
@@ -334,7 +425,22 @@ public sealed class QwenTextToSpeechTests : IDisposable
             if (Gate is { } gate)
             {
                 Pending = gate;
-                await gate.Task;
+                if (HonorsCancel)
+                {
+                    try
+                    {
+                        await gate.Task.WaitAsync(ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        server.Dispose();
+                        throw;
+                    }
+                }
+                else
+                {
+                    await gate.Task;
+                }
             }
 
             return server;
@@ -378,23 +484,36 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public long? ContentLength { get; private set; }
 
+        /// <summary>When set, runs after the first read, and every read after it fails as a killed connection does.</summary>
+        public Action? FailAfterFirstRead { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             ContentLength = request.Content!.Headers.ContentLength; // before the read below, which buffers it and so gives it one
             Request = JsonDocument.Parse(await request.Content.ReadAsStringAsync(ct));
             Authorization = request.Headers.Authorization?.ToString();
-            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Trickle(Body, ReadSize)) };
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Trickle(Body, ReadSize, FailAfterFirstRead)) };
             response.Headers.Add("X-Sample-Rate", "24000");
             return response;
         }
     }
 
-    /// <summary>Gives at most a few bytes per read, as a network stream may.</summary>
-    private sealed class Trickle(byte[] data, int size) : MemoryStream(data)
+    /// <summary>Gives at most a few bytes per read, as a network stream may; with a hook, fails after the first read.</summary>
+    private sealed class Trickle(byte[] data, int size, Action? failAfterFirstRead = null) : MemoryStream(data)
     {
+        private int _reads;
+
         public override int Read(byte[] buffer, int offset, int count) => base.Read(buffer, offset, Math.Min(count, size));
 
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
-            base.ReadAsync(buffer[..Math.Min(buffer.Length, size)], ct);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            if (failAfterFirstRead is not null && _reads++ == 1)
+            {
+                failAfterFirstRead();
+                throw new IOException("An existing connection was forcibly closed by the remote host.");
+            }
+
+            return base.ReadAsync(buffer[..Math.Min(buffer.Length, size)], ct);
+        }
     }
 }

@@ -291,8 +291,11 @@ public sealed class ReplyVoice : IDisposable
         }
         catch (OperationCanceledException)
         {
+            // Hung: likely the sidecar itself (a generation that never ends holds its lock), so every later sentence
+            // would wait behind it. It is started again.
             _logger.LogWarning("Raven's voice stalled on \"{Sentence}\"", sentence.Text);
-            Drop(reply, "Raven's voice took too long, so the rest of this answer is not spoken.");
+            _tts.Recover();
+            Drop(reply, "Raven's voice hung and is starting again, so the rest of this answer is not spoken.");
         }
         catch (TextToSpeechNotReadyException ex)
         {
@@ -449,6 +452,8 @@ public sealed class ReplyVoice : IDisposable
         _disposed = true;
         _sentences.Writer.TryComplete();
         Hush();
+        // The loop ends once the hushed sentence lets go: after it, nothing touches the timer disposed below.
+        _loop.Wait(TimeSpan.FromSeconds(2));
         _sleep.Dispose();
         _keepAlive.Stop();
         if (_playerGate.Wait(TimeSpan.FromSeconds(2)))

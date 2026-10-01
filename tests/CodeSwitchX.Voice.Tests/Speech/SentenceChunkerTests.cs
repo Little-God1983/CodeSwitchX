@@ -46,6 +46,27 @@ public sealed class SentenceChunkerTests
     }
 
     [Fact]
+    public void An_abbreviation_after_a_bracket_or_quote_ends_nothing_either()
+    {
+        Chunk("Check the logs (e.g. auth.log) first. Then \"i.e. this\" one.")
+            .ShouldBe(["Check the logs (e.g. auth.log) first.", "Then \"i.e. this\" one."]);
+    }
+
+    [Fact]
+    public void A_long_line_streamed_in_tiny_pieces_is_cut_without_rescanning_it()
+    {
+        var chunker = new SentenceChunker();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        for (var i = 0; i < 200_000; i++)
+        {
+            chunker.Add("a ").ShouldBeEmpty();
+        }
+
+        chunker.Flush().Single().Length.ShouldBe(399_999);
+        watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(2), "a quadratic scan takes minutes here");
+    }
+
+    [Fact]
     public void A_closing_quote_or_bracket_stays_with_its_sentence()
     {
         Chunk("It said \"done.\" Then (it stopped.) Fine.").ShouldBe(["It said \"done.\"", "Then (it stopped.)", "Fine."]);

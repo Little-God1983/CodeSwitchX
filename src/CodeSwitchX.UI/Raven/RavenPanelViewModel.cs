@@ -405,8 +405,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _voiceNote.Text = "Raven's voice is ready.";
                 _voiceNote = null;
                 break;
-            case TextToSpeechState.Failed:
+            case TextToSpeechState.Failed when _voiceNote is not null:
+                // The install or load it followed ended: the note says so, rather than "Loading…" above the warning.
+                ReplaceEntry(_voiceNote, RavenLogKind.Warning, $"Raven cannot speak: {status.Detail}");
                 _voiceNote = null;
+                break;
+            case TextToSpeechState.Failed:
                 AddEntry(RavenLogKind.Warning, $"Raven cannot speak: {status.Detail}");
                 break;
         }
