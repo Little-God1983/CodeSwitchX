@@ -32,13 +32,17 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>Chats whose tile the app chose when it started them (<see cref="Claim"/>); their folder does not move them.</summary>
     private readonly Dictionary<string, Guid> _claims = new(StringComparer.Ordinal);
+
+    /// <summary>Per chat, the claude process whose VS Code window was looked up (<see cref="WindowOfLocked"/>); not stored.</summary>
+    private readonly Dictionary<string, int> _windowLookups = new(StringComparer.Ordinal);
+    private readonly IIdeWindows? _windows;
     private const int OpenToolsKept = 32;
     private readonly List<IDisposable> _subscriptions = [];
     private ITimer? _sweepTimer;
     private long _version;
 
     public SessionEngine(IEventBus bus, IWorkspaceResolver resolver, TimeProvider time, ILogger<SessionEngine> logger,
-        SessionEngineOptions? options = null, IProcessProbe? probe = null)
+        SessionEngineOptions? options = null, IProcessProbe? probe = null, IIdeWindows? windows = null)
     {
         _bus = bus;
         _resolver = resolver;
@@ -46,6 +50,7 @@ public sealed class SessionEngine : IDisposable
         _logger = logger;
         _options = options ?? new SessionEngineOptions();
         _probe = probe;
+        _windows = windows;
     }
 
     public IReadOnlyCollection<SessionSnapshot> Snapshots
@@ -161,6 +166,8 @@ public sealed class SessionEngine : IDisposable
             }
 
             var cwd = e.Cwd ?? s.Cwd;
+            var claudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid;
+            var window = WindowOfLocked(s, claudePid);
             var awaitingToolResult = e.EventName switch
             {
                 "PreToolUse" or "PermissionRequest" => true,
@@ -174,7 +181,8 @@ public sealed class SessionEngine : IDisposable
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
-                    : cwd != s.Cwd || s.WorkspaceId is null ? _resolver.Resolve(cwd) : s.WorkspaceId,
+                    : cwd != s.Cwd || s.WorkspaceId is null || window != s.WindowFolders ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
+                WindowFolders = window,
                 TranscriptPath = e.TranscriptPath ?? s.TranscriptPath,
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
@@ -183,7 +191,7 @@ public sealed class SessionEngine : IDisposable
                 Inferred = false,
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
-                ClaudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid,
+                ClaudePid = claudePid,
             });
         }
     }
@@ -379,7 +387,7 @@ public sealed class SessionEngine : IDisposable
                 StateSince = stateSince,
                 LastEventAt = lastEvent,
                 Cwd = cwd,
-                WorkspaceId = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : s.WorkspaceId ?? _resolver.Resolve(cwd),
+                WorkspaceId = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : s.WorkspaceId ?? _resolver.Resolve(cwd, s.WindowFolders),
                 TranscriptPath = s.TranscriptPath ?? u.TranscriptPath,
                 Model = model,
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
@@ -463,10 +471,11 @@ public sealed class SessionEngine : IDisposable
         {
             foreach (var s in _sessions.Values.ToArray())
             {
-                var resolved = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : _resolver.Resolve(s.Cwd);
-                if (resolved != s.WorkspaceId)
+                var window = WindowOfLocked(s, s.ClaudePid);
+                var resolved = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : _resolver.Resolve(s.Cwd, window);
+                if (resolved != s.WorkspaceId || window != s.WindowFolders)
                 {
-                    Commit(s, s with { WorkspaceId = resolved });
+                    Commit(s, s with { WorkspaceId = resolved, WindowFolders = window });
                 }
             }
         }
@@ -529,6 +538,25 @@ public sealed class SessionEngine : IDisposable
         var current = candidate with { Version = ++_version };
         _sessions[current.SessionId] = current;
         _bus.Publish(new SessionChanged(previous, current));
+    }
+
+    /// <summary>
+    /// The folders of the VS Code window the chat's claude runs in, looked up once per claude process: two workspaces can
+    /// share a folder, and only the window tells which one the chat belongs to. A new process (a resume, perhaps in another
+    /// window or a terminal) is looked up again. Without a process to look at, the chat keeps what it had, so a chat whose
+    /// claude is gone stays on its tile.
+    /// </summary>
+    private IReadOnlyList<string>? WindowOfLocked(SessionSnapshot s, int? claudePid)
+    {
+        if (_windows is null || claudePid is not { } pid
+            || (_windowLookups.TryGetValue(s.SessionId, out var looked) && looked == pid))
+        {
+            return s.WindowFolders;
+        }
+
+        _windowLookups[s.SessionId] = pid;
+        var folders = _windows.FoldersOf(pid);
+        return folders is not null && s.WindowFolders is { } known && folders.SequenceEqual(known, StringComparer.Ordinal) ? known : folders;
     }
 
     private static SessionSnapshot NewSession(string sessionId, DateTimeOffset at) => new()

@@ -891,4 +891,139 @@ public class SessionEngineTests
 
         _engine.Get("s1")!.WorkspaceId.ShouldBe(AppId);
     }
+
+    private static readonly Guid FullId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static readonly Guid InstallerId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private static readonly string[] FullFolders = [@"C:\Repo\App", @"C:\Repo\Docs"];
+    private static readonly string[] InstallerFolders = [@"C:\Repo\App", @"C:\Repo\Tools"];
+
+    /// <summary>Two multi-root workspaces that both start with C:\Repo\App, Full registered first (issue #80).</summary>
+    private (SessionEngine Engine, FakeIdeWindows Windows) SharedRootEngine()
+    {
+        var resolver = new WorkspaceResolver();
+        resolver.SetRoots(
+            [new WorkspaceRoot(FullId, @"C:\Repo\App"), new WorkspaceRoot(InstallerId, @"C:\Repo\App")],
+            [new WorkspaceWindow(FullId, FullFolders), new WorkspaceWindow(InstallerId, InstallerFolders)]);
+        var windows = new FakeIdeWindows();
+        windows.Folders[100] = [@"c:\repo\app", @"c:\repo\tools"];
+        windows.Folders[200] = [@"C:\Repo\Docs", @"C:\Repo\App"];
+        return (new SessionEngine(_bus, resolver, _time, NullLogger<SessionEngine>.Instance, windows: windows), windows);
+    }
+
+    [Fact]
+    public void A_chat_in_the_window_of_the_second_of_two_workspaces_that_share_its_folder_shows_on_that_tile()
+    {
+        var (engine, _) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe"), new ProcessRef(90, "Code.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(200, "claude.exe")]));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s2")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_chat_outside_any_known_window_follows_its_folder()
+    {
+        var (engine, _) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(300, "claude.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2"));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId, "the first registered of the two");
+        engine.Get("s1")!.WindowFolders.ShouldBeNull();
+        engine.Get("s2")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_chat_on_the_tile_its_folder_gave_it_moves_to_its_window_once_its_claude_is_known()
+    {
+        var (engine, _) = SharedRootEngine();
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+    }
+
+    [Fact]
+    public void A_chat_stored_on_the_wrong_tile_moves_to_its_window_on_the_restart()
+    {
+        var (engine, _) = SharedRootEngine();
+        engine.Restore([Restored(FullId, claudePid: 100, windowFolders: null)]);
+
+        engine.ReResolveWorkspaces();
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe([@"c:\repo\app", @"c:\repo\tools"]);
+    }
+
+    [Fact]
+    public void A_chat_whose_claude_is_gone_stays_on_the_tile_of_its_window_after_a_restart()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: null, windowFolders: InstallerFolders)]);
+
+        engine.ReResolveWorkspaces();
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        windows.Lookups.ShouldBe(0);
+    }
+
+    [Fact]
+    public void The_window_is_looked_up_once_per_claude_process()
+    {
+        var (engine, windows) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe")]));
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+        engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash"));
+        engine.ReResolveWorkspaces();
+        windows.Lookups.ShouldBe(1);
+
+        // A resume of the chat in the other window.
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(200, "claude.exe")]));
+
+        windows.Lookups.ShouldBe(2);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_claim_beats_the_window()
+    {
+        var (engine, _) = SharedRootEngine();
+        engine.Claim("s1", FullId);
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe")]));
+
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    private SessionSnapshot Restored(Guid workspaceId, int? claudePid, IReadOnlyList<string>? windowFolders) => new()
+    {
+        SessionId = "s1",
+        WorkspaceId = workspaceId,
+        State = SessionState.Idle,
+        StartedAt = _time.GetUtcNow(),
+        LastEventAt = _time.GetUtcNow(),
+        StateSince = _time.GetUtcNow(),
+        Cwd = @"C:\Repo\App",
+        Title = "Installer pull request",
+        ClaudePid = claudePid,
+        WindowFolders = windowFolders,
+    };
+
+    private sealed class FakeIdeWindows : IIdeWindows
+    {
+        public Dictionary<int, IReadOnlyList<string>> Folders { get; } = [];
+
+        public int Lookups { get; private set; }
+
+        public IReadOnlyList<string>? FoldersOf(int claudePid)
+        {
+            Lookups++;
+            return Folders.GetValueOrDefault(claudePid);
+        }
+    }
 }

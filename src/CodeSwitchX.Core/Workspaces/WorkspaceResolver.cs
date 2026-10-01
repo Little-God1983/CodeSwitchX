@@ -5,14 +5,43 @@ namespace CodeSwitchX.Core.Workspaces;
 public sealed class WorkspaceResolver : IWorkspaceResolver
 {
     private volatile WorkspaceRoot[] _roots = [];
+    private volatile (Guid WorkspaceId, HashSet<string> Folders)[] _windows = [];
 
-    /// <summary>Longest root first; the sort is stable, so of two equal paths the one listed first wins.</summary>
-    public void SetRoots(IEnumerable<WorkspaceRoot> roots)
+    /// <summary>
+    /// Longest root first; the sort is stable, so of two equal paths the one listed first wins. <paramref name="windows"/>
+    /// (from <see cref="WindowsOf"/>) keep their order: of two workspaces that open the same folders, the first wins.
+    /// </summary>
+    public void SetRoots(IEnumerable<WorkspaceRoot> roots, IEnumerable<WorkspaceWindow>? windows = null)
     {
         _roots = roots
             .Select(r => new WorkspaceRoot(r.WorkspaceId, PathNormalizer.Normalize(r.Path)))
             .OrderByDescending(r => r.Path.Length)
             .ToArray();
+        _windows = (windows ?? [])
+            .Select(w => (w.WorkspaceId, Folders: FolderSet(w.Folders)))
+            .Where(w => w.Folders is { Count: > 0 })
+            .Select(w => (w.WorkspaceId, w.Folders!))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// The folders VS Code opens for each workspace, in the order of <see cref="RootsOf"/>: a folder workspace opens its
+    /// root, a <c>.code-workspace</c> the folders it lists (read with <paramref name="foldersOf"/>; none without it, or
+    /// when the file cannot be read).
+    /// </summary>
+    public static IEnumerable<WorkspaceWindow> WindowsOf(IEnumerable<Workspace> workspaces, Func<string, IReadOnlyList<WorkspaceFolder>?>? foldersOf = null)
+    {
+        foreach (var workspace in workspaces.OrderBy(w => w.WorkspaceFile is { Length: > 0 }).ThenBy(w => w.CreatedAt).ThenBy(w => w.Id))
+        {
+            if (workspace.WorkspaceFile is not { Length: > 0 } file)
+            {
+                yield return new WorkspaceWindow(workspace.Id, [workspace.RootPath]);
+            }
+            else if (foldersOf?.Invoke(file) is { Count: > 0 } folders)
+            {
+                yield return new WorkspaceWindow(workspace.Id, folders.Select(f => f.Path).ToList());
+            }
+        }
     }
 
     /// <summary>
@@ -50,8 +79,19 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
         }
     }
 
-    public Guid? Resolve(string? path)
+    public Guid? Resolve(string? path, IReadOnlyCollection<string>? windowFolders = null)
     {
+        if (windowFolders is { Count: > 0 } && FolderSet(windowFolders) is { } window)
+        {
+            foreach (var (workspaceId, folders) in _windows)
+            {
+                if (folders.SetEquals(window))
+                {
+                    return workspaceId;
+                }
+            }
+        }
+
         if (string.IsNullOrWhiteSpace(path))
         {
             return null;
@@ -76,5 +116,18 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
         }
 
         return null;
+    }
+
+    /// <summary>The folders as comparison keys; null when one of them is no path.</summary>
+    private static HashSet<string>? FolderSet(IEnumerable<string> folders)
+    {
+        try
+        {
+            return folders.Select(PathNormalizer.Normalize).ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

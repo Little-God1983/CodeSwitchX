@@ -22,6 +22,23 @@ public class SessionRecordTests
     }
 
     [Fact]
+    public void The_folders_of_the_chats_window_survive_the_record()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Idle,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch,
+            StateSince = DateTimeOffset.UnixEpoch,
+            WindowFolders = [@"e:\Repos\DiffusionNexus.Installer.SDK", @"e:\Repos\DiffusionNexus.Tools"],
+        };
+
+        SessionRecord.FromSnapshot(snapshot).ToSnapshot().WindowFolders.ShouldBe(snapshot.WindowFolders);
+        SessionRecord.FromSnapshot(snapshot with { WindowFolders = null }).ToSnapshot().WindowFolders.ShouldBeNull();
+    }
+
+    [Fact]
     public void Each_fact_that_shows_a_chat_held_a_conversation_survives_the_record()
     {
         var bare = new SessionSnapshot
