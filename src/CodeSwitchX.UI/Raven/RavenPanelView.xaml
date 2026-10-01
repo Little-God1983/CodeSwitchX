@@ -415,6 +415,9 @@
                 <DataTrigger Binding="{Binding State}" Value="Idle">
                   <Setter Property="IsAnimating" Value="False" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
+                  <Setter Property="IsAnimating" Value="False" />
+                </DataTrigger>
               </Style.Triggers>
             </Style>
           </raven:RavenOrb.Style>

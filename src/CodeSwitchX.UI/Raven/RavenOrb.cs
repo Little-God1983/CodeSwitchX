@@ -6,7 +6,7 @@ namespace CodeSwitchX.UI.Raven;
 /// <summary>
 /// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing, dots
 /// that go round while Raven's brain thinks, rings that go out from a wave ring following the voice while Raven speaks,
-/// and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
+/// a ring of dots with a glint going round while Open mic waits, and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
 /// and is asked to animate; with animations turned off in Windows it draws one still frame per change. Idle breathing
 /// also stops while its window is not the active one (VS Code docked in front, say): listening, transcribing, thinking
 /// and speaking keep animating, because they show what the microphone and the models are doing. The geometry follows the concept page's
@@ -50,6 +50,10 @@ public sealed class RavenOrb : FrameworkElement
     private TimeSpan _lastDraw;
     private double _seconds;
     private double _shownLevel;
+
+    /// <summary>1 while Open mic waits, easing to 0 as speech takes over: the light ring fades out, the wave ring comes in.</summary>
+    private double _attend;
+    private readonly Dictionary<byte, Brush> _dots = [];
     private Size _coreBrushSize;
     private RadialGradientBrush? _coreBrush;
     private SolidColorBrush? _dot;
@@ -88,7 +92,7 @@ public sealed class RavenOrb : FrameworkElement
     private static bool MotionAllowed => SystemParameters.ClientAreaAnimation;
 
     private bool ShouldAnimate => IsAnimating && IsVisible && MotionAllowed && _window is not null && _window.WindowState != WindowState.Minimized
-        && (_window.IsActive || State != RavenState.Idle);
+        && State != RavenState.AttendingPaused && (_window.IsActive || State != RavenState.Idle);
 
     private void OnLoaded()
     {
@@ -178,11 +182,13 @@ public sealed class RavenOrb : FrameworkElement
         _seconds += dt;
 
         // The level arrives in 50 ms steps; easing towards it keeps the ring from jumping (0.18 per 60 Hz frame).
-        var target = State is RavenState.Listening or RavenState.Speaking ? Math.Clamp(Level, 0, 1) : 0;
+        var target = State is RavenState.Listening or RavenState.Speaking or RavenState.Attending ? Math.Clamp(Level, 0, 1) : 0;
         _shownLevel += (target - _shownLevel) * (1 - Math.Pow(1 - 0.18, dt * 60));
+        var attending = State is RavenState.Attending or RavenState.AttendingPaused ? 1 : 0;
+        _attend += (attending - _attend) * (1 - Math.Pow(1 - 0.12, dt * 60));
 
-        // Thinking moves as calmly as the idle breath, and may last minutes in a background window: the same frame rate.
-        if (State is RavenState.Idle or RavenState.Thinking && now - _lastDraw < IdleFrame)
+        // Thinking and the light ring move as calmly as the idle breath, and may last for hours in a background window.
+        if (State is RavenState.Idle or RavenState.Thinking or RavenState.Attending && now - _lastDraw < IdleFrame)
         {
             return;
         }
@@ -217,6 +223,8 @@ public sealed class RavenOrb : FrameworkElement
 
         var center = new Point(ActualWidth / 2, ActualHeight / 2);
         var t = _hooked ? _seconds : 0;
+        var attend = _hooked ? _attend : State is RavenState.Attending or RavenState.AttendingPaused ? 1 : 0;
+        var room = State == RavenState.Attending ? Math.Min(_hooked ? _shownLevel : Math.Clamp(Level, 0, 1), 0.3) : 0;
         var amp = State switch
         {
             RavenState.Listening or RavenState.Speaking => _hooked ? _shownLevel : Math.Clamp(Level, 0, 1),
@@ -225,8 +233,8 @@ public sealed class RavenOrb : FrameworkElement
         };
         var breathe = State == RavenState.Idle ? Math.Sin(t * 1.4) * 3 : 0;
 
-        DrawGlow(dc, center, scale, amp);
-        DrawWaveRing(dc, center, scale, t, amp, breathe);
+        DrawGlow(dc, center, scale, amp + (room * 0.3));
+        DrawWaveRing(dc, center, scale, t, amp, breathe, 0.9 - (0.35 * attend));
         if (State == RavenState.Transcribing)
         {
             DrawArcs(dc, center, scale, t);
@@ -239,9 +247,14 @@ public sealed class RavenOrb : FrameworkElement
         {
             DrawRipples(dc, center, scale, t, amp);
         }
-        else
+        else if (attend < 0.99)
         {
-            dc.DrawEllipse(null, VoicePen(0.25, Math.Max(0.75, 1.4 * scale)), center, (Base + 44) * scale, (Base + 44) * scale);
+            dc.DrawEllipse(null, VoicePen(0.25 * (1 - attend), Math.Max(0.75, 1.4 * scale)), center, (Base + 44) * scale, (Base + 44) * scale);
+        }
+
+        if (attend > 0.01)
+        {
+            DrawLightRing(dc, center, scale, t, room, attend, State == RavenState.AttendingPaused);
         }
 
         var core = (Base - 4 + breathe + amp * 6) * scale;
@@ -274,7 +287,7 @@ public sealed class RavenOrb : FrameworkElement
     }
 
     /// <summary>A closed ring whose radius is the sum of three sines, pushed out by the level.</summary>
-    private void DrawWaveRing(DrawingContext dc, Point center, double scale, double t, double amp, double breathe)
+    private void DrawWaveRing(DrawingContext dc, Point center, double scale, double t, double amp, double breathe, double alpha)
     {
         const int Steps = 120;
         var geometry = new StreamGeometry();
@@ -298,7 +311,7 @@ public sealed class RavenOrb : FrameworkElement
         }
 
         geometry.Freeze();
-        dc.DrawGeometry(null, VoicePen(0.9, Math.Max(1, 2.5 * scale)), geometry);
+        dc.DrawGeometry(null, VoicePen(alpha, Math.Max(1, 2.5 * scale)), geometry);
     }
 
     /// <summary>Three arcs of fixed length that turn: each is built once per scale, starting at angle 0 around the origin,
@@ -343,6 +356,40 @@ public sealed class RavenOrb : FrameworkElement
             var dot = Math.Max(1.5, (3.5 - k * 0.6) * scale);
             dc.DrawEllipse(_dot, null, new Point(center.X + (Math.Cos(a) * radius), center.Y + (Math.Sin(a) * radius)), dot, dot);
         }
+    }
+
+    /// <summary>
+    /// Open mic's light ring: 36 dim dots on the outer ring with a soft glint drifting round them, and the room's sound
+    /// lighting them unevenly, each by its own flicker, so a sound shows as a sparkle round the ring. Paused: the dots
+    /// still, at half their light, with no glint. <paramref name="fade"/> takes it out as speech starts.
+    /// </summary>
+    private void DrawLightRing(DrawingContext dc, Point center, double scale, double t, double room, double fade, bool paused)
+    {
+        const int Dots = 36;
+        var radius = (Base + 44) * scale;
+        var glint = t * 0.9;
+        for (var i = 0; i < Dots; i++)
+        {
+            var a = (i / (double)Dots * Math.PI * 2) - (Math.PI / 2);
+            var d = Math.Abs(((((a - glint) % (Math.PI * 2)) + (Math.PI * 3)) % (Math.PI * 2)) - Math.PI);
+            var g = paused ? 0 : Math.Exp(-d * d * 2.2);
+            var flicker = 0.5 + (0.5 * Math.Sin((i * 2.7) + (t * 9)));
+            var lit = paused ? 0.08 : 0.16 + (g * 0.55) + (room * 2.2 * flicker);
+            var size = Math.Max(0.6, (1.6 + (g * 1.4) + (room * 3 * flicker)) * scale);
+            dc.DrawEllipse(DotBrush(lit * fade), null, new Point(center.X + (Math.Cos(a) * radius), center.Y + (Math.Sin(a) * radius)), size, size);
+        }
+    }
+
+    private Brush DotBrush(double alpha)
+    {
+        var key = AlphaByte(alpha);
+        if (!_dots.TryGetValue(key, out var brush))
+        {
+            brush = Frozen(new SolidColorBrush(Color.FromArgb(key, Voice.R, Voice.G, Voice.B)));
+            _dots[key] = brush;
+        }
+
+        return brush;
     }
 
     private static T Frozen<T>(T freezable) where T : Freezable
