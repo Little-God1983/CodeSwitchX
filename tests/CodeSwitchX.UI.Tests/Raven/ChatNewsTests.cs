@@ -108,6 +108,15 @@ public sealed class ChatNewsTests : IDisposable
         (await TakeAsync()).ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData(120, "2 minutes")]
+    [InlineData(60, "1 minute")]
+    [InlineData(90, "90 seconds")]
+    [InlineData(30, "30 seconds")]
+    [InlineData(1, "1 second")]
+    public void The_age_on_a_stale_line_reads_right_for_any_span(int seconds, string said) =>
+        ChatNewsLine.Span(TimeSpan.FromSeconds(seconds)).ShouldBe(said);
+
     [Fact]
     public async Task News_the_chat_has_moved_past_without_new_news_is_not_told()
     {
@@ -158,5 +167,16 @@ internal sealed class FakeYardDirectory : IYardDirectory
 
     public Task<IReadOnlyList<YardWorkspace>> WorkspacesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<YardWorkspace>>([]);
 
-    public Task<IReadOnlyList<YardChat>> ChatsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<YardChat>>([.. _chats]);
+    /// <summary>While set and not completed, reading the chats waits for it (a busy UI thread).</summary>
+    public TaskCompletionSource? Gate { get; set; }
+
+    public async Task<IReadOnlyList<YardChat>> ChatsAsync(CancellationToken ct)
+    {
+        if (Gate is { } gate)
+        {
+            await gate.Task;
+        }
+
+        return [.. _chats];
+    }
 }

@@ -22,6 +22,12 @@ public interface IConductorBrain : IAsyncDisposable
 /// <summary>Something the brain did during a turn.</summary>
 public abstract record BrainEvent;
 
+/// <summary>
+/// The question has gone in: the brain has it now, in its conversation, whatever becomes of the turn. Comes before any
+/// other event of the turn's but its notices; a turn that ends before it never took the question.
+/// </summary>
+public sealed record BrainQuestionSent : BrainEvent;
+
 /// <summary>The next piece of the reply.</summary>
 public sealed record BrainText(string Delta) : BrainEvent;
 

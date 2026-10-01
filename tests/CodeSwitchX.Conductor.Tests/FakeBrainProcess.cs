@@ -22,8 +22,16 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public string ErrorTail => "error: something broke";
 
+    /// <summary>Its input is full and it reads no more: a write waits until it is cancelled.</summary>
+    public bool WritesHang { get; set; }
+
     public Task WriteLineAsync(string line, CancellationToken ct)
     {
+        if (WritesHang)
+        {
+            return Task.Delay(Timeout.Infinite, ct);
+        }
+
         ct.ThrowIfCancellationRequested(); // as StreamWriter does, before it writes
         if (_exited.Task.IsCompleted)
         {

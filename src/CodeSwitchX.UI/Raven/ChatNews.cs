@@ -27,7 +27,14 @@ public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Wor
     };
 
     /// <summary>The card's line: "ContentAutomatorX · Fix the upload retry: finished".</summary>
-    public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? $" (older than {ChatNews.MaximumAge.TotalMinutes:0} minutes)" : "");
+    public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? $" (older than {Span(ChatNews.MaximumAge)})" : "");
+
+    /// <summary>"2 minutes", "1 minute", "90 seconds": whole minutes when it is some, else seconds.</summary>
+    internal static string Span(TimeSpan span) => span.TotalSeconds % 60 == 0 && span.TotalMinutes >= 1
+        ? Count((long)span.TotalMinutes, "minute")
+        : Count((long)Math.Round(span.TotalSeconds), "second");
+
+    private static string Count(long n, string unit) => $"{n} {unit}{(n == 1 ? "" : "s")}";
 }
 
 /// <summary>
@@ -62,17 +69,6 @@ public sealed class ChatNews : IDisposable
     /// <summary>Raised on any thread when a chat has news.</summary>
     public event EventHandler? Arrived;
 
-    private volatile bool _telling;
-
-    /// <summary>
-    /// Raven's brain is telling the news now (set by the panel). Its prompt holds what other chats said, which is no word
-    /// of the user's, so nothing is done on the Yard meanwhile (<see cref="NewsTurnGuard"/>).
-    /// </summary>
-    public bool Telling
-    {
-        get => _telling;
-        internal set => _telling = value;
-    }
 
     public bool HasNews
     {

@@ -197,6 +197,22 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_the_brain_had_not_taken_yet_when_the_next_came_goes_along_with_it()
+    {
+        var vm = await NewVmAsync();
+        _brain.BeforeSent = new TaskCompletionSource(); // a cold start: "one" is asked but not in yet
+        _brain.Answer = question => [new BrainText("On it.")];
+        Type(vm, "start a chat in CodeSwitchX to fix the tests");
+        await Until(() => _brain.Asked.Count == 1);
+
+        Type(vm, "and use Opus");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe(["start a chat in CodeSwitchX to fix the tests\nand use Opus"]);
+    }
+
+    [Fact]
     public async Task An_answer_cut_off_by_a_new_question_ends_with_interrupted()
     {
         var vm = await NewVmAsync();

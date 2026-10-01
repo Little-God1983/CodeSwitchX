@@ -27,15 +27,82 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
     private Task<List<BrainEvent>> AskAsync(string text) => AskUntilAsync(text, TestContext.Current.CancellationToken);
 
+    /// <summary>The turn's events but <see cref="BrainQuestionSent"/>, which <see cref="A_turn_says_when_its_question_has_gone_in"/> checks.</summary>
     private async Task<List<BrainEvent>> AskUntilAsync(string text, CancellationToken ct)
     {
         var events = new List<BrainEvent>();
         await foreach (var e in _brain.AskAsync(text, ct))
         {
-            events.Add(e);
+            if (e is not BrainQuestionSent)
+            {
+                events.Add(e);
+            }
         }
 
         return events;
+    }
+
+    [Fact]
+    public async Task A_turn_says_when_its_question_has_gone_in()
+    {
+        var events = new List<BrainEvent>();
+        await foreach (var e in _brain.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+            if (e is BrainQuestionSent)
+            {
+                _launcher.Last.Written.Count.ShouldBe(1, "said once the line is written");
+            }
+        }
+
+        events[0].ShouldBe(new BrainQuestionSent());
+        events.OfType<BrainQuestionSent>().Count().ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_process_that_does_not_take_the_question_is_given_up_instead_of_holding_every_later_turn()
+    {
+        await AskAsync("One");
+        _launcher.Last.WritesHang = true;
+        var turn = AskAsync("Two");
+        await WaitUntil(() => _launcher.Last.WritesHang);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        // The write times out after Silence, then the turn waits up to 2 s for the exit code: time goes on until it ends.
+        _time.Advance(ClaudeCliBrain.Silence);
+        for (var i = 0; i < 100 && !turn.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        (await turn).ShouldHaveSingleItem().ShouldBeOfType<BrainFailed>().Reason.ShouldStartWith("Raven's brain stopped before it could take the question");
+        _launcher.Started[0].Process.Disposed.ShouldBeTrue();
+        Reply(await AskAsync("Three")).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task The_teller_has_no_tools_no_MCP_server_and_a_conversation_of_its_own()
+    {
+        File.Delete(_paths.McpConfigFile); // it needs none
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+        _launcher.Answer = _ => [StreamJson.Init("failed"), StreamJson.Text("Done."), StreamJson.Result("Done.")];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in teller.AskAsync("News", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.ShouldBe([new BrainQuestionSent(), new BrainText("Done.")], "no word about tools it does not have");
+        var arguments = _launcher.Started[^1].Arguments;
+        Value(arguments, "--tools").ShouldBe("");
+        Value(arguments, "--mcp-config").ShouldBe("""{"mcpServers":{}}""");
+        arguments.ShouldContain("--strict-mcp-config", "the user's own MCP servers are left out too");
+        arguments.ShouldNotContain("--allowedTools");
+        Value(arguments, "--permission-mode").ShouldBe("dontAsk");
+        Value(arguments, "--settings").ShouldBe("""{"disableAllHooks":true}""");
+        Value(arguments, "--system-prompt").ShouldBe(ClaudeCliBrain.TellerPrompt);
     }
 
     private static string Reply(IEnumerable<BrainEvent> events) => string.Concat(events.OfType<BrainText>().Select(t => t.Delta));
