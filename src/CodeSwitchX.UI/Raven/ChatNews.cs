@@ -27,7 +27,7 @@ public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Wor
     };
 
     /// <summary>The card's line: "ContentAutomatorX · Fix the upload retry: finished".</summary>
-    public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? " (not spoken: older than 2 minutes)" : "");
+    public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? $" (older than {ChatNews.MaximumAge.TotalMinutes:0} minutes)" : "");
 }
 
 /// <summary>
@@ -61,6 +61,18 @@ public sealed class ChatNews : IDisposable
 
     /// <summary>Raised on any thread when a chat has news.</summary>
     public event EventHandler? Arrived;
+
+    private volatile bool _telling;
+
+    /// <summary>
+    /// Raven's brain is telling the news now (set by the panel). Its prompt holds what other chats said, which is no word
+    /// of the user's, so nothing is done on the Yard meanwhile (<see cref="NewsTurnGuard"/>).
+    /// </summary>
+    public bool Telling
+    {
+        get => _telling;
+        internal set => _telling = value;
+    }
 
     public bool HasNews
     {
@@ -108,7 +120,8 @@ public sealed class ChatNews : IDisposable
 
     /// <summary>
     /// Empties the slots: their news is told now, or never. Each line names the chat as the Yard shows it; a chat gone
-    /// from the board is left out. Oldest first.
+    /// from the board is left out, and so is news the chat has moved past since without new news (it needed the user
+    /// and works again, it finished and works again). Oldest first. The chats' last replies are read together.
     /// </summary>
     public async Task<IReadOnlyList<ChatNewsLine>> TakeAsync(CancellationToken ct)
     {
@@ -126,20 +139,24 @@ public sealed class ChatNews : IDisposable
 
         var chats = (await _yard.ChatsAsync(ct).ConfigureAwait(false)).ToDictionary(c => c.Id, StringComparer.Ordinal);
         var now = _time.GetUtcNow();
-        var lines = new List<ChatNewsLine>();
-        foreach (var (id, slot) in taken.OrderBy(t => t.Value.At))
-        {
-            if (!chats.TryGetValue(id, out var chat))
-            {
-                continue;
-            }
-
-            var lastSaid = slot.Kind == ChatNewsKind.NeedsYou ? null : await Task.Run(() => _lastSaid(slot.TranscriptPath), ct).ConfigureAwait(false);
-            lines.Add(new ChatNewsLine(id, chat.WorkspaceId, chat.Workspace, chat.Title, slot.Kind, slot.Detail, lastSaid, now - slot.At > MaximumAge));
-        }
-
-        return lines;
+        var still = taken.OrderBy(t => t.Value.At)
+            .Where(t => chats.TryGetValue(t.Key, out var chat) && StillHolds(t.Value.Kind, chat))
+            .Select(t => (Id: t.Key, Slot: t.Value, Chat: chats[t.Key]))
+            .ToList();
+        var lastSaid = await Task.WhenAll(still.Select(t => t.Slot.Kind == ChatNewsKind.NeedsYou
+            ? Task.FromResult<string?>(null)
+            : Task.Run(() => _lastSaid(t.Slot.TranscriptPath), ct))).ConfigureAwait(false);
+        return still.Select((t, i) => new ChatNewsLine(t.Id, t.Chat.WorkspaceId, t.Chat.Workspace, t.Chat.Title, t.Slot.Kind, t.Slot.Detail,
+            lastSaid[i], now - t.Slot.At > MaximumAge)).ToList();
     }
+
+    /// <summary>Whether the chat, as the Yard shows it now, is still where its news left it.</summary>
+    private static bool StillHolds(ChatNewsKind kind, YardChat chat) => kind switch
+    {
+        ChatNewsKind.NeedsYou => chat.NeedsYou,
+        ChatNewsKind.Finished => chat.State != SessionState.Working,
+        _ => chat.State == SessionState.Errored,
+    };
 
     public void Dispose() => _subscription.Dispose();
 

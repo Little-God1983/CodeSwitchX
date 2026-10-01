@@ -192,10 +192,12 @@ public partial class App : Application
         services.AddSingleton<ChatSettings>();
         services.AddSingleton<IAgentLauncher>(sp => new ClaudeAgentLauncher(sp.GetRequiredService<IBrainProcessLauncher>(),
             () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeAgentLauncher>>()));
-        services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IAgentLauncher>(), sp.GetRequiredService<ChatSettings>(),
+        services.AddSingleton<RavenActions>(sp => new RavenActions(sp.GetRequiredService<IAgentLauncher>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             sp.GetRequiredService<IVsCodeLauncher>().OpenUrl,
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
+        // Nothing is done on the Yard while Raven tells chat news: that turn quotes what other chats said.
+        services.AddSingleton<IYardActions>(sp => new NewsTurnGuard(sp.GetRequiredService<RavenActions>(), sp.GetRequiredService<ChatNews>()));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();

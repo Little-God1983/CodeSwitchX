@@ -21,7 +21,7 @@ internal sealed class FakeBrain : IConductorBrain
         Asked.Add(text);
         if (Gate is { } gate)
         {
-            await gate.Task.WaitAsync(ct); // a cancelled turn ends at once, as the real one is interrupted
+            await (IgnoresCancel ? gate.Task : gate.Task.WaitAsync(ct)); // a cancelled turn ends at once, as the real one is interrupted
         }
 
         var first = true;
@@ -37,6 +37,9 @@ internal sealed class FakeBrain : IConductorBrain
             yield return e;
         }
     }
+
+    /// <summary>The gate holds a cancelled turn too: one that takes a while to end.</summary>
+    public bool IgnoresCancel { get; set; }
 
     /// <summary>While set and not completed, an answer stops after its first event and waits for it.</summary>
     public TaskCompletionSource? Pause { get; set; }

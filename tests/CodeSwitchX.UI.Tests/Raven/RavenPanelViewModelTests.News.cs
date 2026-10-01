@@ -27,8 +27,11 @@ public sealed partial class RavenPanelViewModelTests
         return (vm, news);
     }
 
-    private void Changes(string id, SessionState from, SessionState to, string? notification = null) => _bus.Publish(new SessionChanged(
-        ChatNewsTests.Chat(id, from, _time.GetUtcNow()), ChatNewsTests.Chat(id, to, _time.GetUtcNow(), notification)));
+    private void Changes(string id, SessionState from, SessionState to, string? notification = null)
+    {
+        _yard.Now(id, to, needsYou: to == SessionState.Waiting);
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat(id, from, _time.GetUtcNow()), ChatNewsTests.Chat(id, to, _time.GetUtcNow(), notification)));
+    }
 
     /// <summary>Waits until the panel is idle and has said all it says, then lets the grace pass, so the news is told.</summary>
     private async Task GraceAsync(RavenPanelViewModel vm)
@@ -116,6 +119,27 @@ public sealed partial class RavenPanelViewModelTests
         var digest = DigestsAsked().ShouldHaveSingleItem();
         digest.Split('\n').Count(l => l.StartsWith("- ", StringComparison.Ordinal)).ShouldBe(1);
         digest.ShouldContain("ContentAutomatorX, chat \"Fix the upload retry\": failed");
+    }
+
+    [Fact]
+    public async Task The_Yards_actions_are_refused_only_while_the_brain_tells_the_news()
+    {
+        var telling = new List<bool>();
+        ChatNews? held = null;
+        _brain.Answer = q =>
+        {
+            telling.Add(held!.Telling);
+            return [new BrainText("Done.")];
+        };
+        var (vm, news) = await NewsVmAsync();
+        held = news;
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        Type(vm, "Thanks");
+        await WithinAsync(vm.PendingAnswers);
+
+        telling.ShouldBe([true, false]);
+        news.Telling.ShouldBeFalse();
     }
 
     [Fact]

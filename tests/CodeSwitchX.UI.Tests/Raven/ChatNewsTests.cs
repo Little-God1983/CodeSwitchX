@@ -37,8 +37,12 @@ public sealed class ChatNewsTests : IDisposable
         TranscriptPath = $"{id}.jsonl",
     };
 
-    private void Change(string id, SessionState from, SessionState to, string? notification = null) =>
+    /// <summary>The chat changes, and the board shows it as it now is.</summary>
+    private void Change(string id, SessionState from, SessionState to, string? notification = null)
+    {
+        _yard.Now(id, to, needsYou: to == SessionState.Waiting);
         _bus.Publish(new SessionChanged(Chat(id, from, _time.GetUtcNow()), Chat(id, to, _time.GetUtcNow(), notification)));
+    }
 
     private Task<IReadOnlyList<ChatNewsLine>> TakeAsync() => _news.TakeAsync(TestContext.Current.CancellationToken);
 
@@ -105,6 +109,19 @@ public sealed class ChatNewsTests : IDisposable
     }
 
     [Fact]
+    public async Task News_the_chat_has_moved_past_without_new_news_is_not_told()
+    {
+        Change("a", SessionState.Idle, SessionState.Waiting, "Allow Bash?");
+        _yard.Now("a", SessionState.Working); // allowed in VS Code: it works again, which is no news
+        Change("b", SessionState.Working, SessionState.Idle);
+        _yard.Now("b", SessionState.Working); // a new prompt
+        Change("c", SessionState.Working, SessionState.Waiting);
+        _yard.Now("c", SessionState.Waiting, needsYou: true);
+
+        (await TakeAsync()).ShouldHaveSingleItem().SessionId.ShouldBe("c");
+    }
+
+    [Fact]
     public async Task News_older_than_two_minutes_is_marked_stale_and_a_chat_gone_from_the_board_is_left_out()
     {
         Change("a", SessionState.Working, SessionState.Idle);
@@ -115,7 +132,7 @@ public sealed class ChatNewsTests : IDisposable
         var lines = await TakeAsync();
 
         lines.Select(l => (l.SessionId, l.Stale)).ShouldBe([("a", true), ("b", false)]);
-        lines[0].Text.ShouldEndWith("(not spoken: older than 2 minutes)");
+        lines[0].Text.ShouldEndWith("(older than 2 minutes)");
     }
 }
 
@@ -126,6 +143,16 @@ internal sealed class FakeYardDirectory : IYardDirectory
 
     public void Show(string id, string workspace, string title) => _chats.Add(new YardChat(id, title, WorkspaceOf(workspace), workspace,
         SessionState.Idle, false, DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null));
+
+    /// <summary>The chat as the board shows it now.</summary>
+    public void Now(string id, SessionState state, bool needsYou = false)
+    {
+        var index = _chats.FindIndex(c => c.Id == id);
+        if (index >= 0)
+        {
+            _chats[index] = _chats[index] with { State = state, NeedsYou = needsYou };
+        }
+    }
 
     public static Guid WorkspaceOf(string workspace) => new(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(workspace)));
 

@@ -92,6 +92,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         await _turns.WaitAsync(ct).ConfigureAwait(false);
         IBrainProcess? process = null;
         var finished = false;
+        var sent = false;
         try
         {
             var failure = EnsureRunning();
@@ -109,7 +110,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
 
             process = _process;
-            if (!await SendAsync(process, text, ct).ConfigureAwait(false))
+            // Cancelled before the question went in: the process is idle, with nothing to interrupt. The line is written
+            // whole or not at all (no token), so an idle process is never left with half a line.
+            ct.ThrowIfCancellationRequested();
+            sent = await SendAsync(process, text, CancellationToken.None).ConfigureAwait(false);
+            if (!sent)
             {
                 finished = true;
                 yield return new BrainFailed(await LoseAsync(process, "stopped before it could take the question").ConfigureAwait(false));
@@ -181,7 +186,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         {
             // Cancelled, or left before the turn was over: it is interrupted and read to its end, so the brain keeps the
             // conversation and the rest of its lines are not read as the next turn's. One that does not end is stopped.
-            if (!finished && process is not null && ReferenceEquals(process, _process)
+            if (!finished && sent && process is not null && ReferenceEquals(process, _process)
                 && !await InterruptAsync(process).ConfigureAwait(false))
             {
                 Stop();

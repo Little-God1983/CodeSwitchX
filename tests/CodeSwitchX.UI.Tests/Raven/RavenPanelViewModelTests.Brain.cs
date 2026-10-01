@@ -179,6 +179,24 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_still_waiting_its_turn_goes_along_with_the_next_one_instead_of_being_lost()
+    {
+        var vm = await NewVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true; // "zero" takes a while to end once interrupted
+        _brain.Answer = question => [new BrainText($"Answer to {question}.")];
+        Type(vm, "zero");
+
+        Type(vm, "start a chat in CodeSwitchX to fix the tests"); // waits behind "zero"
+        Type(vm, "and use Opus");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldBe(["zero", "start a chat in CodeSwitchX to fix the tests\nand use Opus"]);
+        Lines(vm).ShouldNotContain(l => l.Kind == RavenLogKind.Note);
+    }
+
+    [Fact]
     public async Task An_answer_cut_off_by_a_new_question_ends_with_interrupted()
     {
         var vm = await NewVmAsync();

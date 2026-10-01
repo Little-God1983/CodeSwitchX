@@ -355,6 +355,33 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_turn_cancelled_before_its_question_went_in_interrupts_nothing_and_keeps_the_process()
+    {
+        await AskAsync("One");
+        _settings.Model = "claude-sonnet-5-5"; // the next turn says so first, before it sends the question
+        await AskAsync("Two");
+        _settings.Model = "claude-opus-5-5";
+        var process = _launcher.Started.Count;
+        using var cancel = new CancellationTokenSource();
+
+        await Should.ThrowAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var e in _brain.AskAsync("Three", cancel.Token))
+            {
+                await cancel.CancelAsync(); // at the notice: the question has not gone in
+            }
+        });
+
+        var last = _launcher.Last;
+        _launcher.Started.Count.ShouldBe(process + 1);
+        last.Written.ShouldBeEmpty("neither the question nor an interrupt went to an idle process");
+        last.Disposed.ShouldBeFalse();
+        last.Answer = StreamJson.Reply("Hi.");
+        Reply(await AskAsync("Four")).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(process + 1);
+    }
+
+    [Fact]
     public async Task A_turn_that_does_not_end_on_an_interrupt_stops_the_process_so_its_rest_is_not_read_as_the_next_turn()
     {
         _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];

@@ -285,11 +285,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>A line of Raven's digest card was clicked: the Yard shows, with the chat's tile lit.</summary>
     internal void ShowTile(Guid workspaceId)
     {
-        if (Mode != ShellMode.Yard)
-        {
-            BackToYard();
-        }
-
+        ((IRavenShell)this).ShowYard();
         Yard.Spotlight(workspaceId);
     }
 

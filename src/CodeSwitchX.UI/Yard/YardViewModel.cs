@@ -137,6 +137,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     private ITimer? _spotlightTimer;
 
+    /// <summary>Each spotlight's number: a timer of an earlier one that already fired puts out nothing (UI thread).</summary>
+    private long _spotlights;
+
     /// <summary>Lights the workspace's tile for <see cref="SpotlightTime"/>, so the eye finds it; false when the board has no such tile (UI thread).</summary>
     public bool Spotlight(Guid workspaceId)
     {
@@ -152,7 +155,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         tile.IsSpotlit = true;
-        _spotlightTimer = _time.CreateTimer(_ => _ui.Post(() => tile.IsSpotlit = false), null, SpotlightTime, Timeout.InfiniteTimeSpan);
+        var number = ++_spotlights;
+        _spotlightTimer = _time.CreateTimer(_ => _ui.Post(() =>
+        {
+            if (number == _spotlights)
+            {
+                tile.IsSpotlit = false;
+            }
+        }), null, SpotlightTime, Timeout.InfiniteTimeSpan);
         return true;
     }
 
@@ -543,6 +553,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
+        _spotlightTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {
             subscription.Dispose();
