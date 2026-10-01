@@ -113,10 +113,21 @@ samples it has been fed, so tests drive it frame by frame.
 
   | Situation | Caption | Orb |
   |---|---|---|
-  | Waiting for the user | "Open mic" | Idle, the level ring following the microphone |
-  | After `SpeechStarted` | "Listening…" | Listening |
-  | Paused | "Open mic paused" | The muted look |
+  | Waiting for the user | "Open mic" | The light ring (below) |
+  | After `SpeechStarted` | "Listening…" | Listening: the wave ring, as in Push to talk |
+  | Paused | "Open mic paused" | The light ring, still and dimmed |
   | Then | Transcribing, Thinking, Speaking as today | |
+
+- **The light ring** (the user's pick of four mockups): Open mic's own look while it waits, so a live microphone never
+  looks like Push to talk's idle breath. 36 dots on the outer ring (the radius of Idle's thin ring, `Base + 44`), dim
+  (alpha 0.16); a soft glint drifts round them (0.9 rad/s, a Gaussian falloff) and lights and enlarges the dots it
+  passes; the room's sound lights the dots unevenly, each by its own flicker, so a sound shows as a sparkle round the
+  ring. The wave ring rests inside at a lower alpha (0.55). When speech starts the dots fade out as the wave ring takes
+  the level, an eased blend rather than a cut. Paused draws the dots still at half their alpha, with no glint.
+  `RavenState` gets two states for it, `Attending` (waiting) and `AttendingPaused`. Unlike Idle, the waiting ring keeps
+  moving in a background window (the microphone is live), at the idle frame rate as Thinking does; with Windows'
+  animations off it draws one still frame.
+
 
 - **`SpeechStarted`** does what a press does: Raven stops speaking, a digest stops, the voice expects an answer, the brain
   warms up. Those steps move out of `StartRecording` into one `UserStartsTalking()` both modes call. An answer still
@@ -150,7 +161,7 @@ samples it has been fed, so tests drive it frame by frame.
   (`WarmUpSpeech.pcm`) and none in silence; a spoken sentence with a one-second gap in the middle comes out of the whole
   listener, fed from a file, as **one** turn, and a finished sentence ends one within a second of its last word.
 - **ListeningModelStore:** a mismatching download leaves nothing behind; a present file is not downloaded again.
-- **The panel:** switching modes starts and stops the listener; the mic button pauses and resumes in Open mic;
+- **The panel:** switching modes starts and stops the listener and puts the orb in `Attending`; the mic button pauses and resumes in Open mic;
   `SpeechStarted` hushes Raven and stops a digest; `TurnEnded` goes through Whisper to `Ask`; a failed download
   switches back to Push to talk; the barge-in setting reaches the listener.
 - **On screen:** a test build fed by audio files instead of the microphone, captured with PrintWindow. The live check
