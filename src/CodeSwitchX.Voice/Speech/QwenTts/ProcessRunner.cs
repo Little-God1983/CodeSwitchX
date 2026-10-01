@@ -6,11 +6,12 @@ namespace CodeSwitchX.Voice.Speech.QwenTts;
 /// <summary>Runs a command line tool to its end; the tests run fakes.</summary>
 public interface IProcessRunner
 {
+    /// <param name="workingDirectory">Where it runs.</param>
     /// <param name="onLine">Each line it writes, to either stream, as it writes it.</param>
     /// <returns>The exit code, and the last lines it wrote, for an error message.</returns>
     /// <exception cref="System.ComponentModel.Win32Exception">The executable could not be started.</exception>
-    Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string> environment,
-        Action<string>? onLine, CancellationToken ct);
+    Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory,
+        IReadOnlyDictionary<string, string> environment, Action<string>? onLine, CancellationToken ct);
 }
 
 public sealed record ProcessResult(int ExitCode, string OutputTail);
@@ -20,11 +21,12 @@ public sealed class ProcessRunner : IProcessRunner
 {
     private const int LinesKept = 15;
 
-    public async Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+    public async Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory,
         IReadOnlyDictionary<string, string> environment, Action<string>? onLine, CancellationToken ct)
     {
         var start = new ProcessStartInfo(executable)
         {
+            WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

@@ -33,7 +33,8 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
         _runner.Calls[1].Arguments.ShouldContain("torch==2.11.0");
         _runner.Calls[1].Arguments.ShouldContain("https://download.pytorch.org/whl/cu128");
         _runner.Calls[2].Arguments.ShouldContain("faster-qwen3-tts==0.5.3");
-        _runner.Calls[2].Arguments.ShouldContain(Path.Combine(_root, "constraints.txt"));
+        _runner.Calls[2].Arguments[^1].ShouldBe("constraints.txt", "by name: uv cuts a path at its first space");
+        _runner.Calls.ShouldAllBe(c => c.WorkingDirectory == _root);
         File.ReadAllText(Path.Combine(_root, "constraints.txt")).ShouldContain("transformers==5.15.1");
         _runner.Calls.ShouldAllBe(c => c.Environment["UV_PYTHON_INSTALL_DIR"] == Path.Combine(_root, "python"));
     }
@@ -63,14 +64,14 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
 
     private sealed class FakeRunner : IProcessRunner
     {
-        public List<(IReadOnlyList<string> Arguments, IReadOnlyDictionary<string, string> Environment)> Calls { get; } = [];
+        public List<(IReadOnlyList<string> Arguments, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment)> Calls { get; } = [];
 
         public int FailAt { get; set; } = -1;
 
-        public Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments,
+        public Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments, string workingDirectory,
             IReadOnlyDictionary<string, string> environment, Action<string>? onLine, CancellationToken ct)
         {
-            Calls.Add((arguments, environment));
+            Calls.Add((arguments, workingDirectory, environment));
             return Task.FromResult(FailAt == Calls.Count - 1 ? new ProcessResult(1, "error: no space left") : new ProcessResult(0, ""));
         }
     }

@@ -41,6 +41,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
     private const string TorchIndex = "https://download.pytorch.org/whl/cu128";
     private static readonly string[] TorchPackages = ["torch==2.11.0", "torchaudio==2.11.0"];
     private const string EnginePackage = "faster-qwen3-tts==0.5.3";
+    private const string ConstraintsFile = "constraints.txt";
 
     private readonly string _root;
     private readonly IProcessRunner _runner;
@@ -93,8 +94,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
         }
 
         var uv = _findUv() ?? await DownloadUvAsync(progress, ct).ConfigureAwait(false);
-        var constraints = Path.Combine(_root, "constraints.txt");
-        await File.WriteAllTextAsync(constraints, Resource("constraints.txt"), ct).ConfigureAwait(false);
+        await File.WriteAllTextAsync(Path.Combine(_root, ConstraintsFile), Resource(ConstraintsFile), ct).ConfigureAwait(false);
 
         progress.Report("getting Python " + PythonVersion);
         await UvAsync(uv, ["venv", Venv, "--python", PythonVersion, "--managed-python", "--no-project"], ct).ConfigureAwait(false);
@@ -103,7 +103,9 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
         await UvAsync(uv, ["pip", "install", "--python", Python, .. TorchPackages, "--index-url", TorchIndex], ct).ConfigureAwait(false);
 
         progress.Report("downloading Qwen3-TTS");
-        await UvAsync(uv, ["pip", "install", "--python", Python, EnginePackage, "--constraint", constraints], ct).ConfigureAwait(false);
+        // By name, from the voice folder (uv runs there): uv 0.11 cuts a constraints path at its first space, and the
+        // data folder is under the user's profile ("C:/Users/Little God/...").
+        await UvAsync(uv, ["pip", "install", "--python", Python, EnginePackage, "--constraint", ConstraintsFile], ct).ConfigureAwait(false);
 
         await File.WriteAllTextAsync(Stamp, RecipeVersion, ct).ConfigureAwait(false);
     }
@@ -122,7 +124,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
         ProcessResult result;
         try
         {
-            result = await _runner.RunAsync(uv, arguments, environment, line => _logger.LogDebug("uv: {Line}", line), ct)
+            result = await _runner.RunAsync(uv, arguments, _root, environment, line => _logger.LogDebug("uv: {Line}", line), ct)
                 .ConfigureAwait(false);
         }
         catch (System.ComponentModel.Win32Exception ex)
