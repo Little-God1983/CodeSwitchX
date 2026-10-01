@@ -100,7 +100,7 @@ public sealed class OpenMicListenerTests
         var stream = new FakeStream();
         using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
             () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
-        var batches = new List<CapturedBlock>();
+        var batches = new List<HeardAudio>();
         listener.Heard += (_, batch) => { lock (batches) { batches.Add(batch); } };
 
         listener.Start("mic");
@@ -112,8 +112,28 @@ public sealed class OpenMicListenerTests
         {
             batches.Count.ShouldBeLessThanOrEqualTo(25);
             batches.Sum(b => b.Duration.Ticks).ShouldBe(TimeSpan.FromSeconds(1).Ticks);
-            batches.ShouldAllBe(b => b.Rms == 0.01f);
+            batches.ShouldAllBe(b => b.Loudest == 0.01f && b.Quietest == 0.01f);
         }
+    }
+
+    [Fact]
+    public async Task A_batch_carries_its_loudest_block_for_the_level_and_its_quietest_for_the_silent_mic_watch()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var batch = new TaskCompletionSource<HeardAudio>(TaskCreationOptions.RunContinuationsAsynchronously);
+        listener.Heard += (_, heard) => batch.TrySetResult(heard);
+
+        listener.Start("mic");
+        stream.Feed(0.2f, seconds: 0.01, block: 160); // a click
+        stream.Feed(0f, seconds: 0.04, block: 160); // then digital zeros
+        var first = await batch.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        listener.Stop();
+
+        first.Loudest.ShouldBe(0.2f);
+        first.Quietest.ShouldBe(0f);
+        first.Duration.ShouldBe(OpenMicListener.HeardBatch);
     }
 
     [Fact]

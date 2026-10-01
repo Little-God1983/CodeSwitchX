@@ -42,10 +42,10 @@ public interface IOpenMic
 
     /// <summary>
     /// What was captured, in batches of about <see cref="OpenMicListener.HeardBatch"/> rather than per 10 ms block, for
-    /// the orb's level and the silent-microphone watch: the loudest block's RMS and the batch's duration. Batched, an idle
-    /// Open mic posts some 20 updates a second to the UI, not 100. On the worker thread.
+    /// the orb's level and the silent-microphone watch (see <see cref="HeardAudio"/>). Batched, an idle Open mic posts
+    /// some 20 updates a second to the UI, not 100. On the worker thread.
     /// </summary>
-    event EventHandler<CapturedBlock>? Heard;
+    event EventHandler<HeardAudio>? Heard;
 
     /// <summary>A run's microphone died (<see cref="OpenMicRun.Failure"/> says how); the listener then stops that run itself,
     /// so a consumer need not call Stop (and must never from inside this handler). On the capture thread.</summary>
@@ -68,6 +68,13 @@ public sealed class OpenMicRun(string deviceId)
     public void Fail(MicrophoneException error) => Volatile.Write(ref _failure, error);
 }
 
+/// <summary>
+/// One <see cref="IOpenMic.Heard"/> batch. <paramref name="Loudest"/> block's RMS is the orb's level. <paramref name="Quietest"/>
+/// is the silent-microphone watch's: it counts a batch as sound for its whole <paramref name="Duration"/>, so one click in
+/// a batch of digital zeros must not make the batch loud, or a dead device clicking every 60 ms would pass for live.
+/// </summary>
+public sealed record HeardAudio(float Loudest, float Quietest, TimeSpan Duration);
+
 /// <summary>A finished turn of <paramref name="Run"/>: its audio, 16 kHz; empty when the detector lost it.</summary>
 public sealed record OpenMicTurn(OpenMicRun Run, float[] Clip);
 
@@ -83,7 +90,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     /// <summary>How much audio one <see cref="Heard"/> carries: enough for a smooth orb, few enough posts to the UI.</summary>
     public static readonly TimeSpan HeardBatch = TimeSpan.FromMilliseconds(50);
 
-    private const int HeardBatchSamples = 800; // HeardBatch at 16 kHz
+    private static readonly int HeardBatchSamples = (int)(HeardBatch.TotalSeconds * AudioMath.TargetRate);
 
     /// <summary>About ten seconds of 10 ms blocks: a Smart Turn call is milliseconds, so the queue only fills if the PC stalls.</summary>
     internal const int QueueBlocks = 1000;
@@ -132,7 +139,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
 
     public event EventHandler<OpenMicTurn>? TurnEnded;
 
-    public event EventHandler<CapturedBlock>? Heard;
+    public event EventHandler<HeardAudio>? Heard;
 
     public event EventHandler<OpenMicRun>? Failed;
 
@@ -356,6 +363,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         var stepLogged = false;
         var heard = 0; // samples in the Heard batch so far
         var loudest = 0f;
+        var quietest = float.MaxValue;
         var inTurn = false; // Started came, Ended has not
         try
         {
@@ -368,11 +376,13 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
 
                 heard += block.Samples16k.Length;
                 loudest = Math.Max(loudest, block.Rms);
+                quietest = Math.Min(quietest, block.Rms);
                 if (heard >= HeardBatchSamples)
                 {
-                    var batch = new CapturedBlock(loudest, TimeSpan.FromSeconds(heard / 16_000.0));
+                    var batch = new HeardAudio(loudest, quietest, TimeSpan.FromSeconds((double)heard / AudioMath.TargetRate));
                     heard = 0;
                     loudest = 0f;
+                    quietest = float.MaxValue;
                     Raise(() => Heard?.Invoke(this, batch), "Heard");
                 }
 
