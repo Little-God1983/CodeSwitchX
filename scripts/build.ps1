@@ -28,10 +28,10 @@
 .PARAMETER InstallDir
     A folder of your own for the build instead of a versioned one. Nothing is bumped, committed
     or pushed, no Start Menu shortcut is written, and any branch is fine - this is the way to try a
-    feature branch's build. The build is stamped <current version>-oneoff.<commit> so it cannot be
+    feature branch's build. The build is stamped <current version>-oneoff.g<commit> so it cannot be
     mistaken for a stable one. Must be outside the repo and outside the stable root, and must be
-    empty or a folder this script published into before - a folder holding anything else is
-    refused untouched.
+    empty or a folder a one-off build was published into before - a folder holding anything else
+    is refused untouched.
 
 .PARAMETER Clean
     With -InstallDir: wipe that folder before publishing. Only ever a folder carrying our install
@@ -97,17 +97,15 @@ if ($stable) {
     Assert-ReleaseReady
     $version = Get-NextVersion -Current $current -Part $Part
     $InstallDir = Get-VersionedInstallDir -InstallRoot $InstallRoot -Version $version
+    Assert-StableTargetFree -InstallDir $InstallDir -Version $version -Current $current
     Write-Ok "version $current -> $version"
     Write-Note "install  $InstallDir"
     Write-Note "Directory.Build.props is bumped, committed and pushed only if the publish succeeds"
     if ($Clean) { Write-Warn "-Clean has nothing to do here: a versioned folder always starts empty" }
 }
 else {
-    # Stamped so Explorer's Product version or a log line can never pass this off as the stable build
-    # of the same number. FileVersion stays numeric, as Windows requires.
-    $commit = Get-HeadCommit
-    if (-not $commit) { $commit = 'nogit' }
-    $version = "$current-oneoff.$commit"
+    # FileVersion stays numeric, as Windows requires; only the product version carries the stamp.
+    $version = Get-OneOffVersion -Current $current -Commit (Get-HeadCommit)
     Write-Ok "version $version"
     if ($NoShortcut) { Write-Note "-NoShortcut is implied: a one-off build never writes the Start Menu shortcut" }
 }
@@ -134,25 +132,53 @@ if (-not $stable -and ((Test-PathUnder $InstallDir $InstallRoot -OrEqual) -or (T
 
 # The install root is shared with other releases (E:\StableVersion holds RawCutX, ContentAutomatorX
 # and friends). A fresh versioned build deletes its folder first, so we only ever work in a folder
-# that is empty or already carries our install marker.
-if ((Test-DirectoryHasContent $InstallDir) -and -not (Test-OurInstall $InstallDir)) {
-    Fail "$InstallDir already holds files that are not a CodeSwitchX install." @(
+# that is empty or already carries our install marker - and a one-off only in a one-off's folder,
+# a second line behind the path check above.
+if ((Test-DirectoryHasContent $InstallDir) -and -not (Test-OurInstall $InstallDir -OneOff:(-not $stable))) {
+    $what = if ($stable) { 'a CodeSwitchX install' } else { 'a one-off CodeSwitchX build' }
+    Fail "$InstallDir already holds files that are not $what." @(
         "Not one of them was touched.",
-        "Move that folder out of the way, or give the build a folder of its own:",
+        "Move that folder out of the way (delete it by hand if it is an old test build), or give the build a folder of its own:",
         "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test'"
     )
 }
 
+# Where each running CodeSwitchX really runs from, asked before anything is closed or moved. Windows
+# reports the path the process was started through, and for a start from the Start Menu that is the
+# current link - which may be gone, or point at the new build, by the time a restart is needed. The
+# version folder behind it is never deleted, so its path always starts the version that was closed.
+function Get-RestartPath {
+    param([object[]]$Running)
+    return @($Running | ForEach-Object { Resolve-RealPath $_.ExecutablePath } | Select-Object -Unique)
+}
+
+# Starts each closed CodeSwitchX again and says, one line per exe, how that went.
+function Restart-ClosedApp {
+    param([string[]]$ExePaths)
+    $lines = @()
+    foreach ($exe in $ExePaths) {
+        try { Start-App $exe | Out-Null; $lines += "The CodeSwitchX that was closed for this build was started again from $exe." }
+        catch { $lines += "The CodeSwitchX that was closed for this build could not be started again - start it by hand: $exe" }
+    }
+    return $lines
+}
+
 # Closes each process this build replaces; a failure stops the script with what to do about it. On
-# success the caller starts the new build again, so nobody is left without CodeSwitchX.
+# success the caller starts the new build again, so nobody is left without CodeSwitchX. One that will
+# not close after others did must not leave those closed: they are started again first.
 function Close-RunningApp {
     param([object[]]$Running, [string[]]$ExtraHints = @())
     if ($Running.Count -eq 0) { return }
     Write-Step "Closing the running CodeSwitchX"
+    $closed = @()
     foreach ($proc in $Running) {
+        $restartPath = Resolve-RealPath $proc.ExecutablePath
         $result = Stop-AppProcess $proc
-        if ($result -eq 'closed') { Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))" }
-        else { Fail "PID $($proc.ProcessId) did not close." (@(Get-StopFailureHints $result) + $ExtraHints) }
+        if ($result -eq 'closed') {
+            Write-Ok "closed PID $($proc.ProcessId) ($($proc.ExecutablePath))"
+            if ($closed -notcontains $restartPath) { $closed += $restartPath }
+        }
+        else { Fail "PID $($proc.ProcessId) did not close." (@(Get-StopFailureHints $result) + @(Restart-ClosedApp $closed) + $ExtraHints) }
     }
 }
 
@@ -177,13 +203,13 @@ if (($stable -or $Clean) -and (Test-DirectoryHasContent $InstallDir)) {
 
     # Belt and braces: the guard above already rejected a folder that is not ours, but this is
     # the only recursive delete in the scripts, so it checks for itself too.
-    if (-not (Test-OurInstall $InstallDir)) {
+    if (-not (Test-OurInstall $InstallDir -OneOff:(-not $stable))) {
         Fail "Refusing to clean $InstallDir - it carries no CodeSwitchX install marker." @(
             "Only a folder this script published into is ever deleted."
         )
     }
 
-    try { Remove-Item -LiteralPath $InstallDir -Recurse -Force }
+    try { Remove-InstallFolder $InstallDir }
     catch {
         Fail "Could not clean $InstallDir - $($_.Exception.Message)" @(
             "Something is probably still holding a file there. Close it and try again."
@@ -197,7 +223,9 @@ if (($stable -or $Clean) -and (Test-DirectoryHasContent $InstallDir)) {
 # virus scanner holding a file) would otherwise leave a folder full of files and no marker, which
 # every later run refuses to publish into *and* refuses to clean. The checks above established
 # the folder is empty or ours, so claiming it here is safe. The marker says "complete": false until
-# the publish has succeeded, and the current link never points at such a folder.
+# a one-off's publish has succeeded or a stable build has been made current. A complete stable
+# folder is never cleaned again (Assert-StableTargetFree), so "complete" must not be said of a
+# build that never became current - the next run has to be able to rebuild that one.
 Write-InstallMarker -InstallDir $InstallDir -Version $version
 
 # --- publish -----------------------------------------------------------------------------
@@ -219,7 +247,7 @@ foreach ($required in @($AppExeName, $RelayRelativePath)) {
         Fail "The build reported success but $required is missing from $InstallDir." $buildFailedHints
     }
 }
-Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete
+if (-not $stable) { Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete }
 Write-Ok "published to $InstallDir"
 
 # --- make it the current version ------------------------------------------------------------
@@ -230,6 +258,7 @@ Write-Ok "published to $InstallDir"
 $shortcutDir = $InstallDir
 if ($stable) {
     $running = @(Get-AppProcess -AnyVersion -InstallRoot $InstallRoot)
+    $restartPaths = Get-RestartPath $running
     Close-RunningApp $running @(
         "$version is published in $InstallDir but not made current, and the version is not bumped.",
         "Run the build again once it is closed; it rebuilds $version."
@@ -239,40 +268,66 @@ if ($stable) {
         Write-Note "while it runs, starting the new version only brings that one forward"
     }
 
-    Write-Step "Making $version the current version"
-    if (Set-CurrentLink -InstallRoot $InstallRoot -Target $InstallDir) {
-        $shortcutDir = Get-CurrentLinkPath $InstallRoot
-        Write-Ok "$shortcutDir -> $InstallDir"
-    }
-    else {
-        Write-Warn "no current link; the shortcut will point at $InstallDir directly, and a taskbar pin made earlier still opens the old build"
-    }
+    # From here on the old version is closed. A step that throws - a junction that cannot be made,
+    # a scanner holding the marker, the shortcut's COM call - must not leave nobody running, so the
+    # closed one is started again before the script stops.
+    try {
+        Write-Step "Making $version the current version"
+        if (Set-CurrentLink -InstallRoot $InstallRoot -Target $InstallDir) {
+            $shortcutDir = Get-CurrentLinkPath $InstallRoot
+            Write-Ok "$shortcutDir -> $InstallDir"
+        }
+        else {
+            Write-Warn "no current link; the shortcut will point at $InstallDir directly, and a taskbar pin made earlier still opens the old build"
+        }
+        # Only now, with the old version closed and the folder current. Had either step failed,
+        # the folder stays incomplete and the next run rebuilds it.
+        Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete
 
-    if ($NoShortcut) {
-        Write-Ok "Start Menu shortcut left as it is, as asked"
-        if ($shortcutDir -eq $InstallDir) {
-            Write-Warn "the existing Start Menu shortcut still opens the previous build"
+        if ($NoShortcut) {
+            Write-Ok "Start Menu shortcut left as it is, as asked"
+            if ($shortcutDir -eq $InstallDir) {
+                Write-Warn "the existing Start Menu shortcut still opens the previous build"
+            }
+        }
+        else {
+            $linkPath = Write-StartMenuShortcut $shortcutDir
+            Write-Ok "Start Menu shortcut at $linkPath"
+            Write-Note "right-click it in the Start Menu and choose 'Pin to taskbar'"
         }
     }
-    else {
-        $linkPath = Write-StartMenuShortcut $shortcutDir
-        Write-Ok "Start Menu shortcut at $linkPath"
-        Write-Note "right-click it in the Start Menu and choose 'Pin to taskbar'"
+    catch {
+        $problem = $_.Exception.Message
+        $hints = @(Restart-ClosedApp $restartPaths)
+        if ((Test-InstallComplete $InstallDir) -or (Test-InstallCurrent $InstallDir)) {
+            $hints += "$version is installed and current, but the version is not bumped: set <Version> to $version in Directory.Build.props, commit that and push $ReleaseBranch."
+        }
+        else {
+            $hints += "$version is published in $InstallDir but not made current, and the version is not bumped. Run the build again; it rebuilds $version."
+        }
+        Fail "Could not make $version the current version - $problem" $hints
     }
 }
 
 # --- start it again ---------------------------------------------------------------------------
 # Only when this script closed it, and before the version is recorded, so a rejected push cannot
-# leave anyone without CodeSwitchX. Started through the shell, which hands the app none of this
-# script's handles: with them it held the output pipe of a piped run open, and whoever read it
-# waited until CodeSwitchX exited.
+# leave anyone without CodeSwitchX.
 $exePath = Join-Path $shortcutDir $AppExeName
 if ($running.Count -gt 0) {
     Write-Step "Starting CodeSwitchX $version"
-    $startInfo = New-Object System.Diagnostics.ProcessStartInfo $exePath
-    $startInfo.WorkingDirectory = $shortcutDir
-    $startInfo.UseShellExecute  = $true
-    $started = [System.Diagnostics.Process]::Start($startInfo)
+    try { $started = Start-App $exePath }
+    catch {
+        # A new exe that will not start - a virus scanner holding it - must not leave nobody running
+        # either. A stable build still has the closed version's folder; a one-off overwrote it.
+        $problem = $_.Exception.Message
+        $hints = @()
+        if ($stable) {
+            $hints += @(Restart-ClosedApp $restartPaths)
+            $hints += "$version is installed and current, but the version is not bumped: set <Version> to $version in Directory.Build.props, commit that and push $ReleaseBranch."
+        }
+        else { $hints += "The build itself is in place. Start it by hand: $exePath" }
+        Fail "CodeSwitchX $version did not start - $problem" $hints
+    }
     Write-Ok "started PID $($started.Id)"
 }
 
