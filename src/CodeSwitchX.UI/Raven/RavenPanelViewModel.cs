@@ -1231,6 +1231,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 break;
             case SignalEvent.Live when _droppedStands:
                 _droppedStands = false;
+                if (MicMode == MicMode.OpenMic)
+                {
+                    // Open mic runs for hours: a second mute after the sound came back is as much news as the first.
+                    // Push to talk keeps its one warning a recording.
+                    _droppedWarned = false;
+                }
+
                 AddEntry(RavenLogKind.Note, $"{mic} is sending sound again.");
                 break;
         }

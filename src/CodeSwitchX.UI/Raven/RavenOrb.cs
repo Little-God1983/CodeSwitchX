@@ -140,17 +140,21 @@ public sealed class RavenOrb : FrameworkElement
     private void OnStateChanged()
     {
         UpdateHook();
-        OnInputChanged();
+        OnInputChanged(levelChanged: false);
     }
 
     /// <summary>While animating the next frame shows the change; still, the one frame is drawn again now, unless no one
-    /// can see it: the level of Open mic's room moves for hours, also under the collapsed orb.</summary>
-    private void OnInputChanged()
+    /// can see it: the level of Open mic's room moves for hours, also under the collapsed orb. An unhooked Attending orb
+    /// is a still light ring without the room's sparkle, so its level changes draw nothing new: a noisy room would
+    /// redraw it ~20 times a second in a background window. <paramref name="levelChanged"/> says that is the input.</summary>
+    private void OnInputChanged(bool levelChanged = true)
     {
-        if (!_hooked && IsVisible)
+        if (_hooked || !IsVisible || (levelChanged && State == RavenState.Attending))
         {
-            DrawFrame();
+            return;
         }
+
+        DrawFrame();
     }
 
     private void OnSystemParameterChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

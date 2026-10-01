@@ -310,6 +310,22 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Last().Text.ShouldBe($"{Headset.Name} is sending sound again.");
     }
 
+    // PR #89 review: Open mic runs for hours, so a second mute is warned of too
+    [Fact]
+    public async Task A_second_mute_in_Open_mic_is_warned_of_again()
+    {
+        var vm = await InOpenMicAsync();
+        var dropped = $"{Headset.Name} stopped sending sound. Check that it isn't muted or gone to sleep.";
+
+        HearFor(0.02f, seconds: 1);
+        HearFor(0f, seconds: 11);
+        HearFor(0.02f, seconds: 1);
+        vm.Log.Last().Text.ShouldBe($"{Headset.Name} is sending sound again.");
+        HearFor(0f, seconds: 11);
+
+        vm.Log.Count(e => e.Kind == RavenLogKind.Warning && e.Text == dropped).ShouldBe(2);
+    }
+
     // PR #89 review: the silent-mic watch
     [Fact]
     public async Task A_microphone_that_starts_late_in_Open_mic_replaces_the_No_sound_warning()
