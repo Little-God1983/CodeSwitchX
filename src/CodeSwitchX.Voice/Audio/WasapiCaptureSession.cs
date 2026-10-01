@@ -46,12 +46,13 @@ internal sealed class WasapiCaptureSession
         MMDeviceEnumerator? enumerator = null;
         MMDevice? device = null;
         WasapiCapture? capture = null;
+        WasapiCaptureSession? session = null;
         try
         {
             enumerator = new MMDeviceEnumerator();
             device = enumerator.GetDevice(deviceId);
             capture = CreateCapture(device);
-            var session = new WasapiCaptureSession(enumerator, device, capture, failed);
+            session = new WasapiCaptureSession(enumerator, device, capture, failed);
             session._data = attach(session);
             capture.DataAvailable += session.OnData;
             capture.RecordingStopped += session.OnStopped;
@@ -61,6 +62,7 @@ internal sealed class WasapiCaptureSession
         catch (Exception e)
         {
             capture?.Dispose();
+            session?._stopped.Dispose(); // after the capture: its thread may still have set it
             device?.Dispose();
             enumerator?.Dispose();
             throw new MicrophoneException(MicrophoneFailure.Classify(e), e.Message, e);

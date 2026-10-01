@@ -54,8 +54,9 @@ public sealed class WasapiMicrophoneRecorder : IMicrophoneRecorder, IDisposable
         private int _rate;
         private int _autoStopped;
 
+        // The session is kept in attach, not from Open's return: blocks may arrive before Open returns.
         public void Open(string deviceId) =>
-            _session = WasapiCaptureSession.Open(deviceId, session =>
+            WasapiCaptureSession.Open(deviceId, session =>
             {
                 _session = session;
                 _rate = session.SampleRate;
