@@ -206,8 +206,20 @@ public partial class App : Application
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
-        services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
-            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path)));
+        services.AddSingleton(sp =>
+        {
+            var news = new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(), sp.GetRequiredService<TimeProvider>(),
+                path => TranscriptLastReply.Read(path));
+            // A chat the app stopped (stop_chat, a hand-over) dies without its hooks, which looks like a failure: it is none.
+            sp.GetRequiredService<IAgentLauncher>().Changed += chat =>
+            {
+                if (chat.Stopped)
+                {
+                    news.StoppedOnPurpose(chat.Id);
+                }
+            };
+            return news;
+        });
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();

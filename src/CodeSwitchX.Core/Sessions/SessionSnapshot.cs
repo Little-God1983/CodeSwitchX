@@ -25,6 +25,12 @@ public sealed record SessionSnapshot
     /// <summary>Transcript ends with a tool call awaiting its result; drives the inferred Working-to-Waiting decay. Not persisted.</summary>
     public bool AwaitingToolResult { get; init; }
 
+    /// <summary>
+    /// The last turn ended on an API error (usage limit, overload, prompt too long: Claude Code's StopFailure) rather than
+    /// with its work done; the state is Idle all the same. Until the next prompt or turn end. Not persisted.
+    /// </summary>
+    public bool TurnFailed { get; init; }
+
     /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
     public long Version { get; init; }
     public int? ClaudePid { get; init; }

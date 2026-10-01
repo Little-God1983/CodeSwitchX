@@ -17,6 +17,9 @@ public interface IConductorBrain : IAsyncDisposable
 
     /// <summary>Gets ready for a turn that is about to come (the user started talking), so its answer does not wait for a start. Never throws.</summary>
     void WarmUp();
+
+    /// <summary>The turn a warm-up was for will not come: whatever it started is stopped. Never throws.</summary>
+    void Rest();
 }
 
 /// <summary>Something the brain did during a turn.</summary>

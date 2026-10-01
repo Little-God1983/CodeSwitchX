@@ -70,5 +70,9 @@ internal sealed class FakeBrain : IConductorBrain
 
     private int _warmUps;
 
+    public int Rests { get; private set; }
+
+    public void Rest() => Rests++;
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

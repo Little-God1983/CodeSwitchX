@@ -102,6 +102,38 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_cancelled_teller_turn_is_stopped_at_once_without_an_interrupt()
+    {
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in teller.AskAsync("News", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        await cancel.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Written.Count.ShouldBe(1, "no interrupt: its conversation is thrown away anyway");
+        _launcher.Last.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Resting_stops_a_warmed_up_process()
+    {
+        _brain.WarmUp();
+        await WaitUntil(() => _launcher.Started.Count == 1);
+
+        _brain.Rest();
+
+        await WaitUntil(() => _launcher.Last.Disposed);
+    }
+
+    [Fact]
     public async Task The_teller_starts_a_fresh_conversation_for_every_digest()
     {
         var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);

@@ -25,25 +25,29 @@ Raven tells the user what their chats did as conversation, not as a queue of not
 `CodeSwitchX.UI/Raven/ChatNews.cs`, subscribed to `SessionChanged`.
 
 - **What counts**, for chats the Yard shows (`ShowsAsChat`) and with a previous snapshot:
-  - Working → Idle: *finished*.
+  - Working → Idle: *finished*; *failed* when the turn ended on an API error (`SessionSnapshot.TurnFailed`, from
+    Claude Code's StopFailure: a usage limit, an overload).
   - Any state → Waiting: *needs you*, with the notification text.
-  - Any state → Errored: *failed*.
+  - Any state → Errored: *failed*, unless the app stopped the chat itself (`ChatNews.StoppedOnPurpose`, fed by the agent
+    launcher's `AgentChat.Stopped`): stop_chat and a hand-over kill claude, which the engine sees as Errored.
   - Nothing else counts. That includes Ended, a first snapshot (a chat restored at startup), and inferred-only changes
     whose previous state was not Working.
-- **Slots:** each chat has one slot, `ChatNewsItem(SessionId, WorkspaceId, Workspace, Title, Kind, Detail, At)`. Newer news
+- **Slots:** each chat has one slot (kind, detail, when, transcript path); `TakeAsync` makes each a
+  `ChatNewsLine(SessionId, WorkspaceId, Workspace, Title, Kind, Detail, LastSaid, Stale)`. Newer news
   replaces the slot's older news. A chat that finishes and then needs you before Raven speaks is told once, as needs you.
-- **Taking:** `Take()` empties the slots and returns the items still fresh. News the chat has moved past without new
-  news (it needed the user and works again) is dropped. An item older than 2 minutes is not spoken: it
-  goes into the log card as a line marked "not spoken (older than 2 minutes)".
-- **Raised:** `NewsArrived` lets the floor know there is something to say.
+- **Taking:** `TakeAsync` empties the slots. News the chat has moved past without new news (it needed the user and works
+  again) is dropped. A line older than 2 minutes (`MaximumAge`) is not spoken: the card marks it "(older than 2
+  minutes)".
+- **Raised:** `Arrived` lets the panel know there is something to say.
 - **Workspace name:** comes from `IYardDirectory` when the news is taken. A chat that has left the board is dropped.
 
-## 2. RavenFloor: one party speaks
+## 2. The floor: one party speaks
 
-The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which owns who holds the floor.
+`RavenPanelViewModel` owns the floor (no class of its own).
 
-- **Holders:** the user (talking), an answer to the user, or a digest. Each holder gets a generation number and a
-  `CancellationTokenSource`.
+- **Holders:** the user (talking), an answer to the user, or a digest. The floor is a `CancellationTokenSource` that a
+  question replaces; a digest also has its own, linked to it, that a press cancels. A digest counts as holding the floor
+  (`_telling`) but is no question: the caption says "Telling chat news…", not "Thinking…".
 - **A mic press** silences Raven at once (`ReplyVoice.Hush`) and stops a digest, also one still being put together. It
   does not interrupt an answer: a press that brings no question (a cough, a mis-tap) leaves the answer to be written.
 - **A new question** (spoken or typed) takes the floor. In one step it cancels the current holder's token (the brain turn
@@ -63,7 +67,8 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
   instructions) and a fresh conversation for every digest (its process is stopped after each turn, and warmed up again
   when news arrives and will be spoken). What other chats said is untrusted text, and it never reaches the brain that
   acts. Verified on CLI 2.1.285: its init lists no tools and no MCP servers. It is warmed up when news arrives, so its
-  start hides in the wait for the floor.
+  start hides in the wait for the floor; a warm-up whose news came to nothing is put to rest (`IConductorBrain.Rest`). A
+  cancelled teller turn is stopped at once, without an interrupt: its conversation is thrown away anyway.
 - **What the teller gets:** the items taken from `ChatNews`, as one message:
 
   ```
@@ -73,7 +78,7 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
   ```
 
   "It last said" is the end of the chat's final reply: the last assistant text in its transcript, about 300 characters,
-  read with `TranscriptTailer` from the end of the file.
+  read by `TranscriptLastReply` from the last 256 KB of the file.
 - **Spoken** through `ReplyVoice` like any answer, and written as a Raven entry below the card.
 - **If the teller fails**, or gives no text, the fallback is a fixed sentence: "ContentAutomatorX finished, and CodeSwitchX
   needs you."
@@ -101,8 +106,9 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
 ## 5. The log card and the tile
 
 - **The card:** a new `RavenLogKind.News` entry holding `ChatNewsLine`s (workspace, title, what happened).
-- **Clicking a line** shows the Yard and spotlights the tile: `IRavenShell.ShowTile(workspaceId)` switches to the Yard,
-  brings the tile into view and lights its border for 2 s.
+- **Clicking a line** shows the Yard and spotlights the tile: the panel raises `TileRequested`, and
+  `ShellViewModel.ShowTile` switches to the Yard and calls `YardViewModel.Spotlight`, which lights the tile's border for
+  2 s; `BringIntoViewWhen` scrolls it into view.
 
 ## 6. Setting
 
@@ -112,11 +118,11 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
 ## Testing
 
 - **ChatNews:** which changes count, newer news replacing older, the 2-minute rule, a chat gone from the board.
-- **RavenFloor and the panel** (fake brain, fake voice, fake clock):
+- **The panel** (fake brain and teller, fake voice, fake clock):
   - Three chats finish while the user talks, and one digest follows the answer.
   - A press during the digest drops it, and nothing of it is spoken later.
   - A chat that changes twice is told once, with its latest state.
-  - A press during an answer interrupts it, and it ends with "(interrupted)".
+  - A question during an answer interrupts it, and it ends with "(interrupted)"; a press without a question only silences it.
   - Order: the user first, news last.
   - Muted or setting off: a card, no brain turn.
 - **ClaudeCliBrain** (fake process): cancel sends the interrupt and drains to the `result`; no `result` in 5 s stops the

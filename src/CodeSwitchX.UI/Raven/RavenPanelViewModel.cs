@@ -147,6 +147,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Questions asked and not yet answered, the one being answered included.</summary>
     private int _asking;
 
+    /// <summary>A digest is being put together or told (UI thread): it holds the floor, but is no question.</summary>
+    private bool _telling;
+
     /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
     private bool _speaking;
 
@@ -1120,7 +1123,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Nobody talks: no recording, no clip or question unanswered, nothing being said.</summary>
-    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_speaking;
+    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking;
 
     private void TellNewsIfFree()
     {
@@ -1132,7 +1135,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // A question takes the floor from it, and a press stops it too.
         _digest?.Dispose();
         _digest = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
-        _asking++;
+        _telling = true;
         UpdateState();
         _conversation = TellNewsAsync(_conversation, _news, _digest.Token);
     }
@@ -1145,6 +1148,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task TellNewsAsync(Task previous, ChatNews news, CancellationToken floor)
     {
         ReplyVoice.SpokenReply? spoken = null;
+        var asked = false;
         try
         {
             await previous;
@@ -1168,6 +1172,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             spoken = _voice.Begin();
+            asked = _teller is not null;
             var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, quiet: true);
             if (!said && !floor.IsCancellationRequested)
             {
@@ -1183,8 +1188,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
+            if (!asked)
+            {
+                _teller?.Rest(); // warmed up for news that came to nothing
+            }
+
             spoken?.Complete();
-            _asking--;
+            _telling = false;
             UpdateState();
         }
     }
@@ -1346,6 +1356,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Level = 0;
+        if (_pending == 0 && _asking == 0 && _telling)
+        {
+            State = RavenState.Thinking;
+            Caption = "Telling chat news…";
+            return;
+        }
+
         if (_pending == 0 && _asking > 0)
         {
             State = RavenState.Thinking;

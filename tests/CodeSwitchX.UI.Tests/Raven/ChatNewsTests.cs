@@ -82,6 +82,26 @@ public sealed class ChatNewsTests : IDisposable
         arrivals.ShouldBe(2);
     }
 
+    [Fact]
+    public async Task A_turn_that_ended_on_an_API_error_is_a_failure_not_a_finish()
+    {
+        _yard.Now("a", SessionState.Idle);
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()),
+            Chat("a", SessionState.Idle, _time.GetUtcNow()) with { TurnFailed = true }));
+
+        (await TakeAsync()).ShouldHaveSingleItem().Kind.ShouldBe(ChatNewsKind.Failed);
+    }
+
+    [Fact]
+    public async Task A_chat_the_app_stopped_itself_brings_no_news_of_its_end()
+    {
+        _news.StoppedOnPurpose("a");
+        Change("a", SessionState.Working, SessionState.Errored);
+        Change("b", SessionState.Working, SessionState.Errored);
+
+        (await TakeAsync()).ShouldHaveSingleItem().SessionId.ShouldBe("b");
+    }
+
     [Theory]
     [InlineData(SessionState.Idle, SessionState.Working)]
     [InlineData(SessionState.Starting, SessionState.Idle)]

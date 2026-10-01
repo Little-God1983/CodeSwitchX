@@ -164,6 +164,37 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_teller_warmed_up_for_news_that_came_to_nothing_is_put_to_rest()
+    {
+        var (vm, _) = await NewsVmAsync();
+        Changes("a", SessionState.Working, SessionState.Waiting);
+        _yard.Now("a", SessionState.Working); // allowed in VS Code before Raven got to it
+
+        await GraceAsync(vm);
+
+        _teller.WarmUps.ShouldBe(1);
+        _teller.Asked.ShouldBeEmpty();
+        _teller.Rests.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_digest_says_it_tells_news_and_is_no_question_waiting()
+    {
+        _teller.Gate = new TaskCompletionSource();
+        _brain.Gate = new TaskCompletionSource();
+        var (vm, _) = await NewsVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(RavenPanelViewModel.NewsGrace);
+        await Until(() => _teller.Asked.Count == 1);
+
+        vm.Caption.ShouldBe("Telling chat news…");
+        Type(vm, "open it");
+        vm.Caption.ShouldBe("Thinking…", "the digest ahead is no question waiting");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    [Fact]
     public async Task The_teller_is_not_started_for_news_that_is_not_spoken()
     {
         var (vm, _) = await NewsVmAsync();

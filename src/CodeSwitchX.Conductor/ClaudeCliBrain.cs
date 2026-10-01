@@ -137,7 +137,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // good (a write blocked in the pipe sees no token): it is waited for from outside, for Silence, and a process
             // that took no line by then is given up, which kills it and ends the write.
             ct.ThrowIfCancellationRequested();
-            sent = await WithinAsync(SendAsync(process, text, CancellationToken.None), Silence).ConfigureAwait(false);
+            sent = await WithinAsync(SendAsync(process, text), Silence).ConfigureAwait(false);
 
             if (!sent)
             {
@@ -215,7 +215,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         {
             // Cancelled, or left before the turn was over: it is interrupted and read to its end, so the brain keeps the
             // conversation and the rest of its lines are not read as the next turn's. One that does not end is stopped.
-            if (!finished && sent && process is not null && ReferenceEquals(process, _process)
+            // The teller keeps no conversation: it is stopped below anyway, so it is not interrupted first.
+            if (!finished && sent && _role == BrainRole.Raven && process is not null && ReferenceEquals(process, _process)
                 && !await InterruptAsync(process).ConfigureAwait(false))
             {
                 Stop();
@@ -262,6 +263,23 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Warming up {Brain} failed", _name);
+        }
+    });
+
+    /// <summary>
+    /// Nothing is coming after the warm-up: the process is stopped once no turn or warm-up holds it, so a teller warmed up
+    /// for news that came to nothing does not sit there. Returns at once; never throws.
+    /// </summary>
+    public void Rest() => _ = Task.Run(async () =>
+    {
+        await _turns.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            Stop();
+        }
+        finally
+        {
+            _turns.Release();
         }
     });
 
@@ -400,23 +418,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
     }
 
-    private async Task<bool> SendAsync(IBrainProcess process, string text, CancellationToken ct)
+    private static Task<bool> SendAsync(IBrainProcess process, string text) => WriteAsync(process, new JsonObject
     {
-        var line = new JsonObject
-        {
-            ["type"] = "user",
-            ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
-        }.ToJsonString();
-        try
-        {
-            await process.WriteLineAsync(line, ct).ConfigureAwait(false);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or OperationCanceledException)
-        {
-            return false;
-        }
-    }
+        ["type"] = "user",
+        ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
+    }.ToJsonString());
 
     /// <summary>
     /// Interrupts the running turn (a control request, as the Agent SDK sends it) and reads it to its <c>result</c>, which

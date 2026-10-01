@@ -46,8 +46,9 @@ public sealed record AgentRequest(string Id, Guid WorkspaceId, string Workspace,
 
 /// <param name="Working">A turn runs.</param>
 /// <param name="PermissionMode">The mode it runs in as Claude Code reports it; null until it did.</param>
+/// <param name="Stopped">It ended because the app stopped it (stop_chat, a hand-over to VS Code), not on its own.</param>
 public sealed record AgentChat(string Id, Guid WorkspaceId, string Workspace, string Folder, string? Model, string? Effort, bool Working,
-    string? PermissionMode, bool Ended);
+    string? PermissionMode, bool Ended, bool Stopped = false);
 
 /// <param name="Failure">Why it did not start, in words for the user; null when it did.</param>
 public sealed record AgentStart(AgentChat Chat, string? Failure);
