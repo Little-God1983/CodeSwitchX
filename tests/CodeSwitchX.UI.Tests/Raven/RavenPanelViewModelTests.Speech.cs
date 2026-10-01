@@ -74,22 +74,41 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task Talking_again_silences_every_answer_asked_before_and_all_of_them_are_written()
+    public async Task A_press_that_brings_no_question_silences_Raven_but_leaves_the_answer_to_be_written()
     {
         _brain.Gate = new TaskCompletionSource();
         _brain.Answer = question => [new BrainText($"Answer to {question}.")];
         var vm = await NewVmAsync();
         Type(vm, "one");
-        Type(vm, "two"); // waits its turn behind "one"
 
-        vm.PressMic(TalkInput.MicButton); // while Raven still thinks about "one"
+        vm.PressMic(TalkInput.MicButton); // a mis-tap while Raven still thinks about "one"
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        _speech.Spoken.ShouldBeEmpty("not the second of two answers without the first");
+        _speech.Spoken.ShouldBeEmpty("the press silenced it");
         Lines(vm).ShouldContain((RavenLogKind.Raven, "Answer to one."));
-        Lines(vm).ShouldContain((RavenLogKind.Raven, "Answer to two."));
+    }
+
+    [Fact]
+    public async Task A_typed_question_silences_Raven_and_nothing_of_the_cut_off_answer_is_said()
+    {
+        _speech.Gate = new TaskCompletionSource();
+        _brain.Pause = new TaskCompletionSource();
+        _brain.Answer = q => q == "next" ? [new BrainText("Sure.")] : [new BrainText("First this. Then"), new BrainText(" that.")];
+        var vm = await NewVmAsync();
+        Type(vm, "What's up?"); // its answer pauses after "First this. Then"
+        await Until(() => _speech.Spoken.Count == 1);
+
+        _brain.Pause = null;
+        Type(vm, "next");
+        _speech.Gate.TrySetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await Until(() => _speech.Spoken.Count == 2);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _speech.Spoken.ShouldBe(["First this.", "Sure."]);
     }
 
     [Fact]

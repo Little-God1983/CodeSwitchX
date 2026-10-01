@@ -202,6 +202,12 @@ public sealed class SessionEngine : IDisposable
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
                 ClaudePid = claudePid,
+                TurnFailed = e.EventName switch
+                {
+                    "StopFailure" => true,
+                    "Stop" or "UserPromptSubmit" or "SessionStart" => false,
+                    _ => s.TurnFailed,
+                },
             });
         }
     }

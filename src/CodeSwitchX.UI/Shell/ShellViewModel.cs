@@ -100,6 +100,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.IsOpen = Settings.RavenPanelOpen;
         Raven.PreferredMicrophone = Settings.RavenMicrophone;
         Raven.IsMuted = Settings.RavenMuted;
+        Raven.SpeakNews = Settings.RavenSpeakNews;
+        Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         Raven.PropertyChanged += (_, e) =>
         {
@@ -114,6 +116,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             else if (e.PropertyName == nameof(RavenPanelViewModel.IsMuted))
             {
                 Settings.RavenMuted = Raven.IsMuted;
+            }
+        };
+        Settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SettingsViewModel.RavenSpeakNews))
+            {
+                Raven.SpeakNews = Settings.RavenSpeakNews;
             }
         };
         // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.
@@ -272,6 +281,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     bool IRavenShell.IsVsCodeInFront(Guid workspaceId) => _host.IsInFront(workspaceId);
+
+    /// <summary>A line of Raven's digest card was clicked: the Yard shows, with the chat's tile lit.</summary>
+    internal void ShowTile(Guid workspaceId)
+    {
+        ((IRavenShell)this).ShowYard();
+        Yard.Spotlight(workspaceId);
+    }
 
     void IRavenShell.ShowYard()
     {

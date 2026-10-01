@@ -797,4 +797,54 @@ public class YardViewModelTests : IDisposable
 
         _yard.FindTile(_shop.Id)!.Chats.Single().IsVoice.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_spotlit_tile_is_lit_for_a_moment_and_only_one_at_a_time()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.Spotlight(_app.Id).ShouldBeTrue();
+        _yard.Spotlight(_shop.Id).ShouldBeTrue();
+
+        _yard.FindTile(_app.Id)!.IsSpotlit.ShouldBeFalse();
+        _yard.FindTile(_shop.Id)!.IsSpotlit.ShouldBeTrue();
+        _time.Advance(YardViewModel.SpotlightTime);
+        _yard.FindTile(_shop.Id)!.IsSpotlit.ShouldBeFalse();
+        _yard.Spotlight(Guid.NewGuid()).ShouldBeFalse("no such tile");
+    }
+
+    [Fact]
+    public async Task A_spotlight_timer_that_fired_before_the_tile_was_lit_again_leaves_it_lit()
+    {
+        var ui = new HeldDispatcher();
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(null), ui: ui);
+        await yard.InitializeAsync(CancellationToken.None);
+        ui.RunAll();
+
+        yard.Spotlight(_app.Id);
+        _time.Advance(YardViewModel.SpotlightTime); // fires: its "put out" is posted, not run yet
+        yard.Spotlight(_app.Id); // clicked again
+        ui.RunAll();
+
+        yard.FindTile(_app.Id)!.IsSpotlit.ShouldBeTrue();
+        _time.Advance(YardViewModel.SpotlightTime);
+        ui.RunAll();
+        yard.FindTile(_app.Id)!.IsSpotlit.ShouldBeFalse();
+    }
+
+    /// <summary>A UI thread that runs what was posted only when asked.</summary>
+    private sealed class HeldDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _posted = new();
+
+        public void Post(Action action) => _posted.Enqueue(action);
+
+        public void RunAll()
+        {
+            while (_posted.TryDequeue(out var action))
+            {
+                action();
+            }
+        }
+    }
 }

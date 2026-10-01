@@ -457,6 +457,6 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
         }
 
         public AgentChat Snapshot() => new(request.Id, request.WorkspaceId, request.Workspace, request.Folder, request.Model, request.Effort, Working,
-            PermissionMode, Ended);
+            PermissionMode, Ended, Ended && StoppedByUs);
     }
 }

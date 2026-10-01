@@ -13,6 +13,7 @@ using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Ingest;
+using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Infrastructure;
@@ -183,6 +184,11 @@ public partial class App : Application
         services.AddSingleton<IConductorBrain>(sp => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<BrainSettings>(),
             sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<ClaudeCliBrain>>()));
+        // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the
+        // brain that acts.
+        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),
+            sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), BrainRole.Teller));
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
             sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IAgentLauncher>().Find(id) is not null));
 
@@ -200,6 +206,20 @@ public partial class App : Application
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
+        services.AddSingleton(sp =>
+        {
+            var news = new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(), sp.GetRequiredService<TimeProvider>(),
+                path => TranscriptLastReply.Read(path));
+            // A chat the app stopped (stop_chat, a hand-over) dies without its hooks, which looks like a failure: it is none.
+            sp.GetRequiredService<IAgentLauncher>().Changed += chat =>
+            {
+                if (chat.Stopped)
+                {
+                    news.StoppedOnPurpose(chat.Id);
+                }
+            };
+            return news;
+        });
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();

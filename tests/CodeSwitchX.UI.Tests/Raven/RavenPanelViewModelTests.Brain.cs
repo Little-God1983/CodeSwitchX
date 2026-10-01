@@ -159,25 +159,92 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task Questions_asked_while_one_is_answered_wait_their_turn_and_are_answered_in_order()
+    public async Task A_question_asked_while_one_is_answered_interrupts_it_and_only_the_new_one_is_answered()
     {
         var vm = await NewVmAsync();
-        var gate = new TaskCompletionSource();
-        _brain.Gate = gate;
+        _brain.Gate = new TaskCompletionSource();
         _brain.Answer = question => [new BrainText($"Answer to {question}.")];
 
         Type(vm, "one");
         Type(vm, "two");
-
-        vm.Caption.ShouldBe("Thinking… (1 waiting)");
-        _brain.Asked.ShouldBe(["one"], "the second waits for the first to be answered");
-        gate.SetResult();
+        _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldBe(["one", "two"]);
         Lines(vm).ShouldBe([
             (RavenLogKind.You, "one"),
             (RavenLogKind.You, "two"),
-            (RavenLogKind.Raven, "Answer to one."),
             (RavenLogKind.Raven, "Answer to two."),
+        ]);
+    }
+
+    [Fact]
+    public async Task A_question_still_waiting_its_turn_goes_along_with_the_next_one_instead_of_being_lost()
+    {
+        var vm = await NewVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true; // "zero" takes a while to end once interrupted
+        _brain.Answer = question => [new BrainText($"Answer to {question}.")];
+        Type(vm, "zero");
+
+        Type(vm, "start a chat in CodeSwitchX to fix the tests"); // waits behind "zero"
+        Type(vm, "and use Opus");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldBe(["zero", "start a chat in CodeSwitchX to fix the tests\nand use Opus"]);
+        Lines(vm).ShouldNotContain(l => l.Kind == RavenLogKind.Note);
+    }
+
+    [Fact]
+    public async Task A_question_the_brain_had_not_taken_yet_when_the_next_came_goes_along_with_it()
+    {
+        var vm = await NewVmAsync();
+        _brain.BeforeSent = new TaskCompletionSource(); // a cold start: "one" is asked but not in yet
+        _brain.Answer = question => [new BrainText("On it.")];
+        Type(vm, "start a chat in CodeSwitchX to fix the tests");
+        await Until(() => _brain.Asked.Count == 1);
+
+        Type(vm, "and use Opus");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe(["start a chat in CodeSwitchX to fix the tests\nand use Opus"]);
+    }
+
+    [Fact]
+    public async Task A_question_whose_turn_failed_is_not_asked_again_with_a_later_one()
+    {
+        var vm = await NewVmAsync();
+        _brain.FailsBeforeSent = true;
+        Type(vm, "start a chat in CodeSwitchX to delete the build folder");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.FailsBeforeSent = false;
+        Type(vm, "what's running?");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe(["what's running?"]);
+    }
+
+    [Fact]
+    public async Task An_answer_cut_off_by_a_new_question_ends_with_interrupted()
+    {
+        var vm = await NewVmAsync();
+        _brain.Pause = new TaskCompletionSource();
+        _brain.Answer = question => [new BrainText($"Start of {question}"), new BrainText(" and its end.")];
+        Type(vm, "one");
+        await Until(() => Lines(vm).Contains((RavenLogKind.Raven, "Start of one")));
+
+        _brain.Pause = null;
+        Type(vm, "two");
+        await WithinAsync(vm.PendingAnswers);
+
+        Lines(vm).ShouldBe([
+            (RavenLogKind.You, "one"),
+            (RavenLogKind.Raven, "Start of one (interrupted)"),
+            (RavenLogKind.You, "two"),
+            (RavenLogKind.Raven, "Start of two and its end."),
         ]);
     }
 

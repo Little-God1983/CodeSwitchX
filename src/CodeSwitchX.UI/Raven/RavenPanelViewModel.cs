@@ -8,6 +8,7 @@ using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Raven;
@@ -17,6 +18,13 @@ namespace CodeSwitchX.UI.Raven;
 /// answers to what was said or typed, with a card for each tool its brain looked at the Yard through. The answers are
 /// spoken as they stream in, unless muted; talking again stops that at once.
 /// </summary>
+/// <remarks>
+/// One party speaks at a time (the floor): the user, Raven's answer, or a digest of what the chats did. A press silences
+/// Raven at once and stops a digest; a new question (spoken or typed) takes the floor: the answer is interrupted, and
+/// nothing of it is said later. A press that brings no question (a cough, a mis-tap) leaves the answer to be written.
+/// News waits until the floor is free, then all of it is told at once, worded by a brain of its own that has no tools:
+/// what other chats said never reaches the brain that acts.
+/// </remarks>
 public sealed partial class RavenPanelViewModel : ObservableObject
 {
     /// <summary>Names the chord from <see cref="HotkeyService.PushToTalk"/>, so a new chord changes the hint with it.</summary>
@@ -36,6 +44,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// raises five to eight of them (state, added, the default once per role), an Audiosrv restart whole bursts.
     /// </summary>
     public static readonly TimeSpan DeviceChangeSettle = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>How long Raven and the user must both have been quiet before news is told: it must not step on the user's next sentence.</summary>
+    public static readonly TimeSpan NewsGrace = TimeSpan.FromSeconds(1.5);
 
     private static readonly TimeSpan MinimumClip = TimeSpan.FromMilliseconds(500);
 
@@ -57,6 +68,32 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly SilentMicWatch _silence = new();
     private readonly SpeechGate _speech = new();
     private readonly ITimer _deviceRefresh;
+    private readonly ChatNews? _news;
+    private readonly ITimer _newsTimer;
+
+    /// <summary>Cancelled when the user takes the floor: the answer or digest that holds it stops (UI thread).</summary>
+    private CancellationTokenSource _floor = new();
+
+    /// <summary>The last question asked, while it may still wait behind another to go to the brain (UI thread).</summary>
+    private Question? _lastQuestion;
+
+    /// <summary>Cancelled by a press: the digest being told stops, before it begins speaking too (UI thread).</summary>
+    private CancellationTokenSource? _digest;
+
+    private readonly IConductorBrain? _teller;
+
+    /// <summary>
+    /// The chat news the user was given (a card written, a digest told), in facts only (workspace, title, what happened),
+    /// for the brain that acts to know with the user's next question. Never what the chats said. An item goes once the
+    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread).
+    /// </summary>
+    private readonly List<(DateTimeOffset At, string Fact)> _toldNews = [];
+
+    /// <summary>How long news the user was given stays worth telling the brain with a question.</summary>
+    public static readonly TimeSpan ToldNewsLifetime = TimeSpan.FromMinutes(10);
+
+    /// <summary>The key of the brain that words chat news (<see cref="ClaudeCliBrain.TellerPrompt"/>) among the app's services.</summary>
+    public const string TellerKey = "raven-teller";
 
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
@@ -110,6 +147,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Questions asked and not yet answered, the one being answered included.</summary>
     private int _asking;
 
+    /// <summary>A digest is being put together or told (UI thread): it holds the floor, but is no question.</summary>
+    private bool _telling;
+
     /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
     private bool _speaking;
 
@@ -118,7 +158,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
-        IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger)
+        IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -144,7 +185,25 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _voice.LevelChanged += (_, level) => _dispatcher.Post(() => OnSpeechLevel(level));
         _voice.Unspoken += (_, why) => _dispatcher.Post(() => AddEntry(RavenLogKind.Note, why));
         _tts.StatusChanged += (_, status) => _dispatcher.Post(() => OnVoiceStatus(status));
+        _news = news;
+        _teller = teller;
+        _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        if (news is not null)
+        {
+            news.Arrived += (_, _) => _dispatcher.Post(() =>
+            {
+                if (SpeakNews && !IsMuted)
+                {
+                    _teller?.WarmUp(); // its start is hidden in the wait for the floor
+                }
+
+                ScheduleNews();
+            });
+        }
     }
+
+    /// <summary>Raised when the user clicks a chat's line on a digest card: the shell shows its tile.</summary>
+    public event EventHandler<Guid>? TileRequested;
 
     [ObservableProperty]
     private bool _isOpen = true;
@@ -167,6 +226,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Raven keeps its answers to itself: they are only written. The shell keeps it in step with Settings.</summary>
     [ObservableProperty]
     private bool _isMuted;
+
+    /// <summary>Raven tells what the chats did; off, the digest cards are only written. The shell keeps it in step with Settings.</summary>
+    [ObservableProperty]
+    private bool _speakNews = true;
 
     /// <summary>0..1, live while listening or speaking.</summary>
     [ObservableProperty]
@@ -597,7 +660,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _recordingMic = mic;
-        _voice.Hush(); // the user talks: Raven stops at once, and what it was saying is not said after
+        // The user talks: Raven stops speaking at once, and what it was saying is not said after. A digest stops too, also
+        // one that has not begun to speak; an answer is interrupted only by a question: a press that brings none leaves
+        // it to be written.
+        _digest?.Cancel();
+        _voice.Hush();
         _voice.Expect();
         _brain.WarmUp(); // while the user talks, so the answer does not wait for the brain to start
         _silentWarning = null;
@@ -866,19 +933,58 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     /// <param name="ended">When the user's turn ended, for the time to Raven's first word in the log.</param>
     /// <remarks>
-    /// The answer's voice begins here, as it is asked, not when its turn comes: talking again silences every answer
-    /// asked before, the ones still waiting their turn too, so none of them is spoken after the user moved on. They
-    /// are all written.
+    /// The question takes the floor: the answer or digest before it is interrupted, so only the newest question is
+    /// answered. One asked before it that has not gone to the brain yet is not lost: it goes with this one, as the first
+    /// half of what the user said. The answer's voice begins here, as it is asked.
     /// </remarks>
     private void Ask(string text, DateTimeOffset ended)
     {
+        if (_lastQuestion is { Sent: false, Ended: false } waiting)
+        {
+            waiting.Merged = true;
+            text = waiting.Text + "\n" + text;
+        }
+
+        var question = new Question(text);
+        _lastQuestion = question;
+        var floor = TakeFloor();
         _asking++;
         UpdateState();
         var asked = new StrongBox<DateTimeOffset>();
         var spoken = _voice.Begin(heard => _logger.LogInformation(
             "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
             (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds));
-        _conversation = AnswerInTurnAsync(_conversation, text, spoken, asked);
+        _conversation = AnswerInTurnAsync(_conversation, question, spoken, asked, floor);
+    }
+
+    /// <summary>
+    /// A question on its way to the brain: <see cref="Sent"/> once the brain says it has it (<see cref="BrainQuestionSent"/>),
+    /// <see cref="Merged"/> when a later one took it along, because it had not, and <see cref="Ended"/> once its turn is over
+    /// (answered, failed): a question that failed is not asked again with a later one (UI thread).
+    /// </summary>
+    private sealed class Question(string text)
+    {
+        public string Text { get; } = text;
+
+        public bool Sent { get; set; }
+
+        public bool Merged { get; set; }
+
+        public bool Ended { get; set; }
+
+        /// <summary>The news facts that went with it; given once it is sent.</summary>
+        public IReadOnlyList<(DateTimeOffset At, string Fact)> Told { get; set; } = [];
+    }
+
+    /// <summary>The user takes the floor: whatever holds it stops, its speech too. Returns the new floor's token (UI thread).</summary>
+    private CancellationToken TakeFloor()
+    {
+        _newsTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _voice.Hush(); // a typed question silences Raven as a press does
+        _floor.Cancel();
+        _floor.Dispose();
+        _floor = new CancellationTokenSource();
+        return _floor.Token;
     }
 
     /// <summary>
@@ -888,22 +994,61 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// behind it always gets its turn.
     /// </summary>
     /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
-    private async Task AnswerInTurnAsync(Task previous, string text, ReplyVoice.SpokenReply spoken, StrongBox<DateTimeOffset> asked)
+    /// <param name="floor">Cancelled when the user takes the floor: the answer is interrupted, and ends with "(interrupted)".</param>
+    private async Task AnswerInTurnAsync(Task previous, Question question, ReplyVoice.SpokenReply spoken, StrongBox<DateTimeOffset> asked,
+        CancellationToken floor)
     {
         try
         {
             await previous;
+            if (question.Merged)
+            {
+                return; // a later question took it along: the floor is only taken by a question, which merges one not sent
+            }
+
             asked.Value = _time.GetUtcNow();
-            RavenLogEntry? reply = null;
+            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question);
+        }
+        finally
+        {
+            question.Ended = true;
+            spoken.Complete();
+            _asking--;
+            UpdateState();
+        }
+    }
+
+    /// <summary>
+    /// The brain's answer to <paramref name="text"/> into the log and the voice. Never faults: a failure is a warning,
+    /// an interruption ends the reply with "(interrupted)". Returns whether any of the reply came.
+    /// </summary>
+    /// <param name="question">Marked sent once the brain has it; null for a digest.</param>
+    /// <param name="quiet">The teller's: what it says about itself goes to the app's log, not the panel's (the fallback sentence covers a failure).</param>
+    private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ReplyVoice.SpokenReply spoken, CancellationToken floor,
+        Question? question = null, bool quiet = false)
+    {
+        RavenLogEntry? reply = null;
+        var said = false;
+        try
+        {
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
-            await foreach (var e in _brain.AskAsync(text, CancellationToken.None))
+            await foreach (var e in brain.AskAsync(text, floor))
             {
                 switch (e)
                 {
+                    case BrainQuestionSent when question is not null:
+                        question.Sent = true;
+                        foreach (var told in question.Told)
+                        {
+                            _toldNews.Remove(told); // the brain has it now
+                        }
+
+                        break;
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
                             reply = AddEntry(RavenLogKind.Raven, start);
+                            said = true;
                             spoken.Add(start);
                         }
 
@@ -928,6 +1073,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainToolResult { Failed: true, Id: var id } when cards.TryGetValue(id, out var failed):
                         failed.Failed = true;
                         break;
+                    case BrainNotice or BrainFailed when quiet:
+                        _logger.LogWarning("Raven's news teller: {What}", e);
+                        break;
                     case BrainNotice notice:
                         AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text);
                         break;
@@ -942,16 +1090,180 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 reply.Text = reply.Text.TrimEnd();
             }
         }
+        catch (OperationCanceledException) when (floor.IsCancellationRequested)
+        {
+            if (reply is not null)
+            {
+                reply.Text = reply.Text.TrimEnd() + " (interrupted)";
+            }
+        }
+        catch (Exception ex) when (quiet)
+        {
+            _logger.LogWarning(ex, "Raven's news teller failed");
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Raven's brain failed");
             AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}");
         }
+
+        return said;
+    }
+
+    /// <summary>
+    /// Waits <see cref="NewsGrace"/> for the floor to stay free, then tells the news. Called when news arrives and
+    /// whenever the panel's state changes (UI thread): each call starts the wait again.
+    /// </summary>
+    private void ScheduleNews()
+    {
+        if (_news is { HasNews: true } && FloorIsFree)
+        {
+            _newsTimer.Change(NewsGrace, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>Nobody talks: no recording, no clip or question unanswered, nothing being said.</summary>
+    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking;
+
+    private void TellNewsIfFree()
+    {
+        if (_news is not { HasNews: true } || !FloorIsFree)
+        {
+            return; // the next change of state schedules it again
+        }
+
+        // A question takes the floor from it, and a press stops it too.
+        _digest?.Dispose();
+        _digest = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
+        _telling = true;
+        UpdateState();
+        _conversation = TellNewsAsync(_conversation, _news, _digest.Token);
+    }
+
+    /// <summary>
+    /// The digest: one card that lists the news, and the teller wording it in a few words, as conversation. Muted, or
+    /// with news not to be spoken, only the card is written. A teller that gives no words (or none at all) says the
+    /// fallback sentence instead. Stopped, the rest is dropped: its chats count as told. Never faults.
+    /// </summary>
+    private async Task TellNewsAsync(Task previous, ChatNews news, CancellationToken floor)
+    {
+        ReplyVoice.SpokenReply? spoken = null;
+        var asked = false;
+        try
+        {
+            await previous;
+            var began = _time.GetUtcNow();
+            var lines = await news.TakeAsync(CancellationToken.None);
+            if (lines.Count == 0)
+            {
+                return;
+            }
+
+            var taken = _time.GetUtcNow();
+
+            var card = AddEntry(RavenLogKind.News, lines.Count == 1 ? "Chat news" : $"Chat news · {lines.Count}");
+            card.Lines = lines;
+            // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
+            // facts with the next question either way, so "open it" finds what "it" is.
+            var at = _time.GetUtcNow();
+            _toldNews.AddRange(lines.Select(l => (at, Fact(l))));
+            var fresh = lines.Where(l => !l.Stale).ToList();
+            if (fresh.Count == 0 || !SpeakNews || IsMuted || floor.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _voice.Expect();
+            var asking = default(DateTimeOffset);
+            spoken = _voice.Begin(heard => _logger.LogInformation(
+                "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
+                (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
+            asked = _teller is not null;
+            asking = _time.GetUtcNow();
+            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, quiet: true);
+            if (!said && !floor.IsCancellationRequested)
+            {
+                var sentence = FallbackSentence(fresh);
+                AddEntry(RavenLogKind.Raven, sentence);
+                spoken.Add(sentence);
+            }
+
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Telling the chat news failed");
+        }
         finally
         {
-            spoken.Complete();
-            _asking--;
+            if (!asked)
+            {
+                _teller?.Rest(); // warmed up for news that came to nothing
+            }
+
+            spoken?.Complete();
+            _telling = false;
             UpdateState();
+        }
+    }
+
+    /// <summary>What the teller is given for a digest: the news (how to tell it is its system prompt).</summary>
+    internal static string DigestPrompt(IReadOnlyList<ChatNewsLine> lines)
+    {
+        var text = new System.Text.StringBuilder("News of the chats:");
+        // Chats that share a workspace and title are numbered, or the teller takes them for one ("Weather discussion" twice).
+        var same = lines.GroupBy(l => (l.Workspace, l.Title)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.ToList());
+        foreach (var line in lines)
+        {
+            var title = same.TryGetValue((line.Workspace, line.Title), out var twins)
+                ? $"\"{line.Title}\" ({twins.IndexOf(line) + 1} of {twins.Count})"
+                : $"\"{line.Title}\"";
+            text.Append('\n').Append($"- {line.Workspace}, chat {title}: {line.What}");
+            if (line.Detail is { Length: > 0 } detail)
+            {
+                text.Append($": \"{detail}\"");
+            }
+
+            if (line.LastSaid is { Length: > 0 } lastSaid)
+            {
+                text.Append($". It last said: \"{lastSaid}\"");
+            }
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>One line of news as the brain that acts is told it: the facts only, never what the chat said or asked.</summary>
+    private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\": {line.What}";
+
+    /// <summary>
+    /// The question as it goes to the brain that acts: after the chat news the user was given since its last question,
+    /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
+    /// along is kept until the brain has it, so a question merged into the next or failed before it went loses none.
+    /// </summary>
+    private string WithToldNews(Question question)
+    {
+        var now = _time.GetUtcNow();
+        _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
+        question.Told = [.. _toldNews];
+        return question.Told.Count == 0
+            ? question.Text
+            : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + question.Text;
+    }
+
+    /// <summary>The digest when the brain gives none: "ContentAutomatorX finished, and CodeSwitchX needs you."</summary>
+    internal static string FallbackSentence(IReadOnlyList<ChatNewsLine> lines)
+    {
+        var parts = lines.Select(l => $"{l.Workspace} {l.What}").ToList();
+        return (parts.Count == 1 ? parts[0] : string.Join(", ", parts[..^1]) + ", and " + parts[^1]) + ".";
+    }
+
+    /// <summary>A line of a digest card was clicked: its chat's tile is shown.</summary>
+    [RelayCommand]
+    private void ShowNewsTile(ChatNewsLine? line)
+    {
+        if (line is not null)
+        {
+            TileRequested?.Invoke(this, line.WorkspaceId);
         }
     }
 
@@ -1056,6 +1368,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Level = 0;
+        if (_pending == 0 && _asking == 0 && _telling)
+        {
+            State = RavenState.Thinking;
+            Caption = "Telling chat news…";
+            return;
+        }
+
         if (_pending == 0 && _asking > 0)
         {
             State = RavenState.Thinking;
@@ -1067,6 +1386,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             State = RavenState.Idle;
             Caption = IdleCaption;
+            ScheduleNews();
             return;
         }
 

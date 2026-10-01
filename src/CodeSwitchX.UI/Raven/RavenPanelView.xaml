@@ -191,6 +191,44 @@
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
+    <!-- A digest card: what the chats did, one line per chat; a click shows its tile in the Yard. -->
+    <DataTemplate x:Key="NewsEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border Background="#0F172A" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="6" Padding="10,6,10,7">
+        <StackPanel>
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#62D0E8" Text="&#xE789;" VerticalAlignment="Center" Margin="0,1,7,0" />
+            <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center">
+              <Run Text="{Binding Text, Mode=OneWay}" /><Run Text="{Binding At.LocalDateTime, Mode=OneWay, StringFormat=' · {0:HH:mm}'}" />
+            </TextBlock>
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Lines}" Margin="0,4,0,0" Focusable="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="{x:Type raven:ChatNewsLine}">
+                <Button Command="{Binding DataContext.ShowNewsTileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                        CommandParameter="{Binding}" Cursor="Hand" ToolTip="Show its tile in the Yard" HorizontalContentAlignment="Left"
+                        AutomationProperties.Name="{Binding Text}">
+                  <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                      <Border x:Name="Row" Background="Transparent" CornerRadius="4" Padding="4,2">
+                        <TextBlock x:Name="Line" FontSize="12" Foreground="#D1D5DB" TextWrapping="Wrap" Text="{Binding Text}" />
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="Row" Property="Background" Value="#1F2937" />
+                        </Trigger>
+                        <DataTrigger Binding="{Binding Stale}" Value="True">
+                          <Setter TargetName="Line" Property="Foreground" Value="#6B7280" />
+                        </DataTrigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Button.Template>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+    </DataTemplate>
     <DataTemplate x:Key="NoteEntry" DataType="{x:Type raven:RavenLogEntry}">
       <TextBlock FontSize="13" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="2,0" Text="{Binding Text}" />
     </DataTemplate>
@@ -309,6 +347,9 @@
                           </DataTrigger>
                           <DataTrigger Binding="{Binding Kind}" Value="Action">
                             <Setter Property="ContentTemplate" Value="{StaticResource ActionEntry}" />
+                          </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="News">
+                            <Setter Property="ContentTemplate" Value="{StaticResource NewsEntry}" />
                           </DataTrigger>
                         </Style.Triggers>
                       </Style>

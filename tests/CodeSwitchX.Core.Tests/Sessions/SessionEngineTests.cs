@@ -1148,4 +1148,20 @@ public class SessionEngineTests
             return !Unreadable;
         }
     }
+
+    [Fact]
+    public void A_turn_that_ends_on_an_API_error_is_marked_until_the_next_prompt_or_turn_end()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "do it"));
+        _engine.Apply(Hook("StopFailure", SessionSignal.Stop));
+
+        var failed = _engine.Get("s1").ShouldNotBeNull();
+        failed.State.ShouldBe(SessionState.Idle);
+        failed.TurnFailed.ShouldBeTrue();
+
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "again"));
+        _engine.Get("s1")!.TurnFailed.ShouldBeFalse();
+        _engine.Apply(Hook("Stop", SessionSignal.Stop));
+        _engine.Get("s1")!.TurnFailed.ShouldBeFalse();
+    }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 
 namespace CodeSwitchX.Conductor.Tests;
@@ -21,8 +22,22 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public string ErrorTail => "error: something broke";
 
+    /// <summary>
+    /// Its input is full and it reads no more: a write hangs, deaf to its token as a pipe write blocked in WriteFile is,
+    /// until the process is killed, which breaks the pipe.
+    /// </summary>
+    public bool WritesHang { get; set; }
+
+    private readonly TaskCompletionSource _broken = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public Task WriteLineAsync(string line, CancellationToken ct)
     {
+        if (WritesHang)
+        {
+            Written.Add(line);
+            return _broken.Task;
+        }
+
         ct.ThrowIfCancellationRequested(); // as StreamWriter does, before it writes
         if (_exited.Task.IsCompleted)
         {
@@ -64,6 +79,7 @@ internal sealed class FakeBrainProcess : IBrainProcess
     public void Dispose()
     {
         Disposed = true;
+        _broken.TrySetException(new IOException("The pipe has been ended."));
         Die(1);
     }
 }
@@ -140,6 +156,35 @@ internal static class StreamJson
 
     public const string ErrorResult =
         """{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded","session_id":"s"}""";
+
+    /// <summary>The line the brain writes to interrupt a turn (control request, subtype interrupt).</summary>
+    public static bool IsInterrupt(string written)
+    {
+        using var line = JsonDocument.Parse(written);
+        return line.RootElement.GetProperty("type").GetString() == "control_request"
+            && line.RootElement.GetProperty("request").GetProperty("subtype").GetString() == "interrupt";
+    }
+
+    /// <summary>What CLI 2.1.285 answers an interrupt with (captured 2026-10-01).</summary>
+    public static string InterruptAck(string written)
+    {
+        using var line = JsonDocument.Parse(written);
+        var id = line.RootElement.GetProperty("request_id").GetString();
+        return new System.Text.Json.Nodes.JsonObject
+        {
+            ["type"] = "control_response",
+            ["response"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["subtype"] = "success",
+                ["request_id"] = id,
+                ["response"] = new System.Text.Json.Nodes.JsonObject { ["still_queued"] = new System.Text.Json.Nodes.JsonArray() },
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>The result that ends an interrupted turn (CLI 2.1.285).</summary>
+    public const string InterruptedResult =
+        """{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}""";
 
     /// <summary>Answers every turn with init, the text in two pieces and the result.</summary>
     public static Func<string, IEnumerable<string>> Reply(string text) =>

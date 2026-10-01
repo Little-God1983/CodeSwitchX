@@ -61,6 +61,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether Raven keeps its replies to itself, as stored; the panel owns it (see <see cref="Raven.RavenPanelViewModel.IsMuted"/>).</summary>
     [ObservableProperty] private bool _ravenMuted;
 
+    /// <summary>Whether Raven tells what the chats did; off, its digest cards are only written. On by default.</summary>
+    [ObservableProperty] private bool _ravenSpeakNews = true;
+
     /// <summary>The preset voice Raven speaks with: an id of <see cref="SpeechSettings.Voices"/>.</summary>
     [ObservableProperty] private string _ravenVoice = SpeechSettings.DefaultVoice;
 
@@ -113,6 +116,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenChatModel = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatModel, "the chat model", ct));
             RavenChatEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatEffort, "the chat effort", ct));
             RavenMuted = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenMuted, "whether Raven is muted", ct) ?? false;
+            RavenSpeakNews = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenSpeakNews, "whether Raven speaks chat news", ct) ?? true;
             _speech.Voice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultVoice;
             RavenVoice = _speech.Voice; // the setter keeps a known voice, or the default
             RavenVoiceModel = await LoadOrDefaultAsync<SpeechModel?>(SettingKeys.RavenVoiceModel, "Raven's voice model", ct) is { } speechModel
@@ -232,6 +236,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenMicrophoneChanged(MicrophoneDevice? value) => Persist(SettingKeys.RavenMicrophone, value);
 
     partial void OnRavenMutedChanged(bool value) => Persist(SettingKeys.RavenMuted, value);
+
+    partial void OnRavenSpeakNewsChanged(bool value) => Persist(SettingKeys.RavenSpeakNews, value);
 
     partial void OnRavenVoiceChanged(string value)
     {

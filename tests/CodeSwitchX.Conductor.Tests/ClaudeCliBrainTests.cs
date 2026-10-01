@@ -27,15 +27,151 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
     private Task<List<BrainEvent>> AskAsync(string text) => AskUntilAsync(text, TestContext.Current.CancellationToken);
 
+    /// <summary>The turn's events but <see cref="BrainQuestionSent"/>, which <see cref="A_turn_says_when_its_question_has_gone_in"/> checks.</summary>
     private async Task<List<BrainEvent>> AskUntilAsync(string text, CancellationToken ct)
     {
         var events = new List<BrainEvent>();
         await foreach (var e in _brain.AskAsync(text, ct))
         {
-            events.Add(e);
+            if (e is not BrainQuestionSent)
+            {
+                events.Add(e);
+            }
         }
 
         return events;
+    }
+
+    [Fact]
+    public async Task A_turn_says_when_its_question_has_gone_in()
+    {
+        var events = new List<BrainEvent>();
+        await foreach (var e in _brain.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+            if (e is BrainQuestionSent)
+            {
+                _launcher.Last.Written.Count.ShouldBe(1, "said once the line is written");
+            }
+        }
+
+        events[0].ShouldBe(new BrainQuestionSent());
+        events.OfType<BrainQuestionSent>().Count().ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_process_that_does_not_take_the_question_is_given_up_instead_of_holding_every_later_turn()
+    {
+        await AskAsync("One");
+        _launcher.Last.WritesHang = true;
+        var turn = AskAsync("Two");
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+
+        // The write times out after Silence, then the turn waits up to 2 s for the exit code: time goes on until it ends.
+        _time.Advance(ClaudeCliBrain.Silence);
+        for (var i = 0; i < 100 && !turn.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        (await turn).ShouldHaveSingleItem().ShouldBeOfType<BrainFailed>().Reason.ShouldStartWith("Raven's brain stopped before it could take the question");
+        _launcher.Started[0].Process.Disposed.ShouldBeTrue();
+        Reply(await AskAsync("Three")).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task An_interrupt_the_process_does_not_take_stops_it()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = AskUntilAsync("One", cancel.Token);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+        _launcher.Last.WritesHang = true;
+
+        await cancel.CancelAsync();
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+        for (var i = 0; i < 100 && !turn.IsCompleted; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_cancelled_teller_turn_is_stopped_at_once_without_an_interrupt()
+    {
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in teller.AskAsync("News", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        await cancel.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Written.Count.ShouldBe(1, "no interrupt: its conversation is thrown away anyway");
+        _launcher.Last.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Resting_stops_a_warmed_up_process()
+    {
+        _brain.WarmUp();
+        await WaitUntil(() => _launcher.Started.Count == 1);
+
+        _brain.Rest();
+
+        await WaitUntil(() => _launcher.Last.Disposed);
+    }
+
+    [Fact]
+    public async Task The_teller_starts_a_fresh_conversation_for_every_digest()
+    {
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+
+        await foreach (var _ in teller.AskAsync("News one", TestContext.Current.CancellationToken))
+        {
+        }
+
+        await foreach (var _ in teller.AskAsync("News two", TestContext.Current.CancellationToken))
+        {
+        }
+
+        _launcher.Started.Count.ShouldBe(2);
+        _launcher.Started.ShouldAllBe(s => s.Process.Disposed && s.Process.Written.Count == 1, "what one digest's chats said is gone before the next");
+    }
+
+    [Fact]
+    public async Task The_teller_has_no_tools_no_MCP_server_and_a_conversation_of_its_own()
+    {
+        File.Delete(_paths.McpConfigFile); // it needs none
+        var teller = new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Teller);
+        _launcher.Answer = _ => [StreamJson.Init("failed"), StreamJson.Text("Done."), StreamJson.Result("Done.")];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in teller.AskAsync("News", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.ShouldBe([new BrainQuestionSent(), new BrainText("Done.")], "no word about tools it does not have");
+        var arguments = _launcher.Started[^1].Arguments;
+        Value(arguments, "--tools").ShouldBe("");
+        Value(arguments, "--mcp-config").ShouldBe("""{"mcpServers":{}}""");
+        arguments.ShouldContain("--strict-mcp-config", "the user's own MCP servers are left out too");
+        arguments.ShouldNotContain("--allowedTools");
+        Value(arguments, "--permission-mode").ShouldBe("dontAsk");
+        Value(arguments, "--settings").ShouldBe("""{"disableAllHooks":true}""");
+        Value(arguments, "--system-prompt").ShouldBe(ClaudeCliBrain.TellerPrompt);
     }
 
     private static string Reply(IEnumerable<BrainEvent> events) => string.Concat(events.OfType<BrainText>().Select(t => t.Delta));
@@ -333,9 +469,11 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task A_cancelled_turn_stops_the_process_so_its_rest_is_not_read_as_the_next_turn()
+    public async Task A_cancelled_turn_is_interrupted_and_the_process_keeps_the_conversation()
     {
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        _launcher.Answer = line => StreamJson.IsInterrupt(line)
+            ? [StreamJson.InterruptAck(line), StreamJson.InterruptedResult]
+            : [StreamJson.Init(), StreamJson.Text("Half")];
         using var cancel = new CancellationTokenSource();
         var turn = AskUntilAsync("One", cancel.Token);
         await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
@@ -343,11 +481,60 @@ public sealed class ClaudeCliBrainTests : IDisposable
         await cancel.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Disposed.ShouldBeFalse("an interrupt ends the turn, not the process, so the brain remembers it");
+        StreamJson.IsInterrupt(_launcher.Last.Written[1]).ShouldBeTrue();
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        var next = await AskAsync("Two");
+        next.OfType<BrainNotice>().ShouldBeEmpty("an interrupted turn is no crash");
+        Reply(next).ShouldBe("Hi.", "the interrupted turn's result was read with it, not as the next turn's");
+        _launcher.Started.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_turn_cancelled_before_its_question_went_in_interrupts_nothing_and_keeps_the_process()
+    {
+        await AskAsync("One");
+        _settings.Model = "claude-sonnet-5-5"; // the next turn says so first, before it sends the question
+        await AskAsync("Two");
+        _settings.Model = "claude-opus-5-5";
+        var process = _launcher.Started.Count;
+        using var cancel = new CancellationTokenSource();
+
+        await Should.ThrowAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var e in _brain.AskAsync("Three", cancel.Token))
+            {
+                await cancel.CancelAsync(); // at the notice: the question has not gone in
+            }
+        });
+
+        var last = _launcher.Last;
+        _launcher.Started.Count.ShouldBe(process + 1);
+        last.Written.ShouldBeEmpty("neither the question nor an interrupt went to an idle process");
+        last.Disposed.ShouldBeFalse();
+        last.Answer = StreamJson.Reply("Hi.");
+        Reply(await AskAsync("Four")).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(process + 1);
+    }
+
+    [Fact]
+    public async Task A_turn_that_does_not_end_on_an_interrupt_stops_the_process_so_its_rest_is_not_read_as_the_next_turn()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = AskUntilAsync("One", cancel.Token);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        await cancel.CancelAsync();
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+        _time.Advance(ClaudeCliBrain.InterruptTimeout);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
         _launcher.Last.Disposed.ShouldBeTrue();
         _launcher.Answer = StreamJson.Reply("Hi.");
         var next = await AskAsync("Two");
-        next.OfType<BrainNotice>().ShouldBeEmpty("a cancelled turn is no crash");
         Reply(next).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(2);
     }
 
     [Fact]

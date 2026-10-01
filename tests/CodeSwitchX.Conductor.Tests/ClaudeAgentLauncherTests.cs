@@ -346,6 +346,7 @@ public sealed class ClaudeAgentLauncherTests : IDisposable
         _launcher.Last.InputClosed.ShouldBeTrue();
         _agents.Chats.ShouldBeEmpty();
         _changes[^1].Ended.ShouldBeTrue();
+        _changes[^1].Stopped.ShouldBeTrue("the app stopped it: its end is no failure");
         _failures.ShouldBeEmpty();
     }
 

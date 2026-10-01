@@ -22,6 +22,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     [ObservableProperty] private bool _needsAttention;
     [ObservableProperty] private bool _hasInferredChats;
 
+    /// <summary>Lit for a moment after Raven's digest card asked for this tile: the view brings it into view and lights its border.</summary>
+    [ObservableProperty] private bool _isSpotlit;
+
     /// <summary>The tile's git lines: one per repository its folders are in, the root folder's first; see <see cref="GitLine"/>.</summary>
     [ObservableProperty] private IReadOnlyList<GitLine> _gitLines = [GitLine.Unknown];
 
