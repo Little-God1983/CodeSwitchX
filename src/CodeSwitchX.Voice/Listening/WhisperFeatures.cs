@@ -8,8 +8,8 @@ namespace CodeSwitchX.Voice.Listening;
 /// 200 at both ends), turned into a power spectrum, projected on Slaney mel filters, log10'd, the last frame dropped,
 /// clamped to 8 under the maximum and mapped by (x + 4) / 4. Tested against Pipecat's output (WhisperFeaturesTests).
 /// <para>
-/// The 400-point transform is a plain DFT on precomputed tables: 800 frames of 201 bins is some 64 million
-/// multiply-adds, tens of milliseconds, once per pause in the user's speech.
+/// The 400-point transform is a plain DFT on precomputed tables, folded for real input and spread over the cores: 800
+/// frames of 201 bins is some 64 million multiply-adds, 60 to 90 ms in a debug build, once per pause in the user's speech.
 /// </para>
 /// </summary>
 public static class WhisperFeatures
@@ -26,7 +26,7 @@ public static class WhisperFeatures
     private static readonly double[] Window = HannWindow();
     private static readonly double[] Cos = Table(Math.Cos);
     private static readonly double[] Sin = Table(Math.Sin);
-    private static readonly double[,] MelFilters = BuildMelFilters();
+    private static readonly (int First, double[] Weights)[] MelBands = SparseBands(BuildMelFilters());
 
     public static float[] LogMel(ReadOnlySpan<float> audio16k)
     {
@@ -43,20 +43,40 @@ public static class WhisperFeatures
         }
 
         var log = new double[Mels, Frames];
-        var power = new double[Bins];
-        var max = double.NegativeInfinity;
-        for (var frame = 0; frame < Frames; frame++) // the reference makes 801 and drops the last
+        var frameMax = new double[Frames];
+        // The reference makes 801 frames and drops the last. Frames are independent: spread them over the cores.
+        Parallel.For(0, Frames, frame =>
         {
+            var power = new double[Bins];
+            var sums = new double[Fft / 2];
+            var diffs = new double[Fft / 2];
+            var max = double.NegativeInfinity;
             var start = frame * Hop;
+            // The frame is real, so the transform folds: with n and Fft - n paired, cos is even and sin odd in n.
+            var v0 = padded[start] * Window[0];
+            var vHalf = padded[start + (Fft / 2)] * Window[Fft / 2];
+            for (var n = 1; n < Fft / 2; n++)
+            {
+                var near = padded[start + n] * Window[n];
+                var far = padded[start + Fft - n] * Window[Fft - n];
+                sums[n] = near + far;
+                diffs[n] = near - far;
+            }
+
             for (var k = 0; k < Bins; k++)
             {
-                double re = 0, im = 0;
-                for (var n = 0; n < Fft; n++)
+                var re = v0 + ((k & 1) == 0 ? vHalf : -vHalf);
+                double im = 0;
+                var index = k; // (k * n) mod Fft, stepped by k and wrapped: no modulo in the hot loop
+                for (var n = 1; n < Fft / 2; n++)
                 {
-                    var v = padded[start + n] * Window[n];
-                    var index = (k * n) % Fft;
-                    re += v * Cos[index];
-                    im -= v * Sin[index];
+                    re += sums[n] * Cos[index];
+                    im -= diffs[n] * Sin[index];
+                    index += k;
+                    if (index >= Fft)
+                    {
+                        index -= Fft;
+                    }
                 }
 
                 power[k] = (re * re) + (im * im);
@@ -65,16 +85,21 @@ public static class WhisperFeatures
             for (var m = 0; m < Mels; m++)
             {
                 double sum = 0;
-                for (var k = 0; k < Bins; k++)
+                var (first, weights) = MelBands[m];
+                for (var i = 0; i < weights.Length; i++)
                 {
-                    sum += MelFilters[k, m] * power[k];
+                    sum += weights[i] * power[first + i];
                 }
 
                 var value = Math.Log10(Math.Max(1e-10, sum));
                 log[m, frame] = value;
                 max = Math.Max(max, value);
             }
-        }
+
+            frameMax[frame] = max;
+        });
+
+        var max = frameMax.Max();
 
         var features = new float[Mels * Frames];
         for (var m = 0; m < Mels; m++)
@@ -135,6 +160,34 @@ public static class WhisperFeatures
         }
 
         return table;
+    }
+
+    /// <summary>Each triangular filter is zero outside a few bins: keep only its non-zero run, as (first bin, weights).</summary>
+    private static (int First, double[] Weights)[] SparseBands(double[,] filters)
+    {
+        var bands = new (int, double[])[Mels];
+        for (var m = 0; m < Mels; m++)
+        {
+            int first = 0, last = -1;
+            for (var k = 0; k < Bins; k++)
+            {
+                if (filters[k, m] != 0)
+                {
+                    first = last < 0 ? k : first;
+                    last = k;
+                }
+            }
+
+            var weights = new double[Math.Max(0, last - first + 1)];
+            for (var i = 0; i < weights.Length; i++)
+            {
+                weights[i] = filters[first + i, m];
+            }
+
+            bands[m] = (first, weights);
+        }
+
+        return bands;
     }
 
     /// <summary>Slaney-scale triangular filters with Slaney area normalisation, [bin, mel] as the reference builds them.</summary>

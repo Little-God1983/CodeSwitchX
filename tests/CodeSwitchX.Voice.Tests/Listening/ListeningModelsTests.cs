@@ -1,0 +1,66 @@
+using System.Diagnostics;
+using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Listening;
+
+namespace CodeSwitchX.Voice.Tests.Listening;
+
+/// <summary>Needs the models in %LOCALAPPDATA%\CodeSwitchX\models\listening (switch to Open mic once, or run
+/// ListeningModelStore.DownloadAsync).</summary>
+public sealed class ListeningModelsTests
+{
+    private static string PathOf(ListeningModel model) =>
+        Path.Combine(CodeSwitchX.Core.AppPaths.Default().ModelsDirectory, "listening", model.FileName);
+
+    [Fact(Explicit = true)]
+    public void Silero_hears_speech_in_the_warm_up_sample_and_none_in_silence()
+    {
+        using var vad = new SileroVad(PathOf(ListeningModelStore.Silero));
+        var speech = WarmUpSpeech.Load();
+
+        var heard = Frames(speech).Max(f => vad.Step(f));
+        vad.Reset();
+        var quiet = Frames(new float[16_000]).Max(f => vad.Step(f));
+
+        heard.ShouldBeGreaterThan(0.8f);
+        quiet.ShouldBeLessThan(0.2f);
+    }
+
+    [Fact(Explicit = true)]
+    public void Smart_turn_answers_in_well_under_a_frame_budget()
+    {
+        using var turn = new SmartTurn(PathOf(ListeningModelStore.SmartTurn));
+        var speech = WarmUpSpeech.Load();
+        turn.Complete(speech); // the first call pays for the session's set-up
+
+        var clock = Stopwatch.StartNew();
+        var p = turn.Complete(speech);
+        clock.Stop();
+        Console.WriteLine($"SmartTurn.Complete: {clock.ElapsedMilliseconds} ms");
+
+        p.ShouldBeInRange(0, 1);
+        clock.ElapsedMilliseconds.ShouldBeLessThan(250);
+    }
+
+    [Fact]
+    public void A_model_file_that_is_not_a_model_fails_with_its_own_exception()
+    {
+        var path = Path.GetTempFileName();
+        File.WriteAllBytes(path, [1, 2, 3]);
+        try
+        {
+            Should.Throw<Microsoft.ML.OnnxRuntime.OnnxRuntimeException>(() => new SileroVad(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static IEnumerable<float[]> Frames(float[] audio)
+    {
+        for (var i = 0; i + SileroVad.FrameSamples <= audio.Length; i += SileroVad.FrameSamples)
+        {
+            yield return audio[i..(i + SileroVad.FrameSamples)];
+        }
+    }
+}
