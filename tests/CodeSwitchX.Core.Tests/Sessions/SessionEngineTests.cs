@@ -1050,6 +1050,22 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void The_window_is_looked_up_outside_the_engines_lock_so_the_UI_can_read_meanwhile()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 200, windowFolders: null)]);
+        var readsMeanwhile = new List<bool>();
+        windows.DuringLookup = () => readsMeanwhile.Add(Task.Run(() => engine.Snapshots).Wait(TimeSpan.FromSeconds(5)));
+
+        engine.ReResolveWorkspaces();
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(100, "claude.exe")]));
+
+        readsMeanwhile.ShouldBe([true, true]);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+        engine.Get("s2")!.WorkspaceId.ShouldBe(InstallerId);
+    }
+
+    [Fact]
     public void The_same_folders_found_again_change_nothing()
     {
         var (engine, windows) = SharedRootEngine();
@@ -1086,9 +1102,12 @@ public class SessionEngineTests
 
         public List<IReadOnlyList<int>?> AncestorsSeen { get; } = [];
 
+        public Action? DuringLookup { get; set; }
+
         public bool TryFoldersOf(int claudePid, IReadOnlyList<int>? ancestors, out IReadOnlyList<string>? folders)
         {
             Lookups++;
+            DuringLookup?.Invoke();
             AncestorsSeen.Add(ancestors);
             folders = Unreadable ? null : Folders.GetValueOrDefault(claudePid);
             return !Unreadable;

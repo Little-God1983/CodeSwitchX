@@ -10,7 +10,7 @@ namespace CodeSwitchX.Hosting.Tests;
 public sealed class ClaudeIdeWindowsTests : IDisposable
 {
     private readonly string _locks = Directory.CreateTempSubdirectory("csx-ide-").FullName;
-    private readonly Dictionary<int, int> _listeners = [];
+    private readonly List<(int Port, int Pid)> _listeners = [];
     private readonly Dictionary<int, (int Parent, string Name)> _processes = [];
     private readonly FakeTimeProvider _time = new();
     private int _listenerReads;
@@ -23,12 +23,12 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
         () =>
         {
             _listenerReads++;
-            return _failure is null ? _listeners : throw _failure;
+            return _failure is null ? _listeners.ToList() : throw _failure; // a read is a copy of the moment
         },
         () =>
         {
             _processReads++;
-            return _processes;
+            return new Dictionary<int, (int Parent, string Name)>(_processes);
         },
         _time);
 
@@ -38,7 +38,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     private void Window(int port, int extensionHost, params string[] folders)
     {
         Lock(port, $$"""{"pid":500,"workspaceFolders":[{{string.Join(",", folders.Select(f => $"\"{f.Replace(@"\", @"\\")}\""))}}],"ideName":"Visual Studio Code","transport":"ws","authToken":"x"}""");
-        _listeners[port] = extensionHost;
+        _listeners.Add((port, extensionHost));
     }
 
     /// <summary>A process line from <paramref name="pid"/> up: each process's parent is the next one.</summary>
@@ -108,7 +108,6 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     }
 
     [Theory]
-    [InlineData("not json")]
     [InlineData("[]")]
     [InlineData("""{"pid":500}""")]
     [InlineData("""{"workspaceFolders":"e:\\Repos\\App"}""")]
@@ -117,9 +116,69 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
     public void A_lock_without_folders_tells_no_window(string json)
     {
         Lock(14108, json);
-        _listeners[14108] = 31;
+        _listeners.Add((14108, 31));
 
         FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"pid":500,"workspaceFolders":["e:\\Repos""")]
+    [InlineData("")]
+    public void A_lock_caught_while_the_extension_writes_it_tells_nothing_yet(string json)
+    {
+        Lock(14108, json);
+        _listeners.Add((14108, 31));
+        var windows = Windows();
+
+        windows.TryFoldersOf(1000, [31, 500], out var folders).ShouldBeFalse();
+        folders.ShouldBeNull();
+
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+        FoldersOf(windows, 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\App"]);
+    }
+
+    [Fact]
+    public void A_hook_chain_that_stops_below_the_extension_host_is_walked_on_in_the_process_table()
+    {
+        // A claude started by another chat's claude through shells: the hook's eight levels end before VS Code.
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+        Line(3000, 2900, 2800, 2000, 31, 500);
+
+        FoldersOf(Windows(), 3000, ancestors: [2900, 2800]).ShouldBe([@"e:\Repos\App"]);
+    }
+
+    [Fact]
+    public void A_claude_that_started_after_the_process_table_was_read_is_found_in_a_new_read()
+    {
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+        Line(1000, 31, 500);
+        var windows = Windows();
+        FoldersOf(windows, 1000).ShouldBe([@"e:\Repos\App"]);
+
+        Line(2000, 31, 500); // within the table's 250 ms
+        FoldersOf(windows, 2000).ShouldBe([@"e:\Repos\App"]);
+
+        _processReads.ShouldBe(2);
+    }
+
+    [Fact]
+    public void Of_two_locks_on_ports_of_one_process_the_newer_one_tells_its_window()
+    {
+        // An old lock of a closed window whose port number the extension host's other server took.
+        Window(51234, extensionHost: 31, @"e:\Repos\Old");
+        File.SetLastWriteTimeUtc(Path.Combine(_locks, "51234.lock"), DateTime.UtcNow.AddDays(-3));
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+
+        FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\App"]);
+    }
+
+    [Fact]
+    public void A_port_two_processes_hold_on_the_two_stacks_counts_for_both()
+    {
+        Window(14108, extensionHost: 31, @"e:\Repos\App");
+        _listeners.Insert(0, (14108, 777)); // an unrelated process on 127.0.0.1, the extension host on [::1]
+
+        FoldersOf(Windows(), 1000, ancestors: [31, 500]).ShouldBe([@"e:\Repos\App"]);
     }
 
     [Fact]
@@ -173,7 +232,7 @@ public sealed class ClaudeIdeWindowsTests : IDisposable
         {
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
-            ProcessTable.Listeners()[port].ShouldBe(Environment.ProcessId);
+            ProcessTable.Listeners().ShouldContain((port, Environment.ProcessId));
         }
         finally
         {

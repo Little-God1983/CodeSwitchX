@@ -33,7 +33,7 @@ public sealed class SessionEngine : IDisposable
     /// <summary>Chats whose tile the app chose when it started them (<see cref="Claim"/>); their folder does not move them.</summary>
     private readonly Dictionary<string, Guid> _claims = new(StringComparer.Ordinal);
 
-    /// <summary>Per chat, the claude process whose VS Code window was looked up (<see cref="WindowOfLocked"/>); not stored.</summary>
+    /// <summary>Per chat, the claude process whose VS Code window was looked up (<see cref="LookUp"/>); not stored.</summary>
     private readonly Dictionary<string, int> _windowLookups = new(StringComparer.Ordinal);
     private readonly IIdeWindows? _windows;
     private const int OpenToolsKept = 32;
@@ -146,6 +146,7 @@ public sealed class SessionEngine : IDisposable
     public void Apply(HookEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
+        var lookup = LookUp(e.SessionId, PickClaudePid(e.ParentChain), e.ParentChain);
         lock (_gate)
         {
             var previous = _sessions.GetValueOrDefault(e.SessionId);
@@ -167,7 +168,7 @@ public sealed class SessionEngine : IDisposable
 
             var cwd = e.Cwd ?? s.Cwd;
             var claudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid;
-            var window = WindowOfLocked(s, claudePid, e.ParentChain);
+            var window = WindowOfLocked(s, claudePid, lookup);
             var windowChanged = !SameFolders(window, s.WindowFolders);
             var awaitingToolResult = e.EventName switch
             {
@@ -468,11 +469,26 @@ public sealed class SessionEngine : IDisposable
 
     public void ReResolveWorkspaces()
     {
+        SessionSnapshot[] sessions;
+        lock (_gate)
+        {
+            sessions = _sessions.Values.ToArray();
+        }
+
+        var lookups = new Dictionary<string, WindowLookup>(StringComparer.Ordinal);
+        foreach (var s in sessions)
+        {
+            if (LookUp(s.SessionId, s.ClaudePid, chain: null) is { } lookup)
+            {
+                lookups[s.SessionId] = lookup;
+            }
+        }
+
         lock (_gate)
         {
             foreach (var s in _sessions.Values.ToArray())
             {
-                var window = WindowOfLocked(s, s.ClaudePid, chain: null);
+                var window = WindowOfLocked(s, s.ClaudePid, lookups.GetValueOrDefault(s.SessionId));
                 var windowChanged = !SameFolders(window, s.WindowFolders);
                 var resolved = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : _resolver.Resolve(s.Cwd, window);
                 if (resolved != s.WorkspaceId || windowChanged)
@@ -542,29 +558,50 @@ public sealed class SessionEngine : IDisposable
         _bus.Publish(new SessionChanged(previous, current));
     }
 
+    /// <summary>What a lookup of claude <paramref name="Pid"/>'s VS Code window found: its folders, or null for none.</summary>
+    private sealed record WindowLookup(int Pid, IReadOnlyList<string>? Folders);
+
     /// <summary>
-    /// The folders of the VS Code window the chat's claude runs in, looked up once per claude process: two workspaces can
-    /// share a folder, and only the window tells which one the chat belongs to. A new process (a resume, perhaps in another
-    /// window) is looked up again. A chat keeps the window it had when there is no process to look at (its claude is gone),
-    /// when the lookup finds none (a resume in a terminal, a reused PID) and when the system could not be read; that last
-    /// lookup is tried again with the next event. A claimed chat needs none: the claim decides its tile.
+    /// Looks up the VS Code window of the chat's claude, once per claude process: two workspaces can share a folder, and
+    /// only the window tells which one the chat belongs to. Called outside <see cref="_gate"/>: the lookup reads the lock
+    /// folder and the system's tables, and the UI reads snapshots under that lock. Null when there is nothing to look up
+    /// (no process, a claimed chat, a process already looked up) or the system could not be read; that last lookup is
+    /// tried again with the next event.
     /// </summary>
     /// <param name="chain">The event's processes, from the hook up: the ones above the claude spare reading every process.</param>
-    private IReadOnlyList<string>? WindowOfLocked(SessionSnapshot s, int? claudePid, IReadOnlyList<ProcessRef>? chain)
+    private WindowLookup? LookUp(string sessionId, int? claudePid, IReadOnlyList<ProcessRef>? chain)
     {
-        if (_windows is null || claudePid is not { } pid || _claims.ContainsKey(s.SessionId)
-            || (_windowLookups.TryGetValue(s.SessionId, out var looked) && looked == pid))
+        if (_windows is null || claudePid is not { } pid)
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            if (_claims.ContainsKey(sessionId) || (_windowLookups.TryGetValue(sessionId, out var looked) && looked == pid))
+            {
+                return null;
+            }
+        }
+
+        return _windows.TryFoldersOf(pid, Above(chain, pid), out var folders) ? new WindowLookup(pid, folders) : null;
+    }
+
+    /// <summary>
+    /// The window folders the chat has once <paramref name="lookup"/> is taken in: a lookup of its claude records the
+    /// process as looked up, and a window it found replaces the one the chat had. The chat keeps what it had without a
+    /// lookup, after one of another process (its claude changed meanwhile), once claimed, and when the lookup found no
+    /// window (a resume in a terminal, a reused PID).
+    /// </summary>
+    private IReadOnlyList<string>? WindowOfLocked(SessionSnapshot s, int? claudePid, WindowLookup? lookup)
+    {
+        if (lookup is null || lookup.Pid != claudePid || _claims.ContainsKey(s.SessionId))
         {
             return s.WindowFolders;
         }
 
-        if (!_windows.TryFoldersOf(pid, Above(chain, pid), out var folders))
-        {
-            return s.WindowFolders;
-        }
-
-        _windowLookups[s.SessionId] = pid;
-        return folders ?? s.WindowFolders;
+        _windowLookups[s.SessionId] = lookup.Pid;
+        return lookup.Folders ?? s.WindowFolders;
     }
 
     /// <summary>The processes above <paramref name="pid"/> in a hook's chain; null when it is not in the chain or tops it.</summary>

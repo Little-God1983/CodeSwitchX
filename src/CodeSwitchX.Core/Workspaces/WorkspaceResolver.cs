@@ -4,8 +4,10 @@ namespace CodeSwitchX.Core.Workspaces;
 
 public sealed class WorkspaceResolver : IWorkspaceResolver
 {
-    private volatile WorkspaceRoot[] _roots = [];
-    private volatile (Guid WorkspaceId, HashSet<string> Folders)[] _windows = [];
+    /// <summary>The roots and windows of one <see cref="SetRoots"/>, published together so a resolve never pairs new roots with old windows.</summary>
+    private sealed record Known(WorkspaceRoot[] Roots, (Guid WorkspaceId, HashSet<string> Folders)[] Windows);
+
+    private volatile Known _known = new([], []);
 
     /// <summary>
     /// Longest root first; the sort is stable, so of two equal paths the one listed first wins. <paramref name="windows"/>
@@ -13,16 +15,24 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
     /// </summary>
     public void SetRoots(IEnumerable<WorkspaceRoot> roots, IEnumerable<WorkspaceWindow>? windows = null)
     {
-        _roots = roots
-            .Select(r => new WorkspaceRoot(r.WorkspaceId, PathNormalizer.Normalize(r.Path)))
-            .OrderByDescending(r => r.Path.Length)
-            .ToArray();
-        _windows = (windows ?? [])
-            .Select(w => (w.WorkspaceId, Folders: FolderSet(w.Folders)))
-            .Where(w => w.Folders is { Count: > 0 })
-            .Select(w => (w.WorkspaceId, w.Folders!))
-            .ToArray();
+        _known = new Known(
+            roots
+                .Select(r => new WorkspaceRoot(r.WorkspaceId, PathNormalizer.Normalize(r.Path)))
+                .OrderByDescending(r => r.Path.Length)
+                .ToArray(),
+            (windows ?? [])
+                .Select(w => (w.WorkspaceId, Folders: FolderSet(w.Folders)))
+                .Where(w => w.Folders is { Count: > 0 })
+                .Select(w => (w.WorkspaceId, w.Folders!))
+                .ToArray());
     }
+
+    /// <summary>
+    /// The order ties go by, for <see cref="RootsOf"/> and <see cref="WindowsOf"/> alike: folder workspaces before
+    /// <c>.code-workspace</c> ones, then the one registered first.
+    /// </summary>
+    private static List<Workspace> InTieOrder(IEnumerable<Workspace> workspaces) =>
+        workspaces.OrderBy(w => w.WorkspaceFile is { Length: > 0 }).ThenBy(w => w.CreatedAt).ThenBy(w => w.Id).ToList();
 
     /// <summary>
     /// The folders VS Code opens for each workspace, in the order of <see cref="RootsOf"/>: a folder workspace opens its
@@ -31,7 +41,7 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
     /// </summary>
     public static IEnumerable<WorkspaceWindow> WindowsOf(IEnumerable<Workspace> workspaces, Func<string, IReadOnlyList<WorkspaceFolder>?>? foldersOf = null)
     {
-        foreach (var workspace in workspaces.OrderBy(w => w.WorkspaceFile is { Length: > 0 }).ThenBy(w => w.CreatedAt).ThenBy(w => w.Id))
+        foreach (var workspace in InTieOrder(workspaces))
         {
             if (workspace.WorkspaceFile is not { Length: > 0 } file)
             {
@@ -53,7 +63,7 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
     /// </summary>
     public static IEnumerable<WorkspaceRoot> RootsOf(IEnumerable<Workspace> workspaces, Func<string, IReadOnlyList<WorkspaceFolder>?>? foldersOf = null)
     {
-        var list = workspaces.OrderBy(w => w.WorkspaceFile is { Length: > 0 }).ThenBy(w => w.CreatedAt).ThenBy(w => w.Id).ToList();
+        var list = InTieOrder(workspaces);
         foreach (var workspace in list)
         {
             yield return new WorkspaceRoot(workspace.Id, workspace.RootPath);
@@ -82,8 +92,8 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
     public Guid? Resolve(string? path, IReadOnlyCollection<string>? windowFolders = null)
     {
         var normalized = Normalized(path);
-        var roots = _roots;
-        if (windowFolders is { Count: > 0 } && FolderSet(windowFolders) is { } window && ByWindow(normalized, window, roots) is { } byWindow)
+        var known = _known;
+        if (windowFolders is { Count: > 0 } && FolderSet(windowFolders) is { } window && ByWindow(normalized, window, known) is { } byWindow)
         {
             return byWindow;
         }
@@ -93,7 +103,7 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
             return null;
         }
 
-        foreach (var root in roots)
+        foreach (var root in known.Roots)
         {
             if (PathNormalizer.IsWithin(normalized, root.Path))
             {
@@ -110,12 +120,12 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
     /// workspace; ties go to the one listed first. A path no workspace holds takes only a workspace that opens exactly
     /// the window's folders. Null when no workspace shares a folder with the window.
     /// </summary>
-    private Guid? ByWindow(string? path, HashSet<string> window, WorkspaceRoot[] roots)
+    private static Guid? ByWindow(string? path, HashSet<string> window, Known known)
     {
-        var holders = path is null ? [] : roots.Where(r => PathNormalizer.IsWithin(path, r.Path)).Select(r => r.WorkspaceId).ToHashSet();
+        var holders = path is null ? [] : known.Roots.Where(r => PathNormalizer.IsWithin(path, r.Path)).Select(r => r.WorkspaceId).ToHashSet();
         Guid? best = null;
         var bestLikeness = 0.0;
-        foreach (var (workspaceId, folders) in _windows)
+        foreach (var (workspaceId, folders) in known.Windows)
         {
             if (holders.Count > 0 ? !holders.Contains(workspaceId) : !folders.SetEquals(window))
             {

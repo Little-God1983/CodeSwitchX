@@ -27,7 +27,7 @@ public sealed class ClaudeIdeWindows : IIdeWindows
     internal static readonly TimeSpan MaxAge = TimeSpan.FromMilliseconds(250);
 
     private readonly string _lockDirectory;
-    private readonly Func<IReadOnlyDictionary<int, int>> _listeners;
+    private readonly Func<IReadOnlyList<(int Port, int Pid)>> _listeners;
     private readonly Func<IReadOnlyDictionary<int, (int Parent, string Name)>> _processes;
     private readonly TimeProvider _time;
     private readonly Lock _gate = new();
@@ -38,10 +38,10 @@ public sealed class ClaudeIdeWindows : IIdeWindows
     {
     }
 
-    /// <param name="listeners">The process listening on each local TCP port.</param>
+    /// <param name="listeners">Each local TCP port with a process listening on it; a port can appear once per process.</param>
     /// <param name="processes">Every process with its parent and name.</param>
-    internal ClaudeIdeWindows(string lockDirectory, Func<IReadOnlyDictionary<int, int>> listeners, Func<IReadOnlyDictionary<int, (int Parent, string Name)>> processes,
-        TimeProvider time)
+    internal ClaudeIdeWindows(string lockDirectory, Func<IReadOnlyList<(int Port, int Pid)>> listeners,
+        Func<IReadOnlyDictionary<int, (int Parent, string Name)>> processes, TimeProvider time)
     {
         _lockDirectory = lockDirectory;
         _listeners = listeners;
@@ -49,6 +49,12 @@ public sealed class ClaudeIdeWindows : IIdeWindows
         _time = time;
     }
 
+    /// <summary>
+    /// The processes a hook event names above the claude are tried first; when none of them holds a lock (the hook's
+    /// chain stops at its depth, a claude started by another chat's sits deep), the claude is walked up in the process
+    /// table. A lock that cannot be read as it is written, or a claude not yet in a process table read before it started,
+    /// leaves nothing known (false): the engine asks again.
+    /// </summary>
     public bool TryFoldersOf(int claudePid, IReadOnlyList<int>? ancestors, out IReadOnlyList<string>? folders)
     {
         folders = null;
@@ -57,16 +63,27 @@ public sealed class ClaudeIdeWindows : IIdeWindows
             lock (_gate)
             {
                 var tables = Fresh();
-                foreach (var pid in (ancestors is { Count: > 0 } ? ancestors : tables.AncestorsOf(claudePid)).Take(MaxDepth))
+                if (tables.LockOf.Count == 0)
                 {
-                    if (tables.LockOf.TryGetValue(pid, out var file))
-                    {
-                        folders = FoldersIn(file);
-                        return true;
-                    }
+                    return true;
                 }
 
-                return true;
+                var file = ancestors?.Take(MaxDepth).Select(tables.LockOf.GetValueOrDefault).FirstOrDefault(f => f is not null);
+                if (file is null)
+                {
+                    var above = tables.AncestorsOf(claudePid, _processes, out var readNow);
+                    if (above is null && !readNow)
+                    {
+                        _tables = tables = Read(); // the process table was older than the claude: read it again
+                        above = tables.AncestorsOf(claudePid, _processes, out _);
+                    }
+
+                    above ??= []; // the claude is gone
+
+                    file = above.Select(tables.LockOf.GetValueOrDefault).FirstOrDefault(f => f is not null);
+                }
+
+                return file is null || TryFoldersIn(file, out folders);
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
@@ -75,56 +92,67 @@ public sealed class ClaudeIdeWindows : IIdeWindows
         }
     }
 
-    private Tables Fresh()
-    {
-        if (_tables is { } tables && _time.GetElapsedTime(tables.ReadAt) < MaxAge)
-        {
-            return tables;
-        }
+    private Tables Fresh() =>
+        _tables is { } tables && _time.GetElapsedTime(tables.ReadAt) < MaxAge ? tables : _tables = Read();
 
+    /// <summary>
+    /// The lock folder and who listens where. A process that listens on the ports of several locks (an old lock whose
+    /// port number its other server took) gets the newest of them: the extension rewrites its window's lock as it starts
+    /// and as the window's folders change.
+    /// </summary>
+    private Tables Read()
+    {
         var lockOf = new Dictionary<int, string>();
         if (Directory.Exists(_lockDirectory))
         {
-            var listeners = _listeners();
-            foreach (var file in Directory.EnumerateFiles(_lockDirectory, "*.lock"))
+            var owners = _listeners().ToLookup(l => l.Port, l => l.Pid);
+            var locks = Directory.EnumerateFiles(_lockDirectory, "*.lock")
+                .Select(file => (File: file, Port: int.TryParse(Path.GetFileNameWithoutExtension(file), out var port) ? port : -1))
+                .Where(l => owners.Contains(l.Port))
+                .OrderByDescending(l => File.GetLastWriteTimeUtc(l.File));
+            foreach (var (file, port) in locks)
             {
-                if (int.TryParse(Path.GetFileNameWithoutExtension(file), out var port) && listeners.TryGetValue(port, out var owner))
+                foreach (var owner in owners[port])
                 {
                     lockOf.TryAdd(owner, file);
                 }
             }
         }
 
-        return _tables = new Tables(_time.GetTimestamp(), lockOf, _processes);
+        return new Tables(_time.GetTimestamp(), lockOf);
     }
 
-    /// <summary>The lock's <c>workspaceFolders</c>; null when it cannot be read or names none. Nothing else of the file is read.</summary>
-    private static IReadOnlyList<string>? FoldersIn(string file)
+    /// <summary>
+    /// The lock's <c>workspaceFolders</c>: null (and true) when it names none, false when it cannot be read now (the
+    /// extension is rewriting it, the window just closed). Nothing else of the file is read.
+    /// </summary>
+    private static bool TryFoldersIn(string file, out IReadOnlyList<string>? folders)
     {
+        folders = null;
         try
         {
             using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var lockFile = JsonDocument.Parse(stream);
-            if (lockFile.RootElement.ValueKind != JsonValueKind.Object
-                || !lockFile.RootElement.TryGetProperty("workspaceFolders", out var folders) || folders.ValueKind != JsonValueKind.Array)
+            if (lockFile.RootElement.ValueKind == JsonValueKind.Object
+                && lockFile.RootElement.TryGetProperty("workspaceFolders", out var listed) && listed.ValueKind == JsonValueKind.Array)
             {
-                return null;
+                var paths = listed.EnumerateArray()
+                    .Where(f => f.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(f.GetString()))
+                    .Select(f => f.GetString()!)
+                    .ToList();
+                folders = paths.Count > 0 ? paths : null;
             }
 
-            var paths = folders.EnumerateArray()
-                .Where(f => f.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(f.GetString()))
-                .Select(f => f.GetString()!)
-                .ToList();
-            return paths.Count > 0 ? paths : null;
+            return true;
         }
-        catch (Exception ex) when (ex is JsonException or FileNotFoundException or DirectoryNotFoundException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return null; // a window that closed since the folder was listed
+            return false;
         }
     }
 
     /// <summary>One read of the system: the lock file of each process that listens on a lock's port, and, once asked, every process.</summary>
-    private sealed class Tables(long readAt, IReadOnlyDictionary<int, string> lockOf, Func<IReadOnlyDictionary<int, (int Parent, string Name)>> readProcesses)
+    private sealed class Tables(long readAt, IReadOnlyDictionary<int, string> lockOf)
     {
         private IReadOnlyDictionary<int, (int Parent, string Name)>? _processes;
 
@@ -132,16 +160,16 @@ public sealed class ClaudeIdeWindows : IIdeWindows
 
         public IReadOnlyDictionary<int, string> LockOf { get; } = lockOf;
 
-        /// <summary>The processes above <paramref name="pid"/>, its parent first, walked as the hook walks them; none when it is gone.</summary>
-        public IEnumerable<int> AncestorsOf(int pid)
+        /// <summary>
+        /// The processes above <paramref name="pid"/>, its parent first, walked as the hook walks them; null when this
+        /// read of the process table does not hold it.
+        /// </summary>
+        /// <param name="readNow">Whether the process table was read for this call, so it cannot be older than the claude.</param>
+        public IReadOnlyList<int>? AncestorsOf(int pid, Func<IReadOnlyDictionary<int, (int Parent, string Name)>> read, out bool readNow)
         {
-            if (LockOf.Count == 0)
-            {
-                return []; // no window to find: no need for every process
-            }
-
-            _processes ??= readProcesses();
-            return ProcessChain.Ancestors(pid, _processes, MaxDepth).Select(p => p.Pid);
+            readNow = _processes is null;
+            _processes ??= read();
+            return _processes.ContainsKey(pid) ? ProcessChain.Ancestors(pid, _processes, MaxDepth).Select(p => p.Pid).ToList() : null;
         }
     }
 }
