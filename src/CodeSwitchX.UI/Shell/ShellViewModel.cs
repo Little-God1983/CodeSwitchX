@@ -101,6 +101,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.PreferredMicrophone = Settings.RavenMicrophone;
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
+        Raven.BargeIn = Settings.RavenBargeIn;
+        Raven.MicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
         Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         Raven.PropertyChanged += (_, e) =>
@@ -117,12 +119,20 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 Settings.RavenMuted = Raven.IsMuted;
             }
+            else if (e.PropertyName == nameof(RavenPanelViewModel.MicMode))
+            {
+                Settings.RavenMicMode = Raven.MicMode.ToString();
+            }
         };
         Settings.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(SettingsViewModel.RavenSpeakNews))
             {
                 Raven.SpeakNews = Settings.RavenSpeakNews;
+            }
+            else if (e.PropertyName == nameof(SettingsViewModel.RavenBargeIn))
+            {
+                Raven.BargeIn = Settings.RavenBargeIn;
             }
         };
         // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.

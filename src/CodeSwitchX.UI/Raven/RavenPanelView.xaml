@@ -4,11 +4,41 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:raven="clr-namespace:CodeSwitchX.UI.Raven"
+             xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance raven:RavenPanelViewModel}"
              d:DesignWidth="320" d:DesignHeight="800">
   <UserControl.Resources>
     <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <infra:EnumIsConverter x:Key="EnumIs" />
+
+    <!-- One half of the Push to talk | Open mic switch: a radio button drawn as a pill. -->
+    <Style x:Key="ModeSwitch" TargetType="RadioButton">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="#9CA3AF" />
+      <Setter Property="Background" Value="#1F2937" />
+      <Setter Property="BorderBrush" Value="#374151" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Border x:Name="Pill" CornerRadius="10" Padding="10,3" BorderThickness="1"
+                    Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}">
+              <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" HorizontalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Pill" Property="Background" Value="#2662D0E8" />
+                <Setter TargetName="Pill" Property="BorderBrush" Value="#62D0E8" />
+                <Setter Property="Foreground" Value="#62D0E8" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
 
     <!-- A setting shown as a small pill. -->
     <Style x:Key="Chip" TargetType="Border">
@@ -83,8 +113,8 @@
       <Setter Property="FontFamily" Value="{StaticResource Icons}" />
       <Setter Property="Content" Value="&#xE720;" />
       <Setter Property="Cursor" Value="Hand" />
-      <Setter Property="ToolTip" Value="{x:Static raven:RavenPanelViewModel.MicToolTip}" />
-      <Setter Property="AutomationProperties.Name" Value="Push to talk" />
+      <Setter Property="ToolTip" Value="{Binding MicButtonToolTip}" />
+      <Setter Property="AutomationProperties.Name" Value="{Binding MicButtonName}" />
       <Setter Property="FocusVisualStyle" Value="{StaticResource RoundFocusRing}" />
       <Setter Property="Template">
         <Setter.Value>
@@ -108,6 +138,10 @@
                 <Setter Property="Foreground" Value="#F59E0B" />
                 <Setter TargetName="Disc" Property="Fill" Value="#26F59E0B" />
                 <Setter TargetName="Disc" Property="Stroke" Value="#F59E0B" />
+              </DataTrigger>
+              <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
+                <Setter Property="Content" Value="&#xE769;" />
+                <Setter Property="Opacity" Value="0.7" />
               </DataTrigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -286,6 +320,13 @@
                       PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
                       PreviewKeyDown="OnMicKey" />
               <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
+                <!-- Push to talk or Open mic: two radio buttons styled as one switch. -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                  <RadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
+                               IsChecked="{Binding MicMode, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}" />
+                  <RadioButton Style="{StaticResource ModeSwitch}" Content="Open mic" AutomationProperties.Name="Open mic mode"
+                               IsChecked="{Binding MicMode, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}" />
+                </StackPanel>
                 <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,0,0,4" />
                 <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"
                           FontSize="13" HorizontalAlignment="Stretch" AutomationProperties.Name="Microphone"

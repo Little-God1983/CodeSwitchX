@@ -301,6 +301,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public string MicButtonName => MicMode == MicMode.PushToTalk ? "Push to talk"
         : _attendPaused ? "Resume Open mic" : "Pause Open mic";
 
+    public string MicButtonToolTip => MicMode == MicMode.PushToTalk ? MicToolTip : $"{MicButtonName} ({HotkeyService.PushToTalk.Keys})";
+
     /// <summary>The last start or stop of Open mic; completed when none runs.</summary>
     internal Task PendingOpenMic { get; private set; } = Task.CompletedTask;
 
@@ -549,6 +551,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         OnPropertyChanged(nameof(MicButtonName));
+        OnPropertyChanged(nameof(MicButtonToolTip));
         UpdateState();
     }
 
@@ -795,6 +798,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         StopOpenMic();
         _attendPaused = true;
         OnPropertyChanged(nameof(MicButtonName));
+        OnPropertyChanged(nameof(MicButtonToolTip));
         UpdateState();
     }
 
@@ -804,6 +808,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _attendPaused = false;
             OnPropertyChanged(nameof(MicButtonName));
+            OnPropertyChanged(nameof(MicButtonToolTip));
             PendingOpenMic = StartOpenMicAsync();
         }
         else
