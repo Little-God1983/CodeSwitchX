@@ -63,6 +63,13 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     public TurnEvent? Step(ReadOnlySpan<float> frame)
     {
         var probability = vad.Step(frame);
+        if (_ignoreSpeech && !_started)
+        {
+            // Raven is talking: a burst that had not become a turn yet is dropped at once, and her voice is not kept as pre-roll.
+            Reset(keepVad: true);
+            return null;
+        }
+
         var copy = frame.ToArray();
         var speech = !_ignoreSpeech && probability >= (_inTurn ? ContinueThreshold : StartThreshold);
         if (!_inTurn)
@@ -104,7 +111,7 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
             _silentFrames++;
             if (!_started && _silentFrames >= FramesIn(Pause))
             {
-                Reset(keepVad: true); // a cough, a key: no turn
+                DropBurst(); // a cough, a key: no turn
                 return null;
             }
 
@@ -141,6 +148,19 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
         if (!keepVad)
         {
             vad.Reset();
+        }
+    }
+
+    /// <summary>A cough or a key is forgotten, but the half second before the next speech must still be real audio, so
+    /// what the burst swallowed of it is handed back to the pre-roll.</summary>
+    private void DropBurst()
+    {
+        var keep = Math.Min(_turn.Count / Frame, FramesIn(PreRoll)) * Frame;
+        var tail = _turn.GetRange(_turn.Count - keep, keep).ToArray();
+        Reset(keepVad: true);
+        for (var i = 0; i < tail.Length; i += Frame)
+        {
+            _preRoll.Enqueue(tail[i..(i + Frame)]);
         }
     }
 

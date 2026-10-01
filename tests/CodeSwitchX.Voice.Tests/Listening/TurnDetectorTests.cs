@@ -125,6 +125,42 @@ public sealed class TurnDetectorTests
         _turn.Calls.ShouldBe(1, "the dip was no pause");
     }
 
+    [Fact]
+    public void A_dropped_burst_does_not_wipe_the_pre_roll_of_the_speech_right_after_it()
+    {
+        _turn.Answers.Enqueue(0.9);
+        var marker = 0.25f;
+
+        var events = Feed(Silence(1), Speech(0.3), Audio(marker, Frame, speech: false), Silence(0.25), Speech(1.0), Silence(0.5));
+
+        events.OfType<TurnEvent.Ended>().Single().Clip.ShouldContain(marker);
+    }
+
+    [Fact]
+    public void Ignoring_speech_drops_a_turn_that_has_not_started_yet_at_once()
+    {
+        Feed(Speech(0.3));
+        _detector.IgnoreSpeech = true;
+
+        Feed(Speech(1.0), Silence(0.5)).ShouldBeEmpty();
+
+        _turn.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Raven_s_own_voice_is_not_kept_as_pre_roll_while_speech_is_ignored()
+    {
+        _turn.Answers.Enqueue(0.9);
+        var marker = 0.25f;
+        _detector.IgnoreSpeech = true;
+        Feed(Audio(marker, Frame * 3, speech: false));
+        _detector.IgnoreSpeech = false;
+
+        var events = Feed(Speech(1.0), Silence(0.5));
+
+        events.OfType<TurnEvent.Ended>().Single().Clip.ShouldNotContain(marker);
+    }
+
     private static double Seconds(float[] clip) => clip.Length / 16_000.0;
 
     private List<TurnEvent> Feed(params float[][] parts)
