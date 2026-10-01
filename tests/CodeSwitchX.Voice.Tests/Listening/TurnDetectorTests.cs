@@ -1,0 +1,200 @@
+using CodeSwitchX.Voice.Listening;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CodeSwitchX.Voice.Tests.Listening;
+
+public sealed class TurnDetectorTests
+{
+    private const int Frame = SileroVad.FrameSamples; // 32 ms
+    private readonly ScriptedVad _vad = new();
+    private readonly ScriptedTurnEnd _turn = new();
+    private readonly TurnDetector _detector;
+
+    public TurnDetectorTests() => _detector = new TurnDetector(_vad, _turn, NullLogger.Instance);
+
+    [Fact]
+    public void A_burst_shorter_than_half_a_second_is_no_turn()
+    {
+        var events = Feed(Silence(1), Speech(0.4), Silence(1));
+
+        events.ShouldBeEmpty();
+        _turn.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Half_a_second_of_speech_starts_the_turn_and_a_complete_pause_ends_it_after_0_2_s()
+    {
+        _turn.Answers.Enqueue(0.9);
+
+        var events = Feed(Silence(1), Speech(1.0), Silence(1));
+
+        events.Count.ShouldBe(2);
+        events[0].ShouldBeOfType<TurnEvent.Started>();
+        var clip = events[1].ShouldBeOfType<TurnEvent.Ended>().Clip;
+        // 0.5 s pre-roll + 1 s speech + 0.2 s of the pause, give or take a frame each
+        Seconds(clip).ShouldBeInRange(1.6, 1.8);
+        _turn.Calls.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_pause_Smart_Turn_calls_incomplete_does_not_end_the_turn_and_more_speech_continues_it()
+    {
+        _turn.Answers.Enqueue(0.1); // "I'd like to open the …"
+        _turn.Answers.Enqueue(0.9);
+
+        var events = Feed(Speech(1.0), Silence(1.0), Speech(1.0), Silence(0.5));
+
+        events.OfType<TurnEvent.Started>().Count().ShouldBe(1);
+        Seconds(events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip).ShouldBeGreaterThan(3.0);
+        _turn.Calls.ShouldBe(2);
+    }
+
+    [Fact]
+    public void Three_seconds_of_silence_end_the_turn_whatever_Smart_Turn_says()
+    {
+        _turn.Answers.Enqueue(0.1);
+
+        var events = Feed(Speech(1.0), Silence(2.9));
+        events.OfType<TurnEvent.Ended>().ShouldBeEmpty();
+
+        events = Feed(Silence(0.2));
+        events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public void Smart_Turn_failing_falls_back_to_the_three_seconds()
+    {
+        _turn.Throws = true;
+
+        var events = Feed(Speech(1.0), Silence(3.2));
+
+        events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public void The_pre_roll_carries_the_first_syllable_the_VAD_was_late_for()
+    {
+        _turn.Answers.Enqueue(0.9);
+        var marker = 0.25f;
+
+        var events = Feed(Silence(1), Audio(marker, Frame, speech: false), Speech(1.0), Silence(0.5));
+
+        events.OfType<TurnEvent.Ended>().Single().Clip.ShouldContain(marker);
+    }
+
+    [Fact]
+    public void A_turn_ends_at_two_minutes()
+    {
+        var events = Feed(Speech(121));
+
+        Seconds(events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip).ShouldBeLessThanOrEqualTo(120.6);
+    }
+
+    [Fact]
+    public void Reset_drops_a_half_spoken_turn()
+    {
+        Feed(Speech(1.0));
+
+        _detector.Reset();
+        var events = Feed(Silence(4));
+
+        events.ShouldBeEmpty();
+        _vad.Resets.ShouldBe(1);
+    }
+
+    [Fact]
+    public void While_speech_is_ignored_it_starts_no_turn()
+    {
+        _detector.IgnoreSpeech = true;
+
+        Feed(Speech(2.0), Silence(1)).ShouldBeEmpty();
+
+        _detector.IgnoreSpeech = false;
+        _turn.Answers.Enqueue(0.9);
+        Feed(Speech(1.0), Silence(0.5)).OfType<TurnEvent.Ended>().ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public void A_dip_under_the_start_level_but_over_the_continue_level_is_still_speech()
+    {
+        _turn.Answers.Enqueue(0.9);
+
+        var events = Feed(Speech(0.3), Audio(0.1f, Frame * 5, speech: true, probability: 0.4f), Speech(0.3), Silence(0.5));
+
+        events.OfType<TurnEvent.Started>().ShouldHaveSingleItem();
+        _turn.Calls.ShouldBe(1, "the dip was no pause");
+    }
+
+    private static double Seconds(float[] clip) => clip.Length / 16_000.0;
+
+    private List<TurnEvent> Feed(params float[][] parts)
+    {
+        var events = new List<TurnEvent>();
+        foreach (var part in parts)
+        {
+            for (var i = 0; i + Frame <= part.Length; i += Frame)
+            {
+                if (_detector.Step(part.AsSpan(i, Frame)) is { } e)
+                {
+                    events.Add(e);
+                }
+            }
+        }
+
+        return events;
+    }
+
+    private float[] Speech(double seconds) => Audio(0.5f, Samples(seconds), speech: true);
+
+    private float[] Silence(double seconds) => Audio(0f, Samples(seconds), speech: false);
+
+    private static int Samples(double seconds) => (int)Math.Round(seconds * 16_000 / Frame) * Frame;
+
+    /// <summary>Audio whose frames the scripted VAD reads back: the first sample of each frame says how likely speech is.</summary>
+    private float[] Audio(float value, int samples, bool speech, float? probability = null)
+    {
+        var audio = new float[samples];
+        Array.Fill(audio, value);
+        for (var i = 0; i < samples; i += Frame)
+        {
+            _vad.Script.Enqueue(probability ?? (speech ? 0.9f : 0.05f));
+        }
+
+        return audio;
+    }
+
+    private sealed class ScriptedVad : IVoiceActivity
+    {
+        public Queue<float> Script { get; } = new();
+
+        public int Resets { get; private set; }
+
+        public float Step(ReadOnlySpan<float> frame) => Script.Dequeue();
+
+        public void Reset() => Resets++;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ScriptedTurnEnd : ITurnEnd
+    {
+        public Queue<double> Answers { get; } = new();
+
+        public int Calls { get; private set; }
+
+        public bool Throws { get; set; }
+
+        public double Complete(ReadOnlySpan<float> turn16k)
+        {
+            Calls++;
+            turn16k.Length.ShouldBeLessThanOrEqualTo(8 * 16_000 + Frame);
+            return Throws ? throw new InvalidOperationException("model died") : Answers.Count > 0 ? Answers.Dequeue() : 0.9;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+}
