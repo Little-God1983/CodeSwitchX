@@ -28,10 +28,10 @@
 .PARAMETER InstallDir
     A folder of your own for the build instead of a versioned one. Nothing is bumped, committed
     or pushed, no Start Menu shortcut is written, and any branch is fine - this is the way to try a
-    feature branch's build. The build is stamped <current version>-oneoff.<commit> so it cannot be
+    feature branch's build. The build is stamped <current version>-oneoff.g<commit> so it cannot be
     mistaken for a stable one. Must be outside the repo and outside the stable root, and must be
-    empty or a folder this script published into before - a folder holding anything else is
-    refused untouched.
+    empty or a folder a one-off build was published into before - a folder holding anything else
+    is refused untouched.
 
 .PARAMETER Clean
     With -InstallDir: wipe that folder before publishing. Only ever a folder carrying our install
@@ -97,17 +97,15 @@ if ($stable) {
     Assert-ReleaseReady
     $version = Get-NextVersion -Current $current -Part $Part
     $InstallDir = Get-VersionedInstallDir -InstallRoot $InstallRoot -Version $version
+    Assert-StableTargetFree -InstallDir $InstallDir -Version $version -Current $current
     Write-Ok "version $current -> $version"
     Write-Note "install  $InstallDir"
     Write-Note "Directory.Build.props is bumped, committed and pushed only if the publish succeeds"
     if ($Clean) { Write-Warn "-Clean has nothing to do here: a versioned folder always starts empty" }
 }
 else {
-    # Stamped so Explorer's Product version or a log line can never pass this off as the stable build
-    # of the same number. FileVersion stays numeric, as Windows requires.
-    $commit = Get-HeadCommit
-    if (-not $commit) { $commit = 'nogit' }
-    $version = "$current-oneoff.$commit"
+    # FileVersion stays numeric, as Windows requires; only the product version carries the stamp.
+    $version = Get-OneOffVersion -Current $current -Commit (Get-HeadCommit)
     Write-Ok "version $version"
     if ($NoShortcut) { Write-Note "-NoShortcut is implied: a one-off build never writes the Start Menu shortcut" }
 }
@@ -134,9 +132,12 @@ if (-not $stable -and ((Test-PathUnder $InstallDir $InstallRoot -OrEqual) -or (T
 
 # The install root is shared with other releases (E:\StableVersion holds RawCutX, ContentAutomatorX
 # and friends). A fresh versioned build deletes its folder first, so we only ever work in a folder
-# that is empty or already carries our install marker.
-if ((Test-DirectoryHasContent $InstallDir) -and -not (Test-OurInstall $InstallDir)) {
-    Fail "$InstallDir already holds files that are not a CodeSwitchX install." @(
+# that is empty or already carries our install marker - and a one-off only in a one-off's folder,
+# since the path check above cannot see through an 8.3 name, a junction or a subst drive.
+$reusable = if ($stable) { Test-OurInstall $InstallDir } else { Test-OurInstall $InstallDir -OneOff }
+if ((Test-DirectoryHasContent $InstallDir) -and -not $reusable) {
+    $what = if ($stable) { 'a CodeSwitchX install' } else { 'a one-off CodeSwitchX build' }
+    Fail "$InstallDir already holds files that are not $what." @(
         "Not one of them was touched.",
         "Move that folder out of the way, or give the build a folder of its own:",
         "  .\scripts\build.ps1 -InstallDir 'E:\Builds\CodeSwitchX-test'"
@@ -177,7 +178,8 @@ if (($stable -or $Clean) -and (Test-DirectoryHasContent $InstallDir)) {
 
     # Belt and braces: the guard above already rejected a folder that is not ours, but this is
     # the only recursive delete in the scripts, so it checks for itself too.
-    if (-not (Test-OurInstall $InstallDir)) {
+    $stillOurs = if ($stable) { Test-OurInstall $InstallDir } else { Test-OurInstall $InstallDir -OneOff }
+    if (-not $stillOurs) {
         Fail "Refusing to clean $InstallDir - it carries no CodeSwitchX install marker." @(
             "Only a folder this script published into is ever deleted."
         )
@@ -197,7 +199,9 @@ if (($stable -or $Clean) -and (Test-DirectoryHasContent $InstallDir)) {
 # virus scanner holding a file) would otherwise leave a folder full of files and no marker, which
 # every later run refuses to publish into *and* refuses to clean. The checks above established
 # the folder is empty or ours, so claiming it here is safe. The marker says "complete": false until
-# the publish has succeeded, and the current link never points at such a folder.
+# the publish has succeeded - and, for a stable build, until the running version has closed - and the
+# current link never points at such a folder. A complete stable folder is never cleaned again
+# (Assert-StableTargetFree), so "complete" must not be said before the build can become current.
 Write-InstallMarker -InstallDir $InstallDir -Version $version
 
 # --- publish -----------------------------------------------------------------------------
@@ -219,7 +223,7 @@ foreach ($required in @($AppExeName, $RelayRelativePath)) {
         Fail "The build reported success but $required is missing from $InstallDir." $buildFailedHints
     }
 }
-Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete
+if (-not $stable) { Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete }
 Write-Ok "published to $InstallDir"
 
 # --- make it the current version ------------------------------------------------------------
@@ -234,6 +238,8 @@ if ($stable) {
         "$version is published in $InstallDir but not made current, and the version is not bumped.",
         "Run the build again once it is closed; it rebuilds $version."
     )
+    # Only now: had the close failed, the folder stays incomplete and the next run rebuilds it.
+    Write-InstallMarker -InstallDir $InstallDir -Version $version -Complete
     foreach ($other in (Get-OtherAppProcess -InstallRoot $InstallRoot)) {
         Write-Warn "another CodeSwitchX runs from $($other.ExecutablePath) (PID $($other.ProcessId)) - left alone"
         Write-Note "while it runs, starting the new version only brings that one forward"

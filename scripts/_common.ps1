@@ -175,13 +175,43 @@ function Get-DirectoryLinkTarget {
 }
 
 # True only for a folder a previous build.ps1 published into. Everything destructive in these
-# scripts is gated on this, so a folder we did not create is never cleaned.
+# scripts is gated on this, so a folder we did not create is never cleaned. With -OneOff, only a
+# one-off build's folder: what the marker says cannot be aliased the way a path can, so a stable
+# release reached through an 8.3 name, a junction or a subst drive is still refused.
 function Test-OurInstall {
-    param([string]$InstallDir)
+    param([string]$InstallDir, [switch]$OneOff)
     $marker = Join-Path $InstallDir $InstallMarkerName
     if (-not (Test-Path -LiteralPath $marker)) { return $false }
-    try { return (((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).app) -eq $AppName) }
+    try {
+        $content = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+        if ($content.app -ne $AppName) { return $false }
+        return (-not $OneOff) -or ("$($content.version)" -match '-oneoff\.')
+    }
     catch { return $false }
+}
+
+# True for a folder whose build finished - the only kind the current link ever points at.
+function Test-InstallComplete {
+    param([string]$InstallDir)
+    if (-not (Test-OurInstall $InstallDir)) { return $false }
+    try { return [bool]((Get-Content -LiteralPath (Join-Path $InstallDir $InstallMarkerName) -Raw | ConvertFrom-Json).complete) }
+    catch { return $false }
+}
+
+# A stable build never republishes over a finished version folder. The current link and the Start
+# Menu shortcut move to the new folder before the bump is committed and pushed, so a push that fails,
+# followed by a reset to origin, hands out the same number again - and its folder is then the one the
+# shortcut opens, with CodeSwitchX running from it. Cleaning it would delete every file the running
+# app has not locked. A folder that never became current - an interrupted publish, or a running
+# CodeSwitchX that would not close - is not marked complete, so build.ps1 still cleans that one.
+function Assert-StableTargetFree {
+    param([string]$InstallDir, [string]$Version, [string]$Current)
+    if (-not (Test-InstallComplete $InstallDir)) { return }
+    Fail "$Version is already published in $InstallDir." @(
+        "A finished stable folder is never republished over - it may be the version running right now.",
+        "Directory.Build.props still says $Current, so the bump of the run that built it never reached origin.",
+        "Record it by hand - set <Version> to $Version in Directory.Build.props, commit that and push $ReleaseBranch - then run this again."
+    )
 }
 
 function Write-InstallMarker {
@@ -272,6 +302,17 @@ function Get-NextVersion {
     }
 }
 
+# The version a one-off -InstallDir build is stamped with, so Explorer's Product version or a log line
+# can never pass it off as the stable build of the same number. The 'g' in front of the hash is
+# load-bearing: a short hash can be all digits with a leading zero (0123456, about 1 commit in 270),
+# which is not a valid SemVer prerelease identifier, and NuGet's restore then fails with nothing but
+# MSB4181.
+function Get-OneOffVersion {
+    param([string]$Current, [string]$Commit)
+    if (-not $Commit) { return "$Current-oneoff.nogit" }
+    return "$Current-oneoff.g$Commit"
+}
+
 # Writes the string back byte for byte apart from the number: same line endings, same BOM or lack of
 # one, so the bump commit is a one-line diff.
 function Set-PropsVersion {
@@ -314,7 +355,14 @@ function Assert-ReleaseReady {
     # Untracked files count too: the SDK compiles every *.cs under src\ whether git knows it or
     # not, so a new file that was never added would go into a build stamped with a commit that
     # does not contain it. bin\, obj\ and the like are ignored, so they never show up here.
+    # The exit code decides, not the output: a git that fails here prints nothing to stdout, and
+    # nothing reads as "no changes".
     $dirty = @(Invoke-Git @('status', '--porcelain') -Quiet)
+    if ($LASTEXITCODE -ne 0) {
+        Fail "git status failed (exit code $LASTEXITCODE), so the working tree could not be checked." @(
+            "Run git status yourself to see why - a damaged index or a safe.directory refusal are the usual causes."
+        )
+    }
     if ($dirty.Count -gt 0) {
         Fail "The working tree has uncommitted or untracked files." @(
             @("A stable build has to match a commit on $ReleaseBranch. Commit, stash, ignore or delete these first:") +
