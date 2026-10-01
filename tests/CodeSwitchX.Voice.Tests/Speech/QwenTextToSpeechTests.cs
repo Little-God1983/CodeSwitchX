@@ -128,6 +128,36 @@ public sealed class QwenTextToSpeechTests : IDisposable
     }
 
     [Fact]
+    public async Task Speaking_before_the_first_install_says_it_installs()
+    {
+        var error = await Should.ThrowAsync<TextToSpeechNotReadyException>(async () =>
+        {
+            await foreach (var _ in _tts.SpeakAsync("Hello.", CancellationToken.None))
+            {
+            }
+        });
+
+        error.Status.State.ShouldBe(TextToSpeechState.Installing, "not \"still loading\" while 5 GB are installed");
+        await _tts.Preparing;
+    }
+
+    [Fact]
+    public async Task A_new_model_picked_during_the_install_lets_it_finish_and_is_loaded_after()
+    {
+        _environment.Gate = new TaskCompletionSource();
+        _tts.Prepare(install: true);
+        await Until(() => _tts.Status.State == TextToSpeechState.Installing);
+
+        _settings.Model = SpeechModel.Large;
+        _environment.Gate.TrySetResult();
+        await Until(() => _tts.Status.State == TextToSpeechState.Ready);
+
+        _environment.Installs.ShouldBe(1);
+        _environment.Cancelled.ShouldBeFalse();
+        _launcher.Starts.ShouldBe(["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]);
+    }
+
+    [Fact]
     public async Task A_new_model_restarts_the_voice()
     {
         _environment.Installed = true;
@@ -175,6 +205,11 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public int Installs { get; private set; }
 
+        /// <summary>When set, the install waits for it.</summary>
+        public TaskCompletionSource? Gate { get; set; }
+
+        public bool Cancelled { get; private set; }
+
         public bool IsInstalled => Installed;
 
         public string Python => "python.exe";
@@ -183,16 +218,21 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public string WriteScript() => "server.py";
 
-        public Task InstallAsync(IProgress<string> progress, CancellationToken ct)
+        public async Task InstallAsync(IProgress<string> progress, CancellationToken ct)
         {
             Installs++;
+            if (Gate is { } gate)
+            {
+                using var _ = ct.Register(() => Cancelled = true);
+                await gate.Task.WaitAsync(ct);
+            }
+
             if (InstallFails)
             {
                 throw new TextToSpeechException("no network");
             }
 
             Installed = true;
-            return Task.CompletedTask;
         }
     }
 

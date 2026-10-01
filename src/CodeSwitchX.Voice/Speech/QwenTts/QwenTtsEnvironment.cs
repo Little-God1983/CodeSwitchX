@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using Microsoft.Extensions.Logging;
 
@@ -29,14 +30,15 @@ public interface IQwenTtsEnvironment
 /// on the machine never breaks it), PyTorch for CUDA 12.8 (the build that runs on Blackwell cards) and faster-qwen3-tts,
 /// whose CUDA graphs make Qwen3-TTS several times faster than real time on Windows (the plain qwen-tts package is three
 /// times slower than real time there). Every other package is pinned by <c>constraints.txt</c>, frozen from an environment
-/// that ran. uv is taken from the PATH, or downloaded next to the environment.
+/// that ran. uv is the pinned version: the one on the PATH if it is that version, else one downloaded next to the environment.
 /// </summary>
 public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
 {
     /// <summary>Raised whenever the recipe changes (a pin, a step): an environment stamped with another version is installed again.</summary>
     public const string RecipeVersion = "1";
 
-    private const string UvVersion = "0.11.6";
+    /// <summary>The recipe relies on this version's flags (<c>--managed-python</c>) and quirks (a path cut at its first space).</summary>
+    internal const string UvVersion = "0.11.6";
     private const string PythonVersion = "3.12";
     private const string TorchIndex = "https://download.pytorch.org/whl/cu128";
     private static readonly string[] TorchPackages = ["torch==2.11.0", "torchaudio==2.11.0"];
@@ -50,7 +52,7 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
     private readonly ILogger<QwenTtsEnvironment> _logger;
 
     /// <param name="root">The voice folder: everything the engine needs goes in here.</param>
-    /// <param name="findUv">uv on the PATH, if any.</param>
+    /// <param name="findUv">uv of <see cref="UvVersion"/> on the PATH, if any; the pinned uv is downloaded otherwise.</param>
     public QwenTtsEnvironment(string root, string modelCache, IProcessRunner runner, HttpClient http, Func<string?> findUv,
         ILogger<QwenTtsEnvironment> logger)
     {
@@ -66,7 +68,8 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
 
     private string Stamp => Path.Combine(_root, "installed.txt");
 
-    private string LocalUv => Path.Combine(_root, "uv", "uv.exe");
+    /// <summary>By version: a recipe that pins another uv downloads that one.</summary>
+    private string LocalUv => Path.Combine(_root, "uv", UvVersion, "uv.exe");
 
     public string Python => Path.Combine(Venv, "Scripts", "python.exe");
 
@@ -178,10 +181,47 @@ public sealed class QwenTtsEnvironment : IQwenTtsEnvironment
         return reader.ReadToEnd();
     }
 
-    /// <summary>uv.exe on the PATH, if any.</summary>
-    public static string? FindUvOnPath() =>
-        (Environment.GetEnvironmentVariable("PATH") ?? "")
+    /// <summary>The first uv.exe on the PATH, if it is <see cref="UvVersion"/>: an older one lacks flags the recipe uses.</summary>
+    public static string? FindPinnedUvOnPath()
+    {
+        var uv = (Environment.GetEnvironmentVariable("PATH") ?? "")
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(folder => Path.Combine(folder, "uv.exe"))
             .FirstOrDefault(File.Exists);
+        return uv is not null && IsPinnedVersion(VersionOf(uv)) ? uv : null;
+    }
+
+    /// <summary>What <c>uv --version</c> says ("uv 0.11.6 (65950801c 2026-04-09 ...)"); empty if it says nothing in 5 s.</summary>
+    private static string VersionOf(string uv)
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo(uv, "--version")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            });
+            if (process is null)
+            {
+                return "";
+            }
+
+            var output = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(5000))
+            {
+                process.Kill();
+                return "";
+            }
+
+            return output.Result.Trim();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return "";
+        }
+    }
+
+    internal static bool IsPinnedVersion(string versionOutput) =>
+        versionOutput == $"uv {UvVersion}" || versionOutput.StartsWith($"uv {UvVersion} ", StringComparison.Ordinal);
 }

@@ -87,7 +87,7 @@ public sealed class ReplyVoiceTests : IDisposable
         await Until(() => _tts.Spoken.Count == 1);
 
         _voice.Hush();
-        _player.Stops.ShouldBe(1);
+        await Until(() => _player.Stops == 1);
         _tts.Cancelled.ShouldBeTrue();
         _tts.Gate.TrySetResult();
         reply.Add("Third sentence.");
@@ -116,7 +116,7 @@ public sealed class ReplyVoiceTests : IDisposable
     public async Task Nothing_is_spoken_while_muted_and_muting_hushes()
     {
         _voice.Muted = true;
-        _player.Stops.ShouldBe(1);
+        await Until(() => _player.Stops == 1);
         var reply = _voice.Begin();
         reply.Add("Not said.");
         reply.Complete();
@@ -168,15 +168,28 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Fact]
-    public void A_coming_reply_wakes_the_output_and_muted_it_stays_asleep()
+    public async Task A_coming_reply_wakes_the_output_and_muted_it_stays_asleep()
     {
         _voice.Expect();
-        _keepAlive.On.ShouldBeTrue();
+        await Until(() => _keepAlive.On);
 
         _keepAlive.On = false;
         _voice.Muted = true;
         _voice.Expect();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         _keepAlive.On.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Waking_the_output_never_waits_for_the_device()
+    {
+        _keepAlive.Opening = new TaskCompletionSource();
+
+        var expect = Task.Run(_voice.Expect, TestContext.Current.CancellationToken);
+
+        (await Task.WhenAny(expect, Task.Delay(1000, TestContext.Current.CancellationToken))).ShouldBe(expect, "the mic press must not wait for a headset to wake");
+        _keepAlive.Opening.TrySetResult();
+        await Until(() => _keepAlive.On);
     }
 
     [Fact]
@@ -186,11 +199,97 @@ public sealed class ReplyVoiceTests : IDisposable
         var keepAlive = new FakeKeepAlive();
         using var voice = new ReplyVoice(_tts, _player, keepAlive, time, NullLogger<ReplyVoice>.Instance);
         voice.Expect();
+        await Until(() => keepAlive.On);
         time.Advance(ReplyVoice.KeepAwake - TimeSpan.FromSeconds(1));
         keepAlive.On.ShouldBeTrue();
         time.Advance(TimeSpan.FromSeconds(1));
         keepAlive.On.ShouldBeFalse();
-        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_reply_the_brain_still_works_on_keeps_the_output_awake()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var keepAlive = new FakeKeepAlive();
+        using var voice = new ReplyVoice(_tts, _player, keepAlive, time, NullLogger<ReplyVoice>.Instance);
+        voice.Expect();
+        await Until(() => keepAlive.On);
+        var reply = voice.Begin(); // the brain thinks, with tools, for minutes
+
+        time.Advance(ReplyVoice.KeepAwake * 3);
+        keepAlive.On.ShouldBeTrue("the first word of the answer must not be lost to a sleeping headset");
+
+        reply.Complete();
+        time.Advance(ReplyVoice.KeepAwake);
+        keepAlive.On.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_hush_never_waits_for_the_device_and_what_was_opening_is_stopped_after()
+    {
+        _player.Opening = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Add("A sentence that opens the device. ");
+        await Until(() => _player.Enqueuing);
+
+        var hush = Task.Run(_voice.Hush, TestContext.Current.CancellationToken);
+
+        (await Task.WhenAny(hush, Task.Delay(1000, TestContext.Current.CancellationToken))).ShouldBe(hush, "a mic press must not wait for a Bluetooth headset to open");
+        _player.Opening.TrySetResult();
+        await Until(() => _player.Stops == 1);
+        _player.Log.ShouldBe(["enqueue", "stop"]); // the chunk that was being queued does not play on
+        _voice.IsSpeaking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Speaking_is_told_in_the_order_it_changes()
+    {
+        var told = new List<bool>();
+        _voice.SpeakingChanged += (_, speaking) =>
+        {
+            if (speaking)
+            {
+                Thread.Sleep(200); // the loop thread is pre-empted between the flip and its telling
+            }
+
+            lock (told)
+            {
+                told.Add(speaking);
+            }
+        };
+        _player.Remaining = TimeSpan.FromSeconds(10);
+        var reply = _voice.Begin();
+        reply.Add("Hello there. ");
+        await Until(() => _player.Played == 1);
+
+        _voice.Hush();
+        await Until(() => { lock (told) { return told.Count == 2; } });
+
+        lock (told)
+        {
+            told.ShouldBe([true, false], "the panel must end on not speaking");
+        }
+    }
+
+    [Fact]
+    public async Task A_reply_hushed_before_its_first_audio_is_told_does_not_start_speaking()
+    {
+        var told = new List<bool>();
+        _voice.SpeakingChanged += (_, speaking) => { lock (told) { told.Add(speaking); } };
+        _tts.Gate = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Add("Hello there. ");
+        await Until(() => _tts.Spoken.Count == 1);
+
+        _voice.Hush();
+        _tts.Gate.TrySetResult();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _voice.IsSpeaking.ShouldBeFalse();
+        lock (told)
+        {
+            told.ShouldNotContain(true);
+        }
     }
 
     private static async Task Until(Func<bool> condition)
@@ -262,9 +361,16 @@ public sealed class ReplyVoiceTests : IDisposable
 
     private sealed class FakeKeepAlive : IAudioKeepAlive
     {
-        public bool On { get; set; }
+        public volatile bool On;
 
-        public void Start() => On = true;
+        /// <summary>When set, opening the device waits for it.</summary>
+        public TaskCompletionSource? Opening { get; set; }
+
+        public void Start()
+        {
+            Opening?.Task.Wait();
+            On = true;
+        }
 
         public void Stop() => On = false;
 
@@ -290,9 +396,34 @@ public sealed class ReplyVoiceTests : IDisposable
             remove { }
         }
 
-        public void Enqueue(SpeechChunk chunk) => Interlocked.Increment(ref _played);
+        /// <summary>When set, the first chunk opens the device, which waits for it.</summary>
+        public TaskCompletionSource? Opening { get; set; }
 
-        public void Stop() => Interlocked.Increment(ref _stops);
+        public volatile bool Enqueuing;
+
+        public List<string> Log { get; } = [];
+
+        public void Enqueue(SpeechChunk chunk)
+        {
+            Enqueuing = true;
+            Opening?.Task.Wait();
+            lock (Log)
+            {
+                Log.Add("enqueue");
+            }
+
+            Interlocked.Increment(ref _played);
+        }
+
+        public void Stop()
+        {
+            lock (Log)
+            {
+                Log.Add("stop");
+            }
+
+            Interlocked.Increment(ref _stops);
+        }
 
         public void Dispose()
         {

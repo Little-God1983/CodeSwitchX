@@ -55,6 +55,17 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
         environment.IsInstalled.ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData("uv 0.11.6 (65950801c 2026-04-09 x86_64-pc-windows-msvc)", true)]
+    [InlineData("uv 0.11.6", true)]
+    [InlineData("uv 0.5.31 (abc 2024-12-01)", false)]
+    [InlineData("uv 0.11.60 (abc)", false)]
+    [InlineData("", false)]
+    public void Only_the_pinned_uv_on_the_path_is_used(string versionOutput, bool used)
+    {
+        QwenTtsEnvironment.IsPinnedVersion(versionOutput).ShouldBe(used);
+    }
+
     [Fact]
     public void The_sidecar_script_is_written_into_the_voice_folder()
     {

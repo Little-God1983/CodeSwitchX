@@ -44,7 +44,20 @@ public sealed class ReplyVoice : IDisposable
     private readonly ILogger<ReplyVoice> _logger;
     private readonly Channel<Sentence> _sentences = Channel.CreateUnbounded<Sentence>();
     private readonly Lock _lock = new();
+
+    /// <summary>Taken while <see cref="_speaking"/> changes and the change is told, so the changes are told in order.</summary>
+    private readonly Lock _telling = new();
+
+    /// <summary>
+    /// Every call to the player goes through this gate, never under <see cref="_lock"/>: the first chunk of a reply opens
+    /// the output device, which takes a while on a Bluetooth headset, and a hush on the UI thread must not wait for it.
+    /// </summary>
+    private readonly SemaphoreSlim _playerGate = new(1, 1);
     private readonly Task _loop;
+
+    /// <summary>Stops asked for by hushes, and how many of them the player has had (under <see cref="_playerGate"/>).</summary>
+    private long _stopsAsked;
+    private long _stopsDone;
 
     /// <summary>How many replies have begun: each one's number.</summary>
     private long _replies;
@@ -56,6 +69,9 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>Sentences queued and not yet spoken or dropped.</summary>
     private int _pending;
+
+    /// <summary>Replies begun and not yet complete: the brain is still working on them.</summary>
+    private int _open;
     private bool _speaking;
 
     public ReplyVoice(ITextToSpeech tts, ISpeechPlayer player, IAudioKeepAlive keepAlive, TimeProvider time, ILogger<ReplyVoice> logger)
@@ -106,7 +122,9 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>
     /// A reply is on its way (the user started their turn): wakes the output now, so a Bluetooth headset does not lose the
-    /// first word to waking up. It sleeps again <see cref="KeepAwake"/> after the voice last went quiet. Any thread.
+    /// first word to waking up. It sleeps again <see cref="KeepAwake"/> after the voice last went quiet and no reply is
+    /// still being written. Returns at once on any thread: opening the device is done on the thread pool, off the mic
+    /// press, and there no synchronisation context catches its events.
     /// </summary>
     public void Expect()
     {
@@ -115,13 +133,13 @@ public sealed class ReplyVoice : IDisposable
             return;
         }
 
-        _keepAlive.Start();
+        _ = Task.Run(_keepAlive.Start);
         _sleep.Change(KeepAwake, Timeout.InfiniteTimeSpan);
     }
 
     private void LetSleep()
     {
-        if (IsSpeaking || Volatile.Read(ref _pending) > 0)
+        if (IsSpeaking || Volatile.Read(ref _pending) > 0 || Volatile.Read(ref _open) > 0)
         {
             _sleep.Change(KeepAwake, Timeout.InfiniteTimeSpan);
             return;
@@ -132,10 +150,16 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>Begins a reply; feed it the text as it streams in, then complete it.</summary>
     /// <param name="onFirstAudio">Called once, when the reply's first audio is queued to play; on any thread.</param>
-    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null) =>
-        new(this, Interlocked.Increment(ref _replies), _muted, onFirstAudio);
+    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null)
+    {
+        Interlocked.Increment(ref _open);
+        return new(this, Interlocked.Increment(ref _replies), _muted, onFirstAudio);
+    }
 
-    /// <summary>Stops speaking at once; nothing of the replies begun so far is spoken after this. Any thread.</summary>
+    /// <summary>
+    /// Stops speaking at once; nothing of the replies begun so far is spoken after this. Any thread, and returns at once:
+    /// the player is stopped on the thread pool, or by the loop before it plays anything more, whichever comes first.
+    /// </summary>
     public void Hush()
     {
         CancellationTokenSource hushed;
@@ -144,11 +168,38 @@ public sealed class ReplyVoice : IDisposable
             _hushedThrough = Interlocked.Read(ref _replies);
             hushed = _hush;
             _hush = new CancellationTokenSource();
-            _player.Stop();
         }
 
+        Interlocked.Increment(ref _stopsAsked);
+        _ = Task.Run(StopAsAskedAsync);
         hushed.Cancel(); // outside the lock: the cancelled request's callbacks run here. Not disposed: a sentence may still hold its token.
         SetSpeaking(false);
+    }
+
+    private bool IsHushed(long reply) => reply <= Interlocked.Read(ref _hushedThrough);
+
+    private async Task StopAsAskedAsync()
+    {
+        await _playerGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            CatchUpStops();
+        }
+        finally
+        {
+            _playerGate.Release();
+        }
+    }
+
+    /// <summary>Gives the player the stops asked for since it last had one. Under <see cref="_playerGate"/>.</summary>
+    private void CatchUpStops()
+    {
+        var asked = Interlocked.Read(ref _stopsAsked);
+        if (_stopsDone < asked)
+        {
+            _stopsDone = asked;
+            _player.Stop();
+        }
     }
 
     private void Queue(Sentence sentence)
@@ -195,7 +246,7 @@ public sealed class ReplyVoice : IDisposable
         CancellationToken hush;
         lock (_lock)
         {
-            if (reply.Number <= _hushedThrough || reply.Dropped)
+            if (IsHushed(reply.Number) || reply.Dropped)
             {
                 return;
             }
@@ -210,17 +261,25 @@ public sealed class ReplyVoice : IDisposable
             await foreach (var chunk in _tts.SpeakAsync(sentence.Text, stalled.Token).ConfigureAwait(false))
             {
                 watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan);
-                lock (_lock)
+                await _playerGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                try
                 {
-                    if (reply.Number <= _hushedThrough)
+                    // A hush that came while this chunk was generated stops the player first; one that comes while it
+                    // is queued waits for the gate, and then stops it.
+                    CatchUpStops();
+                    if (IsHushed(reply.Number))
                     {
                         return;
                     }
 
                     _player.Enqueue(chunk);
                 }
+                finally
+                {
+                    _playerGate.Release();
+                }
 
-                SetSpeaking(true);
+                SetSpeaking(true, reply.Number);
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }
         }
@@ -322,37 +381,51 @@ public sealed class ReplyVoice : IDisposable
             return; // hushed: that stopped it already
         }
 
-        lock (_lock)
+        await _playerGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        try
         {
+            CatchUpStops();
             if (hush.IsCancellationRequested)
             {
-                return;
+                return; // hushed: that stopped it already, and said so
             }
 
             _player.Stop();
+        }
+        finally
+        {
+            _playerGate.Release();
         }
 
         SetSpeaking(false);
     }
 
-    private void SetSpeaking(bool speaking)
+    /// <summary>
+    /// Flips <see cref="IsSpeaking"/> and tells it, in the order the flips happen. Speaking starts only for a reply not
+    /// hushed by then: a hush between a chunk and this call leaves the voice quiet.
+    /// </summary>
+    /// <param name="reply">The reply whose audio starts it; for speaking only.</param>
+    private void SetSpeaking(bool speaking, long reply = 0)
     {
-        lock (_lock)
+        lock (_telling)
         {
-            if (_speaking == speaking)
+            lock (_lock)
             {
-                return;
+                if (_speaking == speaking || (speaking && IsHushed(reply)))
+                {
+                    return;
+                }
+
+                _speaking = speaking;
             }
 
-            _speaking = speaking;
-        }
+            if (!speaking)
+            {
+                _sleep.Change(KeepAwake, Timeout.InfiniteTimeSpan);
+            }
 
-        if (!speaking)
-        {
-            _sleep.Change(KeepAwake, Timeout.InfiniteTimeSpan);
+            SpeakingChanged?.Invoke(this, speaking);
         }
-
-        SpeakingChanged?.Invoke(this, speaking);
     }
 
     /// <summary>Completes once every sentence queued so far has been spoken or dropped, and played out; for the tests.</summary>
@@ -370,11 +443,12 @@ public sealed class ReplyVoice : IDisposable
         Hush();
         _sleep.Dispose();
         _keepAlive.Stop();
+        _player.Stop();
     }
 
     private sealed record Sentence(SpokenReply Reply, string Text);
 
-    /// <summary>One reply being spoken: fed its text as it streams in, in order, on one thread at a time.</summary>
+    /// <summary>One reply being spoken: fed its text as it streams in, in order, on one thread at a time, then completed.</summary>
     public sealed class SpokenReply
     {
         private readonly ReplyVoice _voice;
@@ -384,6 +458,7 @@ public sealed class ReplyVoice : IDisposable
         private int _queued;
         private int _dropped;
         private int _heard;
+        private int _completed;
 
         internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio)
         {
@@ -397,22 +472,32 @@ public sealed class ReplyVoice : IDisposable
 
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
-        /// <summary>The next piece of the reply's text.</summary>
+        /// <summary>Nothing more of it is spoken: muted, dropped, hushed, or its sentences are all queued.</summary>
+        private bool Done => _muted || Dropped || _queued >= MaximumSentences || _voice.IsHushed(Number);
+
+        /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken.</summary>
         public void Add(string piece)
         {
-            if (!_muted && !Dropped)
+            if (!Done)
             {
                 Queue(_chunker.Add(piece));
             }
         }
 
-        /// <summary>The reply is complete: what is left of it is a sentence too.</summary>
+        /// <summary>The reply is complete: what is left of it is a sentence too, and it no longer keeps the output awake.</summary>
         public void Complete()
         {
-            if (!_muted && !Dropped)
+            if (Interlocked.Exchange(ref _completed, 1) == 1)
+            {
+                return;
+            }
+
+            if (!Done)
             {
                 Queue(_chunker.Flush());
             }
+
+            Interlocked.Decrement(ref _voice._open);
         }
 
         private void Queue(IReadOnlyList<string> sentences)

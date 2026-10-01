@@ -28,7 +28,7 @@ public static class VoiceServiceCollectionExtensions
         services.AddSingleton<SpeechSettings>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<IQwenTtsEnvironment>(sp => new QwenTtsEnvironment(voiceDirectory, Path.Combine(modelsDirectory, "huggingface"),
-            sp.GetRequiredService<IProcessRunner>(), new HttpClient(), QwenTtsEnvironment.FindUvOnPath,
+            sp.GetRequiredService<IProcessRunner>(), new HttpClient(), QwenTtsEnvironment.FindPinnedUvOnPath,
             sp.GetRequiredService<ILogger<QwenTtsEnvironment>>()));
         services.AddSingleton<IQwenTtsServerLauncher, QwenTtsServerLauncher>();
         services.AddSingleton<ITextToSpeech>(sp => new QwenTextToSpeech(sp.GetRequiredService<IQwenTtsEnvironment>(),

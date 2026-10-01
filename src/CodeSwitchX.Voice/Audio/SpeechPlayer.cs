@@ -117,7 +117,14 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             _logger.LogWarning(e.Exception, "Speech playback stopped");
         }
 
-        Stop();
+        lock (_lock)
+        {
+            // An output replaced meanwhile (a new sample rate, the next reply) is not this one: it plays on.
+            if (ReferenceEquals(sender, _output))
+            {
+                StopLocked();
+            }
+        }
     }
 
     public void Dispose() => Stop();

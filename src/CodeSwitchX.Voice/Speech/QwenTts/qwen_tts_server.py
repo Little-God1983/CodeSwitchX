@@ -85,6 +85,9 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "not found"})
 
     def do_POST(self):
+        # The body is read first, whatever the answer: on a kept-alive connection, a body left unread would be taken
+        # for the next request.
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0") or 0))
         if not self._authorized():
             return
         if self.path != "/v1/audio/speech":
@@ -94,8 +97,7 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(503, {"error": "loading"})
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            request = json.loads(self.rfile.read(length) or b"{}")
+            request = json.loads(body or b"{}")
             text = str(request["input"]).strip()
             voice = str(request.get("voice") or "ryan").lower()
             language = str(request.get("language") or "English")

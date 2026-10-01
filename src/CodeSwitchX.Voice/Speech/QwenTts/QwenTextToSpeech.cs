@@ -27,6 +27,9 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
     private IQwenTtsServer? _server;
     private SpeechModel _serverModel;
     private Task? _preparing;
+
+    /// <summary>The preparation is installing: that does not depend on the model, so a new model does not cancel it.</summary>
+    private bool _installing;
     private CancellationTokenSource _lifetime = new();
 
     /// <summary>The model the last attempt failed with: not tried again until the model changes or the app restarts.</summary>
@@ -84,20 +87,38 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
                 return;
             }
 
-            _preparing = PrepareAsync(model, _lifetime.Token);
+            _preparing = PrepareAsync(_lifetime.Token);
         }
     }
 
-    private async Task PrepareAsync(SpeechModel model, CancellationToken ct)
+    /// <summary>Installs if needed, then starts the model the settings name by then: one picked during the install is loaded.</summary>
+    private async Task PrepareAsync(CancellationToken ct)
     {
         await Task.Yield(); // never on the caller's thread: checking the install reads files
         IQwenTtsServer? server = null;
+        var model = _settings.Model;
         try
         {
             if (!_environment.IsInstalled)
             {
+                lock (_lock)
+                {
+                    _installing = true;
+                }
+
                 Report(new TextToSpeechStatus(TextToSpeechState.Installing, "starting"));
-                await _environment.InstallAsync(new Progress(this, TextToSpeechState.Installing), ct).ConfigureAwait(false);
+                try
+                {
+                    await _environment.InstallAsync(new Progress(this, TextToSpeechState.Installing), ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (_lock)
+                    {
+                        _installing = false;
+                        model = _settings.Model;
+                    }
+                }
             }
 
             Report(new TextToSpeechStatus(TextToSpeechState.Loading, "starting"));
@@ -160,7 +181,10 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
         Report(TextToSpeechStatus.Off);
     }
 
-    /// <summary>The model changed: the sidecar stops, and the next preparation starts the new one.</summary>
+    /// <summary>
+    /// The model changed: the sidecar stops, and the next preparation starts the new one. An install going on is left
+    /// to finish (it does not depend on the model); it loads the new model after.
+    /// </summary>
     private void Restart()
     {
         IQwenTtsServer? server;
@@ -168,6 +192,12 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
         lock (_lock)
         {
             if (_disposed)
+            {
+                return;
+            }
+
+            _failedModel = null;
+            if (_installing)
             {
                 return;
             }
@@ -200,7 +230,11 @@ public sealed class QwenTextToSpeech : ITextToSpeech, IDisposable
         if (server is null)
         {
             Prepare(install: true);
-            throw new TextToSpeechNotReadyException(Status);
+            // The preparation may not have said yet what it does: an install or a load. Off the UI thread here (the
+            // reply voice's loop), so the install is looked at.
+            var status = Status;
+            throw new TextToSpeechNotReadyException(status.State != TextToSpeechState.Off ? status
+                : new TextToSpeechStatus(_environment.IsInstalled ? TextToSpeechState.Loading : TextToSpeechState.Installing));
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(server.Address, "v1/audio/speech"))
