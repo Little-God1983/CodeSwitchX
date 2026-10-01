@@ -25,6 +25,7 @@ using CodeSwitchX.UI.Workspaces;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Listening;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -174,6 +175,14 @@ public partial class App : Application
         services.AddCodeSwitchXTranscriptIndexer();
         services.AddCodeSwitchXHosting();
         services.AddCodeSwitchXVoice(paths.ModelsDirectory, paths.VoiceDirectory);
+#if DEBUG
+        // The on-screen check of Open mic: nobody but the user can talk into their microphone, so a debug build can play
+        // a 16 kHz mono 16-bit PCM file into Open mic instead.
+        if (Environment.GetEnvironmentVariable("CODESWITCHX_OPEN_MIC_FILE") is { Length: > 0 } openMicFile)
+        {
+            services.AddSingleton<IMicrophoneStream>(_ => new FileMicrophoneStream(openMicFile, realTime: true));
+        }
+#endif
         services.AddSingleton<IDictationVocabularyProvider>(sp =>
             new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf,
                 sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<TimeProvider>()));
