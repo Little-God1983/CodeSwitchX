@@ -71,9 +71,10 @@ public sealed class OpenMicRun(string deviceId)
 /// <summary>
 /// One <see cref="IOpenMic.Heard"/> batch. <paramref name="Loudest"/> block's RMS is the orb's level. <paramref name="Quietest"/>
 /// is the silent-microphone watch's: it counts a batch as sound for its whole <paramref name="Duration"/>, so one click in
-/// a batch of digital zeros must not make the batch loud, or a dead device clicking every 60 ms would pass for live.
+/// a batch of digital zeros must not make the batch loud, or a dead device clicking every 60 ms would pass for live. A
+/// struct: one is raised 20 times a second for as long as Open mic is on.
 /// </summary>
-public sealed record HeardAudio(float Loudest, float Quietest, TimeSpan Duration);
+public readonly record struct HeardAudio(float Loudest, float Quietest, TimeSpan Duration);
 
 /// <summary>A finished turn of <paramref name="Run"/>: its audio, 16 kHz; empty when the detector lost it.</summary>
 public sealed record OpenMicTurn(OpenMicRun Run, float[] Clip);
@@ -332,7 +333,11 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     }
 
     /// <summary>A handler's bug must not end listening. While a worker's handler runs, a Stop from it must not wait on its own thread.</summary>
-    private void Raise(Action raise, string name, bool onWorker = true)
+    private void Raise(Action raise, string name, bool onWorker = true) => Raise(raise, static r => r(), name, onWorker);
+
+    /// <summary>Raises an event through <paramref name="raise"/>, given <paramref name="state"/>: with a static lambda, a
+    /// frequent event allocates no closure.</summary>
+    private void Raise<T>(T state, Action<T> raise, string name, bool onWorker = true)
     {
         if (onWorker)
         {
@@ -341,7 +346,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
 
         try
         {
-            raise();
+            raise(state);
         }
         catch (Exception ex)
         {
@@ -383,7 +388,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                     heard = 0;
                     loudest = 0f;
                     quietest = float.MaxValue;
-                    Raise(() => Heard?.Invoke(this, batch), "Heard");
+                    Raise((Listener: this, Batch: batch), static s => s.Listener.Heard?.Invoke(s.Listener, s.Batch), "Heard"); // no closure, 20 times a second
                 }
 
                 var samples = block.Samples16k.AsSpan();
