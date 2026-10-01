@@ -1,5 +1,6 @@
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Listening;
 using CodeSwitchX.Voice.Speech;
 using CodeSwitchX.Voice.Speech.QwenTts;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,11 @@ public static class VoiceServiceCollectionExtensions
         services.AddSingleton<IDictationService, WhisperDictationService>();
         services.AddSingleton<IMicrophoneCatalog, WasapiMicrophoneCatalog>();
         services.AddSingleton<IMicrophoneRecorder, WasapiMicrophoneRecorder>();
+
+        // Open mic: listens until stopped; its two models are fetched the first time the user switches to it.
+        services.AddSingleton(_ => new ListeningModelStore(Path.Combine(modelsDirectory, "listening"), new HttpClient()));
+        services.AddSingleton<IMicrophoneStream, WasapiMicrophoneStream>();
+        services.AddSingleton<IOpenMic, OpenMicListener>();
 
         // Speech: Qwen3-TTS in a sidecar, installed on first need. The requests stream for as long as a sentence takes,
         // so the client has no timeout of its own; ReplyVoice watches for a stalled one.

@@ -82,7 +82,9 @@ samples it has been fed, so tests drive it frame by frame.
 
 - Ties the stream to the detector. The capture thread only queues frames (a bounded channel); one worker thread cuts
   them into 512-sample frames and runs the detector, so ONNX never runs on the capture thread and never on the UI thread.
-- `Start(deviceId)`, `Stop()`, `Pause()`, `Resume()`, `RavenSpeaking { set; }`.
+- `Start(deviceId)`, `Stop()`, `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
+  microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
+  Raven speaks with voice barge-in off.
 - Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted`, `TurnEnded(clip)`,
   `Level(rms)` for the orb, `Failed(MicrophoneException)`.
 - A Smart Turn failure is logged once per listener and the turn falls back to the 3 s rule: a turn is never lost to it.
