@@ -117,6 +117,45 @@ public sealed class OpenMicListenerTests
     }
 
     [Fact]
+    public async Task Nothing_is_raised_after_a_stop_even_with_blocks_still_queued()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var heard = 0;
+        listener.Heard += (_, _) =>
+        {
+            if (Interlocked.Increment(ref heard) == 1)
+            {
+                listener.Stop(); // from the worker's own handler: must not wait on itself
+            }
+        };
+
+        listener.Start("mic");
+        stream.Feed(0f, seconds: 1.0, block: 160);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        heard.ShouldBe(1);
+        stream.Running.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_failure_stop_does_not_close_a_run_started_in_the_meantime()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        listener.Failed += (_, _) => listener.Start("mic"); // the consumer restarts at once
+
+        listener.Start("mic");
+        stream.Fail();
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        stream.Running.ShouldBeTrue();
+        listener.Stop();
+    }
+
+    [Fact]
     public void A_turn_end_model_that_will_not_load_disposes_the_voice_activity_model_that_did()
     {
         var vad = new LevelVad();

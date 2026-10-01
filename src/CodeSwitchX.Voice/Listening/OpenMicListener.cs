@@ -49,7 +49,9 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
     private readonly Func<IVoiceActivity> _newVad;
     private readonly Func<ITurnEnd> _newTurnEnd;
     private readonly ILogger<OpenMicListener> _logger;
-    private static readonly AsyncLocal<bool> _onWorker = new();
+    /// <summary>The listener whose handler is running on this thread, if any; plain thread state, so it never leaks into tasks a handler starts.</summary>
+    [ThreadStatic]
+    private static OpenMicListener? _workerOf;
 
     private readonly object _gate = new();
     private TurnDetector? _detector;
@@ -134,11 +136,17 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         }
     }
 
-    public void Stop()
+    public void Stop() => StopIfCurrent(_cts, always: true);
+
+    /// <summary>Stops the run that was current when the caller looked; a run started since is left alone.</summary>
+    private void StopIfCurrent(CancellationTokenSource? run, bool always)
     {
         lock (_gate)
         {
-            StopRun();
+            if (run == _cts && (always || run is not null))
+            {
+                StopRun();
+            }
         }
     }
 
@@ -163,7 +171,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         _queue?.Writer.TryComplete();
         _queue = null;
         var worker = _worker;
-        if (_onWorker.Value)
+        if (_workerOf == this)
         {
             // A handler called Stop from the worker thread: waiting would wait on itself. The worker ends by its token.
             _detector?.Reset();
@@ -184,9 +192,11 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         _detector = null;
         _vad = null;
         _turnEnd = null;
+        var cts = _cts;
         _cts = null;
         _ = worker.ContinueWith(_ =>
         {
+            cts?.Dispose();
             vad?.Dispose();
             turnEnd?.Dispose();
         }, TaskScheduler.Default);
@@ -236,15 +246,22 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
 
     private void OnFailed(object? sender, MicrophoneException error)
     {
-        Raise(() => Failed?.Invoke(this, error), "Failed");
+        var run = _cts;
+        Raise(() => Failed?.Invoke(this, error), "Failed", onWorker: false);
 
         // The listener closes itself, off the capture thread: stopping from here would wait on the thread that is calling.
-        _ = Task.Run(Stop);
+        // Only the run that failed: the consumer may have started another by the time this runs.
+        _ = Task.Run(() => StopIfCurrent(run, always: false));
     }
 
-    /// <summary>A handler's bug must not end listening.</summary>
-    private void Raise(Action raise, string name)
+    /// <summary>A handler's bug must not end listening. While a worker's handler runs, a Stop from it must not wait on its own thread.</summary>
+    private void Raise(Action raise, string name, bool onWorker = true)
     {
+        if (onWorker)
+        {
+            _workerOf = this;
+        }
+
         try
         {
             raise();
@@ -253,11 +270,17 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         {
             _logger.LogError(ex, "A handler of Open mic's {Event} event threw", name);
         }
+        finally
+        {
+            if (onWorker)
+            {
+                _workerOf = null;
+            }
+        }
     }
 
     private async Task WorkAsync(Channel<CapturedFrames> queue, TurnDetector detector, CancellationToken token)
     {
-        _onWorker.Value = true;
         var frame = new float[SileroVad.FrameSamples];
         var filled = 0;
         var stepLogged = false;
@@ -265,6 +288,11 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         {
             await foreach (var block in queue.Reader.ReadAllAsync(token).ConfigureAwait(false))
             {
+                if (token.IsCancellationRequested)
+                {
+                    break;
+                }
+
                 Raise(() => Heard?.Invoke(this, block), "Heard");
                 var samples = block.Samples16k.AsSpan();
                 while (samples.Length > 0 && !token.IsCancellationRequested)
