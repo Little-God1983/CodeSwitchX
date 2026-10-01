@@ -64,3 +64,10 @@ OpenProcessToken
 GetTokenInformation
 TOKEN_ELEVATION
 CloseHandle
+GetWindow
+DwmGetWindowAttribute
+DWMWINDOWATTRIBUTE
+GetCursorPos
+ScreenToClient
+GetClientRect
+WINDOWPOS
