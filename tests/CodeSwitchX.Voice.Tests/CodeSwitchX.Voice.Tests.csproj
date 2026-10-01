@@ -6,4 +6,7 @@
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="System.Speech" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Listening\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
