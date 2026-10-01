@@ -138,7 +138,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Warning && e.Text == "Raven could not answer: boom");
         vm.Log[^1].Text.ShouldBe("Two.");
-        vm.State.ShouldBe(RavenState.Idle);
+        await Until(() => vm.State == RavenState.Idle); // once "Two." is said
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.Caption.ShouldBe("Thinking…");
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
-        vm.State.ShouldBe(RavenState.Idle);
+        await Until(() => vm.State == RavenState.Idle); // once "Done." is said
         vm.Caption.ShouldBe(RavenPanelViewModel.IdleCaption);
     }
 

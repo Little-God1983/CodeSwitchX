@@ -7,6 +7,7 @@ using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.Voice.Audio;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -27,7 +28,7 @@ public class SettingsViewModelTests : IDisposable
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
-        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
+        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats, new SpeechSettings(), _paths, _claude, NullLogger<SettingsViewModel>.Instance);
     }
 
     public void Dispose()

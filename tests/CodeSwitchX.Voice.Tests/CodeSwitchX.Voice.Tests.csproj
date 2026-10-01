@@ -3,6 +3,7 @@
     <ProjectReference Include="..\..\src\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
     <ProjectReference Include="..\..\src\CodeSwitchX.Voice\CodeSwitchX.Voice.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="System.Speech" />
   </ItemGroup>
 </Project>

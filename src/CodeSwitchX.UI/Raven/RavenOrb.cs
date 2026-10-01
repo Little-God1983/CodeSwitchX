@@ -5,10 +5,11 @@ namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
 /// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing, dots
-/// that go round while Raven's brain thinks, and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
+/// that go round while Raven's brain thinks, rings that go out from a wave ring following the voice while Raven speaks,
+/// and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
 /// and is asked to animate; with animations turned off in Windows it draws one still frame per change. Idle breathing
-/// also stops while its window is not the active one (VS Code docked in front, say): listening, transcribing and
-/// thinking keep animating, because they show what the microphone and the models are doing. The geometry follows the concept page's
+/// also stops while its window is not the active one (VS Code docked in front, say): listening, transcribing, thinking
+/// and speaking keep animating, because they show what the microphone and the models are doing. The geometry follows the concept page's
 /// canvas, whose 336 px square maps onto the element's size.
 /// <para>
 /// Each frame is drawn into a <see cref="DrawingGroup"/> that <see cref="OnRender"/> hands to WPF once. Redrawing that
@@ -27,7 +28,7 @@ public sealed class RavenOrb : FrameworkElement
     public static readonly DependencyProperty StateProperty = DependencyProperty.Register(nameof(State), typeof(RavenState), typeof(RavenOrb),
         new FrameworkPropertyMetadata(RavenState.Idle, (d, _) => ((RavenOrb)d).OnStateChanged()));
 
-    /// <summary>Changes every captured block (10 ms): redrawn by the next frame while animating, straight away otherwise.</summary>
+    /// <summary>Changes every captured block (10 ms) or played buffer (60 ms): redrawn by the next frame while animating, straight away otherwise.</summary>
     public static readonly DependencyProperty LevelProperty = DependencyProperty.Register(nameof(Level), typeof(double), typeof(RavenOrb),
         new FrameworkPropertyMetadata(0.0, (d, _) => ((RavenOrb)d).OnInputChanged()));
 
@@ -177,7 +178,7 @@ public sealed class RavenOrb : FrameworkElement
         _seconds += dt;
 
         // The level arrives in 50 ms steps; easing towards it keeps the ring from jumping (0.18 per 60 Hz frame).
-        var target = State == RavenState.Listening ? Math.Clamp(Level, 0, 1) : 0;
+        var target = State is RavenState.Listening or RavenState.Speaking ? Math.Clamp(Level, 0, 1) : 0;
         _shownLevel += (target - _shownLevel) * (1 - Math.Pow(1 - 0.18, dt * 60));
 
         // Thinking moves as calmly as the idle breath, and may last minutes in a background window: the same frame rate.
@@ -218,7 +219,7 @@ public sealed class RavenOrb : FrameworkElement
         var t = _hooked ? _seconds : 0;
         var amp = State switch
         {
-            RavenState.Listening => _hooked ? _shownLevel : Math.Clamp(Level, 0, 1),
+            RavenState.Listening or RavenState.Speaking => _hooked ? _shownLevel : Math.Clamp(Level, 0, 1),
             RavenState.Thinking => 0.18 + (Math.Sin(t * 2.4) * 0.12), // a slow ripple: no voice moves it
             _ => 0,
         };
@@ -233,6 +234,10 @@ public sealed class RavenOrb : FrameworkElement
         else if (State == RavenState.Thinking)
         {
             DrawOrbit(dc, center, scale, t);
+        }
+        else if (State == RavenState.Speaking)
+        {
+            DrawRipples(dc, center, scale, t, amp);
         }
         else
         {
@@ -312,6 +317,17 @@ public sealed class RavenOrb : FrameworkElement
             dc.PushTransform(transform);
             dc.DrawGeometry(null, VoicePen(0.8 - k * 0.22, Math.Max(1, 3 * scale)), _arcs[k]);
             dc.Pop();
+        }
+    }
+
+    /// <summary>Two rings that go out from the orb and fade, brighter the louder the voice: Raven is talking.</summary>
+    private void DrawRipples(DrawingContext dc, Point center, double scale, double t, double amp)
+    {
+        for (var k = 0; k < 2; k++)
+        {
+            var phase = ((t * 0.7) + (k * 0.5)) % 1;
+            var radius = (Base + 30 + (phase * 44)) * scale;
+            dc.DrawEllipse(null, VoicePen((1 - phase) * (0.25 + (amp * 0.5)), Math.Max(0.75, 1.6 * scale)), center, radius, radius);
         }
     }
 

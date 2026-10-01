@@ -172,7 +172,7 @@ public partial class App : Application
         services.AddCodeSwitchXTelemetry();
         services.AddCodeSwitchXTranscriptIndexer();
         services.AddCodeSwitchXHosting();
-        services.AddCodeSwitchXVoice(paths.ModelsDirectory);
+        services.AddCodeSwitchXVoice(paths.ModelsDirectory, paths.VoiceDirectory);
         services.AddSingleton<IDictationVocabularyProvider>(sp =>
             new WorkspaceVocabularyProvider(sp.GetRequiredService<IWorkspaceStore>(), WorkspaceProbe.FoldersOf,
                 sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<TimeProvider>()));

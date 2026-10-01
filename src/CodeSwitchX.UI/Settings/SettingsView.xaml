@@ -34,6 +34,26 @@
                   Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
                   ToolTip="A full model id. Pick one or type another." />
       </DockPanel>
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
+                  ItemsSource="{Binding VoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenVoice}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock>
+                <Run Text="{Binding Name, Mode=OneTime}" /><Run Text=" · " /><Run Text="{Binding Description, Mode=OneTime}" Foreground="Gray" />
+              </TextBlock>
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Voice model" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice model"
+                  ItemsSource="{Binding VoiceModelChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Model"
+                  SelectedValue="{Binding RavenVoiceModel}"
+                  ToolTip="Raven speaks with Qwen3-TTS on your graphics card. It is installed the first time Raven speaks (about 5 GB)." />
+      </DockPanel>
 
       <TextBlock Text="Chats Raven starts" FontSize="13" FontWeight="SemiBold" Margin="0,16,0,4" />
       <TextBlock TextWrapping="Wrap" Opacity="0.8"
