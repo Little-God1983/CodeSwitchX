@@ -27,6 +27,8 @@ public partial class MainWindow : Window
     private System.Windows.Threading.DispatcherTimer? _focusOnRelease;
     private nint _hwnd;
     private const int WmWindowPosChanging = 0x0046;
+    private const int WmWindowPosChanged = 0x0047;
+    private bool _raiseHostedWhenMoved;
 
     public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host, IAgentLauncher agents,
         Func<AddWorkspaceViewModel> addWorkspaceFactory, ILogger<AddWorkspaceLauncher> addWorkspaceLogger, ILogger<WindowLocationWatcher> watcherLogger)
@@ -130,13 +132,20 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// An activation of the shell does not lift it over the VS Code window its Cab shows, while the two are the front
-    /// windows (<see cref="ZOrder.HoldBelow"/>): VS Code vanished for a moment on every click on the shell (#82).
+    /// windows (<see cref="ZOrder.KeepUnder"/>): VS Code vanished for a moment on every click on the shell (#82). From
+    /// behind another app the shell does go over VS Code, and VS Code is raised again as soon as the move is done, in
+    /// the same message rather than a dispatcher pass later.
     /// </summary>
     private nint StayUnderHostedWindow(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
         if (msg == WmWindowPosChanging)
         {
-            ZOrder.HoldBelow(lParam, hwnd, _host.ShownInCab);
+            _raiseHostedWhenMoved = ZOrder.KeepUnder(lParam, hwnd, _host.ShownInCab) == FrontMove.Lifted;
+        }
+        else if (msg == WmWindowPosChanged && _raiseHostedWhenMoved)
+        {
+            _raiseHostedWhenMoved = false;
+            _shell.RaiseHostedWindow(focus: false);
         }
 
         return 0;

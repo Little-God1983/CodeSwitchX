@@ -78,7 +78,7 @@ public sealed class ZOrderTests
         {
             Marshal.StructureToPtr(new WINDOWPOS { flags = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE, hwndInsertAfter = HWND.HWND_TOP }, pos, false);
 
-            ZOrder.HoldBelow(pos, Shell, upper: 0).ShouldBeFalse();
+            ZOrder.KeepUnder(pos, Shell, upper: 0).ShouldBe(FrontMove.None);
 
             (Marshal.PtrToStructure<WINDOWPOS>(pos).flags & SET_WINDOW_POS_FLAGS.SWP_NOZORDER).ShouldBe(default);
         }

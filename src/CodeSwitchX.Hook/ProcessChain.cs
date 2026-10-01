@@ -71,7 +71,8 @@ internal static unsafe partial class ProcessChain
         return chain;
     }
 
-    private static Dictionary<int, (int Parent, string Name)> Snapshot()
+    /// <summary>Every process with its parent and name; empty when the system refuses the snapshot. Also compiled into CodeSwitchX.Hosting.</summary>
+    internal static Dictionary<int, (int Parent, string Name)> Snapshot()
     {
         var table = new Dictionary<int, (int, string)>();
         var snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);

@@ -81,33 +81,19 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
 
     public Guid? Resolve(string? path, IReadOnlyCollection<string>? windowFolders = null)
     {
-        if (windowFolders is { Count: > 0 } && FolderSet(windowFolders) is { } window)
+        var normalized = Normalized(path);
+        var roots = _roots;
+        if (windowFolders is { Count: > 0 } && FolderSet(windowFolders) is { } window && ByWindow(normalized, window, roots) is { } byWindow)
         {
-            foreach (var (workspaceId, folders) in _windows)
-            {
-                if (folders.SetEquals(window))
-                {
-                    return workspaceId;
-                }
-            }
+            return byWindow;
         }
 
-        if (string.IsNullOrWhiteSpace(path))
+        if (normalized is null)
         {
             return null;
         }
 
-        string normalized;
-        try
-        {
-            normalized = PathNormalizer.Normalize(path);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return null;
-        }
-
-        foreach (var root in _roots)
+        foreach (var root in roots)
         {
             if (PathNormalizer.IsWithin(normalized, root.Path))
             {
@@ -116,6 +102,53 @@ public sealed class WorkspaceResolver : IWorkspaceResolver
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Of the workspaces that hold <paramref name="path"/>, the one whose folders are most like the window's (shared
+    /// folders over all folders of both), so a window the user added a folder to, or took one from, still finds its
+    /// workspace; ties go to the one listed first. A path no workspace holds takes only a workspace that opens exactly
+    /// the window's folders. Null when no workspace shares a folder with the window.
+    /// </summary>
+    private Guid? ByWindow(string? path, HashSet<string> window, WorkspaceRoot[] roots)
+    {
+        var holders = path is null ? [] : roots.Where(r => PathNormalizer.IsWithin(path, r.Path)).Select(r => r.WorkspaceId).ToHashSet();
+        Guid? best = null;
+        var bestLikeness = 0.0;
+        foreach (var (workspaceId, folders) in _windows)
+        {
+            if (holders.Count > 0 ? !holders.Contains(workspaceId) : !folders.SetEquals(window))
+            {
+                continue;
+            }
+
+            var shared = folders.Count(window.Contains);
+            var likeness = (double)shared / (folders.Count + window.Count - shared);
+            if (likeness > bestLikeness)
+            {
+                best = workspaceId;
+                bestLikeness = likeness;
+            }
+        }
+
+        return best;
+    }
+
+    private static string? Normalized(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return PathNormalizer.Normalize(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The folders as comparison keys; null when one of them is no path.</summary>

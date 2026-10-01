@@ -990,14 +990,76 @@ public class SessionEngineTests
     }
 
     [Fact]
-    public void A_claim_beats_the_window()
+    public void A_claimed_chat_is_not_looked_up_the_claim_decides_its_tile()
     {
-        var (engine, _) = SharedRootEngine();
+        var (engine, windows) = SharedRootEngine();
         engine.Claim("s1", FullId);
 
         engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, chain: [new ProcessRef(100, "claude.exe")]));
+        engine.ReResolveWorkspaces();
 
         engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+        windows.Lookups.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_lookup_that_could_not_read_the_system_keeps_the_chats_window_and_is_tried_again()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 100, windowFolders: InstallerFolders)]);
+        windows.Unreadable = true;
+
+        engine.ReResolveWorkspaces();
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe(InstallerFolders);
+
+        windows.Unreadable = false;
+        windows.Folders[100] = FullFolders; // to see the second lookup land
+        engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "go", chain: [new ProcessRef(100, "claude.exe")]));
+
+        windows.Lookups.ShouldBe(2);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(FullId);
+    }
+
+    [Fact]
+    public void A_lookup_that_finds_no_window_keeps_the_chats_window()
+    {
+        // The chat resumed in a terminal, or its PID went to another process while the app was down.
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 300, windowFolders: InstallerFolders)]);
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(1);
+        engine.Get("s1")!.WorkspaceId.ShouldBe(InstallerId);
+        engine.Get("s1")!.WindowFolders.ShouldBe(InstallerFolders);
+    }
+
+    [Fact]
+    public void The_lookup_gets_the_processes_the_hook_event_names_above_the_claude()
+    {
+        var (engine, windows) = SharedRootEngine();
+
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart,
+            chain: [new ProcessRef(7, "cmd.exe"), new ProcessRef(100, "claude.exe"), new ProcessRef(90, "Code.exe"), new ProcessRef(80, "Code.exe")]));
+        engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "s2", chain: [new ProcessRef(200, "claude.exe")]));
+
+        windows.AncestorsSeen.Count.ShouldBe(2);
+        windows.AncestorsSeen[0].ShouldBe([90, 80]);
+        windows.AncestorsSeen[1].ShouldBeNull("the chain ends at the claude: the lookup reads the processes itself");
+    }
+
+    [Fact]
+    public void The_same_folders_found_again_change_nothing()
+    {
+        var (engine, windows) = SharedRootEngine();
+        engine.Restore([Restored(InstallerId, claudePid: 100, windowFolders: [@"c:\repo\app", @"c:\repo\tools"])]);
+        var before = _changes.Count;
+
+        engine.ReResolveWorkspaces();
+
+        windows.Lookups.ShouldBe(1);
+        _changes.Count.ShouldBe(before);
     }
 
     private SessionSnapshot Restored(Guid workspaceId, int? claudePid, IReadOnlyList<string>? windowFolders) => new()
@@ -1020,10 +1082,16 @@ public class SessionEngineTests
 
         public int Lookups { get; private set; }
 
-        public IReadOnlyList<string>? FoldersOf(int claudePid)
+        public bool Unreadable { get; set; }
+
+        public List<IReadOnlyList<int>?> AncestorsSeen { get; } = [];
+
+        public bool TryFoldersOf(int claudePid, IReadOnlyList<int>? ancestors, out IReadOnlyList<string>? folders)
         {
             Lookups++;
-            return Folders.GetValueOrDefault(claudePid);
+            AncestorsSeen.Add(ancestors);
+            folders = Unreadable ? null : Folders.GetValueOrDefault(claudePid);
+            return !Unreadable;
         }
     }
 }

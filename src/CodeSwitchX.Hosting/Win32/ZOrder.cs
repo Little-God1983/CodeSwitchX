@@ -15,22 +15,30 @@ public static unsafe class ZOrder
     private const int MaxSteps = 10_000;
 
     /// <summary>
-    /// Called with each <c>WM_WINDOWPOSCHANGING</c> of <paramref name="self"/>: a move to the front while
-    /// <paramref name="upper"/> already is the front window with <paramref name="self"/> right below it keeps the
-    /// order instead, so nothing comes between them and <paramref name="upper"/> stays on top. Any other change, or
-    /// the shell behind other windows, goes through as asked. Returns whether it held the window back.
+    /// Called with each <c>WM_WINDOWPOSCHANGING</c> of <paramref name="self"/>. A move to the front while
+    /// <paramref name="upper"/> already is the front window with <paramref name="self"/> right below it keeps the order
+    /// instead, so nothing comes between them and <paramref name="upper"/> stays on top (<see cref="FrontMove.Held"/>).
+    /// From behind other windows (another app was active last) the move goes through, and the caller raises
+    /// <paramref name="upper"/> as soon as it is done (<see cref="FrontMove.Lifted"/>). Owning the docked window would keep
+    /// it above the shell in every case, but a cross-process owner attaches the two programs' input queues: a hung
+    /// VS Code would freeze the shell's input.
     /// </summary>
     /// <param name="windowPos">The message's <c>WINDOWPOS</c>.</param>
-    public static bool HoldBelow(nint windowPos, nint self, nint upper)
+    public static FrontMove KeepUnder(nint windowPos, nint self, nint upper)
     {
         var pos = (WINDOWPOS*)windowPos;
-        if (pos is null || upper == 0 || !IsMoveToFront(pos->flags, pos->hwndInsertAfter) || !IsFrontPair(upper, self))
+        if (pos is null || upper == 0 || !IsMoveToFront(pos->flags, pos->hwndInsertAfter))
         {
-            return false;
+            return FrontMove.None;
+        }
+
+        if (!IsFrontPair(upper, self))
+        {
+            return FrontMove.Lifted;
         }
 
         pos->flags |= SET_WINDOW_POS_FLAGS.SWP_NOZORDER;
-        return true;
+        return FrontMove.Held;
     }
 
     internal static bool IsMoveToFront(SET_WINDOW_POS_FLAGS flags, HWND insertAfter) =>
@@ -103,4 +111,17 @@ public static unsafe class ZOrder
 
         return point.X >= client.left && point.X < client.right && point.Y >= client.top && point.Y < client.bottom;
     }
+}
+
+/// <summary>What <see cref="ZOrder.KeepUnder"/> made of a window's move.</summary>
+public enum FrontMove
+{
+    /// <summary>No move to the front, or no window to keep above.</summary>
+    None,
+
+    /// <summary>The move to the front was held back: the window stays right below the other one.</summary>
+    Held,
+
+    /// <summary>The window goes over the other one: raise that one again once the move is done.</summary>
+    Lifted,
 }

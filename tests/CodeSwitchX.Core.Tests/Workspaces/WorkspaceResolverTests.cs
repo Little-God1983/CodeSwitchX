@@ -156,8 +156,28 @@ public class WorkspaceResolverTests
 
         resolver.Resolve(@"E:\elsewhere", [@"C:\Repo\Catalog", @"c:\repo\sdk\", @"C:/Repo/Tools"]).ShouldBe(installer, "the same folders in any order, case and form");
         resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\nexus"]).ShouldBe(full);
-        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\tools"]).ShouldBe(full, "no workspace opens just these: the folder rule");
         resolver.Resolve(@"c:\repo\sdk").ShouldBe(full);
+
+        // The user added a folder to the DiffusionInstaller window, or took one from it: still most like that workspace.
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\tools", @"c:\repo\catalog", @"c:\repo\docs"]).ShouldBe(installer);
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk", @"c:\repo\tools"]).ShouldBe(installer);
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\sdk"]).ShouldBe(full, "one folder of two is more like Diffusion-Full than one of three");
+        resolver.Resolve(@"c:\repo\sdk", [@"c:\repo\other"]).ShouldBe(full, "a window that shares no folder: the folder rule");
+    }
+
+    [Fact]
+    public void A_window_only_chooses_among_the_workspaces_that_hold_the_chats_folder()
+    {
+        var app = new Workspace { Id = App, Name = "App", RootPath = @"c:\repo\app", TrackId = Guid.NewGuid() };
+        var docs = new Workspace { Id = App2, Name = "Docs", RootPath = @"c:\repo\docs", TrackId = Guid.NewGuid() };
+        var resolver = new WorkspaceResolver();
+        resolver.SetRoots(WorkspaceResolver.RootsOf([app, docs]), WorkspaceResolver.WindowsOf([app, docs]));
+
+        // A window with both folders, a chat in the app's: the app's, though the window is as like the one as the other.
+        resolver.Resolve(@"c:\repo\app\src", [@"c:\repo\docs", @"c:\repo\app"]).ShouldBe(App);
+        // A chat in no workspace's folder takes a window only when one workspace opens exactly its folders.
+        resolver.Resolve(@"c:\elsewhere", [@"c:\repo\docs", @"c:\repo\app"]).ShouldBeNull();
+        resolver.Resolve(@"c:\elsewhere", [@"c:\repo\docs"]).ShouldBe(App2);
     }
 
     [Fact]

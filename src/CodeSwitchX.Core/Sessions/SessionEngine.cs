@@ -167,7 +167,8 @@ public sealed class SessionEngine : IDisposable
 
             var cwd = e.Cwd ?? s.Cwd;
             var claudePid = PickClaudePid(e.ParentChain) ?? s.ClaudePid;
-            var window = WindowOfLocked(s, claudePid);
+            var window = WindowOfLocked(s, claudePid, e.ParentChain);
+            var windowChanged = !SameFolders(window, s.WindowFolders);
             var awaitingToolResult = e.EventName switch
             {
                 "PreToolUse" or "PermissionRequest" => true,
@@ -181,8 +182,8 @@ public sealed class SessionEngine : IDisposable
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
-                    : cwd != s.Cwd || s.WorkspaceId is null || window != s.WindowFolders ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
-                WindowFolders = window,
+                    : cwd != s.Cwd || s.WorkspaceId is null || windowChanged ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
+                WindowFolders = windowChanged ? window : s.WindowFolders,
                 TranscriptPath = e.TranscriptPath ?? s.TranscriptPath,
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
@@ -471,11 +472,12 @@ public sealed class SessionEngine : IDisposable
         {
             foreach (var s in _sessions.Values.ToArray())
             {
-                var window = WindowOfLocked(s, s.ClaudePid);
+                var window = WindowOfLocked(s, s.ClaudePid, chain: null);
+                var windowChanged = !SameFolders(window, s.WindowFolders);
                 var resolved = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : _resolver.Resolve(s.Cwd, window);
-                if (resolved != s.WorkspaceId || window != s.WindowFolders)
+                if (resolved != s.WorkspaceId || windowChanged)
                 {
-                    Commit(s, s with { WorkspaceId = resolved, WindowFolders = window });
+                    Commit(s, s with { WorkspaceId = resolved, WindowFolders = windowChanged ? window : s.WindowFolders });
                 }
             }
         }
@@ -543,21 +545,49 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// The folders of the VS Code window the chat's claude runs in, looked up once per claude process: two workspaces can
     /// share a folder, and only the window tells which one the chat belongs to. A new process (a resume, perhaps in another
-    /// window or a terminal) is looked up again. Without a process to look at, the chat keeps what it had, so a chat whose
-    /// claude is gone stays on its tile.
+    /// window) is looked up again. A chat keeps the window it had when there is no process to look at (its claude is gone),
+    /// when the lookup finds none (a resume in a terminal, a reused PID) and when the system could not be read; that last
+    /// lookup is tried again with the next event. A claimed chat needs none: the claim decides its tile.
     /// </summary>
-    private IReadOnlyList<string>? WindowOfLocked(SessionSnapshot s, int? claudePid)
+    /// <param name="chain">The event's processes, from the hook up: the ones above the claude spare reading every process.</param>
+    private IReadOnlyList<string>? WindowOfLocked(SessionSnapshot s, int? claudePid, IReadOnlyList<ProcessRef>? chain)
     {
-        if (_windows is null || claudePid is not { } pid
+        if (_windows is null || claudePid is not { } pid || _claims.ContainsKey(s.SessionId)
             || (_windowLookups.TryGetValue(s.SessionId, out var looked) && looked == pid))
         {
             return s.WindowFolders;
         }
 
+        if (!_windows.TryFoldersOf(pid, Above(chain, pid), out var folders))
+        {
+            return s.WindowFolders;
+        }
+
         _windowLookups[s.SessionId] = pid;
-        var folders = _windows.FoldersOf(pid);
-        return folders is not null && s.WindowFolders is { } known && folders.SequenceEqual(known, StringComparer.Ordinal) ? known : folders;
+        return folders ?? s.WindowFolders;
     }
+
+    /// <summary>The processes above <paramref name="pid"/> in a hook's chain; null when it is not in the chain or tops it.</summary>
+    private static IReadOnlyList<int>? Above(IReadOnlyList<ProcessRef>? chain, int pid)
+    {
+        if (chain is null)
+        {
+            return null;
+        }
+
+        for (var i = 0; i < chain.Count - 1; i++)
+        {
+            if (chain[i].Pid == pid)
+            {
+                return chain.Skip(i + 1).Select(p => p.Pid).ToList();
+            }
+        }
+
+        return null;
+    }
+
+    private static bool SameFolders(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
+        a is null ? b is null : b is not null && a.SequenceEqual(b, StringComparer.Ordinal);
 
     private static SessionSnapshot NewSession(string sessionId, DateTimeOffset at) => new()
     {
