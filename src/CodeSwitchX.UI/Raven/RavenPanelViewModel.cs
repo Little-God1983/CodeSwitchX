@@ -174,9 +174,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The microphone Open mic listens on, to restart it on another.</summary>
     private string? _openMicDevice;
 
-    /// <summary>The last stop of Open mic's microphone, off the UI thread. A start waits for it: a stop that ran after the
-    /// next start would close the new run.</summary>
-    private Task _openMicStop = Task.CompletedTask;
+    /// <summary>
+    /// Every start and stop of the listener, one after another on the thread pool: each waits for the one before it, so
+    /// a late stop can never close a newer run. A start whose run became stale stops again in the same operation, before
+    /// the next one begins. Never faults.
+    /// </summary>
+    private Task _openMicOps = Task.CompletedTask;
+
+    /// <summary>The run that opened the listener last, 0 once it is stopped. Touched only by operations of the chain,
+    /// which run one at a time.</summary>
+    private long _listenerRun;
+
+    /// <summary>The run whose listener start is in flight, 0 when none (UI thread).</summary>
+    private long _openMicStartingRun;
+
+    /// <summary>A failure the listener raised while its start was in flight: the start pauses instead of attending.</summary>
+    private MicrophoneException? _openMicStartFailure;
+
+    /// <summary>The download of Open mic's models in flight, if any: starts while it runs share it.</summary>
+    private Task<bool>? _openMicDownload;
+
+    /// <summary>The newest run waiting on the download: only its failure says "Back to push to talk".</summary>
+    private long _openMicDownloadRun;
 
     /// <summary>Open mic was switched on before the first microphone listing arrived (the stored mode at startup): it
     /// starts once the listing is applied.</summary>
@@ -545,22 +564,32 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Opens Open mic on the selected microphone: downloads its models first if they are missing (the log shows the
-    /// progress), waits for a microphone listing still on its way, and starts the listener off the UI thread. A failed
-    /// download or a model that will not load goes back to push to talk with a warning; a microphone that will not open
-    /// leaves Open mic paused, for a press to try again.
+    /// progress), waits for a microphone listing still on its way, and starts the listener on the chain of listener
+    /// operations. A failed download or a model that will not load goes back to push to talk with a warning; a
+    /// microphone that will not open, or fails while it opens, leaves Open mic paused, for a press to try again.
     /// </summary>
     private async Task StartOpenMicAsync()
     {
-        var run = ++_openMicRun;
+        var run = Interlocked.Increment(ref _openMicRun);
         UpdateState();
-        if (!_openMic!.ModelsPresent && !await DownloadOpenMicModelsAsync())
+        if (!_openMic!.ModelsPresent)
         {
-            if (run == _openMicRun)
+            // One download at a time: a start while it runs waits for the same one.
+            _openMicDownloadRun = run;
+            if (_openMicDownload is not { IsCompleted: false })
             {
-                MicMode = MicMode.PushToTalk;
+                _openMicDownload = DownloadOpenMicModelsAsync();
             }
 
-            return;
+            if (!await _openMicDownload)
+            {
+                if (run == _openMicRun)
+                {
+                    MicMode = MicMode.PushToTalk;
+                }
+
+                return;
+            }
         }
 
         try
@@ -590,15 +619,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        bool started;
+        _openMicStartingRun = run;
+        _openMicStartFailure = null;
         try
         {
-            await _openMicStop; // never faults: see StopOpenMic
-            if (run != _openMicRun)
+            started = await OnListenerAsync(() =>
             {
-                return;
-            }
+                if (run != Interlocked.Read(ref _openMicRun))
+                {
+                    return false; // stale before it began
+                }
 
-            await Task.Run(() => _openMic.Start(mic.Id));
+                _openMic.Start(mic.Id);
+                _listenerRun = run;
+                if (run == Interlocked.Read(ref _openMicRun))
+                {
+                    return true;
+                }
+
+                StopListener(); // stale while it opened: closed before the next operation begins
+                return false;
+            });
         }
         catch (ListeningModelException ex)
         {
@@ -622,10 +664,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             return;
         }
+        finally
+        {
+            if (_openMicStartingRun == run)
+            {
+                _openMicStartingRun = 0;
+            }
+        }
+
+        if (!started)
+        {
+            return;
+        }
 
         if (run != _openMicRun)
         {
-            _openMicStop = StopInBackground(); // switched away while it opened
+            // Switched away between the start and here: the stop it missed closes this run only, never a newer one.
+            _ = EnqueueStop(onlyRun: run);
+            return;
+        }
+
+        if (_openMicStartFailure is { } died)
+        {
+            // The microphone failed while it opened; the listener has stopped itself.
+            _openMicStartFailure = null;
+            AddEntry(RavenLogKind.Warning, WarningFor(died.Kind, mic));
+            PauseOpenMic();
+            _ = RefreshMicrophonesAsync();
             return;
         }
 
@@ -634,6 +699,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _openSilence.Reset();
         UpdateIgnoreSpeech();
         UpdateState();
+        if (SelectedMicrophone is { } chosen && chosen.Id != mic.Id)
+        {
+            // Another microphone was picked while this one opened.
+            StopOpenMic();
+            var next = StartOpenMicAsync();
+            PendingOpenMic = next;
+            await next;
+        }
     }
 
     private async Task<bool> DownloadOpenMicModelsAsync()
@@ -650,27 +723,45 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Open mic's models could not be downloaded");
-            ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message}. Back to push to talk.");
+            // Only a run still waiting for it goes back to push to talk.
+            var back = _openMicDownloadRun == _openMicRun ? " Back to push to talk." : "";
+            ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message}.{back}");
             return false;
         }
     }
 
-    /// <summary>Closes Open mic's microphone (off the UI thread) and drops a turn being spoken.</summary>
+    /// <summary>Closes Open mic's microphone (on the chain of listener operations) and drops a turn being spoken.</summary>
     private void StopOpenMic()
     {
-        _openMicRun++;
+        Interlocked.Increment(ref _openMicRun);
         _openSpeech = false;
+        _openMicWaitsForList = false;
         if (_attending && _openMic is not null)
         {
             _attending = false;
             _openMicDevice = null;
-            PendingOpenMic = _openMicStop = StopInBackground();
+            PendingOpenMic = EnqueueStop();
         }
     }
 
-    /// <summary>Stops the listener off the UI thread; never faults (a failed stop is logged), so a start can await it.</summary>
-    private Task StopInBackground() => Task.Run(() =>
+    /// <summary>
+    /// Appends a stop to the chain of listener operations. With <paramref name="onlyRun"/>, it stops the listener only
+    /// if that run is the one that opened it last: a newer run's start queued before it stays open.
+    /// </summary>
+    private Task EnqueueStop(long? onlyRun = null) => OnListenerAsync(() =>
     {
+        if (onlyRun is null || _listenerRun == onlyRun)
+        {
+            StopListener();
+        }
+
+        return true;
+    });
+
+    /// <summary>Stops the listener on the calling thread (an operation of the chain); never throws, a failed stop is logged.</summary>
+    private void StopListener()
+    {
+        _listenerRun = 0;
         try
         {
             _openMic!.Stop();
@@ -679,7 +770,25 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Stopping Open mic failed");
         }
-    });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="op"/> on the thread pool once every listener operation before it is done (see
+    /// <see cref="_openMicOps"/>). The task returned carries its result or exception; the chain itself never faults.
+    /// </summary>
+    private Task<T> OnListenerAsync<T>(Func<T> op)
+    {
+        var done = RunAfterAsync(_openMicOps, op);
+        _openMicOps = done.ContinueWith(static _ => { }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return done;
+    }
+
+    private static async Task<T> RunAfterAsync<T>(Task previous, Func<T> op)
+    {
+        await previous.ConfigureAwait(false);
+        return await Task.Run(op).ConfigureAwait(false);
+    }
 
     private void PauseOpenMic()
     {
@@ -1020,6 +1129,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _logger.LogWarning(error, "Open mic's microphone failed");
         if (!_attending)
         {
+            if (_openMicStartingRun != 0 && _openMicStartingRun == _openMicRun)
+            {
+                _openMicStartFailure = error; // it failed while it opened: the start warns and pauses
+            }
+
             return;
         }
 

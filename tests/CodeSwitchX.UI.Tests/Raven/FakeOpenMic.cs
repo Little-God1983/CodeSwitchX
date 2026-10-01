@@ -11,6 +11,9 @@ internal sealed class FakeOpenMic : IOpenMic
 
     public Exception? StartFails { get; set; }
 
+    /// <summary>When set, Start waits for it before it opens: a start still in flight.</summary>
+    public TaskCompletionSource? StartGate { get; set; }
+
     public int Downloads { get; private set; }
 
     /// <summary>The device it listens on now; null while stopped.</summary>
@@ -48,6 +51,7 @@ internal sealed class FakeOpenMic : IOpenMic
             throw error;
         }
 
+        StartGate?.Task.Wait();
         Listening = deviceId;
         Started.Add(deviceId);
     }

@@ -240,4 +240,55 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.ShouldContain(e => e.Kind == RavenLogKind.You);
         _openMic.Listening.ShouldBe(Headset.Id, "the late release must not pause Open mic");
     }
+
+    // Fix round 1, review 1
+    [Fact]
+    public async Task A_start_still_opening_when_paused_and_resumed_never_closes_the_newer_run()
+    {
+        var vm = await NewOpenMicVmAsync();
+        _openMic.StartGate = new TaskCompletionSource();
+        vm.MicMode = MicMode.OpenMic; // its Start blocks
+
+        await vm.TapMic(TalkInput.MicButton); // pause
+        await vm.TapMic(TalkInput.MicButton); // resume, while the first Start is still blocked
+        _openMic.StartGate.SetResult();
+        await WithinAsync(vm.PendingOpenMic);
+
+        _openMic.Listening.ShouldBe(Headset.Id);
+        vm.State.ShouldBe(RavenState.Attending);
+    }
+
+    // Fix round 1, review 3
+    [Fact]
+    public async Task A_microphone_picked_while_Open_mic_opens_is_the_one_it_listens_on()
+    {
+        var vm = await NewOpenMicVmAsync();
+        _openMic.StartGate = new TaskCompletionSource();
+        vm.MicMode = MicMode.OpenMic;
+        var opening = vm.PendingOpenMic;
+
+        vm.SelectedMicrophone = Desk;
+        _openMic.StartGate.SetResult();
+        await WithinAsync(opening);
+
+        _openMic.Listening.ShouldBe(Desk.Id);
+        vm.State.ShouldBe(RavenState.Attending);
+    }
+
+    // Fix round 1, review 5
+    [Fact]
+    public async Task A_microphone_that_fails_while_Open_mic_opens_pauses_it_with_one_warning()
+    {
+        var vm = await NewOpenMicVmAsync();
+        _openMic.StartGate = new TaskCompletionSource();
+        vm.MicMode = MicMode.OpenMic;
+        var opening = vm.PendingOpenMic;
+
+        _openMic.Fail();
+        _openMic.StartGate.SetResult();
+        await WithinAsync(opening);
+
+        vm.State.ShouldBe(RavenState.AttendingPaused);
+        vm.Log.Count(e => e.Kind == RavenLogKind.Warning).ShouldBe(1);
+    }
 }
