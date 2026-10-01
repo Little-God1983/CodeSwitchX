@@ -27,6 +27,38 @@ public sealed class ListeningModelsTests
     }
 
     [Fact(Explicit = true)]
+    public void After_a_reset_Silero_hears_the_same_speech_exactly_as_the_first_time()
+    {
+        using var vad = new SileroVad(PathOf(ListeningModelStore.Silero));
+        var frames = Frames(WarmUpSpeech.Load()).Take(31).ToList(); // an odd count: the reset falls on the second state buffer
+
+        var first = frames.Select(f => vad.Step(f)).ToList();
+        vad.Reset();
+        var again = frames.Select(f => vad.Step(f)).ToList();
+
+        again.ShouldBe(first);
+    }
+
+    [Fact(Explicit = true)]
+    public void A_Silero_frame_allocates_nothing()
+    {
+        using var vad = new SileroVad(PathOf(ListeningModelStore.Silero));
+        var frames = Frames(WarmUpSpeech.Load()).Take(64).ToList();
+        foreach (var frame in frames.Take(8))
+        {
+            vad.Step(frame); // the first runs pay for the session's set-up
+        }
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        foreach (var frame in frames)
+        {
+            vad.Step(frame);
+        }
+
+        (GC.GetAllocatedBytesForCurrentThread() - before).ShouldBe(0);
+    }
+
+    [Fact(Explicit = true)]
     public void Smart_turn_answers_in_well_under_a_frame_budget()
     {
         using var turn = new SmartTurn(PathOf(ListeningModelStore.SmartTurn));

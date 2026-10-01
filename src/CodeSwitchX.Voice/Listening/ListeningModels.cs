@@ -31,8 +31,10 @@ public sealed class ListeningModelException(ListeningModel model, Exception inne
 /// last 64 samples of the previous frame before each frame (576 in all), and its state [2, 1, 128] carries from frame to
 /// frame. One thread each way: a frame is a fraction of a millisecond.
 /// <para>
-/// It runs about 31 times a second for as long as Open mic is on, so a frame allocates nothing: the input, state, rate
-/// and both outputs are arrays pinned once as OrtValues, and the run writes into them.
+/// It runs about 31 times a second for as long as Open mic is on, so a frame allocates nothing: the input, the rate, the
+/// output and two state buffers are arrays pinned once as OrtValues and bound once to two <see cref="OrtIoBinding"/>s,
+/// and a run writes into them. The two state buffers trade roles each frame (one binding reads A and writes B, the other
+/// reads B and writes A), so the state is never copied and no name is marshalled per frame.
 /// </para>
 /// </summary>
 public sealed class SileroVad : IVoiceActivity
@@ -41,34 +43,39 @@ public sealed class SileroVad : IVoiceActivity
     private const int Context = 64;
     private const int StateSize = 2 * 128;
 
-    private static readonly string[] InputNames = ["input", "state", "sr"];
-    private static readonly string[] OutputNames = ["output", "stateN"];
-
     private readonly InferenceSession _session;
     private readonly RunOptions _run = new();
     private readonly float[] _input = new float[Context + FrameSamples];
-    private readonly float[] _state = new float[StateSize];
-    private readonly float[] _stateN = new float[StateSize];
+    private readonly float[] _stateA = new float[StateSize];
+    private readonly float[] _stateB = new float[StateSize];
     private readonly float[] _output = new float[1];
-    private readonly OrtValue[] _inputValues;
-    private readonly OrtValue[] _outputValues;
+    private readonly OrtValue[] _values;
+    private readonly OrtIoBinding[] _bindings;
+    private int _step; // which binding runs next: 0 reads state A, 1 reads state B
 
     public SileroVad(string modelPath)
     {
         using var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = 1 };
         options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); // no core spun hot between frames
         _session = new InferenceSession(modelPath, options);
-        _inputValues =
-        [
-            OrtValue.CreateTensorValueFromMemory(_input, [1, _input.Length]),
-            OrtValue.CreateTensorValueFromMemory(_state, [2, 1, 128]),
-            OrtValue.CreateTensorValueFromMemory(new long[] { AudioMath.TargetRate }, []),
-        ];
-        _outputValues =
-        [
-            OrtValue.CreateTensorValueFromMemory(_output, [1, 1]),
-            OrtValue.CreateTensorValueFromMemory(_stateN, [2, 1, 128]),
-        ];
+        var input = OrtValue.CreateTensorValueFromMemory(_input, [1, _input.Length]);
+        var rate = OrtValue.CreateTensorValueFromMemory(new long[] { AudioMath.TargetRate }, []);
+        var output = OrtValue.CreateTensorValueFromMemory(_output, [1, 1]);
+        var stateA = OrtValue.CreateTensorValueFromMemory(_stateA, [2, 1, 128]);
+        var stateB = OrtValue.CreateTensorValueFromMemory(_stateB, [2, 1, 128]);
+        _values = [input, rate, output, stateA, stateB];
+        _bindings = [Bind(stateA, stateB), Bind(stateB, stateA)];
+
+        OrtIoBinding Bind(OrtValue state, OrtValue stateN)
+        {
+            var binding = _session.CreateIoBinding();
+            binding.BindInput("input", input);
+            binding.BindInput("state", state);
+            binding.BindInput("sr", rate);
+            binding.BindOutput("output", output);
+            binding.BindOutput("stateN", stateN);
+            return binding;
+        }
     }
 
     public float Step(ReadOnlySpan<float> frame)
@@ -79,8 +86,8 @@ public sealed class SileroVad : IVoiceActivity
         }
 
         frame.CopyTo(_input.AsSpan(Context));
-        _session.Run(_run, InputNames, _inputValues, OutputNames, _outputValues);
-        _stateN.CopyTo(_state, 0);
+        _session.RunWithBinding(_run, _bindings[_step]);
+        _step ^= 1; // the state just written is the next frame's input
         _input.AsSpan(FrameSamples, Context).CopyTo(_input); // the frame's last 64 samples are the next one's context
         return _output[0];
     }
@@ -88,12 +95,19 @@ public sealed class SileroVad : IVoiceActivity
     public void Reset()
     {
         Array.Clear(_input);
-        Array.Clear(_state);
+        Array.Clear(_stateA);
+        Array.Clear(_stateB);
+        _step = 0;
     }
 
     public void Dispose()
     {
-        foreach (var value in _inputValues.Concat(_outputValues))
+        foreach (var binding in _bindings)
+        {
+            binding.Dispose();
+        }
+
+        foreach (var value in _values)
         {
             value.Dispose();
         }
