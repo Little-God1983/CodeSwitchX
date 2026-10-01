@@ -10,6 +10,7 @@ public sealed class StreamResamplerTests
     [InlineData(44_100, 441)]
     [InlineData(48_000, 137)] // odd block sizes
     [InlineData(16_000, 160)]
+    [InlineData(8_000, 80)] // a narrowband headset: upsampled
     public void Block_by_block_gives_what_the_whole_clip_gives(int rate, int block)
     {
         var input = Enumerable.Range(0, rate).Select(i => (float)Math.Sin(i * 0.01)).ToArray();

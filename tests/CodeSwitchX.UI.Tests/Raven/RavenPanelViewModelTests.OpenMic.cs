@@ -1,9 +1,11 @@
 using System.Net.Http;
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Listening;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -14,17 +16,17 @@ public sealed partial class RavenPanelViewModelTests
 {
     private readonly FakeOpenMic _openMic = new();
 
-    private async Task<RavenPanelViewModel> NewOpenMicVmAsync()
+    private async Task<RavenPanelViewModel> NewOpenMicVmAsync(ReplyVoice? voice = null)
     {
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, voice ?? _voice, _speech,
             new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         return vm;
     }
 
-    private async Task<RavenPanelViewModel> InOpenMicAsync()
+    private async Task<RavenPanelViewModel> InOpenMicAsync(ReplyVoice? voice = null)
     {
-        var vm = await NewOpenMicVmAsync();
+        var vm = await NewOpenMicVmAsync(voice);
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
         return vm;
@@ -153,7 +155,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var vm = await InOpenMicAsync();
 
-        for (var i = 0; i < 500; i++) // 5 s of digital silence
+        for (var i = 0; i < 100; i++) // 5 s of digital silence, in 50 ms batches
         {
             _openMic.Hear(0f);
         }
@@ -290,5 +292,133 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.State.ShouldBe(RavenState.AttendingPaused);
         vm.Log.Count(e => e.Kind == RavenLogKind.Warning).ShouldBe(1);
+    }
+
+    // Final review 1
+    [Fact]
+    public async Task Talking_over_Raven_in_Open_mic_stops_it()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync(voice);
+        Type(vm, "What's waiting on me?");
+        await Until(() => vm.State == RavenState.Speaking);
+        var stops = player.Stops;
+
+        _openMic.Speak();
+
+        vm.State.ShouldBe(RavenState.Listening);
+        voice.IsSpeaking.ShouldBeFalse();
+        await Until(() => player.Stops > stops);
+    }
+
+    // Final review 1
+    [Fact]
+    public async Task Talking_in_Open_mic_stops_a_digest_being_told()
+    {
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user talks
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX is done.")];
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var news = new ChatNews(_bus, _yard, _time, _ => "All done.");
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, _openMic);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(RavenPanelViewModel.NewsGrace);
+        await Until(() => _teller.Asked.Count == 1);
+
+        _openMic.Speak();
+        _teller.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _speech.Spoken.ShouldBeEmpty("the digest stopped when the user started talking");
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
+    // Final review 3
+    [Fact]
+    public async Task Until_the_microphone_is_open_the_orb_does_not_say_Open_mic()
+    {
+        _openMic.ModelsPresent = false;
+        _openMic.DownloadGate = new TaskCompletionSource();
+        _openMic.StartGate = new TaskCompletionSource();
+        var vm = await NewOpenMicVmAsync();
+
+        vm.MicMode = MicMode.OpenMic;
+        vm.State.ShouldBe(RavenState.Idle);
+        vm.Caption.ShouldBe("Downloading Open mic's models…");
+
+        _openMic.DownloadGate.SetResult();
+        await Until(() => vm.Caption == "Starting Open mic…");
+        vm.State.ShouldBe(RavenState.Idle);
+
+        _openMic.StartGate.SetResult();
+        await WithinAsync(vm.PendingOpenMic);
+        vm.State.ShouldBe(RavenState.Attending);
+        vm.Caption.ShouldBe("Open mic");
+    }
+
+    // Final review 7
+    [Fact]
+    public async Task A_turn_the_listener_lost_mid_way_leaves_Listening_quietly()
+    {
+        var vm = await InOpenMicAsync();
+        var before = vm.Log.Count;
+        _openMic.Speak();
+
+        _openMic.LoseTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.State.ShouldBe(RavenState.Attending);
+        vm.Log.Count.ShouldBe(before);
+        await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+    }
+
+    // Final review 2
+    [Fact]
+    public async Task The_orb_level_changes_only_when_it_would_show()
+    {
+        var vm = await InOpenMicAsync();
+        var changes = 0;
+        vm.PropertyChanged += (_, e) => changes += e.PropertyName == nameof(RavenPanelViewModel.Level) ? 1 : 0;
+
+        _openMic.Hear(0.05f);
+        for (var i = 0; i < 20; i++)
+        {
+            _openMic.Hear(0.05f + (i % 2 * 0.00001f)); // an idle room: the same level, give or take nothing
+        }
+
+        changes.ShouldBe(1);
+    }
+
+    /// <summary>A player whose audio never runs out: Raven speaks until something stops it.</summary>
+    private sealed class HoldingPlayer : ISpeechPlayer
+    {
+        private int _stops;
+
+        public int Stops => Volatile.Read(ref _stops);
+
+        public TimeSpan Remaining => TimeSpan.FromSeconds(30);
+
+        public event EventHandler<float>? LevelChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public void Enqueue(SpeechChunk chunk)
+        {
+        }
+
+        public void Stop() => Interlocked.Increment(ref _stops);
+
+        public void Dispose()
+        {
+        }
     }
 }

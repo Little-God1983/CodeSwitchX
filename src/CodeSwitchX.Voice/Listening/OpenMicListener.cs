@@ -25,10 +25,16 @@ public interface IOpenMic
     /// <summary>Half a second of speech: the user is talking. On the worker thread.</summary>
     event EventHandler? SpeechStarted;
 
-    /// <summary>The user's turn is over: its audio, 16 kHz. On the worker thread.</summary>
+    /// <summary>The user's turn is over: its audio, 16 kHz. Empty when the detector failed mid-turn: the turn is dropped,
+    /// and the consumer leaves "listening". On the worker thread.</summary>
     event EventHandler<float[]>? TurnEnded;
 
-    /// <summary>Each captured block, for the orb's level and the silent-microphone watch. On the worker thread.</summary>
+    /// <summary>
+    /// What was captured, in batches of about <see cref="OpenMicListener.HeardBatch"/> of audio rather than per 10 ms
+    /// block, for the orb's level and the silent-microphone watch: the batch's samples (their length is its duration) and
+    /// the loudest block's RMS. Batched, an idle Open mic posts some 20 updates a second to the UI, not 100. On the
+    /// worker thread.
+    /// </summary>
     event EventHandler<CapturedFrames>? Heard;
 
     /// <summary>The microphone died; the listener then stops itself, so a consumer need not call Stop (and must never from inside this handler). On the capture thread.</summary>
@@ -43,6 +49,11 @@ public interface IOpenMic
 public sealed class OpenMicListener : IOpenMic, IDisposable
 {
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>How much audio one <see cref="Heard"/> carries: enough for a smooth orb, few enough posts to the UI.</summary>
+    public static readonly TimeSpan HeardBatch = TimeSpan.FromMilliseconds(50);
+
+    private const int HeardBatchSamples = 800; // HeardBatch at 16 kHz
 
     private readonly IMicrophoneStream _stream;
     private readonly ListeningModelStore _store;
@@ -284,6 +295,9 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
         var frame = new float[SileroVad.FrameSamples];
         var filled = 0;
         var stepLogged = false;
+        var heard = new List<float>(HeardBatchSamples * 2);
+        var loudest = 0f;
+        var inTurn = false; // Started came, Ended has not
         try
         {
             await foreach (var block in queue.Reader.ReadAllAsync(token).ConfigureAwait(false))
@@ -293,7 +307,16 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                     break;
                 }
 
-                Raise(() => Heard?.Invoke(this, block), "Heard");
+                heard.AddRange(block.Samples16k);
+                loudest = Math.Max(loudest, block.Rms);
+                if (heard.Count >= HeardBatchSamples)
+                {
+                    var batch = new CapturedFrames([.. heard], loudest);
+                    heard.Clear();
+                    loudest = 0f;
+                    Raise(() => Heard?.Invoke(this, batch), "Heard");
+                }
+
                 var samples = block.Samples16k.AsSpan();
                 while (samples.Length > 0 && !token.IsCancellationRequested)
                 {
@@ -321,6 +344,11 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                         }
 
                         detector.Reset();
+                        if (inTurn)
+                        {
+                            // The turn is lost with the detector's state; the consumer must not stay "listening" for it.
+                            result = new TurnEvent.Ended([]);
+                        }
                     }
 
                     if (token.IsCancellationRequested)
@@ -331,9 +359,11 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                     switch (result)
                     {
                         case TurnEvent.Started:
+                            inTurn = true;
                             Raise(() => SpeechStarted?.Invoke(this, EventArgs.Empty), "SpeechStarted");
                             break;
                         case TurnEvent.Ended ended:
+                            inTurn = false;
                             Raise(() => TurnEnded?.Invoke(this, ended.Clip), "TurnEnded");
                             break;
                     }

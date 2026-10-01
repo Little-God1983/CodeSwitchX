@@ -13,7 +13,7 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
-    <!-- Open mic's turn detection: Silero VAD and Smart Turn v3, on the CPU (15 ms a call; see Listening/). -->
+    <!-- Open mic's turn detection: Silero VAD and Smart Turn v3, on the CPU (Smart Turn: the model about 15 ms, the features 60-90 ms; see Listening/). -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime" />
     <PackageReference Include="NAudio.Core" />
     <PackageReference Include="NAudio.Wasapi" />

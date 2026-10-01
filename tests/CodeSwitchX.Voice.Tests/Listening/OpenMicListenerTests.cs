@@ -94,6 +94,53 @@ public sealed class OpenMicListenerTests
     }
 
     [Fact]
+    public async Task What_is_heard_comes_in_batches_whose_samples_add_up_to_the_audio()
+    {
+        var stream = new FakeStream();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => new LevelVad(), () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var batches = new List<CapturedFrames>();
+        listener.Heard += (_, batch) => { lock (batches) { batches.Add(batch); } };
+
+        listener.Start("mic");
+        stream.Feed(0.01f, seconds: 1.0, block: 160); // 100 blocks of 10 ms
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        listener.Stop();
+
+        lock (batches)
+        {
+            batches.Count.ShouldBeLessThanOrEqualTo(25);
+            batches.Sum(b => b.Samples16k.Length).ShouldBe(16_000);
+            batches.ShouldAllBe(b => b.Rms == 0.01f);
+        }
+    }
+
+    [Fact]
+    public async Task A_detector_that_fails_mid_turn_ends_the_turn_with_an_empty_clip()
+    {
+        var stream = new FakeStream();
+        var vad = new LevelVad();
+        using var listener = new OpenMicListener(stream, new ListeningModelStore(Path.GetTempPath(), new HttpClient()),
+            () => vad, () => new AlwaysComplete(), NullLogger<OpenMicListener>.Instance);
+        var started = new TaskCompletionSource();
+        var ended = new TaskCompletionSource<float[]>();
+        listener.SpeechStarted += (_, _) =>
+        {
+            vad.ThrowOnce = true; // the next frame fails, while the turn is under way
+            started.TrySetResult();
+        };
+        listener.TurnEnded += (_, clip) => ended.TrySetResult(clip);
+
+        listener.Start("mic");
+        stream.Feed(0.5f, seconds: 1.0, block: 160);
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var clip = await ended.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        clip.ShouldBeEmpty();
+        listener.Stop();
+    }
+
+    [Fact]
     public async Task A_failed_microphone_is_reported_and_the_listener_stops_itself()
     {
         var stream = new FakeStream();
@@ -174,24 +221,32 @@ public sealed class OpenMicListenerTests
 
     // Needs the models in %LOCALAPPDATA%\CodeSwitchX\models\listening.
     [Fact(Explicit = true)]
-    public async Task A_sentence_with_a_one_second_pause_in_the_middle_is_one_turn()
+    public async Task A_sentence_with_a_one_second_pause_in_the_middle_is_one_turn_and_ends_promptly()
     {
         var store = new ListeningModelStore(Path.Combine(CodeSwitchX.Core.AppPaths.Default().ModelsDirectory, "listening"), new HttpClient());
         var path = Path.Combine(Path.GetTempPath(), "csx-open-mic-pause.pcm");
-        var audio = Speak("I would like to open the") .Concat(new float[16_000]).Concat(Speak("Diffusion Nexus workspace, please.")).Concat(new float[3 * 16_000]).ToArray();
+        var audio = Speak("I would like to open the").Concat(new float[16_000]).Concat(Speak("Diffusion Nexus workspace please.")).Concat(new float[3 * 16_000]).ToArray();
+        // No comma: SAPI pauses 0.45 s at one, Smart Turn may call the turn complete there, and the short "please" after
+        // it is then dropped as a burst; this test is about the pause in the middle and the end.
+        var endOfSpeech = Array.FindLastIndex(audio, s => Math.Abs(s) > 0.01f) + 1;
         WritePcm(path, audio);
-        using var listener = new OpenMicListener(new FileMicrophoneStream(path, realTime: false), store, NullLogger<OpenMicListener>.Instance);
-        var turns = new List<float[]>();
-        listener.TurnEnded += (_, clip) => { lock (turns) { turns.Add(clip); } };
+        // In real time: a file fed faster than the worker reads it would have blocks dropped from the queue.
+        using var listener = new OpenMicListener(new FileMicrophoneStream(path, realTime: true), store, NullLogger<OpenMicListener>.Instance);
+        var turns = new List<(float[] Clip, long At)>();
+        long heard = 0; // samples the worker has taken in: Heard and TurnEnded are both raised on it, in order
+        listener.Heard += (_, batch) => heard += batch.Samples16k.Length;
+        listener.TurnEnded += (_, clip) => { lock (turns) { turns.Add((clip, heard)); } };
 
         listener.Start("file");
-        await Task.Delay(TimeSpan.FromSeconds(4), TestContext.Current.CancellationToken);
+        await Task.Delay(TimeSpan.FromSeconds(audio.Length / 16_000.0 + 1), TestContext.Current.CancellationToken);
         listener.Stop();
 
         lock (turns)
         {
             turns.Count.ShouldBe(1, "the pause mid-sentence must not end the turn");
-            (turns[0].Length / 16_000.0).ShouldBeGreaterThan(3.0);
+            (turns[0].Clip.Length / 16_000.0).ShouldBeGreaterThan(3.0);
+            var late = (turns[0].At - endOfSpeech) / 16_000.0;
+            late.ShouldBeInRange(0.0, 1.0, $"the turn ended {late:0.00} s after the speech: Smart Turn must end it, not the {TurnDetector.GiveUp.TotalSeconds} s fallback");
         }
     }
 
@@ -259,8 +314,23 @@ public sealed class OpenMicListenerTests
 
         public int Resets { get; private set; }
 
+        /// <summary>The next frame throws, once.</summary>
+        public bool ThrowOnce
+        {
+            get => Volatile.Read(ref _throwOnce);
+            set => Volatile.Write(ref _throwOnce, value);
+        }
+
+        private bool _throwOnce;
+
         public float Step(ReadOnlySpan<float> frame)
         {
+            if (ThrowOnce)
+            {
+                ThrowOnce = false;
+                throw new InvalidOperationException("model failed");
+            }
+
             lock (FrameSizes)
             {
                 FrameSizes.Add(frame.Length);

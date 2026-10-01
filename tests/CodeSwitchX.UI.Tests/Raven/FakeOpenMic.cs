@@ -14,6 +14,9 @@ internal sealed class FakeOpenMic : IOpenMic
     /// <summary>When set, Start waits for it before it opens: a start still in flight.</summary>
     public TaskCompletionSource? StartGate { get; set; }
 
+    /// <summary>When set, the download waits for it: a download still running.</summary>
+    public TaskCompletionSource? DownloadGate { get; set; }
+
     public int Downloads { get; private set; }
 
     /// <summary>The device it listens on now; null while stopped.</summary>
@@ -31,17 +34,21 @@ internal sealed class FakeOpenMic : IOpenMic
 
     public event EventHandler<MicrophoneException>? Failed;
 
-    public Task DownloadModelsAsync(IProgress<double>? progress, CancellationToken ct)
+    public async Task DownloadModelsAsync(IProgress<double>? progress, CancellationToken ct)
     {
         Downloads++;
+        if (DownloadGate is { } gate)
+        {
+            await gate.Task;
+        }
+
         if (DownloadFails is { } error)
         {
-            return Task.FromException(error);
+            throw error;
         }
 
         ModelsPresent = true;
         progress?.Report(1);
-        return Task.CompletedTask;
     }
 
     public void Start(string deviceId)
@@ -62,8 +69,11 @@ internal sealed class FakeOpenMic : IOpenMic
 
     public void EndTurn(double seconds = 2) => TurnEnded?.Invoke(this, new float[(int)(seconds * 16_000)]);
 
-    /// <summary>A block of 10 ms at this level.</summary>
-    public void Hear(float rms) => Heard?.Invoke(this, new CapturedFrames(new float[160], rms));
+    /// <summary>A batch of 50 ms at this level, as the listener raises them.</summary>
+    public void Hear(float rms) => Heard?.Invoke(this, new CapturedFrames(new float[800], rms));
+
+    /// <summary>The detector failed mid-turn: the listener ends the turn with an empty clip.</summary>
+    public void LoseTurn() => TurnEnded?.Invoke(this, []);
 
     public void Fail() => Failed?.Invoke(this, new MicrophoneException(MicrophoneFailureKind.Missing, "gone", new Exception("gone")));
 }

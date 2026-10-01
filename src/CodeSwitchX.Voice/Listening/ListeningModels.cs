@@ -43,6 +43,7 @@ public sealed class SileroVad : IVoiceActivity
     public SileroVad(string modelPath)
     {
         using var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = 1 };
+        options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); // no core spun hot between frames
         _session = new InferenceSession(modelPath, options);
     }
 
@@ -77,7 +78,9 @@ public sealed class SileroVad : IVoiceActivity
 }
 
 /// <summary>Pipecat's Smart Turn v3.2 on the CPU: the turn's last 8 s as Whisper features in, the probability that the
-/// turn is complete out (the output is named "logits" but is already a sigmoid). About 15 ms.</summary>
+/// turn is complete out (the output is named "logits" but is already a sigmoid). The model takes about 15 ms, the
+/// features 60-90 ms; it runs once per pause. Half the cores, which do not spin waiting for work between calls: an
+/// always-on listener must not keep the CPU busy.</summary>
 public sealed class SmartTurn : ITurnEnd
 {
     private readonly InferenceSession _session;
@@ -88,8 +91,10 @@ public sealed class SmartTurn : ITurnEnd
         {
             ExecutionMode = ExecutionMode.ORT_SEQUENTIAL,
             InterOpNumThreads = 1,
+            IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2),
             GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
         };
+        options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0");
         _session = new InferenceSession(modelPath, options);
     }
 

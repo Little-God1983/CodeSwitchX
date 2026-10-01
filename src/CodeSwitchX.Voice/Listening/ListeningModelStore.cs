@@ -26,13 +26,17 @@ public sealed class ListeningModelStore(string folder, HttpClient http)
     /// <summary>The models this store keeps; the tests hand in their own.</summary>
     internal IReadOnlyList<ListeningModel> Models { get; init; } = [Silero, SmartTurn];
 
+    /// <summary>How long a download may go without a byte before it counts as stalled; the tests shorten it.</summary>
+    internal TimeSpan StallTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     public string PathOf(ListeningModel model) => Path.Combine(folder, model.FileName);
 
     /// <summary>Every model is in place at its pinned length (the hash was checked when it arrived).</summary>
     public bool IsPresent => Models.All(Present);
 
     /// <summary>Downloads the models not yet in place. Progress is 0..1 over all their bytes. Throws on a failed or
-    /// mismatching download, which leaves no file behind.</summary>
+    /// mismatching download, which leaves no file behind, and on one that stalls (an <see cref="IOException"/> after
+    /// <see cref="StallTimeout"/> without a byte): the body is read without the client's timeout, so nothing else ends it.</summary>
     public async Task DownloadAsync(IProgress<double>? progress, CancellationToken ct)
     {
         Directory.CreateDirectory(folder);
@@ -53,8 +57,9 @@ public sealed class ListeningModelStore(string folder, HttpClient http)
                 await using (target.ConfigureAwait(false))
                 {
                     var buffer = new byte[81_920];
+                    using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     int n;
-                    while ((n = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                    while ((n = await ReadAsync(source, buffer, stall, model, ct).ConfigureAwait(false)) > 0)
                     {
                         await target.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
                         hash.AppendData(buffer, 0, n);
@@ -82,6 +87,20 @@ public sealed class ListeningModelStore(string folder, HttpClient http)
         }
 
         progress?.Report(1.0);
+    }
+
+    /// <summary>One read of the body, given <see cref="StallTimeout"/> afresh.</summary>
+    private async Task<int> ReadAsync(Stream source, byte[] buffer, CancellationTokenSource stall, ListeningModel model, CancellationToken ct)
+    {
+        stall.CancelAfter(StallTimeout);
+        try
+        {
+            return await source.ReadAsync(buffer, stall.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new IOException($"{model.FileName}'s download stalled: nothing came for {StallTimeout.TotalSeconds:0.#} s");
+        }
     }
 
     /// <summary>Deletes a model that would not load, so the next switch to Open mic downloads it again.</summary>

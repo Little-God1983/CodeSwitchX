@@ -64,6 +64,19 @@ public sealed class ListeningModelStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task A_download_that_stalls_fails_and_leaves_nothing_behind()
+    {
+        var a = new byte[] { 1, 2, 3 };
+        var store = new ListeningModelStore(_folder, new HttpClient(new Stalls())) { Models = [Model("a.onnx", a)], StallTimeout = TimeSpan.FromMilliseconds(200) };
+
+        var error = await Should.ThrowAsync<IOException>(() => store.DownloadAsync(null, TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+
+        error.Message.ShouldContain("stalled");
+        Directory.GetFiles(_folder).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void The_pinned_models_are_the_ones_the_spec_names()
     {
         ListeningModelStore.Silero.Length.ShouldBe(2_327_524);
@@ -81,6 +94,25 @@ public sealed class ListeningModelStoreTests : IDisposable
     private sealed class Progress(List<double> values) : IProgress<double>
     {
         public void Report(double value) => values.Add(value);
+    }
+
+    /// <summary>Answers with headers, then a body that never sends a byte.</summary>
+    private sealed class Stalls : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new SilentStream()) });
+    }
+
+    private sealed class SilentStream : MemoryStream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct) =>
+            ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
     }
 
     private sealed class Files : HttpMessageHandler, System.Collections.IEnumerable

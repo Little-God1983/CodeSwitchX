@@ -51,6 +51,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private static readonly TimeSpan MinimumClip = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>The smallest change of Open mic's level that is passed on to the orb.</summary>
+    private const double VisibleLevelChange = 0.01;
+
     private readonly IMicrophoneCatalog _catalog;
     private readonly IMicrophoneRecorder _recorder;
     private readonly IDictationService _dictation;
@@ -584,7 +587,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _openMicDownload = DownloadOpenMicModelsAsync();
             }
 
-            if (!await _openMicDownload)
+            UpdateState(); // "Downloading Open mic's models…"
+            var downloaded = await _openMicDownload;
+            UpdateState();
+            if (!downloaded)
             {
                 if (run == _openMicRun)
                 {
@@ -1110,7 +1116,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         UpdateState();
     }
 
-    /// <summary>The orb's level, and the same watch push to talk keeps: a microphone that sends nothing is warned of once per start.</summary>
+    /// <summary>
+    /// The orb's level, and the same watch push to talk keeps: a microphone that sends nothing is warned of once per start.
+    /// A batch of about 50 ms (<see cref="OpenMicListener.HeardBatch"/>): its samples' length is its duration. The level
+    /// changes only when it would show: an idle room must not redraw the orb twenty times a second for hours.
+    /// </summary>
     private void OnOpenHeard(CapturedFrames block)
     {
         if (!_attending)
@@ -1120,7 +1130,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (State is RavenState.Attending or RavenState.Listening)
         {
-            Level = AudioMath.LevelOf(block.Rms);
+            var level = AudioMath.LevelOf(block.Rms);
+            if (Math.Abs(level - Level) >= VisibleLevelChange)
+            {
+                Level = level;
+            }
         }
 
         if (_openSilence.Step(block.Rms, TimeSpan.FromSeconds(block.Samples16k.Length / 16_000.0)) == SignalEvent.Silent)
@@ -1832,7 +1846,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What the panel shows: Listening while capturing, whatever is queued behind it; otherwise Speaking while Raven
     /// says something; otherwise Transcribing while any stopped clip is pending (the download, or how many wait behind
     /// the one transcribing, in the caption); otherwise Thinking while a question is unanswered; otherwise Idle, or in
-    /// Open mic Attending (AttendingPaused while paused). Speech heard in Open mic shows Listening, as a press does.
+    /// Open mic Attending once its microphone is open (AttendingPaused while paused; Idle, "Starting Open mic…", before
+    /// it opens). Speech heard in Open mic shows Listening, as a press does.
     /// </summary>
     private void UpdateState()
     {
@@ -1874,10 +1889,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (_pending == 0)
         {
-            if (MicMode == MicMode.OpenMic)
+            if (MicMode == MicMode.OpenMic && _attendPaused)
             {
-                State = _attendPaused ? RavenState.AttendingPaused : RavenState.Attending;
-                Caption = _attendPaused ? "Open mic paused" : "Open mic";
+                State = RavenState.AttendingPaused;
+                Caption = "Open mic paused";
+            }
+            else if (MicMode == MicMode.OpenMic && !_attending)
+            {
+                // The microphone is not open yet: the orb does not say "Open mic" before it listens.
+                State = RavenState.Idle;
+                Caption = _openMicDownload is { IsCompleted: false } ? "Downloading Open mic's models…" : "Starting Open mic…";
+            }
+            else if (MicMode == MicMode.OpenMic)
+            {
+                State = RavenState.Attending;
+                Caption = "Open mic";
             }
             else
             {

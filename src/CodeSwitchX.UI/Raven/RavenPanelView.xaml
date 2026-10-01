@@ -140,7 +140,7 @@
                 <Setter TargetName="Disc" Property="Stroke" Value="#F59E0B" />
               </DataTrigger>
               <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
-                <Setter Property="Content" Value="&#xE769;" />
+                <Setter Property="Content" Value="&#xEC54;" />
                 <Setter Property="Opacity" Value="0.7" />
               </DataTrigger>
             </ControlTemplate.Triggers>
