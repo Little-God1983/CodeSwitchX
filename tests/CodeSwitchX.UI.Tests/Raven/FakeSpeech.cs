@@ -26,7 +26,7 @@ internal sealed class FakeSpeech : ITextToSpeech
     /// <summary>While set and not completed, every sentence waits for it before its audio.</summary>
     public TaskCompletionSource? Gate { get; set; }
 
-    public TextToSpeechStatus Status { get; private set; } = TextToSpeechStatus.Off;
+    public TextToSpeechStatus Status { get; private set; } = new(TextToSpeechState.Ready);
 
     public event EventHandler<TextToSpeechStatus>? StatusChanged;
 

@@ -138,7 +138,7 @@ public sealed class SentenceChunker
         return final ? text.Length : -1;
     }
 
-    /// <summary>The dot at <paramref name="dot"/> closes an abbreviation, or an item's number at the start of a line.</summary>
+    /// <summary>The dot at <paramref name="dot"/> closes an abbreviation, or an item's number at the start of a line, indented or not.</summary>
     private bool EndsNothing(string text, int dot)
     {
         var start = dot;
@@ -153,6 +153,6 @@ public sealed class SentenceChunker
             return true;
         }
 
-        return _lineStart && start == 0 && word.Length > 0 && word.All(char.IsAsciiDigit);
+        return _lineStart && string.IsNullOrWhiteSpace(text[..start]) && word.Length > 0 && word.All(char.IsAsciiDigit);
     }
 }

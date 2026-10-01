@@ -113,10 +113,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenChatModel = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatModel, "the chat model", ct));
             RavenChatEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatEffort, "the chat effort", ct));
             RavenMuted = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenMuted, "whether Raven is muted", ct) ?? false;
-            RavenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) is { Length: > 0 } voice
-                && SpeechSettings.Voices.Any(v => v.Id == voice)
-                ? voice
-                : SpeechSettings.DefaultVoice;
+            _speech.Voice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultVoice;
+            RavenVoice = _speech.Voice; // the setter keeps a known voice, or the default
             RavenVoiceModel = await LoadOrDefaultAsync<SpeechModel?>(SettingKeys.RavenVoiceModel, "Raven's voice model", ct) is { } speechModel
                 && Enum.IsDefined(speechModel)
                 ? speechModel

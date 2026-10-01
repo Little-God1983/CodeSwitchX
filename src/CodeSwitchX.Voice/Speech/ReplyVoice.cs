@@ -66,6 +66,7 @@ public sealed class ReplyVoice : IDisposable
     private long _hushedThrough;
     private CancellationTokenSource _hush = new();
     private volatile bool _muted;
+    private volatile bool _disposed;
 
     /// <summary>Sentences queued and not yet spoken or dropped.</summary>
     private int _pending;
@@ -124,11 +125,12 @@ public sealed class ReplyVoice : IDisposable
     /// A reply is on its way (the user started their turn): wakes the output now, so a Bluetooth headset does not lose the
     /// first word to waking up. It sleeps again <see cref="KeepAwake"/> after the voice last went quiet and no reply is
     /// still being written. Returns at once on any thread: opening the device is done on the thread pool, off the mic
-    /// press, and there no synchronisation context catches its events.
+    /// press, and there no synchronisation context catches its events. Only for a voice that is ready or loading: one
+    /// not installed, or failed, would keep a stream of silence open (Bluetooth busy, Windows awake) for nothing.
     /// </summary>
     public void Expect()
     {
-        if (_muted)
+        if (_muted || _tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Loading))
         {
             return;
         }
@@ -267,7 +269,7 @@ public sealed class ReplyVoice : IDisposable
                     // A hush that came while this chunk was generated stops the player first; one that comes while it
                     // is queued waits for the gate, and then stops it.
                     CatchUpStops();
-                    if (IsHushed(reply.Number))
+                    if (_disposed || IsHushed(reply.Number))
                     {
                         return;
                     }
@@ -437,13 +439,29 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
+    /// <summary>
+    /// Nothing more is spoken: the player is stopped through the gate like every call to it, so a chunk being queued
+    /// right now is stopped after it, and none is queued after this. A gate held past two seconds (a device that hangs
+    /// opening) is not waited for longer; the hush's own stop follows it.
+    /// </summary>
     public void Dispose()
     {
+        _disposed = true;
         _sentences.Writer.TryComplete();
         Hush();
         _sleep.Dispose();
         _keepAlive.Stop();
-        _player.Stop();
+        if (_playerGate.Wait(TimeSpan.FromSeconds(2)))
+        {
+            try
+            {
+                _player.Stop();
+            }
+            finally
+            {
+                _playerGate.Release();
+            }
+        }
     }
 
     private sealed record Sentence(SpokenReply Reply, string Text);

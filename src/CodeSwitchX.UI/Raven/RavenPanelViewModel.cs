@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Infrastructure;
@@ -860,11 +861,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// panel thinks while any is unanswered; the mic stays free, so the next question can be asked meanwhile.
     /// </summary>
     /// <param name="ended">When the user's turn ended, for the time to Raven's first word in the log.</param>
+    /// <remarks>
+    /// The answer's voice begins here, as it is asked, not when its turn comes: talking again silences every answer
+    /// asked before, the ones still waiting their turn too, so none of them is spoken after the user moved on. They
+    /// are all written.
+    /// </remarks>
     private void Ask(string text, DateTimeOffset ended)
     {
         _asking++;
         UpdateState();
-        _conversation = AnswerInTurnAsync(_conversation, text, ended);
+        var asked = new StrongBox<DateTimeOffset>();
+        var spoken = _voice.Begin(heard => _logger.LogInformation(
+            "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
+            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds));
+        _conversation = AnswerInTurnAsync(_conversation, text, spoken, asked);
     }
 
     /// <summary>
@@ -873,16 +883,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// the words before a card ("Let me check.") too. The awaits resume on the UI thread. Never faults, so the question
     /// behind it always gets its turn.
     /// </summary>
-    private async Task AnswerInTurnAsync(Task previous, string text, DateTimeOffset ended)
+    /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
+    private async Task AnswerInTurnAsync(Task previous, string text, ReplyVoice.SpokenReply spoken, StrongBox<DateTimeOffset> asked)
     {
-        ReplyVoice.SpokenReply? spoken = null;
         try
         {
             await previous;
-            var asked = _time.GetUtcNow();
-            spoken = _voice.Begin(heard => _logger.LogInformation(
-                "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
-                (heard - ended).TotalMilliseconds, (heard - asked).TotalMilliseconds));
+            asked.Value = _time.GetUtcNow();
             RavenLogEntry? reply = null;
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
             await foreach (var e in _brain.AskAsync(text, CancellationToken.None))
@@ -938,7 +945,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            spoken?.Complete();
+            spoken.Complete();
             _asking--;
             UpdateState();
         }

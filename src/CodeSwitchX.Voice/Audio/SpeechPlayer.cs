@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
@@ -61,22 +62,42 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
             if (_buffer is null)
             {
-                var format = new WaveFormat(chunk.SampleRate, 16, 1);
-                _buffer = new BufferedWaveProvider(format, TimeSpan.FromMinutes(5)) // a reply never fills it
-                {
-                    DiscardOnBufferOverflow = true,
-                    ReadFully = true,
-                };
-                var output = new WaveOutEvent { DesiredLatency = 120 };
-                output.PlaybackStopped += OnPlaybackStopped;
-                output.Init(new Meter(_buffer, this));
-                output.Play();
-                _output = output;
+                Open(chunk.SampleRate);
             }
 
-            var bytes = chunk.Pcm16.ToArray();
-            _buffer.AddSamples(bytes, 0, bytes.Length);
+            // The chunk's own array where it has one (it always does from the sidecar): no second copy per chunk.
+            var segment = MemoryMarshal.TryGetArray(chunk.Pcm16, out var array) ? array : new ArraySegment<byte>(chunk.Pcm16.ToArray());
+            _buffer!.AddSamples(segment.Array!, segment.Offset, segment.Count);
         }
+    }
+
+    /// <summary>
+    /// Opens the default device. Only a device that opened and plays is kept: one that fails (none there, or busy) is
+    /// disposed and the error thrown, so the next chunk tries again instead of filling a buffer nothing plays.
+    /// </summary>
+    private void Open(int sampleRate)
+    {
+        var buffer = new BufferedWaveProvider(new WaveFormat(sampleRate, 16, 1), TimeSpan.FromMinutes(5)) // a reply never fills it
+        {
+            DiscardOnBufferOverflow = true,
+            ReadFully = true,
+        };
+        var output = new WaveOutEvent { DesiredLatency = 120 };
+        try
+        {
+            output.Init(new Meter(buffer, this));
+            output.PlaybackStopped += OnPlaybackStopped;
+            output.Play();
+        }
+        catch
+        {
+            output.PlaybackStopped -= OnPlaybackStopped;
+            output.Dispose();
+            throw;
+        }
+
+        _buffer = buffer;
+        _output = output;
     }
 
     public void Stop()

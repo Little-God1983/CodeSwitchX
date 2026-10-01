@@ -74,6 +74,25 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task Talking_again_silences_every_answer_asked_before_and_all_of_them_are_written()
+    {
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = question => [new BrainText($"Answer to {question}.")];
+        var vm = await NewVmAsync();
+        Type(vm, "one");
+        Type(vm, "two"); // waits its turn behind "one"
+
+        vm.PressMic(TalkInput.MicButton); // while Raven still thinks about "one"
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _speech.Spoken.ShouldBeEmpty("not the second of two answers without the first");
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Answer to one."));
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Answer to two."));
+    }
+
+    [Fact]
     public async Task A_muted_Raven_only_writes_its_answer()
     {
         _brain.Answer = _ => [new BrainText("You have one chat waiting.")];

@@ -158,6 +158,67 @@ public sealed class QwenTextToSpeechTests : IDisposable
     }
 
     [Fact]
+    public async Task A_late_word_of_the_sidecar_about_loading_does_not_undo_ready()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+
+        _launcher.LastStatus!("downloading the model"); // a Hugging Face line on stderr, read after the ready event
+
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task A_load_a_new_model_cancelled_tells_nothing_more()
+    {
+        _environment.Installed = true;
+        _launcher.Gate = new TaskCompletionSource(); // the first sidecar finishes loading, cancelled or not
+        _tts.Prepare(install: false);
+        await Until(() => _launcher.Starts.Count == 1);
+
+        _launcher.Gate = null;
+        var stale = _launcher.Pending!;
+        _settings.Model = SpeechModel.Large; // the second model loads at once
+        await Until(() => _tts.Status.State == TextToSpeechState.Ready);
+        var told = States.Count;
+        stale.TrySetResult();
+        await Until(() => _launcher.Servers[0].Disposed);
+
+        States.Count.ShouldBe(told, "the cancelled load says neither Ready nor Failed");
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task Getting_ready_never_reads_the_disk_on_the_calling_thread()
+    {
+        _environment.CheckGate = new TaskCompletionSource(); // a sleeping disk
+
+        var prepare = Task.Run(() => _tts.Prepare(install: false), TestContext.Current.CancellationToken);
+
+        (await Task.WhenAny(prepare, Task.Delay(1000, TestContext.Current.CancellationToken))).ShouldBe(prepare, "unmuting must not wait for the disk");
+        _environment.CheckGate.TrySetResult();
+        await _tts.Preparing;
+    }
+
+    [Fact]
+    public async Task A_new_model_never_waits_for_the_old_sidecar_to_be_killed()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+        var killing = new TaskCompletionSource();
+        _launcher.Servers[0].Killing = killing;
+
+        var change = Task.Run(() => _settings.Model = SpeechModel.Large, TestContext.Current.CancellationToken);
+
+        (await Task.WhenAny(change, Task.Delay(1000, TestContext.Current.CancellationToken))).ShouldBe(change, "Settings must not wait for a process tree to die");
+        killing.TrySetResult();
+        await Until(() => _launcher.Servers[0].Disposed);
+    }
+
+    [Fact]
     public async Task A_new_model_restarts_the_voice()
     {
         _environment.Installed = true;
@@ -168,7 +229,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         _settings.Model = SpeechModel.Large;
         await _tts.Preparing;
 
-        first.Disposed.ShouldBeTrue();
+        await Until(() => first.Disposed);
         _launcher.Starts.ShouldBe(["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"]);
         _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
     }
@@ -210,7 +271,17 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public bool Cancelled { get; private set; }
 
-        public bool IsInstalled => Installed;
+        /// <summary>When set, looking at the install waits for it (a sleeping disk).</summary>
+        public TaskCompletionSource? CheckGate { get; set; }
+
+        public bool IsInstalled
+        {
+            get
+            {
+                CheckGate?.Task.Wait();
+                return Installed;
+            }
+        }
 
         public string Python => "python.exe";
 
@@ -242,12 +313,31 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public List<FakeServer> Servers { get; } = [];
 
-        public Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus, CancellationToken ct)
+        /// <summary>When set, the next start waits for it before it is ready, cancelled or not.</summary>
+        public TaskCompletionSource? Gate { get; set; }
+
+        /// <summary>The gate the last start waits for.</summary>
+        public TaskCompletionSource? Pending { get; private set; }
+
+        public Action<string>? LastStatus { get; private set; }
+
+        public async Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus, CancellationToken ct)
         {
-            Starts.Add(modelId);
+            lock (Starts)
+            {
+                Starts.Add(modelId);
+            }
+
+            LastStatus = onStatus;
             var server = new FakeServer();
             Servers.Add(server);
-            return Task.FromResult<IQwenTtsServer>(server);
+            if (Gate is { } gate)
+            {
+                Pending = gate;
+                await gate.Task;
+            }
+
+            return server;
         }
     }
 
@@ -261,12 +351,16 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public Task Exited => _exited.Task;
 
-        public bool Disposed { get; private set; }
+        public volatile bool Disposed;
+
+        /// <summary>When set, killing it waits for it.</summary>
+        public TaskCompletionSource? Killing { get; set; }
 
         public void End() => _exited.TrySetResult();
 
         public void Dispose()
         {
+            Killing?.Task.Wait();
             Disposed = true;
             End();
         }

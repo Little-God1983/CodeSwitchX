@@ -180,6 +180,41 @@ public sealed class ReplyVoiceTests : IDisposable
         _keepAlive.On.ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData(TextToSpeechState.Off)]
+    [InlineData(TextToSpeechState.Installing)]
+    [InlineData(TextToSpeechState.Failed)]
+    public async Task A_voice_that_cannot_speak_leaves_the_output_asleep(TextToSpeechState state)
+    {
+        _tts.Status = new TextToSpeechStatus(state);
+
+        _voice.Expect();
+
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _keepAlive.On.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Disposing_stops_a_chunk_being_queued_after_it_and_queues_nothing_more()
+    {
+        _player.Opening = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Add("One sentence. Two sentences. ");
+        await Until(() => _player.Enqueuing);
+
+        var dispose = Task.Run(_voice.Dispose, TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _player.Opening.TrySetResult();
+        await dispose;
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        lock (_player.Log)
+        {
+            _player.Log[0].ShouldBe("enqueue");
+            _player.Log.Skip(1).ShouldAllBe(e => e == "stop", "nothing is queued after the stop");
+        }
+    }
+
     [Fact]
     public async Task Waking_the_output_never_waits_for_the_device()
     {
@@ -324,7 +359,7 @@ public sealed class ReplyVoiceTests : IDisposable
 
         public bool Cancelled { get; private set; }
 
-        public TextToSpeechStatus Status => TextToSpeechStatus.Off;
+        public TextToSpeechStatus Status { get; set; } = new(TextToSpeechState.Ready);
 
         public event EventHandler<TextToSpeechStatus>? StatusChanged
         {

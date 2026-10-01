@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Voice.Speech.QwenTts;
 
@@ -29,10 +30,19 @@ public interface IQwenTtsServerLauncher
 
 /// <summary>
 /// Starts the sidecar with the environment's Python: no window, listening on a free port of 127.0.0.1 with a fresh token.
-/// It ends with CodeSwitchX however that ends (it waits on this process), and is killed when disposed.
+/// It ends with CodeSwitchX however that ends (it waits on this process), and is killed when disposed. What it writes to
+/// stderr reaches the app's log: while it loads at debug level (libraries chatter), and the tail as a warning when the
+/// load fails; once it is ready, every line as a warning, since then it writes only what went wrong (a traceback).
 /// </summary>
 public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
 {
+    private readonly ILogger<QwenTtsServerLauncher> _logger;
+
+    public QwenTtsServerLauncher(ILogger<QwenTtsServerLauncher> logger)
+    {
+        _logger = logger;
+    }
+
     public async Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus,
         CancellationToken ct)
     {
@@ -66,7 +76,7 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
             throw new TextToSpeechException($"The voice could not be started: {ex.Message}", ex);
         }
 
-        var server = new Server(process, token);
+        var server = new Server(process, token, _logger);
         try
         {
             await server.WaitUntilReadyAsync(onStatus, ct).ConfigureAwait(false);
@@ -86,12 +96,16 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
         private readonly Queue<string> _errors = new();
         private readonly TaskCompletionSource<Uri> _listening = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private Action<string>? _onStatus;
+        private readonly ILogger _logger;
 
-        public Server(Process process, string token)
+        /// <summary>Told what the sidecar does while it loads; dropped once it is ready, so nothing it says later counts as loading.</summary>
+        private volatile Action<string>? _onStatus;
+
+        public Server(Process process, string token, ILogger logger)
         {
             _process = process;
             Token = token;
+            _logger = logger;
             _process.ErrorDataReceived += (_, e) => OnError(e.Data);
             _process.BeginErrorReadLine();
             Exited = Task.Run(PumpAsync);
@@ -126,7 +140,22 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
             {
             }
 
-            _ready.TrySetException(new TextToSpeechException($"The voice ended while loading: {LastError() ?? "no reason given"}"));
+            Fail($"The voice ended while loading: {LastError() ?? "no reason given"}");
+        }
+
+        /// <summary>The load failed: the error says the last line, the log gets all that is kept of stderr.</summary>
+        private void Fail(string message)
+        {
+            if (_ready.TrySetException(new TextToSpeechException(message)))
+            {
+                string tail;
+                lock (_errors)
+                {
+                    tail = string.Join(Environment.NewLine, _errors);
+                }
+
+                _logger.LogWarning("Raven's voice failed to load. Its last words:{NewLine}{Tail}", Environment.NewLine, tail);
+            }
         }
 
         private void OnEvent(string line)
@@ -151,11 +180,12 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
                     _onStatus?.Invoke("loading the model");
                     break;
                 case "ready":
+                    _onStatus = null;
                     _ready.TrySetResult();
                     break;
                 case "failed":
                     var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
-                    _ready.TrySetException(new TextToSpeechException($"The voice failed to load: {reason ?? LastError() ?? "no reason given"}"));
+                    Fail($"The voice failed to load: {reason ?? LastError() ?? "no reason given"}");
                     break;
             }
         }
@@ -167,6 +197,13 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
                 return;
             }
 
+            if (_ready.Task.IsCompletedSuccessfully)
+            {
+                _logger.LogWarning("Raven's voice: {Line}", line);
+                return;
+            }
+
+            _logger.LogDebug("Raven's voice: {Line}", line);
             lock (_errors)
             {
                 _errors.Enqueue(line);

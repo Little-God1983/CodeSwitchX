@@ -64,6 +64,12 @@ public sealed class SentenceChunkerTests
     }
 
     [Fact]
+    public void An_indented_item_is_not_cut_after_its_number_either()
+    {
+        Chunk("  1. Open the settings.\n  2. Pick a voice.").ShouldBe(["1. Open the settings.", "2. Pick a voice."]);
+    }
+
+    [Fact]
     public void A_fenced_code_block_is_left_out()
     {
         Chunk("Run this:\n``", "`bash\ndotnet test.\n``", "`\nThen wait.").ShouldBe(["Run this:", "Then wait."]);

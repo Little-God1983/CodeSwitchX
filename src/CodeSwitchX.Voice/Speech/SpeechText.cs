@@ -62,7 +62,7 @@ public static partial class SpeechText
             return body;
         }
 
-        return (".!?".Contains(core[^1]) || core.EndsWith("...", StringComparison.Ordinal) ? core : core + ".") + body[^closers..];
+        return (".!?".Contains(core[^1]) ? core : core + ".") + body[^closers..];
     }
 
     [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)")]
