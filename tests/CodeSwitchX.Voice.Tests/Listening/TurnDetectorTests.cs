@@ -148,17 +148,58 @@ public sealed class TurnDetectorTests
     }
 
     [Fact]
-    public void A_started_turn_goes_on_through_ignored_speech_and_ends_only_at_a_real_pause()
+    public void A_started_turn_goes_on_through_ignored_speech_and_ends_at_the_user_s_first_pause_without_Smart_Turn()
     {
         Feed(Speech(1.0)).OfType<TurnEvent.Started>().ShouldHaveSingleItem();
         _detector.IgnoreSpeech = true; // an earlier answer starts to play while the user is still talking
+        var marker = 0.25f;
 
-        Feed(Speech(1.5)).ShouldBeEmpty();
-        _turn.Calls.ShouldBe(0, "the user never paused");
+        Feed(Speech(1.0)).ShouldBeEmpty();
+        var events = Feed(Silence(0.2), Audio(marker, Frame * 10, speech: true));
 
-        _turn.Answers.Enqueue(0.9);
-        var clip = Feed(Silence(0.5)).OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip;
-        Seconds(clip).ShouldBeGreaterThan(2.6);
+        var clip = events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip;
+        Seconds(clip).ShouldBeInRange(2.1, 2.3); // 2 s of speech + the 0.2 s pause
+        clip.ShouldNotContain(marker);
+        _turn.Calls.ShouldBe(0, "Raven may be talking after the pause: Smart Turn is not asked to wait for it");
+    }
+
+    [Fact]
+    public void A_started_turn_ends_at_the_user_s_pause_although_Raven_s_voice_goes_on_after_it()
+    {
+        Feed(Speech(1.0)).OfType<TurnEvent.Started>().ShouldHaveSingleItem();
+        _detector.IgnoreSpeech = true;
+        var raven = 0.25f;
+
+        var events = Feed(Silence(0.2), Audio(raven, Samples(30), speech: true));
+
+        var clip = events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip;
+        Seconds(clip).ShouldBeLessThan(2.0, "the turn ended at the pause, not at two minutes");
+        clip.ShouldNotContain(raven);
+    }
+
+    [Fact]
+    public void While_speech_is_ignored_a_frame_between_the_two_levels_counts_as_the_pause()
+    {
+        Feed(Speech(1.0)).OfType<TurnEvent.Started>().ShouldHaveSingleItem();
+        _detector.IgnoreSpeech = true;
+
+        var events = Feed(Audio(0.1f, Samples(0.2), speech: true, probability: 0.4f)); // Raven heard faintly
+
+        events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem();
+        _turn.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public void With_speech_heard_again_a_started_turn_still_asks_Smart_Turn_at_its_pause()
+    {
+        Feed(Speech(1.0));
+        _detector.IgnoreSpeech = true;
+        Feed(Speech(0.5));
+        _detector.IgnoreSpeech = false;
+        _turn.Answers.Enqueue(0.1);
+
+        Feed(Silence(0.5)).ShouldBeEmpty();
+
         _turn.Calls.ShouldBe(1);
     }
 

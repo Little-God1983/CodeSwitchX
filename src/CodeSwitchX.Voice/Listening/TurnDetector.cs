@@ -60,8 +60,10 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     private bool _smartTurnFailed;
 
     /// <summary>Raven is speaking and the user turned voice barge-in off: no new turn starts, and a burst not yet
-    /// started is dropped. A turn already started is the user's and goes on to its real end: they may still be finishing
-    /// a sentence when an earlier answer starts to play.</summary>
+    /// started is dropped. A turn already started is the user's: they may still be finishing a sentence when an earlier
+    /// answer starts to play, so it is not cut off, but it ends at their first 0.2 s pause without asking Smart Turn,
+    /// and only frames under <see cref="StartThreshold"/> count as that pause (Raven heard faintly through the speakers
+    /// may sit between the two levels). The clip stops at the pause, so her voice after it never reaches Whisper.</summary>
     public bool IgnoreSpeech
     {
         get => _ignoreSpeech;
@@ -72,14 +74,15 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     public TurnEvent? Step(ReadOnlySpan<float> frame)
     {
         var probability = vad.Step(frame);
-        if (_ignoreSpeech && !_started)
+        var ignoring = _ignoreSpeech;
+        if (ignoring && !_started)
         {
             // Raven is talking: a burst that had not become a turn yet is dropped at once, and her voice is not kept as pre-roll.
             Reset(keepVad: true);
             return null;
         }
 
-        var speech = probability >= (_inTurn ? ContinueThreshold : StartThreshold);
+        var speech = probability >= (_inTurn && !ignoring ? ContinueThreshold : StartThreshold);
         if (!_inTurn)
         {
             if (!speech)
@@ -116,6 +119,11 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
             {
                 DropBurst(); // a cough, a key: no turn
                 return null;
+            }
+
+            if (_started && ignoring && _silentFrames >= FramesIn(Pause))
+            {
+                return End(); // Raven is talking: what follows the user's pause may be her voice, not theirs
             }
 
             if (_started && _silentFrames >= FramesIn(GiveUp))

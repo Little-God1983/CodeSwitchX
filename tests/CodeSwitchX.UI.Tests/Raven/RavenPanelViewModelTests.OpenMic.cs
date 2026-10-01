@@ -702,6 +702,28 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Count(e => e.Kind == RavenLogKind.Warning && e.Text.StartsWith("No sound from")).ShouldBe(1);
     }
 
+    // Third review of #89: Raven's voice must not end up in the user's turn
+    [Fact]
+    public async Task An_answer_that_arrives_while_the_user_is_talking_in_Open_mic_is_only_written()
+    {
+        var transcript = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcript.Task);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync();
+        _openMic.Speak();
+        _openMic.EndTurn(); // the first question is still being transcribed
+
+        _openMic.Speak(); // the user's next turn has started
+        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
+        _speech.Spoken.ShouldBeEmpty("the user is talking");
+        vm.State.ShouldBe(RavenState.Listening);
+    }
+
     /// <summary>A player whose audio never runs out: Raven speaks until something stops it.</summary>
     private sealed class HoldingPlayer : ISpeechPlayer
     {

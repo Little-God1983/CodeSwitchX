@@ -1441,7 +1441,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <remarks>
     /// The question takes the floor: the answer or digest before it is interrupted, so only the newest question is
     /// answered. One asked before it that has not gone to the brain yet is not lost: it goes with this one, as the first
-    /// half of what the user said. The answer's voice begins here, as it is asked.
+    /// half of what the user said. The answer's voice begins here, as it is asked, unless the user is talking in Open mic.
     /// </remarks>
     private void Ask(string text, DateTimeOffset ended)
     {
@@ -1460,6 +1460,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var spoken = _voice.Begin(heard => _logger.LogInformation(
             "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
             (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds));
+        if (_openSpeech)
+        {
+            // The user is in their next Open mic turn: Raven's voice would talk over it and, heard through speakers, end up
+            // in it. The answer is only written; the question being spoken replaces it anyway.
+            _voice.Hush();
+        }
+
         _conversation = AnswerInTurnAsync(_conversation, question, spoken, asked, floor);
     }
 

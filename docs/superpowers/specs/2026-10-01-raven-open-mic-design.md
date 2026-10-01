@@ -74,8 +74,11 @@ samples it has been fed, so tests drive it frame by frame.
   - Incomplete: it waits. Speech that resumes continues the same turn, and the next pause asks again.
 - **Fallbacks:** the turn ends anyway after **3 s** of silence, or when it reaches **120 s** (the recorder's limit, and
   Whisper's sensible length).
-- **Raven speaking, barge-in off:** while the listener is told Raven is speaking, frames are not counted as speech, and
-  a turn that had not raised `SpeechStarted` yet is dropped.
+- **Raven speaking, barge-in off:** while the listener is told Raven is speaking, no new turn starts, and a turn that
+  had not raised `SpeechStarted` yet is dropped. A turn already started is not cut off (the user may still be finishing
+  a sentence), but it ends at the user's first 0.2 s pause without asking Smart Turn, counting only frames under 0.5 as
+  that pause (Raven heard faintly through speakers may sit between 0.35 and 0.5), and the clip stops at the pause, so
+  Raven's voice after it is never sent to Whisper.
 - `Reset()`: back to waiting, with nothing kept (pause, a mode switch, a new microphone).
 
 ### OpenMicListener
@@ -86,8 +89,8 @@ samples it has been fed, so tests drive it frame by frame.
   while it is still the current one, so a late stop never closes a newer run. Both are serialised by the listener and
   called off the UI thread. `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
   microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
-  Raven speaks with voice barge-in off: no new turn starts then, but a turn already started goes on to its real pause
-  (the user may still be finishing a sentence when an earlier answer starts to play).
+  Raven speaks with voice barge-in off: no new turn starts then, but a turn already started goes on to the user's
+  pause (the user may still be finishing a sentence when an earlier answer starts to play), and ends there.
 - Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted(run)`,
   `TurnEnded(run, clip)`, `Heard(HeardAudio)` (about 50 ms of captured audio: its loudest block's RMS for the orb's
   level, its quietest block's RMS for the silent-microphone watch, so one click in a batch of digital zeros is not
@@ -150,6 +153,9 @@ samples it has been fed, so tests drive it frame by frame.
   stop; the user's turn ended when the detector saw the pause, which is the time Raven's first-word log line counts from.
   An empty transcript is logged, not noted in the log ("I didn't hear anything" after every noise would be clutter).
 - **`RavenSpeaking`** follows `ReplyVoice`: the listener is told when Raven starts and stops being heard.
+- **Raven does not talk over a turn:** an answer that arrives while the user is speaking in Open mic (an earlier
+  question's, transcribed or typed) is only written, never spoken, so Raven's voice cannot end up in the user's turn;
+  the question being spoken replaces it anyway. A digest waits for the floor as before.
 - **Barge-in setting:** under Raven in Settings, "Stop Raven when I talk over it", on by default, saved as
   `raven.bargeIn` (`SettingKeys.RavenBargeIn`). Off, the listener ignores speech while Raven speaks.
 - **The Speaking caption** says "Speaking… Talk to interrupt." only where talking does: push to talk, and an Open mic
@@ -175,7 +181,7 @@ samples it has been fed, so tests drive it frame by frame.
 - **TurnDetector**, with fake models, frame by frame: a 0.4 s burst is ignored; a pause Smart Turn calls incomplete,
   then more speech, makes one turn; a complete pause ends the turn after 0.2 s; the 3 s fallback; the 0.5 s pre-roll is
   in the clip; the 120 s cap; `Reset` drops a half-spoken turn; with barge-in off, speech while Raven speaks is not a
-  turn.
+  turn, and a turn already started ends at the user's 0.2 s pause without Smart Turn, its clip cut there.
 - **WhisperFeatures** against Pipecat's numpy code on a fixed clip: the reference features are made once with uv and
   committed as a test fixture, and the C# port must match them closely.
 - **The real models** (tests that run only when the model files are present): Silero finds speech in the warm-up sample
