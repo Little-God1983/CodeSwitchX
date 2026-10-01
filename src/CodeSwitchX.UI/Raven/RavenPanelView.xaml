@@ -168,6 +168,12 @@
         <DataTrigger Binding="{Binding State}" Value="Speaking">
           <Setter Property="Text" Value="SPEAKING" />
         </DataTrigger>
+        <DataTrigger Binding="{Binding State}" Value="Attending">
+          <Setter Property="Text" Value="OPEN MIC" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
+          <Setter Property="Text" Value="PAUSED" />
+        </DataTrigger>
       </Style.Triggers>
     </Style>
 

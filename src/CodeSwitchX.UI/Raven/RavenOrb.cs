@@ -7,10 +7,12 @@ namespace CodeSwitchX.UI.Raven;
 /// Raven's orb: a glow, a wave ring that follows the mic level while listening, arcs that turn while transcribing, dots
 /// that go round while Raven's brain thinks, rings that go out from a wave ring following the voice while Raven speaks,
 /// a ring of dots with a glint going round while Open mic waits, and a gradient core. It draws itself and animates on <see cref="CompositionTarget.Rendering"/> only while it can be seen
-/// and is asked to animate; with animations turned off in Windows it draws one still frame per change. Idle breathing
-/// also stops while its window is not the active one (VS Code docked in front, say): listening, transcribing, thinking
-/// and speaking keep animating, because they show what the microphone and the models are doing. The geometry follows the concept page's
-/// canvas, whose 336 px square maps onto the element's size.
+/// and is asked to animate; with animations turned off in Windows it draws one still frame per change, and a hidden orb
+/// (the panel's or the rail's, whichever is collapsed) draws nothing until it is shown. Idle breathing and Open mic's
+/// waiting light ring also stop, on a still frame, while its window is not the active one (VS Code docked in front, say):
+/// Open mic waits for hours, and its live microphone needs no animation to be live. Listening, transcribing, thinking and
+/// speaking keep animating, because they show what the microphone and the models are doing. The geometry follows the
+/// concept page's canvas, whose 336 px square maps onto the element's size.
 /// <para>
 /// Each frame is drawn into a <see cref="DrawingGroup"/> that <see cref="OnRender"/> hands to WPF once. Redrawing that
 /// group updates the screen without InvalidateVisual, which would arrange the element again on every frame and so run
@@ -28,7 +30,8 @@ public sealed class RavenOrb : FrameworkElement
     public static readonly DependencyProperty StateProperty = DependencyProperty.Register(nameof(State), typeof(RavenState), typeof(RavenOrb),
         new FrameworkPropertyMetadata(RavenState.Idle, (d, _) => ((RavenOrb)d).OnStateChanged()));
 
-    /// <summary>Changes every captured block (10 ms) or played buffer (60 ms): redrawn by the next frame while animating, straight away otherwise.</summary>
+    /// <summary>Changes every captured block (10 ms) or played buffer (60 ms): redrawn by the next frame while animating,
+    /// straight away otherwise, and not at all while the orb is hidden.</summary>
     public static readonly DependencyProperty LevelProperty = DependencyProperty.Register(nameof(Level), typeof(double), typeof(RavenOrb),
         new FrameworkPropertyMetadata(0.0, (d, _) => ((RavenOrb)d).OnInputChanged()));
 
@@ -67,7 +70,7 @@ public sealed class RavenOrb : FrameworkElement
         IsHitTestVisible = false;
         Loaded += (_, _) => OnLoaded();
         Unloaded += (_, _) => OnUnloaded();
-        IsVisibleChanged += (_, _) => UpdateHook();
+        IsVisibleChanged += (_, _) => OnVisibleChanged();
     }
 
     public RavenState State
@@ -92,7 +95,7 @@ public sealed class RavenOrb : FrameworkElement
     private static bool MotionAllowed => SystemParameters.ClientAreaAnimation;
 
     private bool ShouldAnimate => IsAnimating && IsVisible && MotionAllowed && _window is not null && _window.WindowState != WindowState.Minimized
-        && State != RavenState.AttendingPaused && (_window.IsActive || State != RavenState.Idle);
+        && State != RavenState.AttendingPaused && (_window.IsActive || State is not (RavenState.Idle or RavenState.Attending));
 
     private void OnLoaded()
     {
@@ -124,16 +127,27 @@ public sealed class RavenOrb : FrameworkElement
 
     private void OnWindowStateChanged(object? sender, EventArgs e) => UpdateHook();
 
+    /// <summary>Shown again: what changed while it was hidden was not drawn, so a still orb draws its frame now.</summary>
+    private void OnVisibleChanged()
+    {
+        UpdateHook();
+        if (IsVisible && !_hooked)
+        {
+            DrawFrame();
+        }
+    }
+
     private void OnStateChanged()
     {
         UpdateHook();
         OnInputChanged();
     }
 
-    /// <summary>While animating the next frame shows the change; still, the one frame is drawn again now.</summary>
+    /// <summary>While animating the next frame shows the change; still, the one frame is drawn again now, unless no one
+    /// can see it: the level of Open mic's room moves for hours, also under the collapsed orb.</summary>
     private void OnInputChanged()
     {
-        if (!_hooked)
+        if (!_hooked && IsVisible)
         {
             DrawFrame();
         }
@@ -187,7 +201,7 @@ public sealed class RavenOrb : FrameworkElement
         var attending = State is RavenState.Attending or RavenState.AttendingPaused ? 1 : 0;
         _attend += (attending - _attend) * (1 - Math.Pow(1 - 0.12, dt * 60));
 
-        // Thinking and the light ring move as calmly as the idle breath, and may last for hours in a background window.
+        // Thinking and the light ring move as calmly as the idle breath, and may last for hours (Thinking also in a background window).
         if (State is RavenState.Idle or RavenState.Thinking or RavenState.Attending && now - _lastDraw < IdleFrame)
         {
             return;
