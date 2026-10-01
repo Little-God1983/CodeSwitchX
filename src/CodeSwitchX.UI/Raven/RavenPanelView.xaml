@@ -327,14 +327,15 @@
                       PreviewKeyDown="OnMicKey" />
               <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
                 <!-- Push to talk or Open mic: two radio buttons styled as one switch. They show the mode in effect, and
-                     every click is the user's choice, one on the half already checked too (after a fallback). -->
+                     every click is the user's choice, one on the half already checked too (after a fallback), and so is a half
+                     checked any other way (UI Automation's Select). -->
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                   <RadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
                                IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}"
-                               CommandParameter="{x:Static raven:MicMode.PushToTalk}" Command="{Binding ChooseMicModeCommand}" />
+                               Tag="{x:Static raven:MicMode.PushToTalk}" Checked="OnModeChecked" Click="OnModeClick" />
                   <RadioButton Style="{StaticResource ModeSwitch}" Content="Open mic" AutomationProperties.Name="Open mic mode"
                                IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}"
-                               CommandParameter="{x:Static raven:MicMode.OpenMic}" Command="{Binding ChooseMicModeCommand}" />
+                               Tag="{x:Static raven:MicMode.OpenMic}" Checked="OnModeChecked" Click="OnModeClick" />
                 </StackPanel>
                 <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,0,0,4" />
                 <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"

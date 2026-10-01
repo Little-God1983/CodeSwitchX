@@ -296,8 +296,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void ChooseMicMode(MicMode mode)
     {
+        var changed = PreferredMicMode != mode;
         PreferredMicMode = mode;
-        MicMode = mode;
+        if (!changed)
+        {
+            MicMode = mode; // a new choice has already put the panel in that mode, or fallen back from it
+        }
     }
 
     /// <summary>Talking over Raven stops it in Open mic; off, Open mic ignores speech while Raven speaks (Raven heard on
