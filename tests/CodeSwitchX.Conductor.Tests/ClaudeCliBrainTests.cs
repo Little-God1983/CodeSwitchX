@@ -333,9 +333,11 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task A_cancelled_turn_stops_the_process_so_its_rest_is_not_read_as_the_next_turn()
+    public async Task A_cancelled_turn_is_interrupted_and_the_process_keeps_the_conversation()
     {
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        _launcher.Answer = line => StreamJson.IsInterrupt(line)
+            ? [StreamJson.InterruptAck(line), StreamJson.InterruptedResult]
+            : [StreamJson.Init(), StreamJson.Text("Half")];
         using var cancel = new CancellationTokenSource();
         var turn = AskUntilAsync("One", cancel.Token);
         await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
@@ -343,11 +345,33 @@ public sealed class ClaudeCliBrainTests : IDisposable
         await cancel.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => turn);
+        _launcher.Last.Disposed.ShouldBeFalse("an interrupt ends the turn, not the process, so the brain remembers it");
+        StreamJson.IsInterrupt(_launcher.Last.Written[1]).ShouldBeTrue();
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        var next = await AskAsync("Two");
+        next.OfType<BrainNotice>().ShouldBeEmpty("an interrupted turn is no crash");
+        Reply(next).ShouldBe("Hi.", "the interrupted turn's result was read with it, not as the next turn's");
+        _launcher.Started.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_turn_that_does_not_end_on_an_interrupt_stops_the_process_so_its_rest_is_not_read_as_the_next_turn()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        using var cancel = new CancellationTokenSource();
+        var turn = AskUntilAsync("One", cancel.Token);
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        await cancel.CancelAsync();
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+        _time.Advance(ClaudeCliBrain.InterruptTimeout);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => turn);
         _launcher.Last.Disposed.ShouldBeTrue();
         _launcher.Answer = StreamJson.Reply("Hi.");
         var next = await AskAsync("Two");
-        next.OfType<BrainNotice>().ShouldBeEmpty("a cancelled turn is no crash");
         Reply(next).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(2);
     }
 
     [Fact]

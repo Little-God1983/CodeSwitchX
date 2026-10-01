@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Threading.Channels;
 
 namespace CodeSwitchX.Conductor.Tests;
@@ -140,6 +141,35 @@ internal static class StreamJson
 
     public const string ErrorResult =
         """{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded","session_id":"s"}""";
+
+    /// <summary>The line the brain writes to interrupt a turn (control request, subtype interrupt).</summary>
+    public static bool IsInterrupt(string written)
+    {
+        using var line = JsonDocument.Parse(written);
+        return line.RootElement.GetProperty("type").GetString() == "control_request"
+            && line.RootElement.GetProperty("request").GetProperty("subtype").GetString() == "interrupt";
+    }
+
+    /// <summary>What CLI 2.1.285 answers an interrupt with (captured 2026-10-01).</summary>
+    public static string InterruptAck(string written)
+    {
+        using var line = JsonDocument.Parse(written);
+        var id = line.RootElement.GetProperty("request_id").GetString();
+        return new System.Text.Json.Nodes.JsonObject
+        {
+            ["type"] = "control_response",
+            ["response"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["subtype"] = "success",
+                ["request_id"] = id,
+                ["response"] = new System.Text.Json.Nodes.JsonObject { ["still_queued"] = new System.Text.Json.Nodes.JsonArray() },
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>The result that ends an interrupted turn (CLI 2.1.285).</summary>
+    public const string InterruptedResult =
+        """{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}""";
 
     /// <summary>Answers every turn with init, the text in two pieces and the result.</summary>
     public static Func<string, IEnumerable<string>> Reply(string text) =>

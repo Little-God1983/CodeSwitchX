@@ -27,6 +27,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     public static readonly TimeSpan QuietReset = TimeSpan.FromMinutes(20);
 
+    /// <summary>How long an interrupted turn has to end; Claude Code ends one within a second (CLI 2.1.285).</summary>
+    public static readonly TimeSpan InterruptTimeout = TimeSpan.FromSeconds(5);
+
     /// <summary>How often a process whose Yard tools failed to connect is replaced in a row; Claude Code does not connect again by itself.</summary>
     internal const int MaxYardRetries = 2;
 
@@ -63,6 +66,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     /// <summary>Set once the app disposes the brain: nothing starts a process after that.</summary>
     private volatile bool _disposed;
+
+    /// <summary>Interrupts sent so far, to number their requests.</summary>
+    private long _interrupts;
 
     /// <summary>Why the last process went, when it went on its own: the next start says so.</summary>
     private string? _lost;
@@ -173,8 +179,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         finally
         {
-            // Cancelled, or left before the turn was over: the rest of its lines would be read as the next turn's.
-            if (!finished && process is not null && ReferenceEquals(process, _process))
+            // Cancelled, or left before the turn was over: it is interrupted and read to its end, so the brain keeps the
+            // conversation and the rest of its lines are not read as the next turn's. One that does not end is stopped.
+            if (!finished && process is not null && ReferenceEquals(process, _process)
+                && !await InterruptAsync(process).ConfigureAwait(false))
             {
                 Stop();
             }
@@ -348,6 +356,39 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Interrupts the running turn (a control request, as the Agent SDK sends it) and reads it to its <c>result</c>, which
+    /// is not news. True once it ended; false when it did not within <see cref="InterruptTimeout"/>, or the process went.
+    /// </summary>
+    private async Task<bool> InterruptAsync(IBrainProcess process)
+    {
+        var line = new JsonObject
+        {
+            ["type"] = "control_request",
+            ["request_id"] = $"interrupt-{Interlocked.Increment(ref _interrupts)}",
+            ["request"] = new JsonObject { ["subtype"] = "interrupt" },
+        }.ToJsonString();
+        try
+        {
+            using var timeout = new CancellationTokenSource(InterruptTimeout, _time);
+            await process.WriteLineAsync(line, timeout.Token).ConfigureAwait(false);
+            while (true)
+            {
+                var next = await process.Lines.ReadAsync(timeout.Token).ConfigureAwait(false);
+                if (ClaudeStream.Read(next) is ClaudeTurnOver)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or System.Threading.Channels.ChannelClosedException or IOException
+            or ObjectDisposedException or InvalidOperationException)
+        {
+            _logger.LogWarning("Raven's brain did not end an interrupted turn; it is stopped");
             return false;
         }
     }
