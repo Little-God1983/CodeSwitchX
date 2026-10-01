@@ -367,7 +367,8 @@ public sealed partial class RavenPanelViewModelTests
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
         var warning = vm.Log.Last();
         warning.Kind.ShouldBe(RavenLogKind.Warning);
-        warning.Text.ShouldBe("Open mic could not start: onnxruntime.dll was not found. Back to push to talk.");
+        warning.Text.ShouldBe("Open mic could not start: onnxruntime.dll was not found. Back to push to talk for now; Open mic stays "
+            + "your choice and is tried again at the next launch. Pick Push to talk to keep it.");
         warning.Text.ShouldNotContain("downloaded");
     }
 
@@ -582,15 +583,16 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.DownloadFails = new HttpRequestException("no network");
         var vm = await NewOpenMicVmAsync();
 
-        vm.MicModeSwitch = MicMode.OpenMic;
+        vm.ChooseMicModeCommand.Execute(MicMode.OpenMic);
         await WithinAsync(vm.PendingOpenMic);
 
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
-        vm.MicModeSwitch.ShouldBe(MicMode.PushToTalk);
         vm.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+        vm.Log.Last().Text.ShouldBe("Open mic's models could not be downloaded: no network. Back to push to talk for now; Open mic stays "
+            + "your choice and is tried again at the next launch. Pick Push to talk to keep it.");
 
         _openMic.DownloadFails = null;
-        vm.MicModeSwitch = MicMode.OpenMic; // the user tries again: the choice has not changed, the mode does
+        vm.ChooseMicModeCommand.Execute(MicMode.OpenMic); // the user tries again: the choice has not changed, the mode does
         await WithinAsync(vm.PendingOpenMic);
         vm.MicMode.ShouldBe(MicMode.OpenMic);
         _openMic.Listening.ShouldBe(Headset.Id);
@@ -606,10 +608,44 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingOpenMic);
         vm.MicMode.ShouldBe(MicMode.OpenMic);
 
-        vm.MicModeSwitch = MicMode.PushToTalk;
+        vm.ChooseMicModeCommand.Execute(MicMode.PushToTalk);
         await WithinAsync(vm.PendingOpenMic);
         vm.PreferredMicMode.ShouldBe(MicMode.PushToTalk);
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
+    }
+
+    // Third review of #89: after a fallback, a click on the Push to talk already shown is the user's choice
+    [Fact]
+    public async Task After_a_fallback_choosing_Push_to_talk_keeps_it_as_the_choice()
+    {
+        _openMic.StartFails = new DllNotFoundException("onnxruntime.dll was not found");
+        var vm = await NewOpenMicVmAsync();
+        vm.PreferredMicMode = MicMode.OpenMic; // as the shell restores it
+        await WithinAsync(vm.PendingOpenMic);
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+
+        vm.ChooseMicModeCommand.Execute(MicMode.PushToTalk); // the half already checked
+
+        vm.PreferredMicMode.ShouldBe(MicMode.PushToTalk);
+        vm.MicMode.ShouldBe(MicMode.PushToTalk);
+        _openMic.Started.ShouldBeEmpty();
+    }
+
+    // Third review of #89: after a fallback, a click on Open mic tries again
+    [Fact]
+    public async Task After_a_fallback_choosing_Open_mic_starts_it_again()
+    {
+        _openMic.StartFails = new DllNotFoundException("onnxruntime.dll was not found");
+        var vm = await NewOpenMicVmAsync();
+        vm.PreferredMicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+
+        _openMic.StartFails = null;
+        vm.ChooseMicModeCommand.Execute(MicMode.OpenMic);
+        await WithinAsync(vm.PendingOpenMic);
+
+        vm.MicMode.ShouldBe(MicMode.OpenMic);
+        _openMic.Listening.ShouldBe(Headset.Id);
     }
 
     // Second review of #89: the Speaking caption tells what interrupts

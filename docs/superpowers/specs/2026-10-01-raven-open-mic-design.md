@@ -115,7 +115,10 @@ samples it has been fed, so tests drive it frame by frame.
 - **Mode picker:** a two-way switch "Push to talk | Open mic" next to the microphone list, saved as `raven.micMode`
   (`SettingKeys.RavenMicMode`); Push to talk is the default and what an unknown value reads as. What is saved is the
   user's choice (`PreferredMicMode`): a fall back to Push to talk after a failure changes the mode, not the choice, so
-  the next launch tries Open mic again.
+  the next launch tries Open mic again. The switch shows the mode in effect, and every click on either half is the
+  user's choice (`ChooseMicModeCommand`), a click on the half already checked too: after a fallback, Push to talk saves
+  push to talk, and Open mic tries again. The fallback's warning says so: "Back to push to talk for now; Open mic stays
+  your choice and is tried again at the next launch. Pick Push to talk to keep it."
 - **Switching to Open mic:** downloads the models if they are missing, with the progress in the log as the Whisper
   model's download shows it, then starts the listener on the selected microphone. A failed download warns and switches
   back to Push to talk.
@@ -164,8 +167,8 @@ samples it has been fed, so tests drive it frame by frame.
 ## 3. Failures
 
 - **The models cannot be downloaded:** a warning with the reason, and the mode goes back to Push to talk.
-- **A model will not load:** a file ONNX Runtime refuses is deleted, a warning says so, and the mode goes back to Push
-  to talk. Any other failure to start the listener warns with its message and goes back to Push to talk, deleting
+- **A model will not load:** a file ONNX Runtime refuses is deleted, a warning says it is downloaded again the next
+  time Open mic starts, and the mode goes back to Push to talk. Any other failure to start the listener warns with its message and goes back to Push to talk, deleting
   nothing.
 - **The microphone fails** (unplugged, gone): the same warning as today; the listener stops, the mode stays Open mic and
   shows paused, and the mic button tries again. The silent-microphone watch is push to talk's, per start: "No sound
@@ -190,6 +193,7 @@ samples it has been fed, so tests drive it frame by frame.
 - **ListeningModelStore:** a mismatching download leaves nothing behind; a present file is not downloaded again.
 - **The panel:** switching modes starts and stops the listener and puts the orb in `Attending`; the mic button pauses and resumes in Open mic;
   `SpeechStarted` hushes Raven and stops a digest; `TurnEnded` goes through Whisper to `Ask`; a failed download
-  switches back to Push to talk; the barge-in setting reaches the listener.
+  switches back to Push to talk; after a fallback, choosing Push to talk stores it and choosing Open mic starts it
+  again; an answer that arrives mid-turn is not spoken; the barge-in setting reaches the listener.
 - **On screen:** a test build fed by audio files instead of the microphone, captured with PrintWindow. The live check
   (talk, pause mid-sentence, talk over Raven) is the user's: nobody else can talk into their microphone.

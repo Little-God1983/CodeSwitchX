@@ -186,7 +186,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The download of Open mic's models in flight, if any: starts while it runs share it.</summary>
     private Task<bool>? _openMicDownload;
 
-    /// <summary>The newest request waiting on the download: only its failure says "Back to push to talk".</summary>
+    /// <summary>The newest request waiting on the download: only its failure says it goes back to push to talk.</summary>
     private long _openMicDownloadRequest;
 
     /// <summary>Open mic was switched on before the first microphone listing arrived (the stored mode at startup): it
@@ -284,22 +284,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The user's choice of mode, which the shell stores: setting it puts the panel in that mode. Only the user's switch
-    /// changes it (<see cref="MicModeSwitch"/>), never a fallback after a failure, as with <see cref="PreferredMicrophone"/>:
+    /// changes it (<see cref="ChooseMicModeCommand"/>), never a fallback after a failure, as with <see cref="PreferredMicrophone"/>:
     /// a download that failed once while offline must not turn Open mic off for good.
     /// </summary>
     [ObservableProperty]
     private MicMode _preferredMicMode;
 
-    /// <summary>The mode switch: it shows <see cref="MicMode"/>, and the user's flip of it is their choice. A flip back to
-    /// a choice a failure undid sets the mode again, though the choice itself has not changed.</summary>
-    public MicMode MicModeSwitch
+    /// <summary>A click on either half of the mode switch, which shows <see cref="MicMode"/>: the user's choice, saved. A
+    /// click on the half already checked counts too: after a fallback, Push to talk keeps push to talk for good, and Open
+    /// mic tries again although the choice itself has not changed.</summary>
+    [RelayCommand]
+    private void ChooseMicMode(MicMode mode)
     {
-        get => MicMode;
-        set
-        {
-            PreferredMicMode = value;
-            MicMode = value;
-        }
+        PreferredMicMode = mode;
+        MicMode = mode;
     }
 
     /// <summary>Talking over Raven stops it in Open mic; off, Open mic ignores speech while Raven speaks (Raven heard on
@@ -544,7 +542,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     partial void OnMicModeChanged(MicMode value)
     {
-        OnPropertyChanged(nameof(MicModeSwitch));
         if (value == MicMode.OpenMic)
         {
             if (_openMic is null)
@@ -671,7 +668,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Open mic's models would not load");
             BackToPushToTalk(request,
-                $"Open mic could not start: {ex.Message}. It is downloaded again the next time you switch to Open mic.");
+                $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. The file is downloaded again the next time Open mic starts. {FallbackNote}");
             return;
         }
         catch (MicrophoneException ex)
@@ -689,7 +686,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Not the model file's fault (the native runtime would not load, say): nothing is deleted or downloaded again.
             _logger.LogWarning(ex, "Open mic could not start");
-            BackToPushToTalk(request, $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. Back to push to talk.");
+            BackToPushToTalk(request, $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. {FallbackNote}");
             return;
         }
 
@@ -732,6 +729,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return request == _openMicRequest ? await Task.Run(() => _openMic!.Start(deviceId)) : null;
     }
 
+    /// <summary>What a fallback does, said with its warning: the stored choice is still Open mic, so the next launch tries it
+    /// again unless the user picks Push to talk.</summary>
+    private const string FallbackNote =
+        "Back to push to talk for now; Open mic stays your choice and is tried again at the next launch. Pick Push to talk to keep it.";
+
     /// <summary>A start that failed for good: if it is still the current request, the warning and back to push to talk
     /// (the user's stored choice stays Open mic, for the next launch).</summary>
     private void BackToPushToTalk(long request, string warning)
@@ -758,7 +760,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Open mic's models could not be downloaded");
             // Only a request still waiting for it goes back to push to talk.
-            var back = _openMicDownloadRequest == _openMicRequest ? " Back to push to talk." : "";
+            var back = _openMicDownloadRequest == _openMicRequest ? " " + FallbackNote : "";
             ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message}.{back}");
             return false;
         }
