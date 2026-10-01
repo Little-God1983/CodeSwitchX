@@ -32,7 +32,8 @@ Raven tells the user what their chats did as conversation, not as a queue of not
     whose previous state was not Working.
 - **Slots:** each chat has one slot, `ChatNewsItem(SessionId, WorkspaceId, Workspace, Title, Kind, Detail, At)`. Newer news
   replaces the slot's older news. A chat that finishes and then needs you before Raven speaks is told once, as needs you.
-- **Taking:** `Take()` empties the slots and returns the items still fresh. An item older than 2 minutes is not spoken: it
+- **Taking:** `Take()` empties the slots and returns the items still fresh. News the chat has moved past without new
+  news (it needed the user and works again) is dropped. An item older than 2 minutes is not spoken: it
   goes into the log card as a line marked "not spoken (older than 2 minutes)".
 - **Raised:** `NewsArrived` lets the floor know there is something to say.
 - **Workspace name:** comes from `IYardDirectory` when the news is taken. A chat that has left the board is dropped.
@@ -43,9 +44,11 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
 
 - **Holders:** the user (talking), an answer to the user, or a digest. Each holder gets a generation number and a
   `CancellationTokenSource`.
-- **A mic press** takes the floor. In one step it cancels the current holder's token (the brain turn and its speech) and
-  hushes `ReplyVoice`. Answers asked before and still waiting their turn are cancelled too, and are written as
-  "(not asked: you went on)". This replaces the queue of answers: only the newest question is answered.
+- **A mic press** silences Raven at once (`ReplyVoice.Hush`) but interrupts nothing: a press that brings no question
+  (a cough, a mis-tap) leaves the answer to be written.
+- **A new question** (spoken or typed) takes the floor. In one step it cancels the current holder's token (the brain turn
+  and its speech) and hushes `ReplyVoice`. A question asked before it that has not gone to the brain yet is not lost:
+  it goes along with the new one, as its first half.
 - **When the floor is free**, the next holder is picked in this order: the user's turn, then chat questions (an empty
   source until #74), then news.
 - **Free** means nobody talks, no answer is being made or spoken, and Raven has been quiet for 1.5 s (`NewsGrace`), so a
@@ -69,6 +72,8 @@ The panel's turn handling moves into `CodeSwitchX.UI/Raven/RavenFloor.cs`, which
   needs you."
 - **Interrupted:** a digest that is interrupted is dropped; its chats count as told. The brain has the news in its
   conversation, so "go on" or "what did it change?" works.
+- **No actions:** while the digest's brain turn runs, the Yard's actions are refused (`NewsTurnGuard` in front of
+  `RavenActions`): the prompt quotes what other chats said, and only the user's own words may act.
 - **When:** a digest turn only runs while speech is on (not muted, "Speak chat news" on). Otherwise the card is still
   written and no brain turn is spent.
 
