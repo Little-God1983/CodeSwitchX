@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using CodeSwitchX.Voice.Audio;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Voice.Listening;
@@ -23,6 +25,9 @@ public abstract record TurnEvent
 /// dropped without a trace once 0.2 s of silence follows it.
 /// </para>
 /// <para>
+/// Allocation-free while it waits: the pre-roll is a fixed ring of frames, copied into the turn only when speech starts.
+/// </para>
+/// <para>
 /// Pure: no clock, no I/O. Time is the samples it is fed, so the tests drive it frame by frame. Not thread-safe: one
 /// worker feeds it (<see cref="OpenMicListener"/>); <see cref="IgnoreSpeech"/> may be set from any thread.
 /// </para>
@@ -37,11 +42,14 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     public static readonly TimeSpan PreRoll = TimeSpan.FromSeconds(0.5);
     public static readonly TimeSpan MaximumTurn = TimeSpan.FromSeconds(120);
 
-    private const int Rate = 16_000;
+    private const int Rate = AudioMath.TargetRate;
     private const int Frame = SileroVad.FrameSamples;
     private static readonly int SmartTurnWindow = 8 * Rate;
+    private static readonly int PreRollFrames = FramesIn(PreRoll);
 
-    private readonly Queue<float[]> _preRoll = new();
+    private readonly float[] _preRoll = new float[PreRollFrames * Frame];
+    private int _preRollFirst;
+    private int _preRollCount;
     private readonly List<float> _turn = [];
     private volatile bool _ignoreSpeech;
     private bool _inTurn;
@@ -51,8 +59,9 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     private int _silentFrames;
     private bool _smartTurnFailed;
 
-    /// <summary>Raven is speaking and the user turned voice barge-in off: what is heard is not taken as speech, and a
-    /// turn not yet started is dropped.</summary>
+    /// <summary>Raven is speaking and the user turned voice barge-in off: no new turn starts, and a burst not yet
+    /// started is dropped. A turn already started is the user's and goes on to its real end: they may still be finishing
+    /// a sentence when an earlier answer starts to play.</summary>
     public bool IgnoreSpeech
     {
         get => _ignoreSpeech;
@@ -70,31 +79,25 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
             return null;
         }
 
-        var copy = frame.ToArray();
-        var speech = !_ignoreSpeech && probability >= (_inTurn ? ContinueThreshold : StartThreshold);
+        var speech = probability >= (_inTurn ? ContinueThreshold : StartThreshold);
         if (!_inTurn)
         {
             if (!speech)
             {
-                _preRoll.Enqueue(copy);
-                while (_preRoll.Count > FramesIn(PreRoll))
-                {
-                    _preRoll.Dequeue();
-                }
-
+                PushPreRoll(frame);
                 return null;
             }
 
             _inTurn = true;
-            foreach (var earlier in _preRoll)
+            for (var i = 0; i < _preRollCount; i++)
             {
-                _turn.AddRange(earlier);
+                _turn.AddRange(PreRollFrame(i));
             }
 
-            _preRoll.Clear();
+            ClearPreRoll();
         }
 
-        _turn.AddRange(copy);
+        _turn.AddRange(frame);
         if (speech)
         {
             _speechFrames++;
@@ -138,8 +141,13 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
 
     private void Reset(bool keepVad)
     {
+        ClearPreRoll();
+        ResetTurn(keepVad);
+    }
+
+    private void ResetTurn(bool keepVad)
+    {
         _turn.Clear();
-        _preRoll.Clear();
         _inTurn = false;
         _started = false;
         _asked = false;
@@ -155,20 +163,50 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     /// what the burst swallowed of it is handed back to the pre-roll.</summary>
     private void DropBurst()
     {
-        var keep = Math.Min(_turn.Count / Frame, FramesIn(PreRoll)) * Frame;
-        var tail = _turn.GetRange(_turn.Count - keep, keep).ToArray();
-        Reset(keepVad: true);
-        for (var i = 0; i < tail.Length; i += Frame)
+        var keep = Math.Min(_turn.Count / Frame, PreRollFrames) * Frame;
+        var turn = CollectionsMarshal.AsSpan(_turn);
+        ClearPreRoll();
+        for (var i = turn.Length - keep; i < turn.Length; i += Frame)
         {
-            _preRoll.Enqueue(tail[i..(i + Frame)]);
+            PushPreRoll(turn.Slice(i, Frame));
         }
+
+        ResetTurn(keepVad: true);
+    }
+
+    /// <summary>Keeps the frame as the newest of the pre-roll, over the oldest once the half second is full.</summary>
+    private void PushPreRoll(ReadOnlySpan<float> frame)
+    {
+        int slot;
+        if (_preRollCount < PreRollFrames)
+        {
+            slot = (_preRollFirst + _preRollCount) % PreRollFrames;
+            _preRollCount++;
+        }
+        else
+        {
+            slot = _preRollFirst;
+            _preRollFirst = (_preRollFirst + 1) % PreRollFrames;
+        }
+
+        frame.CopyTo(_preRoll.AsSpan(slot * Frame, Frame));
+    }
+
+    /// <summary>The pre-roll's frame <paramref name="index"/>, oldest first.</summary>
+    private ReadOnlySpan<float> PreRollFrame(int index) =>
+        _preRoll.AsSpan((_preRollFirst + index) % PreRollFrames * Frame, Frame);
+
+    private void ClearPreRoll()
+    {
+        _preRollFirst = 0;
+        _preRollCount = 0;
     }
 
     private bool IsComplete()
     {
         try
         {
-            var samples = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_turn);
+            var samples = CollectionsMarshal.AsSpan(_turn);
             return turnEnd.Complete(samples[Math.Max(0, samples.Length - SmartTurnWindow)..]) > 0.5;
         }
         catch (Exception ex)

@@ -148,6 +148,21 @@ public sealed class TurnDetectorTests
     }
 
     [Fact]
+    public void A_started_turn_goes_on_through_ignored_speech_and_ends_only_at_a_real_pause()
+    {
+        Feed(Speech(1.0)).OfType<TurnEvent.Started>().ShouldHaveSingleItem();
+        _detector.IgnoreSpeech = true; // an earlier answer starts to play while the user is still talking
+
+        Feed(Speech(1.5)).ShouldBeEmpty();
+        _turn.Calls.ShouldBe(0, "the user never paused");
+
+        _turn.Answers.Enqueue(0.9);
+        var clip = Feed(Silence(0.5)).OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Clip;
+        Seconds(clip).ShouldBeGreaterThan(2.6);
+        _turn.Calls.ShouldBe(1);
+    }
+
+    [Fact]
     public void Raven_s_own_voice_is_not_kept_as_pre_roll_while_speech_is_ignored()
     {
         _turn.Answers.Enqueue(0.9);

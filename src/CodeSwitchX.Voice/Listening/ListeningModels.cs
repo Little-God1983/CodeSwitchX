@@ -1,3 +1,4 @@
+using CodeSwitchX.Voice.Audio;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -29,22 +30,45 @@ public sealed class ListeningModelException(ListeningModel model, Exception inne
 /// Silero VAD v6 on 512-sample frames at 16 kHz. As Silero's own wrapper (utils_vad.py OnnxWrapper): the model sees the
 /// last 64 samples of the previous frame before each frame (576 in all), and its state [2, 1, 128] carries from frame to
 /// frame. One thread each way: a frame is a fraction of a millisecond.
+/// <para>
+/// It runs about 31 times a second for as long as Open mic is on, so a frame allocates nothing: the input, state, rate
+/// and both outputs are arrays pinned once as OrtValues, and the run writes into them.
+/// </para>
 /// </summary>
 public sealed class SileroVad : IVoiceActivity
 {
     public const int FrameSamples = 512;
     private const int Context = 64;
+    private const int StateSize = 2 * 128;
+
+    private static readonly string[] InputNames = ["input", "state", "sr"];
+    private static readonly string[] OutputNames = ["output", "stateN"];
 
     private readonly InferenceSession _session;
+    private readonly RunOptions _run = new();
     private readonly float[] _input = new float[Context + FrameSamples];
-    private float[] _state = new float[2 * 128];
-    private readonly DenseTensor<long> _rate = new(new long[] { 16_000 }, []);
+    private readonly float[] _state = new float[StateSize];
+    private readonly float[] _stateN = new float[StateSize];
+    private readonly float[] _output = new float[1];
+    private readonly OrtValue[] _inputValues;
+    private readonly OrtValue[] _outputValues;
 
     public SileroVad(string modelPath)
     {
         using var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = 1 };
         options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); // no core spun hot between frames
         _session = new InferenceSession(modelPath, options);
+        _inputValues =
+        [
+            OrtValue.CreateTensorValueFromMemory(_input, [1, _input.Length]),
+            OrtValue.CreateTensorValueFromMemory(_state, [2, 1, 128]),
+            OrtValue.CreateTensorValueFromMemory(new long[] { AudioMath.TargetRate }, []),
+        ];
+        _outputValues =
+        [
+            OrtValue.CreateTensorValueFromMemory(_output, [1, 1]),
+            OrtValue.CreateTensorValueFromMemory(_stateN, [2, 1, 128]),
+        ];
     }
 
     public float Step(ReadOnlySpan<float> frame)
@@ -55,26 +79,28 @@ public sealed class SileroVad : IVoiceActivity
         }
 
         frame.CopyTo(_input.AsSpan(Context));
-        var inputs = new[]
-        {
-            NamedOnnxValue.CreateFromTensor("input", new DenseTensor<float>(_input, [1, _input.Length])),
-            NamedOnnxValue.CreateFromTensor("state", new DenseTensor<float>(_state, [2, 1, 128])),
-            NamedOnnxValue.CreateFromTensor("sr", _rate),
-        };
-        using var results = _session.Run(inputs);
-        var probability = results.First(r => r.Name == "output").AsEnumerable<float>().First();
-        _state = results.First(r => r.Name == "stateN").AsEnumerable<float>().ToArray();
+        _session.Run(_run, InputNames, _inputValues, OutputNames, _outputValues);
+        _stateN.CopyTo(_state, 0);
         _input.AsSpan(FrameSamples, Context).CopyTo(_input); // the frame's last 64 samples are the next one's context
-        return probability;
+        return _output[0];
     }
 
     public void Reset()
     {
         Array.Clear(_input);
-        _state = new float[2 * 128];
+        Array.Clear(_state);
     }
 
-    public void Dispose() => _session.Dispose();
+    public void Dispose()
+    {
+        foreach (var value in _inputValues.Concat(_outputValues))
+        {
+            value.Dispose();
+        }
+
+        _run.Dispose();
+        _session.Dispose();
+    }
 }
 
 /// <summary>Pipecat's Smart Turn v3.2 on the CPU: the turn's last 8 s as Whisper features in, the probability that the
