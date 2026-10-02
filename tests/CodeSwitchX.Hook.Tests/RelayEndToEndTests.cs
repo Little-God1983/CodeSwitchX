@@ -59,7 +59,7 @@ public class RelayEndToEndTests : IAsyncLifetime
         var code = await Relay.RunAsync(["PreToolUse"], Stdin("""{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash"}"""), _stdout, _paths.Root);
 
         code.ShouldBe(0);
-        (await stopped).ShouldBeTrue();
+        (await stopped).ShouldBe(TurnStopOutcome.Stopped);
         using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
         answer.RootElement.GetProperty("continue").GetBoolean().ShouldBeFalse();
         answer.RootElement.GetProperty("stopReason").GetString().ShouldBe(TurnStops.Reason);
@@ -97,7 +97,7 @@ public class RelayEndToEndTests : IAsyncLifetime
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         response.StatusCode.ShouldBe(System.Net.HttpStatusCode.Accepted);
-        stopped.IsCompleted.ShouldBeFalse();
+        (await stopped).ShouldBe(TurnStopOutcome.OldRelay, "it would never land, and Raven says so");
         _stops.CanStop("s1").ShouldBe(false);
     }
 
@@ -107,7 +107,7 @@ public class RelayEndToEndTests : IAsyncLifetime
         var stopped = _stops.Request("s1");
 
         await Relay.RunAsync(["PreToolUse"], Stdin("""{"session_id":"s2","hook_event_name":"PreToolUse","tool_name":"Bash"}"""), _stdout, _paths.Root);
-        await Relay.RunAsync(["UserPromptSubmit"], Stdin("""{"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":"go on"}"""), _stdout, _paths.Root);
+        await Relay.RunAsync(["Notification"], Stdin("""{"session_id":"s1","hook_event_name":"Notification","message":"Claude is waiting"}"""), _stdout, _paths.Root);
 
         _stdout.ToString().ShouldBeEmpty();
         stopped.IsCompleted.ShouldBeFalse();

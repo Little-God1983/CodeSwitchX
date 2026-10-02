@@ -43,7 +43,6 @@ public sealed class EventApiService : IHostedService
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
         ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null)
     {
-        _stops = stops;
         _paths = paths;
         _bus = bus;
         _tokens = tokens;
@@ -53,6 +52,7 @@ public sealed class EventApiService : IHostedService
         _options = options;
         _yard = yard;
         _actions = actions;
+        _stops = stops;
     }
 
     public EndpointDescriptor? Endpoint { get; private set; }

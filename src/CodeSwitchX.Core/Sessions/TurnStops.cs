@@ -2,21 +2,34 @@ using CodeSwitchX.Core.Messaging;
 
 namespace CodeSwitchX.Core.Sessions;
 
+/// <summary>What came of a stop asked for a chat's turn.</summary>
+public enum TurnStopOutcome
+{
+    /// <summary>The chat's relay took it: the turn ended at that step.</summary>
+    Stopped,
+
+    /// <summary>The turn ended first (the chat idled, ended, failed, or was given a new prompt), or the stop expired.</summary>
+    TurnEnded,
+
+    /// <summary>The chat's hooks are an older CodeSwitchX's relay, which drops a stop: it would never land.</summary>
+    OldRelay,
+}
+
 /// <summary>
 /// Stops asked for a chat's running turn, until its hook relay takes one. Nothing outside a VS Code chat's tab can
 /// interrupt it, but a hook can end its turn: the chat's next <c>PreToolUse</c> or <c>PostToolUse</c> takes the stop
 /// (<see cref="Take"/>) and answers Claude Code <c>continue: false</c>, and on <c>PreToolUse</c> denies the step it was
 /// about to take. So a stop lands at the chat's next tool step: a turn that only writes, or one in a long step, runs on
 /// until then. Only the main agent's events take it: what a stop does inside a sub-agent was never tried. A stop whose
-/// turn ends first (the chat idles, ends, or fails) is dropped, and so is one older than <see cref="Lifetime"/>.
-/// Thread-safe: hooks and the bus come on any thread.
+/// turn ends first (the chat idles, ends, fails, or gets a new prompt) is dropped, and so is one older than
+/// <see cref="Lifetime"/>. Thread-safe: hooks and the bus come on any thread.
 /// </summary>
 public sealed class TurnStops : IDisposable
 {
     /// <summary>A stop not taken within this is dropped: the turn it was for is long over.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
-    /// <summary>How long a turn stopped here counts as stopped on purpose (<see cref="StoppedLately"/>).</summary>
+    /// <summary>The longest a turn stopped here counts as stopped on purpose (<see cref="StoppedLately"/>); the chat's next turn ends it sooner.</summary>
     public static readonly TimeSpan StoppedFor = TimeSpan.FromMinutes(2);
 
     /// <summary>What the chat is told, and shows on the step it did not take.</summary>
@@ -32,21 +45,21 @@ public sealed class TurnStops : IDisposable
     public TurnStops(IEventBus bus, TimeProvider time)
     {
         _time = time;
-        _subscription = bus.Subscribe<SessionChanged>(TurnMayHaveEnded);
+        _subscription = bus.Subscribe<SessionChanged>(Changed);
     }
 
     /// <summary>
-    /// Asks the chat's running turn to stop. The task is true once the chat's relay took the stop, false when its turn
-    /// ended first or the stop expired; asked again before then, it is the same stop.
+    /// Asks the chat's running turn to stop. The task completes with what came of it; asked again before then, it is the
+    /// same stop.
     /// </summary>
-    public Task<bool> Request(string sessionId)
+    public Task<TurnStopOutcome> Request(string sessionId)
     {
         lock (_lock)
         {
             if (!_pending.TryGetValue(sessionId, out var pending) || Expired(pending))
             {
-                pending?.Done.TrySetResult(false);
-                pending = new Pending(_time.GetUtcNow(), new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously));
+                pending?.Done.TrySetResult(TurnStopOutcome.TurnEnded);
+                pending = new Pending(_time.GetUtcNow(), new TaskCompletionSource<TurnStopOutcome>(TaskCreationOptions.RunContinuationsAsynchronously));
                 _pending[sessionId] = pending;
             }
 
@@ -55,34 +68,52 @@ public sealed class TurnStops : IDisposable
     }
 
     /// <summary>
-    /// The stop for this hook event, taken; null when none is asked for it, or the event cannot carry one. A relay that
-    /// does not hand a stop on (an older CodeSwitchX's, still in Claude Code's settings) is never given it, and the chat is
-    /// noted as one that cannot be stopped (<see cref="CanStop"/>).
+    /// The stop for this hook event, taken; null when none is asked for it, or the event cannot carry one. A new prompt of
+    /// the chat drops a stop still asked: it was for the turn before. A relay that does not hand a stop on (an older
+    /// CodeSwitchX's, still in Claude Code's settings) is never given it: the stop ends as <see cref="TurnStopOutcome.OldRelay"/>,
+    /// and the chat is noted as one that cannot be stopped (<see cref="CanStop"/>).
     /// </summary>
     /// <param name="relayHandsItOn">Whether the relay that sent the event tells Claude Code a stop.</param>
     public string? Take(HookEvent hookEvent, bool relayHandsItOn)
     {
-        if (hookEvent.EventName is not ("PreToolUse" or "PostToolUse") || hookEvent.AgentId is not null)
+        if (hookEvent.AgentId is not null)
         {
             return null;
         }
 
         lock (_lock)
         {
+            if (hookEvent.EventName == "UserPromptSubmit")
+            {
+                End(hookEvent.SessionId, TurnStopOutcome.TurnEnded);
+                return null;
+            }
+
+            if (hookEvent.EventName is not ("PreToolUse" or "PostToolUse"))
+            {
+                return null;
+            }
+
             _relayHandsItOn[hookEvent.SessionId] = relayHandsItOn;
-            if (!relayHandsItOn || !_pending.Remove(hookEvent.SessionId, out var pending))
+            if (!relayHandsItOn)
+            {
+                End(hookEvent.SessionId, TurnStopOutcome.OldRelay);
+                return null;
+            }
+
+            if (!_pending.Remove(hookEvent.SessionId, out var pending))
             {
                 return null;
             }
 
             if (Expired(pending))
             {
-                pending.Done.TrySetResult(false);
+                pending.Done.TrySetResult(TurnStopOutcome.TurnEnded);
                 return null;
             }
 
             _stopped[hookEvent.SessionId] = _time.GetUtcNow();
-            pending.Done.TrySetResult(true);
+            pending.Done.TrySetResult(TurnStopOutcome.Stopped);
             return Reason;
         }
     }
@@ -99,7 +130,7 @@ public sealed class TurnStops : IDisposable
         }
     }
 
-    /// <summary>Whether the chat's turn ended lately because it was stopped here: its end is no news.</summary>
+    /// <summary>Whether the chat's last turn ended because it was stopped here, and no new turn began since: its end is no news.</summary>
     public bool StoppedLately(string sessionId)
     {
         lock (_lock)
@@ -108,24 +139,33 @@ public sealed class TurnStops : IDisposable
         }
     }
 
-    private void TurnMayHaveEnded(SessionChanged change)
+    private void Changed(SessionChanged change)
     {
-        // Waiting is still the turn (a question, a permission): the step after it takes the stop.
-        if (change.Current.State is SessionState.Working or SessionState.Waiting)
-        {
-            return;
-        }
-
+        var id = change.Current.SessionId;
+        var state = change.Current.State;
         lock (_lock)
         {
-            if (_pending.Remove(change.Current.SessionId, out var pending))
+            if (state == SessionState.Working)
             {
-                pending.Done.TrySetResult(false);
+                // A new turn (told to continue, say): the stopped one is over, and this one's end is news again.
+                if (change.Previous?.State is not (SessionState.Working or SessionState.Waiting))
+                {
+                    _stopped.Remove(id);
+                }
+
+                return;
             }
 
-            if (!SessionStateMachine.IsLive(change.Current.State))
+            // Waiting is still the turn (a question, a permission): the step after it takes the stop.
+            if (state == SessionState.Waiting)
             {
-                _relayHandsItOn.Remove(change.Current.SessionId);
+                return;
+            }
+
+            End(id, TurnStopOutcome.TurnEnded);
+            if (!SessionStateMachine.IsLive(state))
+            {
+                _relayHandsItOn.Remove(id);
             }
 
             foreach (var old in _stopped.Where(s => _time.GetUtcNow() - s.Value >= StoppedFor).Select(s => s.Key).ToList())
@@ -135,9 +175,18 @@ public sealed class TurnStops : IDisposable
         }
     }
 
+    /// <summary>Ends the chat's pending stop, if any, with what came of it. Under the lock.</summary>
+    private void End(string sessionId, TurnStopOutcome outcome)
+    {
+        if (_pending.Remove(sessionId, out var pending))
+        {
+            pending.Done.TrySetResult(outcome);
+        }
+    }
+
     private bool Expired(Pending pending) => _time.GetUtcNow() - pending.Since >= Lifetime;
 
     public void Dispose() => _subscription.Dispose();
 
-    private sealed record Pending(DateTimeOffset Since, TaskCompletionSource<bool> Done);
+    private sealed record Pending(DateTimeOffset Since, TaskCompletionSource<TurnStopOutcome> Done);
 }

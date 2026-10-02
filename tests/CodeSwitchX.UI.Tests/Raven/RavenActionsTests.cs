@@ -111,6 +111,15 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
+    public async Task A_chat_found_to_run_an_older_relay_while_the_stop_waits_is_said_so()
+    {
+        var stop = _actions.StopChatAsync(Chat("busy", "Fix the upload"), Ct);
+        _stops.Take(Step("busy"), relayHandsItOn: false);
+
+        (await Should.ThrowAsync<YardActionException>(() => stop)).Message.ShouldStartWith("The hooks Claude Code runs are an older CodeSwitchX's");
+    }
+
+    [Fact]
     public async Task A_chat_whose_hooks_are_an_older_relay_s_is_not_promised_a_stop()
     {
         _stops.Take(Step("busy"), relayHandsItOn: false);

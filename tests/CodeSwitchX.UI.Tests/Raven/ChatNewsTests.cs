@@ -81,6 +81,26 @@ public sealed class ChatNewsTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_stop_the_end_of_the_turn_the_user_had_it_continue_is_news_again()
+    {
+        using var stops = new TurnStops(_bus, _time);
+        using var news = new ChatNews(_bus, _yard, _time, _ => null, stops.StoppedLately);
+        _news.Dispose();
+        _ = stops.Request("a");
+        stops.Take(new HookEvent { SessionId = "a", EventName = "PreToolUse", At = _time.GetUtcNow() }, relayHandsItOn: true);
+
+        Change("a", SessionState.Working, SessionState.Idle);
+        (await news.TakeAsync(TestContext.Current.CancellationToken)).ShouldBeEmpty("Raven said it stopped");
+
+        _time.Advance(TimeSpan.FromSeconds(30));
+        Change("a", SessionState.Idle, SessionState.Working); // "tell it to continue"
+        _time.Advance(TimeSpan.FromSeconds(30));
+        Change("a", SessionState.Working, SessionState.Idle);
+
+        (await news.TakeAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Kind.ShouldBe(ChatNewsKind.Finished);
+    }
+
+    [Fact]
     public async Task A_chat_that_changes_twice_before_it_is_told_is_told_once_with_its_latest_news()
     {
         var arrivals = 0;

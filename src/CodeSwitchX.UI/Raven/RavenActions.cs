@@ -45,12 +45,12 @@ public sealed class RavenActions : IYardActions
     internal static readonly TimeSpan StopWait = TimeSpan.FromSeconds(10);
 
     private readonly IVsCodeChats _vsCode;
-    private readonly TurnStops _stops;
     private readonly ChatSettings _chats;
     private readonly Action<string, Guid> _claim;
     private readonly Func<IRavenShell> _shell;
     private readonly IUiDispatcher _ui;
     private readonly Func<Guid, CancellationToken, Task<Workspace?>> _workspaceOf;
+    private readonly TurnStops _stops;
     private readonly TimeProvider _time;
     private readonly ILogger<RavenActions> _logger;
     private readonly ConcurrentDictionary<string, bool> _started = new(StringComparer.OrdinalIgnoreCase);
@@ -64,12 +64,12 @@ public sealed class RavenActions : IYardActions
         Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TurnStops stops, TimeProvider time, ILogger<RavenActions> logger)
     {
         _vsCode = vsCode;
-        _stops = stops;
         _chats = chats;
         _claim = claim;
         _shell = shell;
         _ui = ui;
         _workspaceOf = workspaceOf;
+        _stops = stops;
         _time = time;
         _logger = logger;
         // Lives as long as the app: the subscription is never ended.
@@ -121,28 +121,33 @@ public sealed class RavenActions : IYardActions
     {
         if (_stops.CanStop(chat.Id) == false)
         {
-            throw new YardActionException("The hooks Claude Code runs are an older CodeSwitchX's, which cannot stop a chat. Install the hooks "
-                + "again in CodeSwitchX's Settings, then try again; the chat can be stopped in its VS Code tab meanwhile.");
+            throw OldRelay();
         }
 
         var stopped = _stops.Request(chat.Id);
-        bool taken;
+        TurnStopOutcome outcome;
         try
         {
-            taken = await stopped.WaitAsync(StopWait, _time, ct).ConfigureAwait(false);
+            outcome = await stopped.WaitAsync(StopWait, _time, ct).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            // Still asked for: it lands at the chat's next step.
+            // Still asked for: it lands at the chat's next step, whatever keeps it from one now (writing, a long step, a sub-agent).
             _logger.LogInformation("Raven asked chat {Id} in {Workspace} to stop; it stops at its next step", chat.Id, chat.Workspace);
-            return $"The {chat.Title} chat stops at its next step: it is writing or in the middle of a long step, which cannot be cut off.";
+            return $"The {chat.Title} chat stops at its next step; it has not reached one yet.";
         }
 
-        _logger.LogInformation("Raven stopped chat {Id} in {Workspace}: {Taken}", chat.Id, chat.Workspace, taken);
-        return taken
-            ? $"The {chat.Title} chat is stopped. It keeps all it did; telling it to continue carries on."
-            : $"The {chat.Title} chat finished its turn before the stop came.";
+        _logger.LogInformation("Raven's stop of chat {Id} in {Workspace}: {Outcome}", chat.Id, chat.Workspace, outcome);
+        return outcome switch
+        {
+            TurnStopOutcome.Stopped => $"The {chat.Title} chat is stopped. It keeps all it did; telling it to continue carries on.",
+            TurnStopOutcome.OldRelay => throw OldRelay(),
+            _ => $"The {chat.Title} chat finished its turn before the stop came.",
+        };
     }
+
+    private static YardActionException OldRelay() => new("The hooks Claude Code runs are an older CodeSwitchX's, which cannot stop a chat. "
+        + "Install the hooks again in CodeSwitchX's Settings, then try again; the chat can be stopped in its VS Code tab meanwhile.");
 
     public async Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)
     {
