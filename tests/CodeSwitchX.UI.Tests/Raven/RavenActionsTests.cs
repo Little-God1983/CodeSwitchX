@@ -71,6 +71,32 @@ public sealed class RavenActionsTests
         _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high"), ("new-chat", null)], "a chat Raven did not start is left alone");
     }
 
+    private static YardChat Chat(string id, string title) => new(id, title, Diffusion.Id, Diffusion.Name, SessionState.Idle, false,
+        DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null);
+
+    [Fact]
+    public async Task A_closed_chat_leaves_its_tile_at_once_and_is_Raven_s_no_more()
+    {
+        await StartAsync();
+
+        var said = await _actions.CloseChatAsync(Chat("new-chat", "Fix the upload"), Ct);
+
+        _sequence[^1].ShouldBe("close new-chat");
+        _shell.Forgotten.ShouldBe(["new-chat"]);
+        _actions.StartedByRaven("new-chat").ShouldBeFalse();
+        said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
+    }
+
+    [Fact]
+    public async Task A_chat_that_could_not_be_closed_keeps_its_row()
+    {
+        _vsCode.Failure = "VS Code did not close the chat: That chat is not in a tab of this VS Code window.";
+
+        (await Should.ThrowAsync<YardActionException>(() => _actions.CloseChatAsync(Chat("by-hand", "Docs"), Ct))).Message.ShouldBe(_vsCode.Failure);
+
+        _shell.Forgotten.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task The_chat_counts_as_Raven_s_and_its_row_is_marked_with_how_it_started()
     {
@@ -265,6 +291,10 @@ public sealed class RavenActionsTests
         }
 
         public void MarkVoice(string sessionId, string? label) => Marks.Add((sessionId, label));
+
+        public List<string> Forgotten { get; } = [];
+
+        public void ForgetChat(string sessionId) => Forgotten.Add(sessionId);
     }
 
     private sealed class FakeVsCode : IVsCodeChats
@@ -280,6 +310,12 @@ public sealed class RavenActionsTests
             return Failure is { } failure
                 ? Task.FromException<VsCodeChat>(new YardActionException(failure))
                 : Task.FromResult(new VsCodeChat("new-chat", folder ?? workspace.RootPath, "diffusionnexus-4f"));
+        }
+
+        public Task CloseAsync(string sessionId, CancellationToken ct)
+        {
+            Sequence.Add($"close {sessionId}");
+            return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
     }
 }

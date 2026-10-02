@@ -22,6 +22,13 @@ public interface IVsCodeChats
     /// <param name="effort">An effort level; null for VS Code's own.</param>
     /// <exception cref="YardActionException">It could not be opened; the message says why.</exception>
     Task<VsCodeChat> StartAsync(Workspace workspace, string? folder, string? model, string? effort, CancellationToken ct);
+
+    /// <summary>
+    /// Closes the chat's tab in the VS Code window it runs in, and returns once its Claude Code has ended. The conversation
+    /// stays in Claude Code's session list.
+    /// </summary>
+    /// <exception cref="YardActionException">It could not be closed; the message says why.</exception>
+    Task CloseAsync(string sessionId, CancellationToken ct);
 }
 
 /// <param name="Folder">The folder it runs in.</param>
@@ -57,6 +64,12 @@ public sealed class VsCodeChats : IVsCodeChats
     /// may come long after VS Code has answered.
     /// </summary>
     internal static readonly TimeSpan StartSlack = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a closed tab's Claude Code may take to end; one in the middle of a turn takes a few seconds.</summary>
+    internal static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>The first companion that can close a chat; a window still running an older one has not been reloaded since the update.</summary>
+    internal static readonly Version ClosesSince = new(0, 2, 0);
 
     private readonly ICompanionWindows _windows;
     private readonly ICompanionInstaller _installer;
@@ -170,7 +183,7 @@ public sealed class VsCodeChats : IVsCodeChats
         // Known from here on, and never looked at again: each look reads only the records that came since.
         var known = _running(null).Select(c => c.Pid).ToHashSet();
         var sent = _time.GetUtcNow();
-        var answer = await _windows.SendAsync(window, CompanionWindows.NewChat, ct).ConfigureAwait(false);
+        var answer = await _windows.SendAsync(window, CompanionWindows.NewChat, null, ct).ConfigureAwait(false);
         if (!answer.Ok)
         {
             throw new YardActionException($"VS Code could not open a chat in {workspace.Name}: {answer.Error}");
@@ -195,6 +208,47 @@ public sealed class VsCodeChats : IVsCodeChats
 
             await Task.Delay(Poll, _time, ct).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// The chat's window is the one whose extension host started its claude.exe; its companion closes the tab, and the
+    /// close is done once that process is gone. A chat run in a terminal has no record of a VS Code tab and is not found.
+    /// </summary>
+    public async Task CloseAsync(string sessionId, CancellationToken ct)
+    {
+        var chat = _running(null).FirstOrDefault(c => string.Equals(c.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        var window = _parents().TryGetValue(chat.Pid, out var host) ? _windows.Of(host) : null;
+        if (window is null)
+        {
+            throw new YardActionException("The VS Code window that chat runs in does not run the CodeSwitchX companion, so it cannot be closed from "
+                + "here. Close its tab in VS Code.");
+        }
+
+        if (Version.TryParse(window.Version, out var version) && version < ClosesSince)
+        {
+            throw new YardActionException("The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
+                + "Reload that window (Developer: Reload Window) and try again.");
+        }
+
+        var answer = await _windows.SendAsync(window, CompanionWindows.CloseChat, chat.SessionId, ct).ConfigureAwait(false);
+        if (!answer.Ok)
+        {
+            throw new YardActionException($"VS Code did not close the chat: {answer.Error}");
+        }
+
+        var until = _time.GetUtcNow() + CloseWait;
+        while (_running(null).Any(c => c.Pid == chat.Pid))
+        {
+            if (_time.GetUtcNow() >= until)
+            {
+                throw new YardActionException($"VS Code closed the chat's tab, but its Claude Code still runs after {CloseWait.TotalSeconds:0} seconds.");
+            }
+
+            await Task.Delay(Poll, _time, ct).ConfigureAwait(false);
+        }
+
+        _logger.LogInformation("Closed chat {Id} ({Name}) in VS Code", chat.SessionId, chat.Name);
     }
 
     /// <summary>

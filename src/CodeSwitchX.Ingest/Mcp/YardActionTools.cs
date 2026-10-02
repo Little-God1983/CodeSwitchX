@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
@@ -6,7 +7,7 @@ using ModelContextProtocol.Server;
 namespace CodeSwitchX.Ingest.Mcp;
 
 /// <summary>
-/// What Raven's brain can do on the Yard, as MCP tools: open a Claude chat in a workspace's VS Code by voice, set the model
+/// What Raven's brain can do on the Yard, as MCP tools: open and close Claude chats in a workspace's VS Code by voice, set the model
 /// and effort chats start with, and move between the Yard and a workspace. Names are matched here, like the looking tools
 /// match them; what cannot be done comes back as a tool error in words the brain can repeat.
 /// </summary>
@@ -73,16 +74,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
             return await Act(() => actions.OpenWorkspaceAsync(named, cancellationToken)).ConfigureAwait(false);
         }
 
-        var key = chat!.Trim();
-        var found = (await yard.ChatsAsync(cancellationToken).ConfigureAwait(false))
-            .Where(c => c.Id.StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (found is not [var one])
-        {
-            throw new McpException(found.Count == 0
-                ? $"The Yard shows no chat '{chat}'. Name its workspace to open that instead."
-                : $"'{chat}' fits more than one chat. Give more of its id.");
-        }
-
+        var one = await OneChatAsync(chat!, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)
             ?? throw new McpException($"The workspace of chat '{chat}' is not on the Yard any more.");
         return await Act(() => actions.OpenWorkspaceAsync(target, cancellationToken)).ConfigureAwait(false);
@@ -98,6 +90,43 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
             return true;
         }).ConfigureAwait(false);
         return "The Yard is shown.";
+    }
+
+    [McpServerTool(Name = "close_chat", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
+    [Description("Closes a chat's tab in VS Code (\"close the … chat\"); its row leaves the tile. Any chat open in a VS Code tab can be closed, "
+        + "not only ones you started. Its conversation is not deleted: it stays in VS Code's session list and can be opened again. Never call "
+        + "it before you have asked the user \"Close the <title> chat?\" and they said yes in their next words. A chat that is working or "
+        + "waiting for the user is refused unless anyway is true: closing it cuts its turn off, and what it is writing is lost.")]
+    public async Task<string> CloseChat(
+        [Description("The chat's id from list_chats or start_chat; its start is enough.")] string chat,
+        [Description("True only once the user, told the chat is still working and asked \"Close it anyway?\", said yes.")] bool anyway = false,
+        CancellationToken cancellationToken = default)
+    {
+        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        if (!anyway && (one.State == SessionState.Working || one.NeedsYou))
+        {
+            throw new McpException($"The {one.Title} chat is {(one.NeedsYou ? "waiting for the user in the middle of its turn" : "still working")}: "
+                + "closing it now cuts that turn off, and what it is writing is lost. Nothing was closed. Tell the user so and ask "
+                + "\"Close it anyway?\"; only after a yes call close_chat again with anyway true.");
+        }
+
+        return await Act(() => actions.CloseChatAsync(one, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>The one chat on the Yard whose id starts so; none or more than one is an error.</summary>
+    /// <param name="otherwise">Said after "no chat": what the brain can do instead.</param>
+    private async Task<YardChat> OneChatAsync(string chat, string otherwise, CancellationToken ct)
+    {
+        var key = chat.Trim();
+        var found = key.Length == 0
+            ? []
+            : (await yard.ChatsAsync(ct).ConfigureAwait(false)).Where(c => c.Id.StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
+        return found switch
+        {
+            [var one] => one,
+            [] => throw new McpException($"The Yard shows no chat '{chat}'.{otherwise}"),
+            _ => throw new McpException($"'{chat}' fits more than one chat. Give more of its id."),
+        };
     }
 
     /// <summary>The one workspace a name means; more than one equally good is a question back, none an error.</summary>

@@ -190,6 +190,43 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>When each chat closed on purpose was closed (UI thread): it keeps no row until it is opened again.</summary>
+    private readonly Dictionary<string, DateTimeOffset> _closed = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Takes a chat that was closed on purpose off its tile now, rather than as an ended row 10 minutes from now. What is
+    /// still heard of its end brings no row back; only a change after this, of a chat that runs again (opened again from
+    /// VS Code's session list), does.
+    /// </summary>
+    public void ForgetChat(string sessionId)
+    {
+        _closed[sessionId] = _time.GetUtcNow();
+        foreach (var tile in Tiles.Where(t => t.Chats.Any(c => c.SessionId == sessionId)).ToList())
+        {
+            tile.Remove(sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Whether the snapshot is of a chat closed on purpose that has not run since, and gets no row. One that runs again
+    /// after the close is forgotten no more.
+    /// </summary>
+    private bool IsClosed(SessionSnapshot snapshot)
+    {
+        if (!_closed.TryGetValue(snapshot.SessionId, out var closed))
+        {
+            return false;
+        }
+
+        if (!SessionStateMachine.IsLive(snapshot.State) || snapshot.LastEventAt <= closed)
+        {
+            return true;
+        }
+
+        _closed.Remove(snapshot.SessionId);
+        return false;
+    }
+
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
     public async Task UnregisterAsync(Guid workspaceId)
@@ -419,6 +456,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     internal void Apply(SessionSnapshot snapshot)
     {
+        if (IsClosed(snapshot))
+        {
+            return;
+        }
+
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
         foreach (var other in Tiles.Where(t => t != tile && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
         {
@@ -470,7 +512,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var tile = new WorkspaceTileViewModel(workspace, this);
         var index = group.Tiles.TakeWhile(t => string.Compare(t.Name, tile.Name, StringComparison.OrdinalIgnoreCase) < 0).Count();
         group.Tiles.Insert(index, tile);
-        foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id))
+        foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id && !IsClosed(s)))
         {
             tile.Upsert(snapshot, _pricing.Pricing);
         }

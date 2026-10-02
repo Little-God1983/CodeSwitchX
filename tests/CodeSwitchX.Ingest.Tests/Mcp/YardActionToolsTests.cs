@@ -131,6 +131,51 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task An_idle_chat_is_closed_by_the_start_of_its_id()
+    {
+        (await Tools.CloseChat("CCCCCCCC", cancellationToken: Ct)).ShouldBe("closed");
+
+        _actions.Closed.ShouldNotBeNull().Title.ShouldBe("Installer icons");
+    }
+
+    [Theory]
+    [InlineData("aaaaaaaa", "The Speech gate chat is still working")]
+    [InlineData("bbbbbbbb", "The Raven brain chat is waiting for the user in the middle of its turn")]
+    public async Task A_chat_in_the_middle_of_its_turn_is_closed_only_anyway(string chat, string said)
+    {
+        var error = await Should.ThrowAsync<McpException>(() => Tools.CloseChat(chat, cancellationToken: Ct));
+
+        error.Message.ShouldStartWith(said);
+        error.Message.ShouldContain("Close it anyway?");
+        _actions.Calls.ShouldBeEmpty("nothing is closed without the user's second yes");
+
+        await Tools.CloseChat(chat, anyway: true, cancellationToken: Ct);
+        _actions.Calls.ShouldBe(["close_chat"]);
+    }
+
+    [Theory]
+    [InlineData("zzzz", "no chat 'zzzz'")]
+    [InlineData("", "no chat ''")]
+    [InlineData("aaaaaaaa", null)]
+    public async Task A_chat_to_close_must_be_one_the_Yard_shows(string chat, string? said)
+    {
+        _yard.Chats.Add(_yard.Chats[0] with { Id = "aaaaaaaa-0099" });
+
+        var error = await Should.ThrowAsync<McpException>(() => Tools.CloseChat(chat, anyway: true, cancellationToken: Ct));
+
+        error.Message.ShouldContain(said ?? "fits more than one chat");
+        _actions.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_VS_Code_cannot_close_is_said()
+    {
+        _actions.Refusal = "VS Code did not close the chat: That chat is not in a tab of this VS Code window.";
+
+        (await Should.ThrowAsync<McpException>(() => Tools.CloseChat("cccccccc", cancellationToken: Ct))).Message.ShouldBe(_actions.Refusal);
+    }
+
+    [Fact]
     public async Task Back_to_the_Yard_goes_to_the_actions()
     {
         (await Tools.BackToYard(Ct)).ShouldBe("The Yard is shown.");

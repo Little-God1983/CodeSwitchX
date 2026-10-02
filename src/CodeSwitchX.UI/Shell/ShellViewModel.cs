@@ -310,6 +310,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     void IRavenShell.MarkVoice(string sessionId, string? label) => Yard.MarkVoice(sessionId, label);
 
+    void IRavenShell.ForgetChat(string sessionId) => Yard.ForgetChat(sessionId);
+
     [RelayCommand]
     public void BackToYard()
     {

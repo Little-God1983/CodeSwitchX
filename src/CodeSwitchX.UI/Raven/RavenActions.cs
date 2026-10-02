@@ -22,6 +22,9 @@ public interface IRavenShell
 
     /// <summary>Marks a chat's row as one Raven started, with the model and effort it started with.</summary>
     void MarkVoice(string sessionId, string? label);
+
+    /// <summary>Takes a chat that was closed on purpose off its tile at once; it shows again only if it is opened again.</summary>
+    void ForgetChat(string sessionId);
 }
 
 /// <summary>
@@ -94,6 +97,18 @@ public sealed class RavenActions : IYardActions
         _ui.Post(() => _shell().MarkVoice(chat.SessionId, Label(modelId, level)));
         _logger.LogInformation("Raven opened chat {Id} in {Workspace}", chat.SessionId, workspace.Name);
         return new VoiceChatView(chat.SessionId, workspace.Id, workspace.Name, chat.Folder, modelId, level, chat.SendTo);
+    }
+
+    public async Task<string> CloseChatAsync(YardChat chat, CancellationToken ct)
+    {
+        await _vsCode.CloseAsync(chat.Id, ct).ConfigureAwait(false);
+        _started.TryRemove(chat.Id, out _);
+
+        // Closed on purpose: no ended row lingers on the tile, and none is news. Its tab is gone either way, so a window
+        // too busy to take the row off now does not make the close a failure; it takes it off with the chat's end.
+        _ui.Post(() => _shell().ForgetChat(chat.Id));
+        _logger.LogInformation("Raven closed chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        return $"The {chat.Title} chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.";
     }
 
     public async Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)

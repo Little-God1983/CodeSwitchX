@@ -358,6 +358,93 @@ public sealed class VsCodeChatsTests : IDisposable
         ids.ShouldBe(["chat-200", "chat-201"], ignoreOrder: true);
     }
 
+    /// <summary>The chat's claude.exe ends: its record is gone.</summary>
+    private void Ends(int pid)
+    {
+        lock (_gate)
+        {
+            _running.RemoveAll(c => c.Pid == pid);
+        }
+    }
+
+    private CompanionWindow Closing() => Window() with { Version = "0.2.0" };
+
+    [Fact]
+    public async Task A_chat_is_closed_by_the_window_whose_host_started_it_and_waited_for_until_its_process_is_gone()
+    {
+        _windows.Shown = Closing();
+        Starts(300, "busy-chat", Host);
+        var close = _chats.CloseAsync("BUSY-CHAT", Ct);
+        for (var i = 0; i < 8; i++)
+        {
+            await Task.Delay(1, Ct);
+            _time.Advance(VsCodeChats.Poll); // a chat cut off in its turn takes a few seconds
+        }
+
+        close.IsCompleted.ShouldBeFalse("its Claude Code still runs");
+        Ends(300);
+        await Advance(() => close.IsCompleted);
+
+        await close;
+        _windows.Commands.ShouldBe([CompanionWindows.CloseChat]);
+        _windows.SessionIds.ShouldBe(["busy-chat"], "the id as the chat's record has it");
+    }
+
+    [Fact]
+    public async Task A_chat_not_open_in_a_VS_Code_tab_is_not_closed()
+    {
+        _windows.Shown = Closing();
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-a-terminal", Ct))).Message
+            .ShouldBe("That chat is not open in a VS Code tab, so there is nothing to close.");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_in_a_window_without_the_companion_is_closed_by_hand()
+    {
+        _windows.Shown = Closing();
+        Starts(300, "elsewhere", 9999);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("elsewhere", Ct))).Message
+            .ShouldStartWith("The VS Code window that chat runs in does not run the CodeSwitchX companion");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_window_still_running_a_companion_that_cannot_close_is_told_to_reload()
+    {
+        _windows.Shown = Window(); // 0.1.1: CodeSwitchX updated it, the window has not loaded the update yet
+        Starts(300, "a-chat", Host);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("a-chat", Ct))).Message
+            .ShouldContain("Reload that window (Developer: Reload Window)");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_tab_the_companion_cannot_close_is_said()
+    {
+        _windows.Shown = Closing();
+        Starts(300, "in-the-side-bar", Host);
+        _windows.Answer = new CompanionAnswer(false, Error: "That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.");
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-the-side-bar", Ct))).Message
+            .ShouldBe("VS Code did not close the chat: That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.");
+    }
+
+    [Fact]
+    public async Task A_chat_whose_Claude_Code_outlives_its_tab_is_said()
+    {
+        _windows.Shown = Closing();
+        Starts(300, "stuck", Host);
+        var close = _chats.CloseAsync("stuck", Ct);
+        await Advance(() => close.IsCompleted);
+
+        (await Should.ThrowAsync<YardActionException>(() => close)).Message
+            .ShouldBe("VS Code closed the chat's tab, but its Claude Code still runs after 20 seconds.");
+    }
+
     [Fact]
     public void A_session_has_a_conversation_once_its_transcript_is_in_a_project_folder()
     {
@@ -428,9 +515,17 @@ public sealed class VsCodeChatsTests : IDisposable
             return Shown;
         }
 
-        public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, CancellationToken ct)
+        public CompanionWindow? Of(int extensionHost) => Shown?.Pid == extensionHost ? Shown : null;
+
+        public List<string?> SessionIds { get; } = [];
+
+        /// <summary>What closing the tab does; set by the test.</summary>
+        public Action Close { get; set; } = () => { };
+
+        public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, string? sessionId, CancellationToken ct)
         {
             Commands.Add(command);
+            SessionIds.Add(sessionId);
             if (Hold is { } hold)
             {
                 await hold.Task.WaitAsync(ct);
@@ -438,7 +533,7 @@ public sealed class VsCodeChatsTests : IDisposable
 
             if (Answer.Ok)
             {
-                NewChat();
+                (command == CompanionWindows.CloseChat ? Close : NewChat)();
             }
 
             return Answer;

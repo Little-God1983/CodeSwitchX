@@ -1,8 +1,8 @@
 {
   "name": "companion",
   "displayName": "CodeSwitchX Companion",
-  "description": "Lets CodeSwitchX open Claude Code chats in this VS Code window. Installed and updated by CodeSwitchX.",
-  "version": "0.1.2",
+  "description": "Lets CodeSwitchX open and close Claude Code chats in this VS Code window. Installed and updated by CodeSwitchX.",
+  "version": "0.2.0",
   "publisher": "codeswitchx",
   "license": "UNLICENSED",
   "engines": {
