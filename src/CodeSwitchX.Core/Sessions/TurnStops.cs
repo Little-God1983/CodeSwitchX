@@ -109,6 +109,24 @@ public sealed class TurnStops : IDisposable
     }
 
     /// <summary>
+    /// The end of the turn a stop was handed to at <paramref name="step"/>, as a <c>Stop</c> hook would tell it. Claude Code
+    /// ends the turn on the stop without one of its own (seen on screen, extension 2.1.287): unheard, the chat would show
+    /// as working on the Yard until its next turn.
+    /// </summary>
+    public static HookEvent EndOf(HookEvent step) => new()
+    {
+        SessionId = step.SessionId,
+        EventName = "Stop",
+        Signal = SessionSignal.Stop,
+        At = step.At,
+        Cwd = step.Cwd,
+        TranscriptPath = step.TranscriptPath,
+        Source = "stopped by Raven",
+        RelayPid = step.RelayPid,
+        ParentChain = step.ParentChain,
+    };
+
+    /// <summary>
     /// Whether the chat's hooks hand a stop on, as its last tool step showed; null before it took one while the app ran.
     /// False means Claude Code runs an older CodeSwitchX's relay: a stop would never land.
     /// </summary>

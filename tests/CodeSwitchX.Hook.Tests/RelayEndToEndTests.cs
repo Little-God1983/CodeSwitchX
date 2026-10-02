@@ -66,7 +66,9 @@ public class RelayEndToEndTests : IAsyncLifetime
         var specific = answer.RootElement.GetProperty("hookSpecificOutput");
         specific.GetProperty("hookEventName").GetString().ShouldBe("PreToolUse");
         specific.GetProperty("permissionDecision").GetString().ShouldBe("deny");
-        _received.ShouldHaveSingleItem("the event still reaches the Yard");
+        _received.Select(e => (e.EventName, e.Signal)).ShouldBe([("PreToolUse", SessionSignal.ToolUse), ("Stop", SessionSignal.Stop)],
+            "the step still reaches the Yard, and so does the end of the turn, which Claude Code does not send itself");
+        _received[1].SessionId.ShouldBe("s1");
     }
 
     [Fact]

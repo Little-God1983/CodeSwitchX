@@ -141,9 +141,14 @@ public sealed class EventApiService : IHostedService
                 return Results.Accepted();
             }
 
-            return _stops.Take(hookEvent, context.Request.Headers.ContainsKey(RelayStopsHeader)) is { } reason
-                ? Results.Ok(new { stop = reason })
-                : Results.Accepted();
+            if (_stops.Take(hookEvent, context.Request.Headers.ContainsKey(RelayStopsHeader)) is not { } reason)
+            {
+                return Results.Accepted();
+            }
+
+            // Claude Code ends the turn on this answer and sends no Stop hook of its own: the Yard hears the end from here.
+            _bus.Publish(new HookEventReceived(TurnStops.EndOf(hookEvent)));
+            return Results.Ok(new { stop = reason });
         });
 
         if (_yard is not null)
