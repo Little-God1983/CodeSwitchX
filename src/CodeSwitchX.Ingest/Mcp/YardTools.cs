@@ -103,9 +103,15 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
         };
     }
 
-    /// <summary>What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there.</summary>
+    /// <summary>
+    /// What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there. Two held asks (agents
+    /// asking side by side) read apart from one ask of two questions, whose questions "; " joins.
+    /// </summary>
     private static string? AsksOf(ILookup<string, ChatAsk>? asked, string chatId) =>
-        asked?[chatId].Select(a => a.Describe()).ToList() is { Count: > 0 } said ? string.Join("; ", said) : null;
+        asked?[chatId].Select(a => a.Describe()).ToList() is { Count: > 0 } said ? string.Join(AlsoAsks, said) : null;
+
+    /// <summary>Between two asks of one chat.</summary>
+    internal const string AlsoAsks = " | Separately, it also asks: ";
 
     /// <summary>The workspaces and the chats, both read at once: each read waits for the UI thread.</summary>
     private async Task<(IReadOnlyList<YardWorkspace> Workspaces, IReadOnlyList<YardChat> Chats)> ReadAsync(CancellationToken ct)

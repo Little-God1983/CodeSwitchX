@@ -1689,6 +1689,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>A chat asks something: its card goes in the log, to be read out when the floor is free.</summary>
     private void OnAsked(ChatAsk ask)
     {
+        if (_asks?.IsHeld(ask.Id) == false)
+        {
+            return; // it ended before it got here (the Cab changed, say): its Closed found no card, and a card now would stay open
+        }
+
         var card = new ChatQuestionCard(ask);
         var entry = new RavenLogEntry(RavenLogKind.Question, "asks", _time.GetUtcNow()) { Question = card };
         Append(entry);

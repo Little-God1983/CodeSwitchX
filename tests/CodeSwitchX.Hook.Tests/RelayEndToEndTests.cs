@@ -87,7 +87,7 @@ public class RelayEndToEndTests : IAsyncLifetime
     {
         _asks.Takes = _ => true;
         Task<TurnStopOutcome>? stopped = null;
-        _asks.Opened += _ => stopped = _stops.Request("s1");
+        _asks.Opened += _ => stopped = Task.Delay(200).ContinueWith(_ => _stops.Request("s1")).Unwrap();
 
         var code = await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
 
@@ -97,6 +97,7 @@ public class RelayEndToEndTests : IAsyncLifetime
         answer.RootElement.GetProperty("continue").GetBoolean().ShouldBeFalse();
         answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("permissionDecision").GetString().ShouldBe("deny");
         _received.Select(e => (e.EventName, e.Signal)).ShouldBe([("PermissionRequest", SessionSignal.Notification), ("Stop", SessionSignal.Stop)]);
+        (_received[1].At - _received[0].At).ShouldBeGreaterThan(TimeSpan.FromMilliseconds(150), "the turn ends when it is stopped, not when it asked");
     }
 
     private static Stream Stdin(string text) => new MemoryStream(Encoding.UTF8.GetBytes(text));

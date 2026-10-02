@@ -173,6 +173,23 @@ public sealed class YardToolsTests
         chat.Asks.ShouldBe("\"Which fruit?\" (one of: Apple, Banana)");
     }
 
+    [Fact]
+    public async Task Two_questions_asked_side_by_side_read_apart_from_one_ask_of_two_questions()
+    {
+        var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),
+            TimeProvider.System) { Takes = _ => true };
+        var at = DateTimeOffset.UtcNow;
+        foreach (var (id, text) in new[] { ("toolu_1", "Which fruit?"), ("toolu_2", "Which colour?") })
+        {
+            _ = asks.HoldAsync(new ChatAsk(id, ChatAskKind.Question, new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = at = at.AddSeconds(1) },
+                [new ChatQuestion(text, null, [], false)]), CancellationToken.None);
+        }
+
+        var chat = await new YardTools(_yard, asks).GetChat("bbbbbbbb", CancellationToken.None);
+
+        chat.Asks.ShouldBe("\"Which fruit?\" | Separately, it also asks: \"Which colour?\"");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("zzzz")]

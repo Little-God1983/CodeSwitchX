@@ -159,7 +159,7 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
-    public async Task A_stop_ends_what_the_chats_main_agent_asks_and_leaves_the_rest()
+    public async Task A_stop_ends_what_the_chats_main_agent_asks_and_leaves_a_sub_agent_s_question_to_VS_Code()
     {
         var held = _asks.HoldAsync(Ask(), CancellationToken.None);
         var subAgent = _asks.HoldAsync(Ask(toolUse: "toolu_2") with
@@ -171,8 +171,22 @@ public sealed class ChatAsksTests : IDisposable
         _asks.Stop("s1");
 
         (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Stopped);
-        subAgent.IsCompleted.ShouldBeFalse("a stop is never handed to a sub-agent");
+        (await subAgent).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode, "a stop is never handed to a sub-agent, and held it would hold the chat");
         otherChat.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_ask_the_window_stopped_keeping_while_it_was_taken_goes_to_VS_Code_unseen()
+    {
+        ChatAsk? opened = null;
+        _asks.Opened += a => opened = a;
+        _asks.Keeps = _ => false; // the Cab switched to the chat after Takes said yes, in a Recheck that missed it
+
+        (await _asks.HoldAsync(Ask(), CancellationToken.None)).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+
+        opened.ShouldBeNull();
+        _published.ShouldBeEmpty("the chat never waited here");
+        _asks.IsHeld("toolu_1").ShouldBeFalse();
     }
 
     [Fact]

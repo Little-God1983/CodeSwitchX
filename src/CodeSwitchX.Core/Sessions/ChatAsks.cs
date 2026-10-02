@@ -129,6 +129,13 @@ public sealed class ChatAsks : IDisposable
             Finish(replaced, ChatAskOutcome.Gone, null);
         }
 
+        // The window may have changed since Takes said yes, in a Recheck that could not see this ask yet.
+        if (!KeepsSafely(ask))
+        {
+            Close(ask.Id, ChatAskOutcome.ToVsCode, null);
+            return await held.Done.Task.ConfigureAwait(false);
+        }
+
         // The chat waits for the user from now on, as it does with VS Code's own form open.
         _bus.Publish(new HookEventReceived(Asking(ask)));
         Opened?.Invoke(ask);
@@ -192,9 +199,14 @@ public sealed class ChatAsks : IDisposable
     /// <summary>
     /// The user asked to stop the chat: what its main agent asks ends as <see cref="ChatAskOutcome.Stopped"/>, so the stop
     /// goes back in the ask's answer. Held, the ask would hold the stop too: a stop lands at the chat's next tool step,
-    /// and the step that asks is held. A sub-agent's ask stays, as a stop is never handed to a sub-agent.
+    /// and the step that asks is held. A stop is never handed to a sub-agent, so what one asks goes to VS Code: the
+    /// sub-agent goes on once it is answered there, and the main agent takes the stop at its next step.
     /// </summary>
-    public void Stop(string sessionId) => CloseWhere(h => h.Ask.SessionId == sessionId && h.Ask.Step.AgentId is null, ChatAskOutcome.Stopped);
+    public void Stop(string sessionId)
+    {
+        CloseWhere(h => h.Ask.SessionId == sessionId && h.Ask.Step.AgentId is null, ChatAskOutcome.Stopped);
+        CloseWhere(h => h.Ask.SessionId == sessionId && h.Ask.Step.AgentId is not null, ChatAskOutcome.ToVsCode);
+    }
 
     /// <summary>The window changed: a held ask it does not keep any more (<see cref="Keeps"/>) goes to VS Code.</summary>
     public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), ChatAskOutcome.ToVsCode);
@@ -217,6 +229,15 @@ public sealed class ChatAsks : IDisposable
         lock (_lock)
         {
             return _held.Values.Select(h => h.Ask).OrderBy(a => a.At).ToList();
+        }
+    }
+
+    /// <summary>Whether this ask is held still: one that ended before its <see cref="Opened"/> was handled needs no card.</summary>
+    public bool IsHeld(string askId)
+    {
+        lock (_lock)
+        {
+            return _held.ContainsKey(askId);
         }
     }
 

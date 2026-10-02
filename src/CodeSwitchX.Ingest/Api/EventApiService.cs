@@ -191,7 +191,8 @@ public sealed class EventApiService : IHostedService
             // Only a relay with the Ask hook asks here, and every one of those hands a stop on.
             if (closed is { Outcome: ChatAskOutcome.Stopped } && _stops?.Take(ask.Step, relayHandsItOn: true) is { } reason)
             {
-                _bus.Publish(new HookEventReceived(TurnStops.EndOf(ask.Step)));
+                // Ended now, not when it asked: the Yard counts the chat idle from here.
+                _bus.Publish(new HookEventReceived(TurnStops.EndOf(ask.Step with { At = _time.GetUtcNow() })));
                 return Results.Ok(new { stop = reason });
             }
 
