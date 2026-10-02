@@ -1,3 +1,5 @@
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Mcp;
 using ModelContextProtocol;
@@ -199,5 +201,54 @@ public sealed class YardActionToolsTests
         (await Tools.BackToYard(Ct)).ShouldBe("The Yard is shown.");
 
         _actions.Calls.ShouldBe(["back_to_yard"]);
+    }
+
+    /// <summary>The Raven brain chat (bbbbbbbb) asks two questions in the panel; the task ends with the answers given.</summary>
+    private static (ChatAsks Asks, Task<IReadOnlyList<string>?> Held) Asking()
+    {
+        var asks = new ChatAsks(new EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
+        var ask = new ChatAsk("toolu_1", ChatAskKind.Question,
+            new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow, ToolName = "AskUserQuestion" },
+            [
+                new ChatQuestion("Which fruit?", null, [new ChatQuestionOption("Apple", null), new ChatQuestionOption("Banana", null)], false),
+                new ChatQuestion("Which colours?", null, [new ChatQuestionOption("Red", null), new ChatQuestionOption("Blue", null)], true),
+            ]);
+        return (asks, asks.HoldAsync(ask, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_question_is_answered_with_the_options_own_labels_or_the_user_s_words()
+    {
+        var (asks, held) = Asking();
+
+        var said = await new YardActionTools(_yard, _actions, asks).AnswerQuestion("bbbbbbbb", [" banana ", "Red, Blue"], Ct);
+
+        said.ShouldBe("The Raven brain chat has its answer (Banana; Red, Blue) and carries on.");
+        (await held).ShouldBe(["Banana", "Red, Blue"]);
+    }
+
+    [Theory]
+    [InlineData("Apple")]
+    [InlineData("Apple| ")]
+    [InlineData("Apple|Red|Blue")]
+    public async Task Not_one_answer_per_question_is_refused_with_the_questions(string given)
+    {
+        var (asks, held) = Asking();
+
+        var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, asks).AnswerQuestion("bbbbbbbb", given.Split('|'), Ct));
+
+        error.Message.ShouldBe("Give one answer for each of its 2 questions, none of them blank. It asks: \"Which fruit?\" (one of: Apple, Banana); "
+            + "\"Which colours?\" (any of: Red, Blue).");
+        held.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_that_asks_nothing_in_the_panel_is_said()
+    {
+        var (asks, _) = Asking();
+
+        var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, asks).AnswerQuestion("aaaaaaaa", ["Apple"], Ct));
+
+        error.Message.ShouldStartWith("The Speech gate chat asks nothing in Raven's panel now");
     }
 }

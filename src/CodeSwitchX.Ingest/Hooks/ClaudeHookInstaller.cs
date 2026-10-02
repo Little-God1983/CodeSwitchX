@@ -29,6 +29,19 @@ public sealed class ClaudeHookInstaller
         "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "StopFailure", "SubagentStop", "SessionEnd",
     ];
 
+    /// <summary>
+    /// The relay's argument for the second PreToolUse entry, which only a chat's question runs (<see cref="AskMatcher"/>): it
+    /// hands the question to CodeSwitchX and waits, up to <see cref="AskTimeoutSeconds"/>, for the user to answer it there.
+    /// </summary>
+    public const string AskArgument = "Ask";
+
+    public const string AskEvent = "PreToolUse";
+
+    public const string AskMatcher = "AskUserQuestion";
+
+    /// <summary>Above CodeSwitchX's own ten minutes, which let the question go to VS Code first.</summary>
+    public const int AskTimeoutSeconds = 660;
+
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
         WriteIndented = true,
@@ -60,7 +73,7 @@ public sealed class ClaudeHookInstaller
         var outdated = false;
         foreach (var eventName in Events)
         {
-            var ours = OurHooks(settings, eventName).ToList();
+            var ours = OurHooks(settings, eventName).Where(h => !IsAsk(h)).ToList();
             if (ours.Count == 0)
             {
                 continue;
@@ -71,6 +84,13 @@ public sealed class ClaudeHookInstaller
             {
                 outdated = true;
             }
+        }
+
+        // Without its entry for questions, an install from before them asks every question in VS Code: one more to update.
+        var asks = OurAsks(settings).ToList();
+        if (asks.Count != 1 || !IsCurrentAsk(asks[0].Group, asks[0].Hook, relayExecutable))
+        {
+            outdated = true;
         }
 
         var missing = Events.Except(installed).ToList();
@@ -108,7 +128,7 @@ public sealed class ClaudeHookInstaller
                 hooks[eventName] = groups;
             }
 
-            var ours = OurHooks(settings, eventName).ToList();
+            var ours = OurHooks(settings, eventName).Where(h => !IsAsk(h)).ToList();
             if (ours.Count == 0)
             {
                 groups.Add(new JsonObject
@@ -132,7 +152,82 @@ public sealed class ClaudeHookInstaller
             }
         }
 
+        InstallAsk(hooks, settings, relayExecutable);
         return Save(settings, before);
+    }
+
+    /// <summary>
+    /// The entry for questions, in a group of its own with the matcher: exactly one, current. Ours elsewhere (a second one,
+    /// one moved into a group without the matcher) go, so no question is asked twice or every tool waits.
+    /// </summary>
+    private static void InstallAsk(JsonObject hooks, JsonObject settings, string relayExecutable)
+    {
+        var asks = OurAsks(settings).ToList();
+        var keep = asks.Where(a => Matches(a.Group)).Select(a => a.Hook).FirstOrDefault();
+        foreach (var (group, hook) in asks.Where(a => !ReferenceEquals(a.Hook, keep)))
+        {
+            var entries = (JsonArray)group["hooks"]!;
+            entries.Remove(hook);
+            if (entries.Count == 0)
+            {
+                (hooks[AskEvent] as JsonArray)?.Remove(group);
+            }
+        }
+
+        if (keep is not null)
+        {
+            keep["type"] = "command";
+            keep["command"] = relayExecutable;
+            keep["args"] = new JsonArray(AskArgument);
+            keep["timeout"] = AskTimeoutSeconds;
+            return;
+        }
+
+        if (hooks[AskEvent] is not JsonArray groups)
+        {
+            groups = [];
+            hooks[AskEvent] = groups;
+        }
+
+        groups.Add(new JsonObject
+        {
+            ["matcher"] = AskMatcher,
+            ["hooks"] = new JsonArray(new JsonObject
+            {
+                ["type"] = "command",
+                ["command"] = relayExecutable,
+                ["args"] = new JsonArray(AskArgument),
+                ["timeout"] = AskTimeoutSeconds,
+            }),
+        });
+    }
+
+    private static bool Matches(JsonObject group) =>
+        group["matcher"] is JsonValue matcher && matcher.TryGetValue<string>(out var text) && text == AskMatcher;
+
+    private static bool IsCurrentAsk(JsonObject group, JsonObject hook, string relayExecutable) =>
+        Matches(group)
+        && hook["command"] is JsonValue command && command.TryGetValue<string>(out var path) && string.Equals(path, relayExecutable, StringComparison.OrdinalIgnoreCase)
+        && hook["timeout"] is JsonValue timeout && timeout.TryGetValue<int>(out var seconds) && seconds == AskTimeoutSeconds;
+
+    /// <summary>Our entry for questions: the relay run with <see cref="AskArgument"/>.</summary>
+    private static bool IsAsk(JsonObject hook) =>
+        hook["args"] is JsonArray { Count: 1 } args && args[0] is JsonValue arg && arg.TryGetValue<string>(out var argument) && argument == AskArgument;
+
+    private static IEnumerable<(JsonObject Group, JsonObject Hook)> OurAsks(JsonObject settings)
+    {
+        if (settings["hooks"] is not JsonObject hooks || hooks[AskEvent] is not JsonArray groups)
+        {
+            yield break;
+        }
+
+        foreach (var group in groups.OfType<JsonObject>())
+        {
+            foreach (var entry in (group["hooks"] as JsonArray ?? []).OfType<JsonObject>().Where(h => IsOurs(h) && IsAsk(h)))
+            {
+                yield return (group, entry);
+            }
+        }
     }
 
     public HookInstallResult Uninstall()

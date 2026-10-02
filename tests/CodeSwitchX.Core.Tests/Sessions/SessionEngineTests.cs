@@ -774,6 +774,33 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void The_late_start_of_the_very_step_that_waits_does_not_end_the_waiting()
+    {
+        // A question held in Raven's panel: the hook that asks it and the one that reports the step run side by side, so the
+        // step's PreToolUse may land after the waiting began. Its PostToolUse, once answered, ends the waiting as always.
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "AskUserQuestion") with { ToolUseId = "t1" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "AskUserQuestion") with { ToolUseId = "t1" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "AskUserQuestion") with { ToolUseId = "t1" });
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void Another_step_s_start_still_ends_the_waiting()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, tool: "AskUserQuestion") with { ToolUseId = "t1" });
+
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { ToolUseId = "t2" });
+
+        _engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the chat went on past its question");
+    }
+
+    [Fact]
     public void A_stop_ends_the_waiting_of_the_main_agent()
     {
         _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash") with { ToolUseId = "t1" });

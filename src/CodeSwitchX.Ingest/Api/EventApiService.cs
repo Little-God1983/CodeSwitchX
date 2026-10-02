@@ -17,7 +17,8 @@ namespace CodeSwitchX.Ingest.Api;
 
 /// <summary>
 /// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus, and answers a tool event
-/// with the stop asked for its chat's turn, if any (<see cref="TurnStops"/>). Given the Yard, it also
+/// with the stop asked for its chat's turn, if any (<see cref="TurnStops"/>). It holds a chat's question until the user
+/// answers it here or leaves it to VS Code (<see cref="ChatAsks"/>). Given the Yard, it also
 /// serves the MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), and given what can be done on it,
 /// those it acts through (<see cref="YardActionTools"/>), on the loopback port under <see cref="YardMcp.Route"/>, behind the
 /// same token, and writes <c>mcp.json</c> for Claude Code to find them.
@@ -34,14 +35,17 @@ public sealed class EventApiService : IHostedService
     private readonly IYardDirectory? _yard;
     private readonly IYardActions? _actions;
     private readonly TurnStops? _stops;
+    private readonly ChatAsks? _asks;
     private WebApplication? _app;
 
     /// <summary>What a relay that hands a stop on sends along (CodeSwitchX.Hook's <c>Relay.StopsHeader</c>).</summary>
     internal const string RelayStopsHeader = "X-CodeSwitchX-Relay-Stops";
 
     /// <param name="stops">The stops asked for chats' turns, handed to their hook relay in its answer; null for none.</param>
+    /// <param name="asks">Where what chats ask is held while the user answers it here; null leaves every ask to VS Code.</param>
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
-        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null)
+        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null,
+        ChatAsks? asks = null)
     {
         _paths = paths;
         _bus = bus;
@@ -53,6 +57,7 @@ public sealed class EventApiService : IHostedService
         _yard = yard;
         _actions = actions;
         _stops = stops;
+        _asks = asks;
     }
 
     public EndpointDescriptor? Endpoint { get; private set; }
@@ -91,6 +96,11 @@ public sealed class EventApiService : IHostedService
         {
             // Stateless: every request stands alone, so a restarted brain or app needs no session to be re-established.
             builder.Services.AddSingleton(_yard);
+            if (_asks is not null)
+            {
+                builder.Services.AddSingleton(_asks);
+            }
+
             var mcp = builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })
                 .WithHttpTransport(http => http.Stateless = true)
                 .WithTools<YardTools>();
@@ -149,6 +159,26 @@ public sealed class EventApiService : IHostedService
             // Claude Code ends the turn on this answer and sends no Stop hook of its own: the Yard hears the end from here.
             _bus.Publish(new HookEventReceived(TurnStops.EndOf(hookEvent)));
             return Results.Ok(new { stop = reason });
+        });
+
+        // A chat's question, from its relay's Ask hook, which waits for the answer: 200 with one answer per question, or 204
+        // for VS Code to ask it in the chat's tab.
+        app.MapPost("/asks", async (HttpContext context) =>
+        {
+            if (!IsAuthorized(context, token))
+            {
+                return Results.Unauthorized();
+            }
+
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(context.RequestAborted);
+            if (_asks is null || ChatAskParser.Parse(body, _time.GetUtcNow()) is not { } ask)
+            {
+                return Results.NoContent();
+            }
+
+            var answers = await _asks.HoldAsync(ask, context.RequestAborted);
+            return answers is null ? Results.NoContent() : Results.Ok(new { answers });
         });
 
         if (_yard is not null)

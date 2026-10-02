@@ -209,6 +209,38 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task Raven_takes_a_chat_s_question_while_its_panel_is_open_unless_the_Cab_shows_that_chat_s_VS_Code()
+    {
+        var other = Guid.NewGuid();
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue();
+        _h.Shell.TakesAsks(null).ShouldBeTrue("a chat on no tile is shown in no Cab");
+
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeFalse("the user is looking at that chat's VS Code: its tab asks");
+        _h.Shell.TakesAsks(other).ShouldBeTrue();
+
+        _h.Shell.SetShellMinimized(true);
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue("minimised, the Cab shows nothing");
+        _h.Shell.SetShellMinimized(false);
+
+        _h.Shell.BackToYard();
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue();
+
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.TakesAsks(other).ShouldBeFalse("with the panel collapsed every question goes to VS Code");
+    }
+
+    [Fact]
+    public void Before_the_shell_is_set_up_it_takes_no_question()
+    {
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task EnterCab_switches_mode_opens_vscode_and_docks_into_the_known_rect()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

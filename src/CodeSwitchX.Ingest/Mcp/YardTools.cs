@@ -13,7 +13,7 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// is there only to ask <c>get_chat</c> about it).
 /// </summary>
 [McpServerToolType]
-public sealed class YardTools(IYardDirectory yard)
+public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
 {
     /// <summary>The filters <see cref="ListChats"/> takes.</summary>
     public static readonly IReadOnlyList<string> ChatFilters = ["needs_me", "working", "live", "all"];
@@ -45,7 +45,8 @@ public sealed class YardTools(IYardDirectory yard)
         + "and how full its context is. \"needs you\" means the chat is stopped on the user: a question to answer or something "
         + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me. send_to is the name "
         + "SendMessage takes to tell the chat something; a chat without one is not open in a VS Code tab (closed, or run in a "
-        + "terminal) and cannot be told anything from here.")]
+        + "terminal) and cannot be told anything from here. asks is the question the chat waits on in Raven's panel, with its "
+        + "options: answer_question answers it.")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
@@ -81,7 +82,7 @@ public sealed class YardTools(IYardDirectory yard)
             shown = shown.Where(c => ids.Contains(c.WorkspaceId));
         }
 
-        return shown.Select(ChatView.Of).ToList();
+        return shown.Select(c => ChatView.Of(c, AsksOf(c.Id))).ToList();
     }
 
     [McpServerTool(Name = "get_chat", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -95,11 +96,18 @@ public sealed class YardTools(IYardDirectory yard)
         return found switch
         {
             _ when key.Length == 0 => throw new McpException("Give a chat id from list_chats."),
-            [var chat] => ChatDetailView.Of(chat),
+            [var chat] => ChatDetailView.Of(chat, AsksOf(chat.Id)),
             [] => throw new McpException($"The Yard shows no chat '{id}'. list_chats lists them."),
             _ => throw new McpException($"'{id}' fits {found.Count} chats. Give more of the id."),
         };
     }
+
+    /// <summary>What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there.</summary>
+    private string? AsksOf(string chatId) => asks?.Open().FirstOrDefault(a => a.SessionId == chatId) is { } ask ? Describe(ask) : null;
+
+    /// <summary>"\"Which fruit?\" (one of: Apple, Banana, Cherry)", the questions joined by "; ".</summary>
+    internal static string Describe(ChatAsk ask) => string.Join("; ", ask.Questions.Select(q => $"\"{q.Text}\""
+        + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 
     /// <summary>The workspaces and the chats, both read at once: each read waits for the UI thread.</summary>
     private async Task<(IReadOnlyList<YardWorkspace> Workspaces, IReadOnlyList<YardChat> Chats)> ReadAsync(CancellationToken ct)
@@ -157,19 +165,21 @@ public sealed record WorkspaceMatchView(string MatchedName, double Score, Worksp
 /// The name SendMessage takes to tell this chat something; null for a chat not open in a VS Code tab (closed, or run in a
 /// terminal).
 /// </param>
+/// <param name="Asks">The question the chat waits on in Raven's panel, with its options; null when it asks nothing there.</param>
 public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
-    bool StartedByRaven, string? SendTo)
+    bool StartedByRaven, string? SendTo, string? Asks = null)
 {
-    internal static ChatView Of(YardChat chat) => new(
+    internal static ChatView Of(YardChat chat, string? asks = null) => new(
         chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool, YardTools.Percent(chat.ContextFill),
-        chat.Voice, chat.SendName);
+        chat.Voice, chat.SendName, asks);
 }
 
 /// <param name="SendTo">As <see cref="ChatView.SendTo"/>.</param>
+/// <param name="Asks">As <see cref="ChatView.Asks"/>.</param>
 public sealed record ChatDetailView(string Id, string Title, string Workspace, string State, string For, DateTimeOffset Since, string? Model,
-    string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven, string? SendTo)
+    string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven, string? SendTo, string? Asks = null)
 {
-    internal static ChatDetailView Of(YardChat chat) => new(
+    internal static ChatDetailView Of(YardChat chat, string? asks = null) => new(
         chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
-        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName);
+        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName, asks);
 }

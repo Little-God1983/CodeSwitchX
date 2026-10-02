@@ -16,6 +16,9 @@ public enum RavenLogKind
 
     /// <summary>A digest card: what the chats did, a line per chat that shows its tile when clicked.</summary>
     News,
+
+    /// <summary>A chat's question, with its options to click, held until it is answered here or left to VS Code.</summary>
+    Question,
 }
 
 /// <summary>One line of the panel's log. The text is observable so a progress line can update in place.</summary>
@@ -34,6 +37,9 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
 
     /// <summary>A digest card's lines; null for every other kind.</summary>
     public IReadOnlyList<ChatNewsLine>? Lines { get; set; }
+
+    /// <summary>A question card's question; null for every other kind.</summary>
+    public ChatQuestionCard? Question { get; set; }
 
     /// <summary>An action card's tool call came back failed.</summary>
     [ObservableProperty]

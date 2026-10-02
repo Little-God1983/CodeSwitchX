@@ -7,12 +7,13 @@ using ModelContextProtocol.Server;
 namespace CodeSwitchX.Ingest.Mcp;
 
 /// <summary>
-/// What Raven's brain can do on the Yard, as MCP tools: open, stop and close Claude chats in a workspace's VS Code by voice, set the model
+/// What Raven's brain can do on the Yard, as MCP tools: open, stop and close Claude chats in a workspace's VS Code by voice, answer
+/// a chat's question waiting in Raven's panel, set the model
 /// and effort chats start with, and move between the Yard and a workspace. Names are matched here, like the looking tools
 /// match them; what cannot be done comes back as a tool error in words the brain can repeat.
 /// </summary>
 [McpServerToolType]
-public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
+public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, ChatAsks? asks = null)
 {
     [McpServerTool(Name = "start_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Opens a new, empty Claude Code chat in a tab of the workspace's VS Code window (VS Code is started in the background "
@@ -134,6 +135,39 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
         }
 
         return await Act(() => actions.StopChatAsync(one, cancellationToken)).ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "answer_question", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
+    [Description("Answers the question a chat waits on in Raven's panel (list_chats shows it under asks; you are told it with the "
+        + "user's words when it was read out to them). Give one answer per question, in their order: the label of the option the "
+        + "user meant (\"the first one\" is the first option's label), several labels joined by \", \" where any of them may be "
+        + "picked, or the user's own words when they said something else. Only answer what the user said; never pick for them. "
+        + "The chat carries on with the answer.")]
+    public async Task<string> AnswerQuestion(
+        [Description("The chat's id from list_chats; its start is enough.")] string chat,
+        [Description("One answer per question, in the order the chat asked them.")] string[] answers,
+        CancellationToken cancellationToken = default)
+    {
+        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var ask = asks?.Open().FirstOrDefault(a => a.SessionId == one.Id)
+            ?? throw new McpException($"The {one.Title} chat asks nothing in Raven's panel now: it was answered, left to VS Code, or never asked here.");
+        var given = (answers ?? []).Select((a, i) => i < ask.Questions.Count ? AsOption(a, ask.Questions[i]) : (a ?? "").Trim()).ToList();
+        if (given.Count != ask.Questions.Count || given.Any(a => a.Length == 0))
+        {
+            throw new McpException($"Give one answer for each of its {ask.Questions.Count} question{(ask.Questions.Count == 1 ? "" : "s")}, "
+                + $"none of them blank. It asks: {YardTools.Describe(ask)}.");
+        }
+
+        return asks!.Answer(ask.Id, given)
+            ? $"The {one.Title} chat has its answer ({string.Join("; ", given)}) and carries on."
+            : $"The {one.Title} chat no longer waits for that answer: it was answered or left to VS Code meanwhile.";
+    }
+
+    /// <summary>The option's own label for an answer that names it, whatever its case; anything else as it was said.</summary>
+    private static string AsOption(string answer, ChatQuestion question)
+    {
+        var said = (answer ?? "").Trim();
+        return question.Options.FirstOrDefault(o => string.Equals(o.Label, said, StringComparison.OrdinalIgnoreCase))?.Label ?? said;
     }
 
     /// <summary>The one chat on the Yard whose id starts so; none or more than one is an error.</summary>

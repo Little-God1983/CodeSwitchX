@@ -99,6 +99,9 @@ public partial class App : Application
 
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
             await shell.InitializeAsync(CancellationToken.None);
+            // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
+            var engine = _host.Services.GetRequiredService<SessionEngine>();
+            _host.Services.GetRequiredService<ChatAsks>().Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = window;
@@ -237,7 +240,8 @@ public partial class App : Application
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
-            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately));
+            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,
+            sp.GetRequiredService<ChatAsks>().Holds));
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();
