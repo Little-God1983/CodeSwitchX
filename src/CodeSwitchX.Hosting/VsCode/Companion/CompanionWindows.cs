@@ -15,8 +15,12 @@ public interface ICompanionWindows
     /// <summary>The window that shows the workspace, with the companion running in it; null for none. Any thread; never throws.</summary>
     CompanionWindow? Find(Workspace workspace);
 
+    /// <summary>The window whose extension host has this process id, with the companion running in it; null for none. Any thread; never throws.</summary>
+    CompanionWindow? Of(int extensionHost);
+
     /// <summary>Sends one command to the window's companion and returns its answer; an answer that says why not when it cannot be reached.</summary>
-    Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, CancellationToken ct);
+    /// <param name="sessionId">The chat the command is about, for <see cref="CompanionWindows.CloseChat"/>; null for none.</param>
+    Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, string? sessionId, CancellationToken ct);
 }
 
 /// <summary>A VS Code window as its companion describes it.</summary>
@@ -47,6 +51,9 @@ public sealed class CompanionWindows : ICompanionWindows
 
     /// <summary>The command that opens a chat tab.</summary>
     public const string NewChat = "newChat";
+
+    /// <summary>The command that closes a chat's tab, found by the chat's session id.</summary>
+    public const string CloseChat = "closeChat";
 
     /// <summary>A record is a few hundred bytes; anything far bigger is not one.</summary>
     private const long MaxRecordBytes = 64 * 1024;
@@ -99,13 +106,25 @@ public sealed class CompanionWindows : ICompanionWindows
         }
     }
 
+    public CompanionWindow? Of(int extensionHost)
+    {
+        try
+        {
+            return Records().Where(r => r.Window.Pid == extensionHost).Select(r => r.Window).FirstOrDefault();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>How long a request may take here; <see cref="RequestTimeout"/> but in tests.</summary>
     internal TimeSpan Timeout { get; init; } = RequestTimeout;
 
     /// <summary>How long opening a chat may take here; <see cref="NewChatTimeout"/> but in tests.</summary>
     internal TimeSpan ChatTimeout { get; init; } = NewChatTimeout;
 
-    public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, CancellationToken ct)
+    public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, string? sessionId, CancellationToken ct)
     {
         var limit = command == NewChat ? ChatTimeout : Timeout;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -130,7 +149,7 @@ public sealed class CompanionWindows : ICompanionWindows
                         + "(Developer: Reload Window) and try again.");
                 }
             }
-            var request = JsonSerializer.Serialize(new { token = window.Token, command }) + "\n";
+            var request = JsonSerializer.Serialize(new { token = window.Token, command, sessionId }) + "\n";
             await pipe.WriteAsync(Encoding.UTF8.GetBytes(request), timeout.Token).ConfigureAwait(false);
             await pipe.FlushAsync(timeout.Token).ConfigureAwait(false);
 

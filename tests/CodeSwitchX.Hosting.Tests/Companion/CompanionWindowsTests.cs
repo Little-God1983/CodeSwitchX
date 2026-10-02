@@ -150,12 +150,48 @@ public sealed class CompanionWindowsTests : IDisposable
             return request;
         }, Ct);
 
-        var result = await _windows.SendAsync(new CompanionWindow(4000, $@"\\.\pipe\{name}", "secret", [], null, null), "newChat", Ct);
+        var result = await _windows.SendAsync(new CompanionWindow(4000, $@"\\.\pipe\{name}", "secret", [], null, null), "newChat", null, Ct);
 
         result.ShouldBe(new CompanionAnswer(true, 4000));
         using var sent = JsonDocument.Parse((await serving)!);
         sent.RootElement.GetProperty("token").GetString().ShouldBe("secret");
         sent.RootElement.GetProperty("command").GetString().ShouldBe("newChat");
+    }
+
+    [Fact]
+    public void A_window_is_found_by_its_extension_host()
+    {
+        Record(10, [@"E:\Repos\App"]);
+        Record(11, [@"E:\Repos\Lib", @"E:\Repos\App"], @"E:\Repos\Full.code-workspace");
+        Record(12, [@"E:\Repos\Old"]);
+        _processes.Gone.Add(12);
+
+        _windows.Of(11).ShouldNotBeNull().Folders.ShouldBe([@"E:\Repos\Lib", @"E:\Repos\App"]);
+        _windows.Of(12).ShouldBeNull("its VS Code is gone");
+        _windows.Of(13).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Closing_a_chat_names_the_chat()
+    {
+        var name = "csx-test-" + Guid.NewGuid().ToString("N");
+        await using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var serving = Task.Run(async () =>
+        {
+            await server.WaitForConnectionAsync(Ct);
+            var request = await new StreamReader(server, Encoding.UTF8).ReadLineAsync(Ct);
+            await server.WriteAsync(Encoding.UTF8.GetBytes("{\"ok\":true}\n"), Ct);
+            await server.FlushAsync(Ct);
+            return request;
+        }, Ct);
+
+        var result = await _windows.SendAsync(new CompanionWindow(4000, name, "secret", [], null, null), CompanionWindows.CloseChat,
+            "0b5d7153-5759-4359-8fa3-a562a130a880", Ct);
+
+        result.Ok.ShouldBeTrue();
+        using var sent = JsonDocument.Parse((await serving)!);
+        sent.RootElement.GetProperty("command").GetString().ShouldBe("closeChat");
+        sent.RootElement.GetProperty("sessionId").GetString().ShouldBe("0b5d7153-5759-4359-8fa3-a562a130a880");
     }
 
     [Fact]
@@ -171,7 +207,7 @@ public sealed class CompanionWindowsTests : IDisposable
             await server.FlushAsync(Ct);
         }, Ct);
 
-        var result = await _windows.SendAsync(new CompanionWindow(4000, name, "old", [], null, null), "newChat", Ct);
+        var result = await _windows.SendAsync(new CompanionWindow(4000, name, "old", [], null, null), "newChat", null, Ct);
         await serving;
 
         result.ShouldBe(new CompanionAnswer(false, Error: "Wrong token."));
@@ -184,8 +220,8 @@ public sealed class CompanionWindowsTests : IDisposable
         var nobody = new CompanionWindow(4000, @"\\.\pipe\csx-test-nobody-" + Guid.NewGuid().ToString("N"), "t", [], null, null);
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
-        var ping = await windows.SendAsync(nobody, "ping", Ct);
-        var chat = await windows.SendAsync(nobody, CompanionWindows.NewChat, Ct);
+        var ping = await windows.SendAsync(nobody, "ping", null, Ct);
+        var chat = await windows.SendAsync(nobody, CompanionWindows.NewChat, null, Ct);
 
         ping.Ok.ShouldBeFalse();
         ping.Error.ShouldNotBeNull().ShouldStartWith("The CodeSwitchX companion in that VS Code window does not answer.");
@@ -205,7 +241,7 @@ public sealed class CompanionWindowsTests : IDisposable
         }, Ct);
         var windows = new CompanionWindows(_directory, _processes.StartOf) { ChatTimeout = TimeSpan.FromMilliseconds(300) };
 
-        var result = await windows.SendAsync(new CompanionWindow(4000, name, "t", [], null, null), CompanionWindows.NewChat, Ct);
+        var result = await windows.SendAsync(new CompanionWindow(4000, name, "t", [], null, null), CompanionWindows.NewChat, null, Ct);
         await serving;
 
         result.Error.ShouldBe("The VS Code window did not answer within 0 seconds. A chat tab may still open there.");

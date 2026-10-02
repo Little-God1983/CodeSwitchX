@@ -803,6 +803,34 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_chat_closed_on_purpose_leaves_its_tile_at_once_and_its_end_brings_no_row_back()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Working)));
+
+        _yard.ForgetChat("s1");
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle) with { Version = 5 })); // heard late
+        _time.Advance(TimeSpan.FromSeconds(3));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Errored) with { Version = 6 }));
+
+        _yard.FindTile(_shop.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["s2"]);
+    }
+
+    [Fact]
+    public async Task A_closed_chat_opened_again_shows_again()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        _yard.ForgetChat("s1");
+
+        _time.Advance(TimeSpan.FromMinutes(5)); // reopened from VS Code's session list
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working) with { Version = 7 }));
+
+        _yard.FindTile(_shop.Id)!.Chats.ShouldHaveSingleItem().SessionId.ShouldBe("s1");
+    }
+
+    [Fact]
     public async Task A_spotlit_tile_is_lit_for_a_moment_and_only_one_at_a_time()
     {
         await _yard.InitializeAsync(CancellationToken.None);

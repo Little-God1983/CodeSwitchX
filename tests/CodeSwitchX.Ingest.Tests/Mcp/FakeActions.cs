@@ -30,6 +30,15 @@ internal sealed class FakeActions : IYardActions
             "claude-fable-5-1", "high", "diffusionnexus-4f"));
     }
 
+    public YardChat? Closed { get; private set; }
+
+    public Task<string> CloseChatAsync(YardChat chat, CancellationToken ct)
+    {
+        Act("close_chat");
+        Closed = chat;
+        return Task.FromResult("closed");
+    }
+
     public Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)
     {
         Act($"set_defaults {model} {effort}");

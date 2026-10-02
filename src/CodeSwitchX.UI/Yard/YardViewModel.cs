@@ -190,6 +190,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>When each chat closed on purpose was closed (UI thread): it keeps no row until it is opened again.</summary>
+    private readonly Dictionary<string, DateTimeOffset> _closed = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Takes a chat that was closed on purpose off its tile now, rather than as an ended row 10 minutes from now. What is
+    /// still heard of its end brings no row back; only a change after this, of a chat that runs again (opened again from
+    /// VS Code's session list), does.
+    /// </summary>
+    public void ForgetChat(string sessionId)
+    {
+        _closed[sessionId] = _time.GetUtcNow();
+        foreach (var tile in Tiles.Where(t => t.Chats.Any(c => c.SessionId == sessionId)).ToList())
+        {
+            tile.Remove(sessionId);
+        }
+    }
+
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
     public async Task UnregisterAsync(Guid workspaceId)
@@ -419,6 +436,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     internal void Apply(SessionSnapshot snapshot)
     {
+        if (_closed.TryGetValue(snapshot.SessionId, out var closed))
+        {
+            if (!SessionStateMachine.IsLive(snapshot.State) || snapshot.LastEventAt <= closed)
+            {
+                return;
+            }
+
+            _closed.Remove(snapshot.SessionId);
+        }
+
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
         foreach (var other in Tiles.Where(t => t != tile && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
         {
