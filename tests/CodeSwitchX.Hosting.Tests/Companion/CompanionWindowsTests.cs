@@ -148,13 +148,24 @@ public sealed class CompanionWindowsTests : IDisposable
     [Fact]
     public async Task A_window_nobody_listens_for_is_said_not_thrown()
     {
-        var windows = new CompanionWindows(_directory, _probe) { Timeout = TimeSpan.FromMilliseconds(300) };
+        var windows = new CompanionWindows(_directory, _probe) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromSeconds(1) };
+        var nobody = new CompanionWindow(4000, @"\\.\pipe\csx-test-nobody-" + Guid.NewGuid().ToString("N"), "t", [], null, null);
 
-        var result = await windows.SendAsync(new CompanionWindow(4000, @"\\.\pipe\csx-test-nobody-" + Guid.NewGuid().ToString("N"), "t", [], null, null),
-            "newChat", Ct);
+        var ping = await windows.SendAsync(nobody, "ping", Ct);
+        var chat = await windows.SendAsync(nobody, CompanionWindows.NewChat, Ct);
 
-        result.Ok.ShouldBeFalse();
-        result.Error.ShouldNotBeNull().ShouldStartWith("The VS Code window did not answer within");
+        ping.Ok.ShouldBeFalse();
+        ping.Error.ShouldBe("The VS Code window did not answer within 0 seconds.");
+        chat.Error.ShouldBe("The VS Code window did not answer within 1 seconds. A chat tab may still open there.",
+            "opening a chat has its own, longer wait, and the tab may come after it");
+    }
+
+    [Fact]
+    public void Opening_a_chat_may_take_far_longer_than_any_other_request()
+    {
+        // Claude Code's extension activates first in a window VS Code just started.
+        CompanionWindows.NewChatTimeout.ShouldBeGreaterThanOrEqualTo(TimeSpan.FromSeconds(60));
+        CompanionWindows.RequestTimeout.ShouldBeLessThan(CompanionWindows.NewChatTimeout);
     }
 
     private sealed class FakeProbe : IProcessProbe

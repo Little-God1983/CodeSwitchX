@@ -35,8 +35,17 @@ public sealed record CompanionAnswer(bool Ok, int? Pid = null, string? Version =
 /// </summary>
 public sealed class CompanionWindows : ICompanionWindows
 {
-    /// <summary>How long a request may take: opening a chat tab is quick, a window that hangs is not waited for.</summary>
+    /// <summary>How long a request may take: a window that hangs is not waited for.</summary>
     internal static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long opening a chat may take: in a window VS Code just started, Claude Code's extension activates first, which
+    /// takes longer than any other request. Given up too early, the tab would open anyway, unknown to Raven.
+    /// </summary>
+    internal static readonly TimeSpan NewChatTimeout = TimeSpan.FromSeconds(90);
+
+    /// <summary>The command that opens a chat tab.</summary>
+    public const string NewChat = "newChat";
 
     /// <summary>A record is a few hundred bytes; anything far bigger is not one.</summary>
     private const long MaxRecordBytes = 64 * 1024;
@@ -83,10 +92,14 @@ public sealed class CompanionWindows : ICompanionWindows
     /// <summary>How long a request may take here; <see cref="RequestTimeout"/> but in tests.</summary>
     internal TimeSpan Timeout { get; init; } = RequestTimeout;
 
+    /// <summary>How long opening a chat may take here; <see cref="NewChatTimeout"/> but in tests.</summary>
+    internal TimeSpan ChatTimeout { get; init; } = NewChatTimeout;
+
     public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, CancellationToken ct)
     {
+        var limit = command == NewChat ? ChatTimeout : Timeout;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(Timeout);
+        timeout.CancelAfter(limit);
         try
         {
             var name = window.Pipe.StartsWith(@"\\.\pipe\", StringComparison.OrdinalIgnoreCase) ? window.Pipe[@"\\.\pipe\".Length..] : window.Pipe;
@@ -106,7 +119,8 @@ public sealed class CompanionWindows : ICompanionWindows
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new CompanionAnswer(false, Error: $"The VS Code window did not answer within {Timeout.TotalSeconds:0} seconds.");
+            return new CompanionAnswer(false, Error: $"The VS Code window did not answer within {limit.TotalSeconds:0} seconds."
+                + (command == NewChat ? " A chat tab may still open there." : ""));
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or TimeoutException)
         {

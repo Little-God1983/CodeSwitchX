@@ -1,4 +1,6 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
@@ -23,6 +25,7 @@ public sealed class RavenActionsTests
     private readonly FakeShell _shell;
     private readonly List<string> _sequence = [];
     private readonly FakeTimeProvider _time = new();
+    private readonly EventBus _bus = new(NullLogger<EventBus>.Instance);
     private readonly RavenActions _actions;
     private Workspace? _registered = Registered;
 
@@ -30,13 +33,13 @@ public sealed class RavenActionsTests
     {
         _shell = new FakeShell(_chats);
         _vsCode.Sequence = _sequence;
-        _actions = new RavenActions(_vsCode, _chats, (id, workspace) => _sequence.Add($"claim {id} {workspace}"), () => _shell, new ImmediateDispatcher(),
+        _actions = new RavenActions(_vsCode, _chats, _bus, (id, workspace) => _sequence.Add($"claim {id} {workspace}"), () => _shell, new ImmediateDispatcher(),
             (id, _) => Task.FromResult(_registered?.Id == id ? _registered : null), _time, NullLogger<RavenActions>.Instance);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private Task<StartedChat> StartAsync(string? model = null, string? effort = null, YardFolder? folder = null) =>
+    private Task<VoiceChatView> StartAsync(string? model = null, string? effort = null, YardFolder? folder = null) =>
         _actions.StartChatAsync(Diffusion, folder, model, effort, Ct);
 
     [Fact]
@@ -47,9 +50,25 @@ public sealed class RavenActionsTests
         var request = _vsCode.Requests.ShouldHaveSingleItem();
         request.Workspace.ShouldBeSameAs(Registered);
         _sequence.ShouldBe(["start Diffusion-Full", $"claim new-chat {Diffusion.Id}"]);
-        started.Chat.ShouldBe(new VoiceChatView("new-chat", Diffusion.Id, "Diffusion-Full", @"E:\Repos\DiffusionNexus.Installer.SDK", null, null,
+        started.ShouldBe(new VoiceChatView("new-chat", Diffusion.Id, "Diffusion-Full", @"E:\Repos\DiffusionNexus.Installer.SDK", null, null,
             "diffusionnexus-4f"));
-        started.Note.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData(SessionState.Ended)]
+    [InlineData(SessionState.Errored)]
+    public async Task A_chat_Raven_started_that_ends_loses_its_mark(SessionState end)
+    {
+        await StartAsync("Fable", "high");
+        var now = _time.GetUtcNow();
+
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("new-chat", SessionState.Idle, now), ChatNewsTests.Chat("new-chat", SessionState.Working, now)));
+        _actions.StartedByRaven("new-chat").ShouldBeTrue("working is no end");
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("new-chat", SessionState.Working, now), ChatNewsTests.Chat("new-chat", end, now)));
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("other", SessionState.Working, now), ChatNewsTests.Chat("other", end, now)));
+
+        _actions.StartedByRaven("new-chat").ShouldBeFalse();
+        _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high"), ("new-chat", null)], "a chat Raven did not start is left alone");
     }
 
     [Fact]

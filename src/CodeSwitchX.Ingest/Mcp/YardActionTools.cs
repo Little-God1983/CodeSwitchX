@@ -15,8 +15,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
 {
     [McpServerTool(Name = "start_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Opens a new, empty Claude Code chat in a tab of the workspace's VS Code window (VS Code is started in the background "
-        + "when it does not run); it shows on the workspace's tile. It runs in the workspace's first folder: VS Code starts every new chat "
-        + "there. It returns the chat's send_to name: then send it its task with SendMessage to that name, or it does nothing. Leave model "
+        + "when it does not run); it shows on the workspace's tile. VS Code starts every new chat in the workspace's first folder: a "
+        + "workspace named by another of its folders, or another folder named, is refused, and you say so. It returns the chat's "
+        + "send_to name: then send it its task with SendMessage to that name, or it does nothing. Leave model "
         + "and effort out to use the defaults; give them only when the user wants them for this one chat.")]
     public async Task<StartedChatView> StartChat(
         [Description("The workspace or project as the user named it, matched like find_workspace.")] string workspace,
@@ -26,15 +27,22 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
         CancellationToken cancellationToken = default)
     {
         var match = await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false);
-        YardFolder? named = null;
+        YardFolder? named;
         if (!string.IsNullOrWhiteSpace(folder))
         {
             named = WorkspaceMatcher.FindFolder(folder, match.Workspace)
                 ?? throw new McpException($"{match.Workspace.Name} has no folder like '{folder}'. Its folders: {string.Join(", ", match.Workspace.Folders.Select(f => f.Name))}.");
         }
+        else
+        {
+            // A workspace found by one of its folders' names ("Diffusion Nexus" for Diffusion-Full) is that folder asked
+            // for: started elsewhere without a word, the work would land in the wrong repository.
+            var matched = WorkspaceMatcher.FolderOf(match);
+            named = SamePath(matched.Path, match.Workspace.RootPath) ? null : matched;
+        }
 
         var started = await Act(() => actions.StartChatAsync(match.Workspace, named, model, effort, cancellationToken)).ConfigureAwait(false);
-        return new StartedChatView(VoiceChatOf(started.Chat), $"Now send it its task: SendMessage to \"{started.Chat.SendTo}\".", started.Note);
+        return new StartedChatView(VoiceChatOf(started), $"Now send it its task: SendMessage to \"{started.SendTo}\".");
     }
 
     [McpServerTool(Name = "set_defaults", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -122,13 +130,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
         }
     }
 
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b), StringComparison.OrdinalIgnoreCase);
+
     private static VoiceChatInfo VoiceChatOf(VoiceChatView chat) => new(chat.Id, chat.Workspace, Path.GetFileName(Path.TrimEndingDirectorySeparator(chat.Folder)),
         chat.Model ?? "VS Code's default", chat.Effort ?? "VS Code's default", chat.SendTo);
 }
 
 /// <param name="Next">What the brain does next: the chat is empty until it is sent its task.</param>
-/// <param name="Note">Something to tell the user about how it runs, or null.</param>
-public sealed record StartedChatView(VoiceChatInfo Chat, string Next, string? Note);
+public sealed record StartedChatView(VoiceChatInfo Chat, string Next);
 
 /// <param name="Folder">The name of the folder it runs in.</param>
 /// <param name="SendTo">The name SendMessage takes for it.</param>

@@ -13,6 +13,8 @@ namespace CodeSwitchX.UI.Raven;
 /// </summary>
 public sealed class StartSettings : IDisposable
 {
+    private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
+
     private readonly string _file;
     private readonly byte[]? _original;
     private readonly bool _createdDirectory;
@@ -50,7 +52,10 @@ public sealed class StartSettings : IDisposable
             JsonObject settings;
             try
             {
-                settings = original is null || original.Length == 0 ? [] : JsonNode.Parse(original)?.AsObject() ?? [];
+                // Notepad and PowerShell 5 write a byte order mark, which Claude Code reads past and the JSON reader does not.
+                var json = original.AsSpan();
+                json = json.StartsWith(Utf8Bom) ? json[Utf8Bom.Length..] : json;
+                settings = json.IsEmpty ? [] : JsonNode.Parse(json)?.AsObject() ?? [];
             }
             catch (Exception ex) when (ex is JsonException or InvalidOperationException)
             {

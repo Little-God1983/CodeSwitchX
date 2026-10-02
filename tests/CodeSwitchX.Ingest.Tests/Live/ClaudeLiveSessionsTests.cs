@@ -223,10 +223,32 @@ public class ClaudeLiveSessionsTests : IDisposable
         _processes.Gone.Add(32000);
 
         _live.RunningNow().OrderBy(c => c.Pid).ShouldBe([
-            new LiveChat(21688, Issues, "codeswitchx-ea"),
-            new LiveChat(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2"),
+            new LiveChat(21688, Issues, "codeswitchx-ea", FakeProcesses.StartOfEach),
+            new LiveChat(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2", FakeProcesses.StartOfEach),
         ]);
-        _live.NameOf(Issues).ShouldBe("codeswitchx-ea", "the fresh read serves the names too");
+    }
+
+    [Fact]
+    public void The_processes_a_caller_knows_are_neither_read_nor_looked_up()
+    {
+        Record(21688, Issues, "codeswitchx-ea");
+        Record(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2");
+
+        _live.RunningNow(new HashSet<int> { 21688 }).ShouldHaveSingleItem().Pid.ShouldBe(30000);
+
+        _processes.Asked.ShouldBe([30000]);
+    }
+
+    [Fact]
+    public void A_fresh_read_of_the_running_chats_leaves_the_names_read_alone()
+    {
+        // A start waiting for its chat reads every quarter second: the Yard's names must not be read again each time.
+        _live.NameOf(Issues).ShouldBeNull();
+        Record(21688, Issues, "codeswitchx-ea");
+
+        _live.RunningNow().ShouldHaveSingleItem();
+
+        _live.NameOf(Issues).ShouldBeNull("the names' own read still serves");
     }
 
     private void Record(int pid, string sessionId, string name, long updatedAt = 1_000, string entrypoint = "claude-vscode", string kind = "interactive") =>

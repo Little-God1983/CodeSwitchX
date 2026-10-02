@@ -13,6 +13,11 @@ const path = require('path');
 
 const MaxRequest = 64 * 1024;
 
+/** How long a connection may take to send its request line; one that stalls is dropped, not kept for the window's life. */
+const RequestIdleMs = 10 * 1000;
+
+const ClaudeCode = 'anthropic.claude-code';
+
 let server;
 let recordFile;
 
@@ -32,6 +37,19 @@ function activate(context) {
     context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
         writeRecord(directory, { pid: process.pid, pipe, token, version });
     }));
+
+    // Claude Code's extension activates on first use, which can take a while in a window that just started: done now,
+    // the first chat CodeSwitchX opens here does not wait for it.
+    activateClaudeCode().catch(error => console.error('CodeSwitchX Companion: Claude Code did not activate', error));
+}
+
+async function activateClaudeCode() {
+    const extension = vscode.extensions.getExtension(ClaudeCode);
+    if (extension && !extension.isActive) {
+        await extension.activate();
+    }
+
+    return extension;
 }
 
 function deactivate() {
@@ -74,6 +92,7 @@ function removeRecord() {
 function serve(socket, token, version) {
     let received = '';
     socket.setEncoding('utf8');
+    socket.setTimeout(RequestIdleMs, () => socket.destroy());
     socket.on('error', () => socket.destroy());
     socket.on('data', chunk => {
         received += chunk;
@@ -87,6 +106,8 @@ function serve(socket, token, version) {
             return;
         }
 
+        // The request is in: answering may take a while (Claude Code activating), which is no stall.
+        socket.setTimeout(0);
         socket.removeAllListeners('data');
         handle(received.slice(0, end), token, version).then(
             answer => socket.end(JSON.stringify(answer) + '\n'),
@@ -118,7 +139,7 @@ async function handle(line, token, version) {
 
 /** Opens a new Claude Code chat tab in this window; its claude.exe starts at once, as a child of this extension host. */
 async function newChat() {
-    if (!vscode.extensions.getExtension('anthropic.claude-code')) {
+    if (!await activateClaudeCode()) {
         return { ok: false, error: "Claude Code's VS Code extension is not installed in this window." };
     }
 

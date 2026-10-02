@@ -17,8 +17,11 @@ public sealed class VsCodeChatsTests : IDisposable
     private readonly Workspace _workspace;
     private readonly FakeWindows _windows = new();
     private readonly FakeInstaller _installer = new();
-    private readonly List<LiveChat> _running = [new(100, "old-chat", "app-01")];
-    private readonly Dictionary<int, int> _parents = new() { [100] = Host };
+    private readonly Lock _gate = new();
+    private readonly List<LiveChat> _running = [];
+    private readonly Dictionary<int, int> _parents = [];
+    private readonly HashSet<string> _conversations = [];
+    private readonly List<IReadOnlySet<int>?> _skipped = [];
     private readonly List<string> _opened = [];
     private readonly FakeTimeProvider _time = new();
     private readonly VsCodeChats _chats;
@@ -29,24 +32,46 @@ public sealed class VsCodeChatsTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "App"));
         Directory.CreateDirectory(Path.Combine(_root, "Lib"));
         _workspace = new Workspace { Name = "App", RootPath = Path.Combine(_root, "App") };
-        _windows.NewChat = () =>
-        {
-            _running.Add(new LiveChat(200, "new-chat", "app-4f"));
-            _parents[200] = Host;
-        };
+        Starts(100, "old-chat", Host, _time.GetUtcNow() - TimeSpan.FromHours(1));
+        _windows.NewChat = () => Starts(200, "new-chat", Host);
         _chats = new VsCodeChats(_windows, _installer, (w, _) =>
             {
                 _opened.Add(w.Name);
                 return Task.FromResult(_openFailure);
             },
-            () => _running.ToList(), pid => _parents.TryGetValue(pid, out var parent) ? parent : null, _time, NullLogger<VsCodeChats>.Instance);
+            skip =>
+            {
+                lock (_gate)
+                {
+                    _skipped.Add(skip is null ? null : new HashSet<int>(skip));
+                    return _running.Where(c => skip?.Contains(c.Pid) != true).ToList();
+                }
+            },
+            () =>
+            {
+                lock (_gate)
+                {
+                    return new Dictionary<int, int>(_parents);
+                }
+            },
+            id => _conversations.Contains(id), _time, NullLogger<VsCodeChats>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private CompanionWindow Window(params string[] folders) => new(Host, "pipe", "token", folders.Length > 0 ? folders : [_workspace.RootPath], null, "0.1.0");
+    /// <summary>A claude.exe under <paramref name="parent"/> records itself, started now unless said otherwise.</summary>
+    private void Starts(int pid, string sessionId, int parent, DateTimeOffset? at = null)
+    {
+        lock (_gate)
+        {
+            _running.Add(new LiveChat(pid, sessionId, $"app-{pid}", (at ?? _time.GetUtcNow()).ToFileTime()));
+            _parents[pid] = parent;
+        }
+    }
+
+    private CompanionWindow Window(params string[] folders) => new(Host, "pipe", "token", folders.Length > 0 ? folders : [_workspace.RootPath], null, "0.1.1");
 
     [Fact]
     public async Task A_chat_opens_in_the_window_already_showing_the_workspace_and_is_the_new_process_its_host_started()
@@ -55,8 +80,8 @@ public sealed class VsCodeChatsTests : IDisposable
 
         var chat = await _chats.StartAsync(_workspace, null, null, null, Ct);
 
-        chat.ShouldBe(new VsCodeChat("new-chat", _workspace.RootPath, "app-4f"));
-        _windows.Commands.ShouldBe(["newChat"]);
+        chat.ShouldBe(new VsCodeChat("new-chat", _workspace.RootPath, "app-200"));
+        _windows.Commands.ShouldBe([CompanionWindows.NewChat]);
         _opened.ShouldBeEmpty("VS Code runs already");
     }
 
@@ -66,13 +91,77 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Shown = Window();
         _windows.NewChat = () =>
         {
-            _running.Add(new LiveChat(150, "someone-elses", "other-11")); // the user opened one in another window
-            _parents[150] = 9999;
-            _running.Add(new LiveChat(200, "new-chat", "app-4f"));
-            _parents[200] = Host;
+            Starts(150, "someone-elses", 9999); // the user opened one in another window
+            Starts(200, "new-chat", Host);
         };
 
         (await _chats.StartAsync(_workspace, null, null, null, Ct)).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task A_tab_the_window_restores_with_its_conversation_is_not_taken_for_the_new_chat()
+    {
+        // VS Code started cold reopens the tabs it had: their claude.exe start under the same host, on conversations on disk.
+        _windows.Shown = Window();
+        _conversations.Add("restored");
+        _windows.NewChat = () =>
+        {
+            Starts(150, "restored", Host);
+            _time.Advance(TimeSpan.FromMilliseconds(100));
+            Starts(200, "new-chat", Host);
+        };
+        var start = _chats.StartAsync(_workspace, null, null, null, Ct);
+        await Advance(() => start.IsCompleted);
+
+        (await start).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task A_tab_whose_process_started_long_before_the_tab_was_opened_is_not_it()
+    {
+        // Restored before the start, recorded only now: a process that old is no tab opened by this start.
+        _windows.Shown = Window();
+        _windows.NewChat = () =>
+        {
+            Starts(150, "restored-empty", Host, _time.GetUtcNow() - VsCodeChats.StartSlack - TimeSpan.FromSeconds(1));
+            Starts(200, "new-chat", Host);
+        };
+
+        (await _chats.StartAsync(_workspace, null, null, null, Ct)).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task Of_two_empty_tabs_opened_meanwhile_the_newer_is_taken()
+    {
+        _windows.Shown = Window();
+        _windows.NewChat = () =>
+        {
+            Starts(150, "by-hand", Host, _time.GetUtcNow() - TimeSpan.FromSeconds(1));
+            Starts(200, "new-chat", Host);
+        };
+
+        (await _chats.StartAsync(_workspace, null, null, null, Ct)).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task A_chat_whose_record_comes_late_is_waited_for_and_records_seen_are_not_read_again()
+    {
+        _windows.Shown = Window();
+        _windows.NewChat = () => Starts(150, "restored", Host); // with a conversation, below
+        _conversations.Add("restored");
+        var start = _chats.StartAsync(_workspace, null, null, null, Ct);
+        for (var i = 0; i < 200 && SkippedCount() < 3; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(VsCodeChats.Poll);
+        }
+
+        Starts(200, "new-chat", Host);
+        await Advance(() => start.IsCompleted);
+
+        (await start).SessionId.ShouldBe("new-chat");
+        _skipped[0].ShouldBeNull("the first read takes in every chat there is");
+        _skipped[^1].ShouldNotBeNull().ShouldBe([100, 150], ignoreOrder: true);
     }
 
     [Fact]
@@ -157,12 +246,7 @@ public sealed class VsCodeChatsTests : IDisposable
         var lib = Path.Combine(_root, "Lib");
         _windows.Shown = Window(lib, _workspace.RootPath);
         var next = 200;
-        _windows.NewChat = () =>
-        {
-            var pid = next++;
-            _running.Add(new LiveChat(pid, $"chat-{pid}", $"lib-{pid}"));
-            _parents[pid] = Host;
-        };
+        _windows.NewChat = () => Starts(next, $"chat-{next++}", Host);
 
         (await _chats.StartAsync(_workspace, null, null, null, Ct)).Folder.ShouldBe(lib);
         (await _chats.StartAsync(_workspace, lib.ToUpperInvariant() + "\\", null, null, Ct)).Folder.ShouldBe(lib);
@@ -187,8 +271,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.NewChat = () =>
         {
             whileOpening = File.ReadAllText(file);
-            _running.Add(new LiveChat(200, "new-chat", "app-4f"));
-            _parents[200] = Host;
+            Starts(200, "new-chat", Host);
         };
 
         await _chats.StartAsync(_workspace, null, "claude-opus-5-5", "high", Ct);
@@ -215,12 +298,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _windows.Shown = Window();
         var next = 200;
-        _windows.NewChat = () =>
-        {
-            var pid = next++;
-            _running.Add(new LiveChat(pid, $"chat-{pid}", $"app-{pid}"));
-            _parents[pid] = Host;
-        };
+        _windows.NewChat = () => Starts(next, $"chat-{next++}", Host);
         _windows.Hold = new TaskCompletionSource();
 
         var first = _chats.StartAsync(_workspace, null, null, null, Ct);
@@ -231,6 +309,26 @@ public sealed class VsCodeChatsTests : IDisposable
 
         var ids = new[] { (await first).SessionId, (await second).SessionId };
         ids.ShouldBe(["chat-200", "chat-201"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public void A_session_has_a_conversation_once_its_transcript_is_in_a_project_folder()
+    {
+        var projects = Path.Combine(_root, "projects");
+        Directory.CreateDirectory(Path.Combine(projects, "e--Repos-App"));
+        File.WriteAllText(Path.Combine(projects, "e--Repos-App", "with-one.jsonl"), "{}");
+
+        VsCodeChats.HasConversation(projects, "with-one").ShouldBeTrue();
+        VsCodeChats.HasConversation(projects, "new-one").ShouldBeFalse();
+        VsCodeChats.HasConversation(Path.Combine(_root, "missing"), "with-one").ShouldBeFalse();
+    }
+
+    private int SkippedCount()
+    {
+        lock (_gate)
+        {
+            return _skipped.Count;
+        }
     }
 
     private int _openedWindowShowsAfter = -1;

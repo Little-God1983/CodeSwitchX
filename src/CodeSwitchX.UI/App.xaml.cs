@@ -223,10 +223,11 @@ public partial class App : Application
                 var hosted = await sp.GetRequiredService<HostManager>().OpenAsync(workspace, ct).ConfigureAwait(false);
                 return hosted.State == HostState.Running ? null : hosted.Error ?? "VS Code did not show its window.";
             },
-            sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.ParentOf, sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<VsCodeChats>>()));
+            sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.Snapshot,
+            id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
-            sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
+            sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 

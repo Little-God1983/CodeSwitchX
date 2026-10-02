@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Ingest.Live;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using Path = System.IO.Path;
 
@@ -30,9 +31,12 @@ public sealed record VsCodeChat(string SessionId, string Folder, string SendTo);
 /// <summary>
 /// A chat started through the companion extension (<c>vscode-companion/</c>) of the workspace's window. VS Code starts
 /// the tab's claude.exe as a child of that window's extension host, which the companion runs in, and Claude Code records
-/// it in <c>~/.claude/sessions</c> before any message: the new chat is the record that was not there before and whose
-/// process that host started. Chats are started one at a time per folder, so two starts never take each other's chat or
-/// each other's model.
+/// it in <c>~/.claude/sessions</c> before any message: the new chat is a record that was not there before, whose process
+/// that host started, and which has no conversation yet. Other tabs of the window can start their claude.exe meanwhile: a
+/// window VS Code just started restores the tabs it had, and the user may open one by hand. A restored tab goes on a
+/// conversation that is on disk, so it is never taken, and only a process started while the tab was being opened counts;
+/// of two empty tabs that both fit, the newer process is taken, and both are empty chats in that window. Chats are started
+/// one at a time per folder, so two starts never take each other's chat or model.
 /// </summary>
 public sealed class VsCodeChats : IVsCodeChats
 {
@@ -47,26 +51,36 @@ public sealed class VsCodeChats : IVsCodeChats
 
     internal static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// How far outside the opening of the tab its claude.exe may start and still count: the extension may start it just
+    /// after it has answered, and the process's start and this clock are not read alike.
+    /// </summary>
+    internal static readonly TimeSpan StartSlack = TimeSpan.FromSeconds(5);
+
     private readonly ICompanionWindows _windows;
     private readonly ICompanionInstaller _installer;
     private readonly Func<Workspace, CancellationToken, Task<string?>> _openVsCode;
-    private readonly Func<IReadOnlyList<LiveChat>> _running;
-    private readonly Func<int, int?> _parentOf;
+    private readonly Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> _running;
+    private readonly Func<IReadOnlyDictionary<int, int>> _parents;
+    private readonly Func<string, bool> _hasConversation;
     private readonly TimeProvider _time;
     private readonly ILogger<VsCodeChats> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _folders = new();
 
     /// <param name="openVsCode">Opens the workspace's VS Code without showing it (<c>HostManager.OpenAsync</c>); null once it runs, else why not.</param>
-    /// <param name="running">The chats open in VS Code tabs right now (<see cref="ClaudeLiveSessions.RunningNow"/>).</param>
-    /// <param name="parentOf">The process that started a process; null when it is gone.</param>
+    /// <param name="running">The chats open in VS Code tabs right now, but those of the processes given (<see cref="ClaudeLiveSessions.RunningNow"/>).</param>
+    /// <param name="parents">Every running process with its parent, from one snapshot.</param>
+    /// <param name="hasConversation">Whether a session has a conversation on disk: one it goes on, not a new chat.</param>
     public VsCodeChats(ICompanionWindows windows, ICompanionInstaller installer, Func<Workspace, CancellationToken, Task<string?>> openVsCode,
-        Func<IReadOnlyList<LiveChat>> running, Func<int, int?> parentOf, TimeProvider time, ILogger<VsCodeChats> logger)
+        Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> running, Func<IReadOnlyDictionary<int, int>> parents, Func<string, bool> hasConversation,
+        TimeProvider time, ILogger<VsCodeChats> logger)
     {
         _windows = windows;
         _installer = installer;
         _openVsCode = openVsCode;
         _running = running;
-        _parentOf = parentOf;
+        _parents = parents;
+        _hasConversation = hasConversation;
         _time = time;
         _logger = logger;
     }
@@ -146,18 +160,22 @@ public sealed class VsCodeChats : IVsCodeChats
 
     private async Task<VsCodeChat> OpenChatAsync(Workspace workspace, CompanionWindow window, string chatFolder, CancellationToken ct)
     {
-        var before = _running().Select(c => c.Pid).ToHashSet();
-        var answer = await _windows.SendAsync(window, "newChat", ct).ConfigureAwait(false);
+        // Known from here on, and never looked at again: each look reads only the records that came since.
+        var known = _running(null).Select(c => c.Pid).ToHashSet();
+        var sent = _time.GetUtcNow();
+        var answer = await _windows.SendAsync(window, CompanionWindows.NewChat, ct).ConfigureAwait(false);
         if (!answer.Ok)
         {
             throw new YardActionException($"VS Code could not open a chat in {workspace.Name}: {answer.Error}");
         }
 
         var host = answer.Pid ?? window.Pid;
-        var until = _time.GetUtcNow() + NewChatWait;
+        var answered = _time.GetUtcNow();
+        var span = ((sent - StartSlack).ToFileTime(), (answered + StartSlack).ToFileTime());
+        var until = answered + NewChatWait;
         while (true)
         {
-            if (_running().FirstOrDefault(c => !before.Contains(c.Pid) && _parentOf(c.Pid) == host) is { } chat)
+            if (NewChatOf(host, span, known) is { } chat)
             {
                 _logger.LogInformation("Opened chat {Id} ({Name}) in VS Code for {Workspace}", chat.SessionId, chat.Name, workspace.Name);
                 return new VsCodeChat(chat.SessionId, chatFolder, chat.Name);
@@ -170,6 +188,60 @@ public sealed class VsCodeChats : IVsCodeChats
             }
 
             await Task.Delay(Poll, _time, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The newest chat that came since, that the window's host started while it opened the tab (<paramref name="span"/>,
+    /// as UTC file times), and that has no conversation yet; null for none so far. A chat seen once and found to be none
+    /// is added to <paramref name="known"/>; one whose parent is not in the snapshot yet (it started after it) is looked
+    /// at again.
+    /// </summary>
+    private LiveChat? NewChatOf(int host, (long From, long To) span, HashSet<int> known)
+    {
+        var fresh = _running(known);
+        if (fresh.Count == 0)
+        {
+            return null;
+        }
+
+        var parents = _parents();
+        var candidates = new List<LiveChat>();
+        foreach (var chat in fresh)
+        {
+            if (!parents.TryGetValue(chat.Pid, out var parent))
+            {
+                continue;
+            }
+
+            if (parent == host && chat.ProcessStart >= span.From && chat.ProcessStart <= span.To && !_hasConversation(chat.SessionId))
+            {
+                candidates.Add(chat);
+            }
+            else
+            {
+                known.Add(chat.Pid);
+            }
+        }
+
+        return candidates.MaxBy(c => c.ProcessStart);
+    }
+
+    /// <summary>
+    /// Whether the session has a conversation on disk: Claude Code writes <c>projects\&lt;folder&gt;\&lt;id&gt;.jsonl</c>
+    /// with its first message, so a chat that goes on one has it and a new chat does not yet. Never throws; a folder that
+    /// cannot be read counts as having it, so a doubtful chat is not taken for the new one.
+    /// </summary>
+    public static bool HasConversation(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            return Directory.Exists(projectsDirectory)
+                && Directory.EnumerateDirectories(projectsDirectory).Any(project => File.Exists(Path.Combine(project, sessionId + ".jsonl")));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
         }
     }
 

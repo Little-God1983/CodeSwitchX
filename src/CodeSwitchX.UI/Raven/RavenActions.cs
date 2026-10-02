@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Infrastructure;
@@ -46,10 +48,11 @@ public sealed class RavenActions : IYardActions
     private readonly ILogger<RavenActions> _logger;
     private readonly ConcurrentDictionary<string, bool> _started = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <param name="bus">Where the chats' changes come: one that ends is Raven's no more.</param>
     /// <param name="claim">Puts a chat on a tile before its first event (<c>SessionEngine.Claim</c>).</param>
     /// <param name="shell">The window; asked for when first needed, since it is made after the services that call this.</param>
     /// <param name="workspaceOf">The registered workspace with this id; null when it is gone.</param>
-    public RavenActions(IVsCodeChats vsCode, ChatSettings chats, Action<string, Guid> claim, Func<IRavenShell> shell, IUiDispatcher ui,
+    public RavenActions(IVsCodeChats vsCode, ChatSettings chats, IEventBus bus, Action<string, Guid> claim, Func<IRavenShell> shell, IUiDispatcher ui,
         Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TimeProvider time, ILogger<RavenActions> logger)
     {
         _vsCode = vsCode;
@@ -60,13 +63,25 @@ public sealed class RavenActions : IYardActions
         _workspaceOf = workspaceOf;
         _time = time;
         _logger = logger;
+        // Lives as long as the app: the subscription is never ended.
+        bus.Subscribe<SessionChanged>(Ended);
+    }
+
+    /// <summary>A chat Raven started that has ended (its tab closed, its process gone) loses its mark and is Raven's no more.</summary>
+    private void Ended(SessionChanged change)
+    {
+        var id = change.Current.SessionId;
+        if (!SessionStateMachine.IsLive(change.Current.State) && _started.TryRemove(id, out _))
+        {
+            _ui.Post(() => _shell().MarkVoice(id, null));
+        }
     }
 
     public ChatDefaults Defaults => _chats.Defaults;
 
     public bool StartedByRaven(string chatId) => _started.ContainsKey(chatId);
 
-    public async Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
+    public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
     {
         var modelId = ChatSettings.Blank(model) is { } m ? ModelIdOf(m) : _chats.DefaultModelId;
         var level = ChatSettings.Blank(effort) is { } e ? EffortOf(e) : _chats.Defaults.Effort;
@@ -78,7 +93,7 @@ public sealed class RavenActions : IYardActions
         _started[chat.SessionId] = true;
         _ui.Post(() => _shell().MarkVoice(chat.SessionId, Label(modelId, level)));
         _logger.LogInformation("Raven opened chat {Id} in {Workspace}", chat.SessionId, workspace.Name);
-        return new StartedChat(new VoiceChatView(chat.SessionId, workspace.Id, workspace.Name, chat.Folder, modelId, level, chat.SendTo), null);
+        return new VoiceChatView(chat.SessionId, workspace.Id, workspace.Name, chat.Folder, modelId, level, chat.SendTo);
     }
 
     public async Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)

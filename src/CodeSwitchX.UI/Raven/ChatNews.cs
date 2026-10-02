@@ -40,7 +40,7 @@ public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Wor
 /// <summary>
 /// What the chats did since Raven last told it: one slot per chat, so a chat that changed twice before Raven got to it
 /// is told once, with its latest news. A chat's news is: its turn ended (Working to Idle), it waits for the user, or it
-/// failed (its claude went, or its turn ended on an API error); a chat the app stopped itself brings none. Only for the chats the Yard shows, and only for changes seen while the app runs: a chat restored at startup
+/// failed (its claude went, or its turn ended on an API error). Only for the chats the Yard shows, and only for changes seen while the app runs: a chat restored at startup
 /// brings no news. Thread-safe: the bus raises changes on any thread.
 /// </summary>
 public sealed class ChatNews : IDisposable
@@ -55,9 +55,6 @@ public sealed class ChatNews : IDisposable
     private readonly DateTimeOffset _since;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Slot> _slots = new(StringComparer.Ordinal);
-
-    /// <summary>Chats the app stopped on purpose: their claude is killed, which the engine sees as Errored, and that is no failure.</summary>
-    private readonly HashSet<string> _stoppedOnPurpose = new(StringComparer.Ordinal);
 
     /// <param name="lastSaid">The end of a chat's last reply from its transcript path (<c>TranscriptLastReply.Read</c>); called off the UI thread.</param>
     public ChatNews(IEventBus bus, IYardDirectory yard, TimeProvider time, Func<string?, string?> lastSaid)
@@ -84,29 +81,11 @@ public sealed class ChatNews : IDisposable
         }
     }
 
-    /// <summary>The app ended this chat itself: its end is no news. Any thread.</summary>
-    public void StoppedOnPurpose(string sessionId)
-    {
-        lock (_lock)
-        {
-            _stoppedOnPurpose.Add(sessionId);
-            _slots.Remove(sessionId);
-        }
-    }
-
     internal void Offer(SessionChanged change)
     {
         if (KindOf(change) is not { } kind || change.Current.StateSince < _since)
         {
             return;
-        }
-
-        lock (_lock)
-        {
-            if (kind == ChatNewsKind.Failed && change.Current.State == SessionState.Errored && _stoppedOnPurpose.Contains(change.Current.SessionId))
-            {
-                return;
-            }
         }
 
         var current = change.Current;

@@ -12,15 +12,24 @@ public sealed class YardActionToolsTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public async Task A_chat_for_Diffusion_Nexus_opens_in_Diffusion_Full_without_a_folder_of_its_own()
+    public async Task A_chat_for_Diffusion_Nexus_asks_for_Diffusion_Full_s_DiffusionNexus_folder()
     {
         var started = await Tools.StartChat("Diffusion Nexus", cancellationToken: Ct);
 
         var (workspace, folder, model, effort) = _actions.Started.ShouldNotBeNull();
         workspace.Name.ShouldBe("Diffusion-Full");
-        folder.ShouldBeNull("a workspace found by a folder's name is not that folder asked for: VS Code starts the chat where it starts every chat");
+        folder.ShouldNotBeNull("found by that folder's name, the chat is meant for that folder: VS Code refuses it if it cannot, never starts it elsewhere")
+            .Path.ShouldBe(@"E:\Repos\DiffusionNexus");
         (model, effort).ShouldBe((null, null));
         started.Chat.Workspace.ShouldBe("Diffusion-Full");
+    }
+
+    [Fact]
+    public async Task A_chat_for_the_workspace_s_own_name_asks_for_no_folder()
+    {
+        await Tools.StartChat("Diffusion Full", cancellationToken: Ct);
+
+        _actions.Started!.Value.Folder.ShouldBeNull();
     }
 
     [Fact]

@@ -62,6 +62,21 @@ public sealed class StartSettingsTests : IDisposable
     }
 
     [Fact]
+    public void A_file_saved_with_a_byte_order_mark_is_read_and_comes_back_with_it()
+    {
+        // Notepad and PowerShell 5 write one; Claude Code reads past it.
+        Directory.CreateDirectory(Path.GetDirectoryName(_file)!);
+        byte[] original = [0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes("{ \"permissions\": {} }")];
+        File.WriteAllBytes(_file, original);
+
+        var settings = StartSettings.Apply(_folder, "claude-opus-5-5", null).ShouldNotBeNull();
+        JsonNode.Parse(File.ReadAllText(_file))!["model"]!.GetValue<string>().ShouldBe("claude-opus-5-5");
+        settings.Dispose();
+
+        File.ReadAllBytes(_file).ShouldBe(original);
+    }
+
+    [Fact]
     public void A_file_the_user_changed_meanwhile_is_left_as_they_made_it()
     {
         var settings = StartSettings.Apply(_folder, "claude-opus-5-5", null).ShouldNotBeNull();

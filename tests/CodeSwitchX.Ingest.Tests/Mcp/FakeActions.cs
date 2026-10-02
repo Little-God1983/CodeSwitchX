@@ -22,12 +22,12 @@ internal sealed class FakeActions : IYardActions
 
     public bool StartedByRaven(string chatId) => Voice.Contains(chatId);
 
-    public Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
+    public Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
     {
         Act("start_chat");
         Started = (workspace, folder, model, effort);
-        return Task.FromResult(new StartedChat(new VoiceChatView("dddddddd-0004", workspace.Id, workspace.Name, folder?.Path ?? workspace.RootPath,
-            "claude-fable-5-1", "high", "diffusionnexus-4f"), null));
+        return Task.FromResult(new VoiceChatView("dddddddd-0004", workspace.Id, workspace.Name, folder?.Path ?? workspace.RootPath,
+            "claude-fable-5-1", "high", "diffusionnexus-4f"));
     }
 
     public Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)

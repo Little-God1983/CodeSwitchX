@@ -18,7 +18,7 @@ public interface IYardActions
     /// <param name="folder">The folder the user named for it; null for wherever VS Code starts a chat.</param>
     /// <param name="model">A name the alias table knows, or a full id; null for the default.</param>
     /// <param name="effort">An effort level, or how it is said; null for the default.</param>
-    Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct);
+    Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct);
 
     /// <summary>Changes the defaults; a null leaves that one as it is.</summary>
     Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct);
@@ -39,9 +39,6 @@ public sealed class YardActionException(string message) : Exception(message);
 /// <param name="Model">The alias name or id chats start with; null for Claude Code's own default.</param>
 /// <param name="Effort">The effort level; null for Claude Code's own default.</param>
 public sealed record ChatDefaults(string? Model, string? Effort);
-
-/// <param name="Note">What the user should know about how it runs, or null.</param>
-public sealed record StartedChat(VoiceChatView Chat, string? Note);
 
 /// <summary>A chat Raven started, as the brain is told about it.</summary>
 /// <param name="Folder">The folder it runs in.</param>
