@@ -389,7 +389,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                     heard = 0;
                     loudest = 0f;
                     quietest = float.MaxValue;
-                    Raise((Listener: this, Batch: batch), static s => s.Listener.Heard?.Invoke(s.Listener, s.Batch), "Heard"); // no closure, 20 times a second
+                    Raise((Listener: this, Batch: batch), static s => s.Listener.Heard?.Invoke(s.Listener, s.Batch), "Heard"); // no closure, 20 times a second; the panel posts the batch on without one too
                 }
 
                 var samples = block.Samples16k.AsSpan();

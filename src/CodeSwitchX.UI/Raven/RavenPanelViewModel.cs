@@ -243,7 +243,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             openMic.SpeechStarted += (_, run) => _dispatcher.Post(() => OnOpenSpeech(run));
             openMic.TurnEnded += (_, turn) => _dispatcher.Post(() => OnOpenTurn(turn));
-            openMic.Heard += (_, heard) => _dispatcher.Post(() => OnOpenHeard(heard));
+            // Some 20 batches a second: a cached static delegate and the batch as state, so no closure per batch here (the
+            // dispatcher's own work item for a post from the worker thread remains: see WpfUiDispatcher).
+            openMic.Heard += (_, heard) => _dispatcher.Post(static s => s.Panel.OnOpenHeard(s.Heard), (Panel: this, Heard: heard));
             openMic.Failed += (_, run) => _dispatcher.Post(() => OnOpenMicFailed(run));
         }
     }

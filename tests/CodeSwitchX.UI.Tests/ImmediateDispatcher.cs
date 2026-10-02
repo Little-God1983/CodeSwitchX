@@ -6,4 +6,6 @@ namespace CodeSwitchX.UI.Tests;
 public sealed class ImmediateDispatcher : IUiDispatcher
 {
     public void Post(Action action) => action();
+
+    public void Post<T>(Action<T> action, T state) => action(state);
 }

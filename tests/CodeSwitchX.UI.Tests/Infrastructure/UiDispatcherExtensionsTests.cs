@@ -59,6 +59,8 @@ public sealed class UiDispatcherExtensionsTests
     {
         private readonly List<Action> _held = [];
 
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
+
         public void Post(Action action)
         {
             lock (_held)

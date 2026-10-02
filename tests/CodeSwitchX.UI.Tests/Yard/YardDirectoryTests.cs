@@ -188,5 +188,9 @@ public sealed class YardDirectoryTests
         public void Post(Action action)
         {
         }
+
+        public void Post<T>(Action<T> action, T state)
+        {
+        }
     }
 }

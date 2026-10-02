@@ -1,6 +1,7 @@
 using System.Net.Http;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -16,10 +17,10 @@ public sealed partial class RavenPanelViewModelTests
 {
     private readonly FakeOpenMic _openMic = new();
 
-    private async Task<RavenPanelViewModel> NewOpenMicVmAsync(ReplyVoice? voice = null)
+    private async Task<RavenPanelViewModel> NewOpenMicVmAsync(ReplyVoice? voice = null, IUiDispatcher? dispatcher = null)
     {
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, voice ?? _voice, _speech,
-            new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic);
+            dispatcher ?? new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         return vm;
     }
@@ -520,6 +521,22 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Attending);
         vm.Log.Count.ShouldBe(before);
         await _dictation.DidNotReceive().TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>());
+    }
+
+    // Fourth review of #89: some 20 batches a second are posted without a closure
+    [Fact]
+    public async Task A_heard_batch_is_posted_with_its_state_and_reaches_the_orb()
+    {
+        var dispatcher = new CountingDispatcher();
+        var vm = await NewOpenMicVmAsync(dispatcher: dispatcher);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var before = dispatcher.StatePosts;
+
+        _openMic.Hear(0.2f);
+
+        dispatcher.StatePosts.ShouldBe(before + 1);
+        vm.Level.ShouldBeGreaterThan(0);
     }
 
     // Final review 2

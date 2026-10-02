@@ -1676,6 +1676,8 @@ public sealed partial class RavenPanelViewModelTests
         /// <summary>Completes once anything has been posted.</summary>
         public Task Posted => _posted.Task;
 
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
+
         public void Post(Action action)
         {
             lock (_posts)
@@ -1713,10 +1715,22 @@ public sealed partial class RavenPanelViewModelTests
 
         public int Posts => Volatile.Read(ref _posts);
 
+        /// <summary>Posts made with a state, rather than a closure.</summary>
+        public int StatePosts => Volatile.Read(ref _statePosts);
+
+        private int _statePosts;
+
         public void Post(Action action)
         {
             Interlocked.Increment(ref _posts);
             action();
+        }
+
+        public void Post<T>(Action<T> action, T state)
+        {
+            Interlocked.Increment(ref _posts);
+            Interlocked.Increment(ref _statePosts);
+            action(state);
         }
     }
 }
