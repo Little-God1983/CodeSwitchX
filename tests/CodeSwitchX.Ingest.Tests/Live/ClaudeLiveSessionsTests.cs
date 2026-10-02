@@ -1,5 +1,7 @@
 using CodeSwitchX.Core;
 using CodeSwitchX.Ingest.Live;
+using CodeSwitchX.Tests;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 
 namespace CodeSwitchX.Ingest.Tests.Live;
@@ -11,13 +13,14 @@ public class ClaudeLiveSessionsTests : IDisposable
     private readonly string _sessions;
     private readonly FakeProcesses _processes = new();
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 2, 9, 0, 0, TimeSpan.Zero));
+    private readonly ListLogger<ClaudeLiveSessions> _logger = new();
     private readonly ClaudeLiveSessions _live;
 
     public ClaudeLiveSessionsTests()
     {
         _sessions = Path.Combine(_home, ".claude", "sessions");
         Directory.CreateDirectory(_sessions);
-        _live = new ClaudeLiveSessions(new ClaudeCodePaths(_home), _processes.StartOf, _time);
+        _live = new ClaudeLiveSessions(new ClaudeCodePaths(_home), _processes.StartOf, _time, _logger);
     }
 
     public void Dispose() => Directory.Delete(_home, recursive: true);
@@ -123,7 +126,7 @@ public class ClaudeLiveSessionsTests : IDisposable
     {
         // Killed, and Windows gave its id to a process that started later.
         Record(21688, Issues, "codeswitchx-ea");
-        _processes.Started[21688] = FakeProcesses.StartOfEach + 1;
+        _processes.Started[21688] = FakeProcesses.StartOfEach + ClaudeLiveSessions.StartTolerance;
 
         _live.NameOf(Issues).ShouldBeNull();
     }
@@ -150,13 +153,54 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.NameOf(Issues).ShouldBeNull();
     }
 
-    [Fact]
-    public void A_record_without_its_process_start_is_skipped()
+    [Theory]
+    [InlineData("procStart")]
+    [InlineData("entrypoint")]
+    [InlineData("kind")]
+    public void A_record_without_what_tells_its_process_is_skipped_and_said_once(string missing)
     {
-        File.WriteAllText(Path.Combine(_sessions, "21688.json"),
-            $$"""{"pid":21688,"sessionId":"{{Issues}}","kind":"interactive","entrypoint":"claude-vscode","name":"codeswitchx-ea"}""");
+        string[] fields = [$"\"pid\":21688", $"\"sessionId\":\"{Issues}\"", "\"name\":\"codeswitchx-ea\"",
+            $"\"procStart\":\"{FakeProcesses.StartOfEach}\"", "\"entrypoint\":\"claude-vscode\"", "\"kind\":\"interactive\""];
+        var record = "{" + string.Join(",", fields.Where(f => !f.StartsWith($"\"{missing}\"", StringComparison.Ordinal))) + "}";
+        File.WriteAllText(Path.Combine(_sessions, "21688.json"), record);
+        File.WriteAllText(Path.Combine(_sessions, "30000.json"), record.Replace("21688", "30000", StringComparison.Ordinal));
 
-        _live.NameOf(Issues).ShouldBeNull("without it, a process that took the id since cannot be told from the chat's");
+        _live.NameOf(Issues).ShouldBeNull("without it, a chat in a tab cannot be told from another process");
+        _time.Advance(ClaudeLiveSessions.MaxAge);
+        _live.NameOf(Issues).ShouldBeNull();
+
+        _logger.Entries.Count(e => e.Level == LogLevel.Warning).ShouldBe(1, "a new format is what this looks like: said once, not per record or read");
+    }
+
+    [Fact]
+    public void A_record_of_a_chat_outside_a_tab_is_not_taken_for_a_new_format()
+    {
+        Record(21688, Issues, "codeswitchx-ea", entrypoint: "cli");
+
+        _live.NameOf(Issues).ShouldBeNull();
+        _logger.Entries.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_process_start_a_little_off_the_records_still_counts()
+    {
+        // How Claude Code takes the start is not documented: a coarser clock than the process's own must not lose the chat.
+        Record(21688, Issues, "codeswitchx-ea");
+        _processes.Started[21688] = FakeProcesses.StartOfEach + ClaudeLiveSessions.StartTolerance - 1;
+
+        _live.NameOf(Issues).ShouldBe("codeswitchx-ea");
+    }
+
+    [Fact]
+    public void Only_the_processes_of_the_chats_asked_for_are_looked_up()
+    {
+        Record(21688, Issues, "codeswitchx-ea");
+        Record(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2");
+
+        _live.NameOf(Issues);
+        _live.NameOf(Issues);
+
+        _processes.Asked.ShouldBe([21688], "one look per read, and none for a chat nobody asked about");
     }
 
     [Fact]
@@ -181,6 +225,12 @@ public class ClaudeLiveSessionsTests : IDisposable
 
         public Dictionary<int, long?> Started { get; } = [];
 
-        public long? StartOf(int pid) => Gone.Contains(pid) ? null : Started.TryGetValue(pid, out var start) ? start : StartOfEach;
+        public List<int> Asked { get; } = [];
+
+        public long? StartOf(int pid)
+        {
+            Asked.Add(pid);
+            return Gone.Contains(pid) ? null : Started.TryGetValue(pid, out var start) ? start : StartOfEach;
+        }
     }
 }

@@ -22,7 +22,7 @@ public sealed class YardDirectory : IYardDirectory
 
     /// <param name="sessionOf">The engine's snapshot of a chat (<see cref="SessionEngine.Get"/>).</param>
     /// <param name="isVoice">Whether Raven started the chat and the app runs it; none is, without it.</param>
-    /// <param name="sendNameOf">The name a running chat is messaged by, null when it does not run; none has one, without it.</param>
+    /// <param name="sendNameOf">The name a chat open in a VS Code tab is messaged by, null when it is not open in one; none has one, without it.</param>
     public YardDirectory(YardViewModel yard, Func<string, SessionSnapshot?> sessionOf, IUiDispatcher ui, Func<string, IReadOnlyList<WorkspaceFolder>?> foldersOf,
         Func<string, bool>? isVoice = null, Func<string, string?>? sendNameOf = null)
     {
