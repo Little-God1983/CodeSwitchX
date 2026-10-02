@@ -12,17 +12,138 @@ namespace CodeSwitchX.Voice.Dictation;
 ///
 /// <para>Everything Whisper does runs on the thread pool, never on the caller's thread: loading
 /// the model takes seconds, and the caller is usually the UI thread.</para></summary>
-public sealed class WhisperDictationService(
-    IWhisperModelStore store,
-    IOptions<DictationOptions> options,
-    ILogger<WhisperDictationService> logger) : IDictationService, IDisposable
+public sealed class WhisperDictationService : IDictationService, IDisposable
 {
+    private readonly IWhisperModelStore store;
+    private readonly IOptions<DictationOptions> options;
+    private readonly ILogger<WhisperDictationService> logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Lock _warmUpLock = new();
-    private WhisperFactory? _factory;
+
+    /// <summary>Taken while the status is worked out and told, so listeners hear the changes in their order.</summary>
+    private readonly Lock _telling = new();
+    private volatile WhisperFactory? _factory;
     private Task<bool>? _warmUp;
     private ModelFileKey? _failedLoad;
+    private string? _failedReason;
+    private volatile bool _loading;
+    private DictationStatus? _told;
     private bool _disposed;
+
+    public WhisperDictationService(IWhisperModelStore store, IOptions<DictationOptions> options, ILogger<WhisperDictationService> logger)
+    {
+        this.store = store;
+        this.options = options;
+        this.logger = logger;
+        store.DownloadChanged += (_, _) => Tell();
+        store.ModelChanged += (_, _) => _ = Task.Run(SwitchModelAsync);
+    }
+
+    public event EventHandler<DictationStatus>? StatusChanged;
+
+    public DictationStatus Status
+    {
+        get
+        {
+            var model = store.Model;
+            if (store.Download is { } download && download.Model == model)
+            {
+                return new DictationStatus(DictationState.Downloading, model, Bytes: download.Bytes);
+            }
+
+            if (!store.IsPresent)
+            {
+                return new DictationStatus(DictationState.NotDownloaded, model);
+            }
+
+            if (_loading)
+            {
+                return new DictationStatus(DictationState.Loading, model);
+            }
+
+            if (_factory is not null)
+            {
+                return new DictationStatus(DictationState.Ready, model);
+            }
+
+            lock (_warmUpLock)
+            {
+                if (_failedLoad is not null && _failedLoad == ModelFileKey.Of(store.ModelPath))
+                {
+                    return new DictationStatus(DictationState.Failed, model, _failedReason);
+                }
+            }
+
+            return new DictationStatus(DictationState.Asleep, model);
+        }
+    }
+
+    /// <summary>Works the status out again, and tells it if it changed. Never throws.</summary>
+    private void Tell()
+    {
+        lock (_telling)
+        {
+            DictationStatus status;
+            try
+            {
+                status = Status;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not tell where the speech model stands");
+                return;
+            }
+
+            if (status == _told)
+            {
+                return;
+            }
+
+            _told = status;
+            StatusChanged?.Invoke(this, status);
+        }
+    }
+
+    /// <summary>
+    /// Another model was picked: the one loaded is freed once no clip uses it, and the new one is warmed up if it is on
+    /// disk. On the thread pool: Settings picks it on the UI thread, and freeing waits for a running transcription.
+    /// </summary>
+    private async Task SwitchModelAsync()
+    {
+        try
+        {
+            await _gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _factory?.Dispose();
+                _factory = null;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            lock (_warmUpLock)
+            {
+                _warmUp = null;
+            }
+
+            Tell();
+            if (store.IsPresent)
+            {
+                await WarmUpAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Switching the speech model failed");
+        }
+    }
 
     /// <summary>How long <see cref="Dispose"/> waits for a running transcription before it gives up
     /// on freeing the model. Only tests shorten it.</summary>
@@ -64,11 +185,18 @@ public sealed class WhisperDictationService(
             // every later clip throw the same way until the app restarted. Dropping the factory
             // on failure lets a re-downloaded model be picked up without one.
             WhisperProcessorBuilder builder;
+            if (loadedTheModel)
+            {
+                _loading = true;
+                Tell();
+            }
+
             try
             {
+                // Ready is told only once the clip below has gone through: until then it is loading.
                 _factory ??= WhisperFactory.FromPath(store.ModelPath);
                 builder = _factory.CreateBuilder().WithLanguage(options.Value.Language);
-                RememberFailedLoad(null);
+                RememberFailedLoad(null, null);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -79,8 +207,11 @@ public sealed class WhisperDictationService(
                     store.ModelPath, store.LoadedRuntime ?? "(no backend chosen)");
                 _factory?.Dispose();
                 _factory = null;
-                RememberFailedLoad(ModelFileKey.Of(store.ModelPath));
-                throw new DictationModelLoadException(store.ModelPath, store.LoadedRuntime, ex);
+                var failure = new DictationModelLoadException(store.ModelPath, store.LoadedRuntime, ex);
+                RememberFailedLoad(ModelFileKey.Of(store.ModelPath), failure.Message);
+                _loading = false;
+                Tell();
+                throw failure;
             }
 
             var prompt = VocabularyPrompt.Build(vocabulary.Words);
@@ -118,7 +249,13 @@ public sealed class WhisperDictationService(
         }
         finally
         {
+            var loaded = loadedTheModel && _loading;
+            _loading = false;
             _gate.Release();
+            if (loaded)
+            {
+                Tell(); // ready, or asleep again after a clip that failed past the load
+            }
         }
     }
 
@@ -184,11 +321,12 @@ public sealed class WhisperDictationService(
         }
     }
 
-    private void RememberFailedLoad(ModelFileKey? key)
+    private void RememberFailedLoad(ModelFileKey? key, string? reason)
     {
         lock (_warmUpLock)
         {
             _failedLoad = key;
+            _failedReason = reason;
         }
     }
 

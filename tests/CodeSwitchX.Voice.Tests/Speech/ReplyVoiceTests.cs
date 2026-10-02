@@ -160,12 +160,14 @@ public sealed class ReplyVoiceTests : IDisposable
         notes.ShouldBe(["Raven's voice is still loading, so this answer is not spoken."]);
     }
 
-    [Fact]
-    public async Task A_failed_voice_was_reported_already_and_is_not_noted_again()
+    [Theory]
+    [InlineData(TextToSpeechState.Failed)]
+    [InlineData(TextToSpeechState.NoEngine)]
+    public async Task A_failed_voice_was_reported_already_and_no_engine_means_text_only_so_neither_is_noted(TextToSpeechState state)
     {
         var notes = new List<string>();
         _voice.Unspoken += (_, why) => { lock (notes) { notes.Add(why); } };
-        _tts.NotReady = new TextToSpeechStatus(TextToSpeechState.Failed, "no GPU");
+        _tts.NotReady = new TextToSpeechStatus(state, "no GPU");
         var reply = _voice.Begin();
         reply.Add("One.");
         reply.Complete();
@@ -221,6 +223,8 @@ public sealed class ReplyVoiceTests : IDisposable
     [InlineData(TextToSpeechState.Off)]
     [InlineData(TextToSpeechState.Installing)]
     [InlineData(TextToSpeechState.Failed)]
+    [InlineData(TextToSpeechState.NotInstalled)]
+    [InlineData(TextToSpeechState.NoEngine)]
     public async Task A_voice_that_cannot_speak_leaves_the_output_asleep(TextToSpeechState state)
     {
         _tts.Status = new TextToSpeechStatus(state);

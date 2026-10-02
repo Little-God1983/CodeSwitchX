@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace CodeSwitchX.Voice.Speech.QwenTts;
+namespace CodeSwitchX.Voice.Speech.Sidecar;
 
 /// <summary>Runs a command line tool to its end; the tests run fakes.</summary>
 public interface IProcessRunner

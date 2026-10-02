@@ -5,6 +5,7 @@ using System.Windows.Media;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Voice;
 
 namespace CodeSwitchX.UI.Infrastructure;
 
@@ -104,6 +105,38 @@ public sealed class NullToCollapsedConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is null || value is string { Length: 0 } ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+}
+
+/// <summary>A model's dot: red not downloaded or failed, grey asleep, yellow on its way, green ready.</summary>
+public sealed class ModelDotToBrushConverter : IValueConverter
+{
+    public static readonly IReadOnlyDictionary<ModelDot, Brush> Brushes = new Dictionary<ModelDot, Brush>
+    {
+        [ModelDot.Red] = SessionStateToBrushConverter.Freeze("#EF4444"),
+        [ModelDot.Grey] = SessionStateToBrushConverter.Freeze("#9CA3AF"),
+        [ModelDot.Yellow] = SessionStateToBrushConverter.Freeze("#F59E0B"),
+        [ModelDot.Green] = SessionStateToBrushConverter.Freeze("#22C55E"),
+    };
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is ModelDot dot ? Brushes[dot] : System.Windows.Media.Brushes.Transparent;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+}
+
+public sealed class InvertBoolConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is not true;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value is not true;
+}
+
+/// <summary>True for null: a progress bar with no known fraction shows as busy.</summary>
+public sealed class IsNullConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is null;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
 }

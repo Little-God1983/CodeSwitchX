@@ -13,5 +13,8 @@
     <infra:NullToCollapsedConverter x:Key="NullToCollapsed" />
     <BooleanToVisibilityConverter x:Key="BoolVisible" />
     <infra:TrueToCollapsedConverter x:Key="BoolCollapsed" />
+    <infra:ModelDotToBrushConverter x:Key="DotBrush" />
+    <infra:InvertBoolConverter x:Key="InvertBool" />
+    <infra:IsNullConverter x:Key="IsNull" />
   </Application.Resources>
 </Application>

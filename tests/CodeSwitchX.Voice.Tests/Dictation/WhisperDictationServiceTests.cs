@@ -10,19 +10,27 @@ public sealed class WhisperDictationServiceTests
 {
     private sealed class MissingStore : IWhisperModelStore
     {
-        public WhisperModel Model => WhisperModel.BaseEnglish;
+        public WhisperModel Model { get; set; } = WhisperModel.BaseEnglish;
         public string ModelPath => @"C:\nowhere\ggml-base.en.bin";
         public bool IsPresent => false;
         public string? LoadedRuntime => null;
+        public bool IsPresentFor(WhisperModel model) => IsPresent;
+        public ModelDownload? Download => null;
+        public event EventHandler? ModelChanged { add { } remove { } }
+        public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
     }
 
     private sealed class PresentStore(string path) : IWhisperModelStore
     {
-        public WhisperModel Model => WhisperModel.BaseEnglish;
+        public WhisperModel Model { get; set; } = WhisperModel.BaseEnglish;
         public string ModelPath => path;
         public bool IsPresent => true;
         public string? LoadedRuntime => "Vulkan";
+        public bool IsPresentFor(WhisperModel model) => IsPresent;
+        public ModelDownload? Download => null;
+        public event EventHandler? ModelChanged { add { } remove { } }
+        public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
     }
 
@@ -34,7 +42,7 @@ public sealed class WhisperDictationServiceTests
         public ManualResetEventSlim Proceed { get; } = new();
         public int LoadThread { get; private set; } = -1;
 
-        public WhisperModel Model => WhisperModel.BaseEnglish;
+        public WhisperModel Model { get; set; } = WhisperModel.BaseEnglish;
 
         public string ModelPath
         {
@@ -53,6 +61,10 @@ public sealed class WhisperDictationServiceTests
 
         public bool IsPresent => true;
         public string? LoadedRuntime => null;
+        public bool IsPresentFor(WhisperModel model) => IsPresent;
+        public ModelDownload? Download => null;
+        public event EventHandler? ModelChanged { add { } remove { } }
+        public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
 
         public void Dispose()

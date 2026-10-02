@@ -21,7 +21,36 @@ public interface IDictationService
     /// reason to fail. The failure still reaches whoever actually dictates, from
     /// <see cref="TranscribeAsync"/>.</para></summary>
     Task WarmUpAsync(CancellationToken ct);
+
+    /// <summary>Where the model in use stands: on disk or not, downloading, loaded or not. Reads the disk.</summary>
+    DictationStatus Status { get; }
+
+    /// <summary>Raised on any thread, never under a lock, when <see cref="Status"/> changes.</summary>
+    event EventHandler<DictationStatus>? StatusChanged;
 }
+
+public enum DictationState
+{
+    /// <summary>Its file is not on disk; it is downloaded with the first dictation, or from Settings.</summary>
+    NotDownloaded,
+
+    Downloading,
+
+    /// <summary>On disk, not loaded: the next dictation, or the warm-up, loads it.</summary>
+    Asleep,
+
+    /// <summary>Being read off disk and onto the GPU (or into memory), and run once.</summary>
+    Loading,
+
+    Ready,
+
+    /// <summary>On disk but Whisper could not load it; a new download (another file) or another model is worth trying.</summary>
+    Failed,
+}
+
+/// <param name="Detail">Why it failed (Failed); null otherwise.</param>
+/// <param name="Bytes">How far the download is (Downloading).</param>
+public sealed record DictationStatus(DictationState State, WhisperModel Model, string? Detail = null, ByteProgress? Bytes = null);
 
 /// <summary>The model has not been downloaded. Its own type so callers can answer "download it first"
 /// instead of showing a generic failure.</summary>

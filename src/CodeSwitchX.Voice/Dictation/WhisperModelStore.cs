@@ -4,17 +4,64 @@ using Whisper.net.LibraryLoader;
 
 namespace CodeSwitchX.Voice.Dictation;
 
-/// <summary>Where the model file lives and how it gets there. The download goes to a
+/// <summary>Which model is used, where the model files live and how they get there. The download goes to a
 /// ".partial" file and is renamed only when complete, so a half file is never mistaken for a
 /// model: IsPresent looks at the final name only. "Complete" is checked, not assumed: a proxy or
-/// CDN closing a length-less response early ends the stream without an error.</summary>
+/// CDN closing a length-less response early ends the stream without an error. One download per
+/// model at a time: the Raven panel and Settings asking for the same one share it.</summary>
 public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhisperModelStore
 {
-    public WhisperModel Model => options.Value.Model;
+    private readonly Lock _lock = new();
+    private WhisperModel _model = options.Value.Model;
+    private Downloading? _download;
 
-    public string ModelPath => Path.Combine(options.Value.ModelFolder, FileName(Model));
+    public WhisperModel Model
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _model;
+            }
+        }
+        set
+        {
+            lock (_lock)
+            {
+                if (_model == value)
+                {
+                    return;
+                }
+
+                _model = value;
+            }
+
+            ModelChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public event EventHandler? ModelChanged;
+
+    public string ModelPath => PathOf(Model);
 
     public bool IsPresent => File.Exists(ModelPath);
+
+    public bool IsPresentFor(WhisperModel model) => File.Exists(PathOf(model));
+
+    public ModelDownload? Download
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _download is { } d ? new ModelDownload(d.Model, d.Bytes) : null;
+            }
+        }
+    }
+
+    public event EventHandler? DownloadChanged;
+
+    private string PathOf(WhisperModel model) => Path.Combine(options.Value.ModelFolder, FileName(model));
 
     // Whisper.net picks a native backend the first time a WhisperFactory is built and remembers
     // it process-wide, so this is null until someone has dictated once.
@@ -50,14 +97,85 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
 
     public static long ApproximateBytes(WhisperModel model) => Info(model).ApproximateBytes;
 
-    public async Task DownloadAsync(IProgress<double>? progress, CancellationToken ct)
+    /// <summary>Downloads the model in use now; joins its download if one runs. <paramref name="ct"/> stops the wait,
+    /// not the download: another caller may be waiting for it too.</summary>
+    public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct)
     {
-        Directory.CreateDirectory(options.Value.ModelFolder);
-        var partial = ModelPath + ".partial";
-        var approximate = ApproximateBytes(Model);
+        Downloading download;
+        lock (_lock)
+        {
+            if (_download is not { } running || running.Model != _model)
+            {
+                // A download of a model picked before goes on, but is no longer told: only one is shown at a time.
+                running = new Downloading(_model, new ByteProgress(0, ApproximateBytes(_model)));
+                running.Task = Task.Run(() => DownloadOnPoolAsync(running));
+                _download = running;
+            }
+
+            download = running;
+            if (progress is not null)
+            {
+                download.Listeners.Add(progress);
+            }
+        }
+
+        DownloadChanged?.Invoke(this, EventArgs.Empty);
+        return download.Task!.WaitAsync(ct);
+    }
+
+    private async Task DownloadOnPoolAsync(Downloading download)
+    {
         try
         {
-            using var source = await OpenDownload(Info(Model).Ggml, ct).ConfigureAwait(false);
+            await DownloadFileAsync(download.Model, fraction => Tell(download, fraction)).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                if (_download == download)
+                {
+                    _download = null;
+                }
+            }
+
+            DownloadChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private void Tell(Downloading download, double fraction)
+    {
+        IProgress<double>[] listeners;
+        bool changed;
+        lock (_lock)
+        {
+            listeners = [.. download.Listeners];
+            var bytes = new ByteProgress((long)(fraction * download.Bytes.Total), download.Bytes.Total);
+            // Once a megabyte: 1.6 GB read 80 KB at a time would tell twenty thousand times.
+            changed = bytes.Done / 1_000_000 != download.Bytes.Done / 1_000_000 && _download == download;
+            download.Bytes = bytes;
+        }
+
+        foreach (var listener in listeners)
+        {
+            listener.Report(fraction);
+        }
+
+        if (changed)
+        {
+            DownloadChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private async Task DownloadFileAsync(WhisperModel model, Action<double> progress)
+    {
+        Directory.CreateDirectory(options.Value.ModelFolder);
+        var path = PathOf(model);
+        var partial = path + ".partial";
+        var approximate = ApproximateBytes(model);
+        try
+        {
+            using var source = await OpenDownload(Info(model).Ggml, CancellationToken.None).ConfigureAwait(false);
             // A seekable stream knows exactly how much is to come; the HTTP stream does not.
             long? exact = source.CanSeek ? source.Length - source.Position : null;
             var expected = (double)(exact ?? approximate);
@@ -70,11 +188,11 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
             {
                 var buffer = new byte[81_920];
                 int n;
-                while ((n = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+                while ((n = await source.ReadAsync(buffer).ConfigureAwait(false)) > 0)
                 {
-                    await target.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+                    await target.WriteAsync(buffer.AsMemory(0, n)).ConfigureAwait(false);
                     read += n;
-                    progress?.Report(Math.Min(read / expected, 0.99));
+                    progress(Math.Min(read / expected, 0.99));
                 }
             }
 
@@ -85,8 +203,8 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
                 throw new IOException($"the download ended early, after {read:N0} of {of} bytes");
             }
 
-            File.Move(partial, ModelPath, overwrite: true);
-            progress?.Report(1.0);
+            File.Move(partial, path, overwrite: true);
+            progress(1.0);
         }
         finally
         {
@@ -95,5 +213,17 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
                 File.Delete(partial); // no-op after a successful Move
             }
         }
+    }
+
+    /// <summary>A download in flight, and who is told of it.</summary>
+    private sealed class Downloading(WhisperModel model, ByteProgress bytes)
+    {
+        public WhisperModel Model { get; } = model;
+
+        public ByteProgress Bytes { get; set; } = bytes;
+
+        public Task? Task { get; set; }
+
+        public List<IProgress<double>> Listeners { get; } = [];
     }
 }

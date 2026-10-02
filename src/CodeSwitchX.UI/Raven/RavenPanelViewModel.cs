@@ -873,7 +873,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         switch (status.State)
         {
             case TextToSpeechState.Installing:
-                SetVoiceNote($"Installing Raven's voice (about 5 GB, a few minutes): {status.Detail}…");
+                SetVoiceNote($"Installing Raven's voice: {status.Detail}{(status.Bytes is { } bytes ? $" ({bytes})" : "")}…");
                 break;
             case TextToSpeechState.Loading when _voiceNote is not null:
                 SetVoiceNote($"Loading Raven's voice: {status.Detail}…");

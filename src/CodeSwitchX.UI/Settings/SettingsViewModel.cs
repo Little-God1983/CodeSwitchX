@@ -7,7 +7,9 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Audio;
+using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -22,6 +24,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly PersistenceWriterOptions _writerOptions;
     private readonly BrainSettings _brain;
     private readonly SpeechSettings _speech;
+    private readonly SpeechEngines _engines;
+    private readonly IWhisperModelStore _whisper;
     private readonly ChatSettings _chats;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
@@ -69,17 +73,42 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private bool _ravenBargeIn = true;
 
-    /// <summary>The preset voice Raven speaks with: an id of <see cref="SpeechSettings.Voices"/>.</summary>
-    [ObservableProperty] private string _ravenVoice = SpeechSettings.DefaultVoice;
+    /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RavenVoice), nameof(VoiceChoices), nameof(HasEngine), nameof(IsQwen))]
+    private string _ravenVoiceEngine = NoEngine;
+
+    /// <summary>Qwen3-TTS's preset voice: an id of <see cref="SpeechSettings.QwenVoices"/>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RavenVoice))]
+    private string _ravenQwenVoice = SpeechSettings.DefaultQwenVoice;
+
+    /// <summary>Kokoro's voice: an id of <see cref="SpeechSettings.KokoroVoices"/>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RavenVoice))]
+    private string _ravenKokoroVoice = SpeechSettings.DefaultKokoroVoice;
 
     /// <summary>The Qwen3-TTS model Raven speaks with; a change restarts the voice.</summary>
     [ObservableProperty] private SpeechModel _ravenVoiceModel = SpeechModel.Small;
+
+    /// <summary>Whether the voice setup opened once by itself: then it opens only from here.</summary>
+    [ObservableProperty] private bool _ravenVoiceSetupShown;
+
+    /// <summary>The Whisper model dictation uses; a change frees the one loaded and loads this one.</summary>
+    [ObservableProperty] private WhisperModel _ravenWhisperModel = WhisperModel.LargeV3Turbo;
+
+    /// <summary>The speech-to-text model picked is not on disk: the Download button shows.</summary>
+    [ObservableProperty] private bool _whisperMissing;
+
+    /// <summary>What <see cref="RavenVoiceEngine"/> holds when no engine is picked.</summary>
+    public const string NoEngine = "None";
 
     /// <summary>What the model and effort boxes show for "leave it to Claude Code"; stored as blank.</summary>
     public const string ClaudeDefault = "default";
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
-        ChatSettings chats, SpeechSettings speech, AppPaths paths, ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
+        ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
+        ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
     {
         _installer = installer;
         _settings = settings;
@@ -87,6 +116,16 @@ public sealed partial class SettingsViewModel : ObservableObject
         _brain = brain;
         _chats = chats;
         _speech = speech;
+        _engines = engines;
+        _whisper = whisper;
+        Voice = voice;
+        Voice.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(VoiceStatusViewModel.ListeningState))
+            {
+                WhisperMissing = Voice.ListeningState == DictationState.NotDownloaded;
+            }
+        };
         _logger = logger;
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
@@ -124,12 +163,24 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenSpeakNews = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenSpeakNews, "whether Raven speaks chat news", ct) ?? true;
             RavenMicMode = await LoadOrDefaultAsync<string?>(SettingKeys.RavenMicMode, "Raven's mic mode", ct) ?? nameof(Raven.MicMode.PushToTalk);
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
-            _speech.Voice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultVoice;
-            RavenVoice = _speech.Voice; // the setter keeps a known voice, or the default
+            _speech.QwenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultQwenVoice;
+            RavenQwenVoice = _speech.QwenVoice; // the setter keeps a known voice, or the default
+            _speech.KokoroVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenKokoroVoice, "Raven's Kokoro voice", ct) ?? SpeechSettings.DefaultKokoroVoice;
+            RavenKokoroVoice = _speech.KokoroVoice;
             RavenVoiceModel = await LoadOrDefaultAsync<SpeechModel?>(SettingKeys.RavenVoiceModel, "Raven's voice model", ct) is { } speechModel
                 && Enum.IsDefined(speechModel)
                 ? speechModel
                 : SpeechModel.Small;
+            RavenVoiceSetupShown = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenVoiceSetupShown, "whether the voice setup was shown", ct) ?? false;
+            // Never picked: Qwen3-TTS for whoever has it installed already (it was the only engine), else none until the
+            // voice setup. Not stored, so it is looked at again until a pick is.
+            RavenVoiceEngine = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoiceEngine, "Raven's voice engine", ct) is { Length: > 0 } engine
+                ? (Enum.TryParse<SpeechEngine>(engine, out var known) ? known.ToString() : NoEngine)
+                : await Task.Run(() => _engines.IsInstalled(SpeechEngine.Qwen), ct) ? nameof(SpeechEngine.Qwen) : NoEngine;
+            RavenWhisperModel = await LoadOrDefaultAsync<WhisperModel?>(SettingKeys.RavenWhisperModel, "the speech-to-text model", ct) is { } whisperModel
+                && Enum.IsDefined(whisperModel)
+                ? whisperModel
+                : WhisperModel.LargeV3Turbo;
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
@@ -250,10 +301,16 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnRavenBargeInChanged(bool value) => Persist(SettingKeys.RavenBargeIn, value);
 
-    partial void OnRavenVoiceChanged(string value)
+    partial void OnRavenQwenVoiceChanged(string value)
     {
-        _speech.Voice = value;
-        Persist(SettingKeys.RavenVoice, _speech.Voice);
+        _speech.QwenVoice = value;
+        Persist(SettingKeys.RavenVoice, _speech.QwenVoice);
+    }
+
+    partial void OnRavenKokoroVoiceChanged(string value)
+    {
+        _speech.KokoroVoice = value;
+        Persist(SettingKeys.RavenKokoroVoice, _speech.KokoroVoice);
     }
 
     partial void OnRavenVoiceModelChanged(SpeechModel value)
@@ -262,8 +319,111 @@ public sealed partial class SettingsViewModel : ObservableObject
         Persist(SettingKeys.RavenVoiceModel, value);
     }
 
-    /// <summary>The voices the Settings view offers.</summary>
-    public static IReadOnlyList<SpeechVoice> VoiceChoices => SpeechSettings.Voices;
+    partial void OnRavenVoiceEngineChanged(string value)
+    {
+        _speech.Engine = Engine;
+        Persist(SettingKeys.RavenVoiceEngine, value);
+    }
+
+    partial void OnRavenVoiceSetupShownChanged(bool value) => Persist(SettingKeys.RavenVoiceSetupShown, value);
+
+    partial void OnRavenWhisperModelChanged(WhisperModel value)
+    {
+        _whisper.Model = value;
+        Persist(SettingKeys.RavenWhisperModel, value);
+    }
+
+    /// <summary>Where Raven's models stand, for the dots beside the engine and the speech-to-text model.</summary>
+    public VoiceStatusViewModel Voice { get; }
+
+    /// <summary>The engine picked, or none.</summary>
+    public SpeechEngine? Engine => Enum.TryParse<SpeechEngine>(RavenVoiceEngine, out var engine) ? engine : null;
+
+    public bool HasEngine => Engine is not null;
+
+    /// <summary>The model choice is Qwen3-TTS's only.</summary>
+    public bool IsQwen => Engine == SpeechEngine.Qwen;
+
+    /// <summary>The voice of the engine picked, as the Voice box shows and changes it.</summary>
+    public string RavenVoice
+    {
+        get => Engine == SpeechEngine.Kokoro ? RavenKokoroVoice : RavenQwenVoice;
+        set
+        {
+            if (value is null)
+            {
+                return; // the box clears its selection as its list changes with the engine
+            }
+
+            if (Engine == SpeechEngine.Kokoro)
+            {
+                RavenKokoroVoice = value;
+            }
+            else
+            {
+                RavenQwenVoice = value;
+            }
+        }
+    }
+
+    /// <summary>The voices of the engine picked.</summary>
+    public IReadOnlyList<SpeechVoice> VoiceChoices => SpeechSettings.VoicesOf(Engine ?? SpeechEngine.Kokoro);
+
+    /// <summary>The engines the Settings view offers, none first.</summary>
+    public static IReadOnlyList<EngineChoice> EngineChoices { get; } =
+    [
+        new(NoEngine, "None: Raven answers in text"),
+        new(nameof(SpeechEngine.Kokoro), "Kokoro (small, runs on any PC)"),
+        new(nameof(SpeechEngine.Qwen), "Qwen3-TTS (more natural, needs an NVIDIA graphics card)"),
+    ];
+
+    /// <summary>The speech-to-text models the Settings view offers.</summary>
+    public static IReadOnlyList<WhisperChoice> WhisperChoices { get; } =
+    [
+        new(WhisperModel.TinyEnglish, "Tiny: English only, 78 MB, the fastest"),
+        new(WhisperModel.BaseEnglish, "Base: English only, 148 MB"),
+        new(WhisperModel.SmallEnglish, "Small: English only, 488 MB"),
+        new(WhisperModel.LargeV3Turbo, "Large v3 Turbo: any language, 1.6 GB, best on a graphics card"),
+    ];
+
+    /// <summary>The voice setup picked an engine and a voice: shown here and stored, and Raven speaks with them from now on.</summary>
+    public void PickVoice(SpeechEngine engine, string voice)
+    {
+        if (engine == SpeechEngine.Kokoro)
+        {
+            RavenKokoroVoice = voice;
+        }
+        else
+        {
+            RavenQwenVoice = voice;
+        }
+
+        RavenVoiceEngine = engine.ToString();
+    }
+
+    /// <summary>The voice setup opens by itself once: when the Raven panel is first used and no engine is picked.</summary>
+    public bool NeedsVoiceSetup => !RavenVoiceSetupShown && Engine is null;
+
+    /// <summary>Asks for the voice setup; the shell opens it.</summary>
+    public event Action? VoiceSetupRequested;
+
+    [RelayCommand]
+    private void OpenVoiceSetup() => VoiceSetupRequested?.Invoke();
+
+    /// <summary>Downloads the speech-to-text model picked; the dot beside it shows how far it is.</summary>
+    [RelayCommand]
+    private async Task DownloadWhisperAsync()
+    {
+        try
+        {
+            await _whisper.DownloadAsync(null, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The speech model could not be downloaded");
+            LastMessage = $"The speech-to-text model could not be downloaded: {ex.Message}";
+        }
+    }
 
     /// <summary>The voice models the Settings view offers.</summary>
     public static IReadOnlyList<VoiceModelChoice> VoiceModelChoices { get; } =
@@ -414,3 +574,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
 /// <summary>A voice model as the Settings view offers it.</summary>
 public sealed record VoiceModelChoice(SpeechModel Model, string Label);
+
+/// <summary>An engine as the Settings view offers it: a name of <see cref="SpeechEngine"/>, or <see cref="SettingsViewModel.NoEngine"/>.</summary>
+public sealed record EngineChoice(string Engine, string Label);
+
+/// <summary>A speech-to-text model as the Settings view offers it.</summary>
+public sealed record WhisperChoice(WhisperModel Model, string Label);

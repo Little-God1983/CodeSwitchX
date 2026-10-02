@@ -1,6 +1,7 @@
 <UserControl x:Class="CodeSwitchX.UI.Settings.SettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice">
   <ScrollViewer VerticalScrollBarVisibility="Auto">
     <StackPanel Margin="24" MaxWidth="760" HorizontalAlignment="Left">
       <DockPanel>
@@ -35,9 +36,19 @@
                   ToolTip="A full model id. Pick one or type another." />
       </DockPanel>
       <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Voice engine" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice engine"
+                  ItemsSource="{Binding EngineChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Engine"
+                  SelectedValue="{Binding RavenVoiceEngine}"
+                  ToolTip="Kokoro is about 450 MB and runs on the CPU; Qwen3-TTS is about 5 GB and needs an NVIDIA graphics card. Another engine is installed the next time Raven speaks, or now from Voice setup." />
+        <voice:ModelLampView DataContext="{Binding Voice.Speech}" Margin="12,0,0,0" AutomationProperties.ItemType="Raven's voice" />
+        <Button Content="Voice setup…" Command="{Binding OpenVoiceSetupCommand}" Margin="12,0,0,0" HorizontalAlignment="Left"
+                ToolTip="Pick an engine and a voice, hear them, and install the engine now." />
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0" Visibility="{Binding HasEngine, Converter={StaticResource BoolVisible}}">
         <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
         <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
-                  ItemsSource="{Binding VoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenVoice}">
+                  ItemsSource="{Binding VoiceChoices}" SelectedValuePath="Id" SelectedValue="{Binding RavenVoice}">
           <ComboBox.ItemTemplate>
             <DataTemplate>
               <TextBlock>
@@ -47,12 +58,22 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
       </DockPanel>
-      <DockPanel Margin="0,8,0,0">
+      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsQwen, Converter={StaticResource BoolVisible}}">
         <TextBlock Text="Voice model" VerticalAlignment="Center" Width="140" />
         <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice model"
                   ItemsSource="{Binding VoiceModelChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Model"
                   SelectedValue="{Binding RavenVoiceModel}"
-                  ToolTip="Raven speaks with Qwen3-TTS on your graphics card. It is installed the first time Raven speaks (about 5 GB)." />
+                  ToolTip="Qwen3-TTS's model. The 1.7B one is downloaded the first time Raven speaks with it (3.5 GB)." />
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0">
+        <TextBlock Text="Speech to text" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Speech-to-text model"
+                  ItemsSource="{Binding WhisperChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Model"
+                  SelectedValue="{Binding RavenWhisperModel}"
+                  ToolTip="The Whisper model that writes down what you say. The English-only ones are smaller and faster; Large v3 Turbo also hears German. A model not on this PC is downloaded with your next dictation, or now." />
+        <voice:ModelLampView DataContext="{Binding Voice.Listening}" Margin="12,0,0,0" AutomationProperties.ItemType="Speech to text" />
+        <Button Content="Download" Command="{Binding DownloadWhisperCommand}" Margin="12,0,0,0" HorizontalAlignment="Left"
+                Visibility="{Binding WhisperMissing, Converter={StaticResource BoolVisible}}" />
       </DockPanel>
       <CheckBox Margin="140,10,0,0" IsChecked="{Binding RavenSpeakNews}" AutomationProperties.Name="Speak chat news"
                 Content="Speak chat news"

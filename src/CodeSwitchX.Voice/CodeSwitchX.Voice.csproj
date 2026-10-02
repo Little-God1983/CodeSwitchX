@@ -5,9 +5,15 @@
   <ItemGroup>
     <!-- The sample the warm-up decodes; see WarmUpSpeech.cs. -->
     <EmbeddedResource Include="Dictation\WarmUpSpeech.pcm" LogicalName="CodeSwitchX.Voice.WarmUpSpeech.pcm" />
-    <!-- The Qwen3-TTS sidecar and the pins of its Python packages; written into the voice folder (QwenTtsEnvironment). -->
+    <!-- The speech sidecars: the module they share, each engine's script and the pins of its Python packages; written
+         into each engine's environment (SidecarScripts). -->
+    <EmbeddedResource Include="Speech\Sidecar\tts_sidecar.py" LogicalName="CodeSwitchX.Voice.Sidecar.tts_sidecar.py" />
     <EmbeddedResource Include="Speech\QwenTts\qwen_tts_server.py" LogicalName="CodeSwitchX.Voice.QwenTts.qwen_tts_server.py" />
     <EmbeddedResource Include="Speech\QwenTts\constraints.txt" LogicalName="CodeSwitchX.Voice.QwenTts.constraints.txt" />
+    <EmbeddedResource Include="Speech\Kokoro\kokoro_tts_server.py" LogicalName="CodeSwitchX.Voice.Kokoro.kokoro_tts_server.py" />
+    <EmbeddedResource Include="Speech\Kokoro\constraints.txt" LogicalName="CodeSwitchX.Voice.Kokoro.constraints.txt" />
+    <!-- What the voice setup plays: one clip per voice, "Engine.voice.wav", recorded with the engine itself (VoiceSamples). -->
+    <EmbeddedResource Include="Speech\Samples\*.wav" LogicalName="CodeSwitchX.Voice.Samples.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
