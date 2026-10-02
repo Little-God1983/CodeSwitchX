@@ -126,6 +126,18 @@ public sealed class YardToolsTests
     }
 
     [Fact]
+    public async Task A_running_chat_comes_with_the_name_SendMessage_takes()
+    {
+        _yard.Chats[0] = _yard.Chats[0] with { SendName = "codeswitchx-ea" };
+
+        var chats = await Tools.ListChats("all", cancellationToken: CancellationToken.None);
+
+        chats.Single(c => c.Title == "Speech gate").SendTo.ShouldBe("codeswitchx-ea");
+        chats.Single(c => c.Title == "Raven brain").SendTo.ShouldBeNull("its VS Code tab is closed: nothing can be sent to it");
+        (await Tools.GetChat("aaaaaaaa", CancellationToken.None)).SendTo.ShouldBe("codeswitchx-ea");
+    }
+
+    [Fact]
     public async Task A_workspace_name_that_matches_nothing_is_refused()
     {
         await Should.ThrowAsync<McpException>(() => Tools.ListChats("all", "Photoshop", CancellationToken.None));

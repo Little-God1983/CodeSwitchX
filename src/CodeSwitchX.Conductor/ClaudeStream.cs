@@ -8,7 +8,9 @@ internal abstract record ClaudeLine;
 /// <summary><c>system/init</c>, sent at the start of every turn.</summary>
 /// <param name="McpServers">Each MCP server's name and whether it connected ("connected", "failed", "pending").</param>
 /// <param name="PermissionMode">The mode it runs in: "auto" asked for with a model that cannot do it runs as "default".</param>
-internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers, string? PermissionMode = null) : ClaudeLine;
+/// <param name="Tools">The tools it has, built-in and MCP; null when the line does not list them.</param>
+internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, string> McpServers, string? PermissionMode = null,
+    IReadOnlyList<string>? Tools = null) : ClaudeLine;
 
 /// <summary>What the line says the brain did.</summary>
 internal sealed record ClaudeEvents(IReadOnlyList<BrainEvent> Events) : ClaudeLine;
@@ -93,7 +95,10 @@ internal static class ClaudeStream
             }
         }
 
-        return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"));
+        var tools = root.TryGetProperty("tools", out var named) && named.ValueKind == JsonValueKind.Array
+            ? named.EnumerateArray().Where(t => t.ValueKind == JsonValueKind.String).Select(t => t.GetString()!).ToList()
+            : null;
+        return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"), tools);
     }
 
     private static ClaudeEvents? Delta(JsonElement root)

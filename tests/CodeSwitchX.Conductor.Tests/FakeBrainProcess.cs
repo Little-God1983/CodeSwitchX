@@ -116,8 +116,9 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 /// <summary>Lines shaped like CLI 2.1.285's (captured 2026-09-30), cut down to what the brain reads.</summary>
 internal static class StreamJson
 {
-    public static string Init(string status = "connected", string mode = "dontAsk") =>
-        $$"""{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","permissionMode":"{{mode}}","mcp_servers":[{"name":"codeswitchx","status":"{{status}}"}],"tools":["mcp__codeswitchx__list_chats"]}""";
+    /// <param name="send">Whether this Claude Code has the SendMessage tool.</param>
+    public static string Init(string status = "connected", string mode = "dontAsk", bool send = true) =>
+        $$"""{"type":"system","subtype":"init","model":"claude-haiku-4-5-20251001","permissionMode":"{{mode}}","mcp_servers":[{"name":"codeswitchx","status":"{{status}}"}],"tools":[{{(send ? "\"SendMessage\"," : "")}}"mcp__codeswitchx__list_chats"]}""";
 
     public static string Text(string text, string? parent = null) =>
         $$$"""{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"{{{text}}}"}},"parent_tool_use_id":{{{Parent(parent)}}}}""";

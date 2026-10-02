@@ -349,7 +349,7 @@ public sealed class ClaudeAgentLauncher : IAgentLauncher
     }
 
     private static YardActionException NotOurs(string chatId) => new(
-        $"No chat Raven started runs with the id '{chatId}'. Only those can be told something or stopped; the others run in VS Code.");
+        $"No chat Raven started runs with the id '{chatId}'. Only those take send_to_chat and stop_chat; a chat running in VS Code is told with SendMessage, to its send_to name from list_chats.");
 
     /// <summary>
     /// Tells of the chat as it is now. The start, a send and the pump raise from their own threads: one at a time per

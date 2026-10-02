@@ -47,6 +47,14 @@ public sealed class ClaudeStreamTests
     }
 
     [Fact]
+    public void Init_names_the_tools_it_has()
+    {
+        ClaudeStream.Read(StreamJson.Init()).ShouldBeOfType<ClaudeInit>().Tools.ShouldBe(["SendMessage", "mcp__codeswitchx__list_chats"]);
+        ClaudeStream.Read(StreamJson.Init(send: false)).ShouldBeOfType<ClaudeInit>().Tools.ShouldBe(["mcp__codeswitchx__list_chats"]);
+        ClaudeStream.Read("""{"type":"system","subtype":"init","model":"m"}""").ShouldBeOfType<ClaudeInit>().Tools.ShouldBeNull();
+    }
+
+    [Fact]
     public void A_result_ends_the_turn()
     {
         ClaudeStream.Read(StreamJson.Result()).ShouldBe(new ClaudeTurnOver(null));

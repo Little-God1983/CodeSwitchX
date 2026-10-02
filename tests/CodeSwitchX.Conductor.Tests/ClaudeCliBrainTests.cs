@@ -204,8 +204,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
         executable.ShouldBe(Claude);
         folder.ShouldBe(_paths.RavenDirectory);
         Directory.Exists(_paths.RavenDirectory).ShouldBeTrue();
-        Value(arguments, "--tools").ShouldBe("", "no built-in tool: no Bash, no Read, no Edit");
-        Value(arguments, "--allowedTools").ShouldBe("mcp__codeswitchx");
+        Value(arguments, "--tools").ShouldBe("SendMessage", "the one built-in tool: no Bash, no Read, no Edit");
+        Value(arguments, "--allowedTools").ShouldBe("mcp__codeswitchx,SendMessage");
         Value(arguments, "--permission-mode").ShouldBe("dontAsk");
         Value(arguments, "--mcp-config").ShouldBe(_paths.McpConfigFile);
         arguments.ShouldContain("--strict-mcp-config");
@@ -336,6 +336,19 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
         (await AskAsync("Hi")).ShouldHaveSingleItem().ShouldBeOfType<BrainFailed>().Reason
             .ShouldBe($"Raven's brain could not be started from {Claude}: Access is denied");
+    }
+
+    [Fact]
+    public async Task A_Claude_Code_without_SendMessage_is_a_warning_once()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(send: false), StreamJson.Text("Hm."), StreamJson.Result("Hm.")];
+
+        var first = await AskAsync("One");
+        var second = await AskAsync("Two");
+
+        first[0].ShouldBe(new BrainNotice(
+            "Raven cannot tell chats in VS Code anything: this Claude Code has no SendMessage tool. Update Claude Code.", true));
+        second.OfType<BrainNotice>().ShouldBeEmpty();
     }
 
     [Fact]
