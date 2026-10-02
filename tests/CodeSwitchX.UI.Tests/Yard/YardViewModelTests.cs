@@ -818,6 +818,27 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_closed_chat_gets_no_row_when_its_workspace_s_tile_is_made_again()
+    {
+        _resolver.SetRoots(WorkspaceResolver.RootsOf([_app, _shop]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        foreach (var id in new[] { "s1", "s2" })
+        {
+            _engine.Apply(Hook(id, "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+            _engine.Apply(Hook(id, "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app") with { Prompt = "fix the build" });
+        }
+
+        _yard.FindTile(_app.Id)!.Chats.Count.ShouldBe(2);
+        _yard.ForgetChat("s1");
+        _time.Advance(TimeSpan.FromSeconds(2));
+        _engine.Apply(Hook("s1", "SessionEnd", SessionSignal.SessionEnd, @"c:\repo\app"));
+        _bus.Publish(new WorkspaceUnregistered(_app.Id));
+        _bus.Publish(new WorkspaceRegistered(_app));
+
+        _yard.FindTile(_app.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["s2"], "the tile is made from the engine's snapshots, the closed chat's end among them");
+    }
+
+    [Fact]
     public async Task A_closed_chat_opened_again_shows_again()
     {
         await _yard.InitializeAsync(CancellationToken.None);

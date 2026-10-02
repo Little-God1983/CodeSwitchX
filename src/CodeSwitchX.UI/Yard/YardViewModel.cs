@@ -207,6 +207,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the snapshot is of a chat closed on purpose that has not run since, and gets no row. One that runs again
+    /// after the close is forgotten no more.
+    /// </summary>
+    private bool IsClosed(SessionSnapshot snapshot)
+    {
+        if (!_closed.TryGetValue(snapshot.SessionId, out var closed))
+        {
+            return false;
+        }
+
+        if (!SessionStateMachine.IsLive(snapshot.State) || snapshot.LastEventAt <= closed)
+        {
+            return true;
+        }
+
+        _closed.Remove(snapshot.SessionId);
+        return false;
+    }
+
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
     public async Task UnregisterAsync(Guid workspaceId)
@@ -436,14 +456,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     internal void Apply(SessionSnapshot snapshot)
     {
-        if (_closed.TryGetValue(snapshot.SessionId, out var closed))
+        if (IsClosed(snapshot))
         {
-            if (!SessionStateMachine.IsLive(snapshot.State) || snapshot.LastEventAt <= closed)
-            {
-                return;
-            }
-
-            _closed.Remove(snapshot.SessionId);
+            return;
         }
 
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
@@ -497,7 +512,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var tile = new WorkspaceTileViewModel(workspace, this);
         var index = group.Tiles.TakeWhile(t => string.Compare(t.Name, tile.Name, StringComparison.OrdinalIgnoreCase) < 0).Count();
         group.Tiles.Insert(index, tile);
-        foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id))
+        foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id && !IsClosed(s)))
         {
             tile.Upsert(snapshot, _pricing.Pricing);
         }

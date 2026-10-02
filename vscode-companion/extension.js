@@ -26,6 +26,8 @@ const SessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /** How long a chat's tab may take to come to the front once Claude Code is asked to show it. */
 const RevealMs = 3 * 1000;
 
+const NoTab = 'VS Code has no tab of that chat in this window; it may be shown in the side bar. Nothing was closed: it can be closed where it is shown.';
+
 let server;
 let recordFile;
 
@@ -190,14 +192,14 @@ async function closeChat(sessionId) {
         await vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
         const tab = await waitFor(() => isClaudeTab(activeTab()) ? activeTab() : undefined, RevealMs);
         if (!tab) {
-            return { ok: false, error: 'That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.' };
+            return { ok: false, error: NoTab };
         }
 
         const opened = !before.has(tab);
         const closed = await vscode.window.tabGroups.close(tab);
         if (opened) {
-            // It had no tab here, so Claude Code opened one: taken away again, nothing was closed.
-            return { ok: false, error: 'That chat is not open in this VS Code window.' };
+            // Claude Code knew no tab of it here and opened one: taken away again. The chat runs on where it is shown.
+            return { ok: false, error: NoTab };
         }
 
         return closed ? { ok: true } : { ok: false, error: 'VS Code did not close the tab.' };
