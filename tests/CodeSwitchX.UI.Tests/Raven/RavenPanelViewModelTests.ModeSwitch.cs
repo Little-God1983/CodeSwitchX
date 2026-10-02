@@ -26,12 +26,12 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     /// <summary>The two halves as the view has them: radio buttons whose IsChecked follows the panel's MicMode one way, like the binding.</summary>
-    private static (RadioButton PushToTalk, RadioButton OpenMic) NewSwitch(RavenPanelViewModel vm)
+    private static (MicModeRadioButton PushToTalk, MicModeRadioButton OpenMic) NewSwitch(RavenPanelViewModel vm)
     {
         var modeSwitch = new MicModeSwitch(() => vm);
-        RadioButton Half(MicMode mode)
+        MicModeRadioButton Half(MicMode mode)
         {
-            var half = new RadioButton { Tag = mode, IsChecked = vm.MicMode == mode };
+            var half = new MicModeRadioButton { Tag = mode, IsChecked = vm.MicMode == mode };
             half.Checked += (sender, _) => modeSwitch.OnChecked(sender);
             half.Click += (sender, _) => modeSwitch.OnClicked(sender);
             vm.PropertyChanged += (_, e) =>
@@ -48,7 +48,7 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     private static void Select(RadioButton half) =>
-        ((ISelectionItemProvider)new RadioButtonAutomationPeer(half).GetPattern(PatternInterface.SelectionItem)).Select();
+        ((ISelectionItemProvider)UIElementAutomationPeer.CreatePeerForElement(half).GetPattern(PatternInterface.SelectionItem)).Select();
 
     private static void Click(RadioButton half) => half.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
 
@@ -70,6 +70,26 @@ public sealed partial class RavenPanelViewModelTests
             vm.MicMode.ShouldBe(MicMode.PushToTalk);
             vm.PreferredMicMode.ShouldBe(MicMode.PushToTalk);
             pushToTalk.IsChecked.ShouldBe(true);
+        });
+    }
+
+    // Fourth review of #89: a Select on the half already checked is a choice too
+    [Fact]
+    public async Task Selecting_the_half_already_checked_through_UI_Automation_after_a_fallback_chooses_it()
+    {
+        var vm = await NewVmAsync(); // no Open mic: choosing it warns, falls back, and keeps the choice
+
+        await StaThread.RunAsync(() =>
+        {
+            var (pushToTalk, openMic) = NewSwitch(vm);
+            Select(openMic);
+            vm.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+            pushToTalk.IsChecked.ShouldBe(true);
+
+            Select(pushToTalk);
+
+            vm.PreferredMicMode.ShouldBe(MicMode.PushToTalk);
+            vm.MicMode.ShouldBe(MicMode.PushToTalk);
         });
     }
 

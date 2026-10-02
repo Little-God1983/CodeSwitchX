@@ -6,9 +6,10 @@ namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
 /// The logic of the Push to talk | Open mic switch, whose halves are radio buttons that show the panel's mode (a one-way
-/// binding) and carry their mode as their <see cref="FrameworkElement.Tag"/>. A half checked from outside the panel (UI
-/// Automation's Select, which raises no click) is the user's choice, as a click is, one on the half already checked
-/// too (after a fallback). The panel's own update of the switch checks the half of the mode it is in, which is no choice.
+/// binding) and carry their mode as their <see cref="FrameworkElement.Tag"/>. A click is the user's choice, one on the
+/// half already checked too (after a fallback), and so is a UI Automation Select, which clicks the half
+/// (<see cref="MicModeRadioButton"/>). A half checked from outside the panel without a click is a choice too. The
+/// panel's own update of the switch checks the half of the mode it is in, which is no choice.
 /// </summary>
 internal sealed class MicModeSwitch(Func<RavenPanelViewModel?> viewModel)
 {
