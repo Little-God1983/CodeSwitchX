@@ -46,7 +46,9 @@ public partial class MainWindow : Window
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         shell.ForwardRequested += () => WindowActivation.BringUp(this);
         _voiceSetupFactory = voiceSetupFactory;
-        shell.VoiceSetupRequested += ShowVoiceSetup;
+        // Posted: the request can come from inside the Raven panel's IsOpen change, and a modal loop there would hold the
+        // panel's opening, and everything else that follows that change, until the dialog closed.
+        shell.VoiceSetupRequested += () => Dispatcher.BeginInvoke(new Action(ShowVoiceSetup));
         // The first use of the Raven panel: open at the start, the voice setup opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
     }

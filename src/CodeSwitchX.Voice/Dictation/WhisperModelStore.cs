@@ -8,12 +8,15 @@ namespace CodeSwitchX.Voice.Dictation;
 /// ".partial" file and is renamed only when complete, so a half file is never mistaken for a
 /// model: IsPresent looks at the final name only. "Complete" is checked, not assumed: a proxy or
 /// CDN closing a length-less response early ends the stream without an error. One download per
-/// model at a time: the Raven panel and Settings asking for the same one share it.</summary>
+/// model at a time, whichever model is in use: the Raven panel and Settings asking for the same one share it,
+/// and a model picked again while its download still runs joins that download.</summary>
 public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhisperModelStore
 {
     private readonly Lock _lock = new();
     private WhisperModel _model = options.Value.Model;
-    private Downloading? _download;
+
+    /// <summary>The downloads running, one per model at most.</summary>
+    private readonly Dictionary<WhisperModel, Downloading> _downloads = [];
 
     public WhisperModel Model
     {
@@ -46,15 +49,13 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
 
     public bool IsPresent => File.Exists(ModelPath);
 
-    public bool IsPresentFor(WhisperModel model) => File.Exists(PathOf(model));
-
     public ModelDownload? Download
     {
         get
         {
             lock (_lock)
             {
-                return _download is { } d ? new ModelDownload(d.Model, d.Bytes) : null;
+                return _downloads.TryGetValue(_model, out var d) ? new ModelDownload(d.Model, d.Bytes) : null;
             }
         }
     }
@@ -104,12 +105,11 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
         Downloading download;
         lock (_lock)
         {
-            if (_download is not { } running || running.Model != _model)
+            if (!_downloads.TryGetValue(_model, out var running))
             {
-                // A download of a model picked before goes on, but is no longer told: only one is shown at a time.
                 running = new Downloading(_model, new ByteProgress(0, ApproximateBytes(_model)));
                 running.Task = Task.Run(() => DownloadOnPoolAsync(running));
-                _download = running;
+                _downloads[_model] = running;
             }
 
             download = running;
@@ -133,10 +133,7 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
         {
             lock (_lock)
             {
-                if (_download == download)
-                {
-                    _download = null;
-                }
+                _downloads.Remove(download.Model);
             }
 
             DownloadChanged?.Invoke(this, EventArgs.Empty);
@@ -151,8 +148,8 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
         {
             listeners = [.. download.Listeners];
             var bytes = new ByteProgress((long)(fraction * download.Bytes.Total), download.Bytes.Total);
-            // Once a megabyte: 1.6 GB read 80 KB at a time would tell twenty thousand times.
-            changed = bytes.Done / 1_000_000 != download.Bytes.Done / 1_000_000 && _download == download;
+            // Once a megabyte, and only of the model in use: 1.6 GB read 80 KB at a time would tell twenty thousand times.
+            changed = bytes.Done / 1_000_000 != download.Bytes.Done / 1_000_000 && download.Model == _model;
             download.Bytes = bytes;
         }
 

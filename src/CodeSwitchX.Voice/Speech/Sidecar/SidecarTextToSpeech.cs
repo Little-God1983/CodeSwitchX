@@ -123,7 +123,7 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
 
     private async Task CheckInstallAsync(CancellationToken attempt)
     {
-        await Task.Yield();
+        await OffTheCallersThread(); // it reads files
         string model;
         lock (_lock)
         {
@@ -159,7 +159,7 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
     /// <summary>Installs if needed and asked for, then starts the model the settings name by then: one picked during the install is loaded.</summary>
     private async Task PrepareAsync(CancellationToken ct)
     {
-        await Task.Yield(); // never on the caller's thread: checking the install reads files
+        await OffTheCallersThread(); // checking the install reads files
         ISidecarServer? server = null;
         string model;
         lock (_lock)
@@ -261,6 +261,12 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
             Report(new TextToSpeechStatus(TextToSpeechState.Failed, ex is TextToSpeechException ? ex.Message : $"{ex.GetType().Name}: {ex.Message}"), ct);
         }
     }
+
+    /// <summary>
+    /// Goes on on the thread pool, whatever the caller's thread: Task.Yield would come back to the UI thread through WPF's
+    /// synchronisation context, and a sleeping disk would hold the window up.
+    /// </summary>
+    private static ConfiguredTaskAwaitable OffTheCallersThread() => Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
 
     private static void Cancel(CancellationTokenSource source)
     {

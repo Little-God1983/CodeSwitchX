@@ -8,8 +8,6 @@ namespace CodeSwitchX.Voice.Speech;
 /// </summary>
 public interface IVoiceSamples
 {
-    bool Has(SpeechEngine engine, string voice);
-
     /// <summary>Plays the clip on the default output device until it ends or <paramref name="ct"/> is cancelled; then returns. Never on the caller's thread.</summary>
     Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct);
 }
@@ -18,7 +16,8 @@ public sealed class VoiceSamples : IVoiceSamples
 {
     private static string ResourceName(SpeechEngine engine, string voice) => $"CodeSwitchX.Voice.Samples.{engine}.{voice}.wav";
 
-    public bool Has(SpeechEngine engine, string voice) =>
+    /// <summary>Whether the voice has a clip; the tests walk every voice offered.</summary>
+    internal static bool Has(SpeechEngine engine, string voice) =>
         typeof(VoiceSamples).Assembly.GetManifestResourceInfo(ResourceName(engine, voice)) is not null;
 
     public Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct) => Task.Run(async () =>

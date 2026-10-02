@@ -99,6 +99,38 @@ public sealed class VoiceStatusTests
         (_vm.Kokoro.Dot, _vm.Qwen.Dot).ShouldBe((ModelDot.Red, ModelDot.Grey));
     }
 
+    [Fact]
+    public async Task The_status_read_at_the_start_does_not_undo_a_newer_one()
+    {
+        var dictation = new RacingDictation();
+        var vm = new VoiceStatusViewModel(new SpeechEngines(_settings, [_kokoro, _qwen]), _settings, dictation, new ImmediateDispatcher());
+
+        vm.Start();
+
+        await Until(() => vm.ListeningState is not null);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        vm.ListeningState.ShouldBe(DictationState.Ready, "the warm-up told Ready while the start read Loading");
+    }
+
+    /// <summary>Tells Ready while its status is read, and gives the Loading it read before.</summary>
+    private sealed class RacingDictation : IDictationService
+    {
+        public event EventHandler<DictationStatus>? StatusChanged;
+
+        public DictationStatus Status
+        {
+            get
+            {
+                StatusChanged?.Invoke(this, new DictationStatus(DictationState.Ready, WhisperModel.LargeV3Turbo));
+                return new DictationStatus(DictationState.Loading, WhisperModel.LargeV3Turbo);
+            }
+        }
+
+        public Task<DictationResult> TranscribeAsync(ReadOnlyMemory<float> samples, DictationVocabulary vocabulary, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task WarmUpAsync(CancellationToken ct) => Task.CompletedTask;
+    }
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

@@ -106,12 +106,20 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
 
     /// <summary>
     /// Another model was picked: the one loaded is freed once no clip uses it, and the new one is warmed up if it is on
-    /// disk. On the thread pool: Settings picks it on the UI thread, and freeing waits for a running transcription.
+    /// disk and one was loaded or warming up before. The model read from the settings at the start is not: the startup
+    /// warm-up loads it after its delay. On the thread pool: Settings picks it on the UI thread, and freeing waits for a
+    /// running transcription.
     /// </summary>
     private async Task SwitchModelAsync()
     {
         try
         {
+            bool warm;
+            lock (_warmUpLock)
+            {
+                warm = _factory is not null || _warmUp is not null;
+            }
+
             await _gate.WaitAsync().ConfigureAwait(false);
             try
             {
@@ -134,7 +142,7 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
             }
 
             Tell();
-            if (store.IsPresent)
+            if (warm && store.IsPresent)
             {
                 await WarmUpAsync(CancellationToken.None).ConfigureAwait(false);
             }

@@ -75,7 +75,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasEngine), nameof(IsQwen), nameof(IsKokoro))]
+    [NotifyPropertyChangedFor(nameof(IsQwen), nameof(IsKokoro))]
     private string _ravenVoiceEngine = NoEngine;
 
     /// <summary>Qwen3-TTS's preset voice: an id of <see cref="SpeechSettings.QwenVoices"/>.</summary>
@@ -334,8 +334,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The engine picked, or none.</summary>
     public SpeechEngine? Engine => Enum.TryParse<SpeechEngine>(RavenVoiceEngine, out var engine) ? engine : null;
-
-    public bool HasEngine => Engine is not null;
 
     /// <summary>The model choice is Qwen3-TTS's only.</summary>
     public bool IsQwen => Engine == SpeechEngine.Qwen;

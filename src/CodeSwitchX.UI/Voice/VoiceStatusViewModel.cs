@@ -16,6 +16,9 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
     private readonly IDictationService _dictation;
     private readonly IUiDispatcher _ui;
 
+    /// <summary>Counts the statuses the dictation service told: the one read at the start is dropped if a newer came meanwhile.</summary>
+    private int _listeningTold;
+
     /// <summary>The engine picked, or none; with its name for the bottom bar ("voice · Kokoro").</summary>
     [ObservableProperty] private ModelLamp _speech;
     [ObservableProperty] private string _speechName;
@@ -39,7 +42,11 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
         _listeningName = "speech to text";
         _engines.EngineStatusChanged += (_, _) => _ui.Post(ShowSpeech);
         _settings.EngineChanged += (_, _) => _ui.Post(ShowSpeech);
-        _dictation.StatusChanged += (_, status) => _ui.Post(() => ShowListening(status));
+        _dictation.StatusChanged += (_, status) =>
+        {
+            Interlocked.Increment(ref _listeningTold);
+            _ui.Post(() => ShowListening(status));
+        };
         ShowSpeech();
     }
 
@@ -51,8 +58,15 @@ public sealed partial class VoiceStatusViewModel : ObservableObject
         _engines.CheckInstalls();
         _ = Task.Run(() =>
         {
+            var told = Volatile.Read(ref _listeningTold);
             var status = _dictation.Status;
-            _ui.Post(() => ShowListening(status));
+            _ui.Post(() =>
+            {
+                if (Volatile.Read(ref _listeningTold) == told)
+                {
+                    ShowListening(status); // else a newer status was told while this one was read, and stands
+                }
+            });
         });
     }
 

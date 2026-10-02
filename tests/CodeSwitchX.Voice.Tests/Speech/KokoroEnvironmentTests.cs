@@ -80,6 +80,24 @@ public sealed class KokoroEnvironmentTests : IDisposable
     }
 
     [Fact]
+    public async Task A_model_file_gone_from_a_whole_environment_is_fetched_alone()
+    {
+        var environment = Environment();
+        await environment.InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
+        Directory.CreateDirectory(Path.GetDirectoryName(environment.Python)!);
+        File.WriteAllText(environment.Python, "");
+        File.Delete(Path.Combine(Models, "voices-v1.0.bin"));
+        environment.IsInstalled.ShouldBeFalse();
+        _runner.Calls.Clear();
+        _files.Asked.Clear();
+
+        await environment.InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
+
+        _runner.Calls.ShouldBeEmpty("the environment stays: no new venv, no pip install");
+        _files.Asked.ShouldBe(["https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"]);
+        environment.IsInstalled.ShouldBeTrue();
+    }
+    [Fact]
     public async Task A_download_cut_off_fails_the_install_and_leaves_no_file()
     {
         _files.CutAfter = 500_000;

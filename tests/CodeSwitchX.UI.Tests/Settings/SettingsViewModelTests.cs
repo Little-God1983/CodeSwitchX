@@ -489,7 +489,7 @@ public class SettingsViewModelTests : IDisposable
     {
         await _vm.LoadAsync(CancellationToken.None);
 
-        (_vm.RavenVoiceEngine, _speech.Engine, _vm.HasEngine, _vm.NeedsVoiceSetup).ShouldBe((SettingsViewModel.NoEngine, (SpeechEngine?)null, false, true));
+        (_vm.RavenVoiceEngine, _speech.Engine, _vm.IsKokoro, _vm.IsQwen, _vm.NeedsVoiceSetup).ShouldBe((SettingsViewModel.NoEngine, (SpeechEngine?)null, false, false, true));
 
         _vm.RavenVoiceSetupShown = true;
         _vm.NeedsVoiceSetup.ShouldBeFalse("it opens by itself once");

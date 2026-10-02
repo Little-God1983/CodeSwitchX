@@ -75,6 +75,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         ShowLamps();
         _onEngineStatus = (_, status) => _ui.Post(() => OnEngineStatus(status));
         _engines.EngineStatusChanged += _onEngineStatus;
+        Status.PropertyChanged += OnLampChanged;
     }
 
     public VoiceStatusViewModel Status { get; }
@@ -115,12 +116,14 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         }
 
         StopSample();
-        ShowVoices();
+        // Before the voices: in Ready the voice picked applies at once, and the card only looked at must not pick its engine.
         if (Step is VoiceSetupStep.Ready or VoiceSetupStep.Failed)
         {
             Step = VoiceSetupStep.Choosing; // another engine: its own install, or use
             FooterText = ChoosingText;
         }
+
+        ShowVoices();
     }
 
     partial void OnSelectedVoiceChanged(VoiceRow? value)
@@ -130,7 +133,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
             row.IsSelected = row == value;
         }
 
-        if (Step == VoiceSetupStep.Ready && value is not null)
+        if (Step == VoiceSetupStep.Ready && value is not null && SelectedCard.Engine == _settings.Engine)
         {
             _settings.PickVoice(SelectedCard.Engine, value.Voice.Id); // ready: another voice applies at once
             FooterText = $"{SelectedCard.Name} is ready. Raven speaks with {value.Voice.Name} from now on.";
@@ -154,14 +157,23 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The cards' dots are the ones <see cref="VoiceStatusViewModel"/> keeps.</summary>
     private void ShowLamps()
     {
         foreach (var card in Cards)
         {
-            card.Lamp = ModelLamp.Of(_engines.StatusOf(card.Engine), card.Engine);
+            card.Lamp = Status.LampOf(card.Engine);
         }
 
         OnPropertyChanged(nameof(InstallText));
+    }
+
+    private void OnLampChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(VoiceStatusViewModel.Kokoro) or nameof(VoiceStatusViewModel.Qwen))
+        {
+            ShowLamps();
+        }
     }
 
     /// <summary>Picks the engine and voice, and installs and starts the engine; the footer follows it.</summary>
@@ -206,9 +218,9 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         CloseRequested?.Invoke();
     }
 
+    /// <summary>The footer follows the install of the engine picked here, with its download's progress.</summary>
     private void OnEngineStatus(EngineStatus status)
     {
-        ShowLamps();
         if (Step is not (VoiceSetupStep.Installing or VoiceSetupStep.Failed) || status.Engine != SelectedCard.Engine)
         {
             return;
@@ -291,6 +303,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
     {
         StopSample();
         _engines.EngineStatusChanged -= _onEngineStatus;
+        Status.PropertyChanged -= OnLampChanged;
     }
 }
 

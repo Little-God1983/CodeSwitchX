@@ -468,6 +468,35 @@ public sealed class SidecarTextToSpeechTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Looking_at_the_install_never_comes_back_to_the_UI_thread()
+    {
+        var ui = new HoldingContext(); // a UI thread busy with something else: what is posted to it never runs
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(ui);
+        try
+        {
+            _tts.CheckInstall();
+            _tts.Prepare(install: false);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        await Until(() => _tts.Status.State == TextToSpeechState.NotInstalled);
+        ui.Posted.ShouldBe(0, "the disk is read on the thread pool, not on the UI thread");
+    }
+
+    private sealed class HoldingContext : SynchronizationContext
+    {
+        private int _posted;
+
+        public int Posted => _posted;
+
+        public override void Post(SendOrPostCallback d, object? state) => Interlocked.Increment(ref _posted);
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

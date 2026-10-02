@@ -106,16 +106,71 @@ public sealed class WhisperStatusTests : IDisposable
     }
 
     [Fact]
-    public void Each_model_says_whether_it_is_on_disk_whichever_is_used()
+    public async Task A_model_picked_before_any_was_loaded_waits_for_the_startup_warm_up()
     {
         Directory.CreateDirectory(_folder);
-        File.WriteAllBytes(Path.Combine(_folder, WhisperModelStore.FileName(WhisperModel.SmallEnglish)), new byte[10]);
+        await File.WriteAllBytesAsync(Path.Combine(_folder, WhisperModelStore.FileName(WhisperModel.TinyEnglish)), new byte[4096], TestContext.Current.CancellationToken);
 
-        _store.IsPresentFor(WhisperModel.SmallEnglish).ShouldBeTrue();
-        _store.IsPresentFor(WhisperModel.BaseEnglish).ShouldBeFalse();
-        _store.IsPresent.ShouldBeFalse();
+        _store.Model = WhisperModel.TinyEnglish; // Settings loading the stored model at the start
+
+        await Until(() => Told.LastOrDefault() == new DictationStatus(DictationState.Asleep, WhisperModel.TinyEnglish));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        Told.ShouldNotContain(s => s.State == DictationState.Loading, "loaded later, by the startup warm-up after its delay");
     }
 
+    [Fact]
+    public async Task A_model_picked_after_one_was_warmed_up_is_warmed_up_in_its_place()
+    {
+        Directory.CreateDirectory(_folder);
+        await File.WriteAllBytesAsync(_store.ModelPath, new byte[4096], TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(Path.Combine(_folder, WhisperModelStore.FileName(WhisperModel.TinyEnglish)), new byte[4096], TestContext.Current.CancellationToken);
+        await _service.WarmUpAsync(TestContext.Current.CancellationToken); // Base: fails on the magic number, but was tried
+
+        _store.Model = WhisperModel.TinyEnglish;
+
+        await Until(() => Told.LastOrDefault() is { State: DictationState.Failed, Model: WhisperModel.TinyEnglish });
+        Told.ShouldContain(new DictationStatus(DictationState.Loading, WhisperModel.TinyEnglish));
+    }
+
+    [Fact]
+    public async Task A_model_picked_again_while_its_download_runs_joins_that_download()
+    {
+        var downloads = new List<GatedStream>();
+        var store = new WhisperModelStore(Options.Create(new DictationOptions { ModelFolder = _folder, Model = WhisperModel.BaseEnglish }))
+        {
+            OpenDownload = (_, _) =>
+            {
+                var stream = new GatedStream(1000);
+                lock (downloads)
+                {
+                    downloads.Add(stream);
+                }
+
+                return Task.FromResult<Stream>(stream);
+            },
+        };
+        var baseDownload = store.DownloadAsync(null, CancellationToken.None);
+        store.Model = WhisperModel.TinyEnglish;
+        var tinyDownload = store.DownloadAsync(null, CancellationToken.None);
+
+        store.Model = WhisperModel.BaseEnglish;
+        store.Download.ShouldNotBeNull().Model.ShouldBe(WhisperModel.BaseEnglish, "its download is still told");
+        var again = store.DownloadAsync(null, CancellationToken.None);
+
+        await Until(() => { lock (downloads) { return downloads.Count == 2; } });
+        lock (downloads)
+        {
+            downloads.ForEach(d => d.Open());
+        }
+
+        await Task.WhenAll(baseDownload, tinyDownload, again);
+        lock (downloads)
+        {
+            downloads.Count.ShouldBe(2, "one download per model");
+        }
+
+        store.IsPresent.ShouldBeTrue();
+    }
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);

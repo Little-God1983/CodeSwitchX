@@ -158,6 +158,22 @@ public sealed partial class RavenPanelViewModelTests
         Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice is ready.")]);
     }
 
+    [Theory]
+    [InlineData(TextToSpeechState.Off)]
+    [InlineData(TextToSpeechState.NotInstalled)]
+    [InlineData(TextToSpeechState.NoEngine)]
+    public async Task An_install_stopped_says_so_in_its_note(TextToSpeechState after)
+    {
+        var vm = await NewVmAsync();
+
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading PyTorch (2.5 GB)"));
+        _speech.Report(new TextToSpeechStatus(after));
+
+        Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice stopped getting ready.")]);
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Loading, "loading the model"));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Ready));
+        Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice stopped getting ready.")], "a later load of a voice on disk is quiet");
+    }
     [Fact]
     public async Task A_load_that_fails_after_the_install_turns_its_note_into_the_warning()
     {

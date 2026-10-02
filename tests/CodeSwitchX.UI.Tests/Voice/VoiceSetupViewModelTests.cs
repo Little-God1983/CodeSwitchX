@@ -79,6 +79,21 @@ public sealed class VoiceSetupViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Looking_at_the_other_engine_once_ready_leaves_the_engine_installed_in_use()
+    {
+        var vm = await OpenAsync();
+        vm.InstallCommand.Execute(null);
+        _shell.Kokoro.Report(new TextToSpeechStatus(TextToSpeechState.Ready));
+        var stops = _shell.Kokoro.Stops;
+
+        vm.SelectedCard = vm.Cards.Single(c => c.Engine == SpeechEngine.Qwen);
+
+        _shell.Speech.Engine.ShouldBe(SpeechEngine.Kokoro, "a card only looked at picks nothing");
+        _shell.Shell.Settings.RavenVoiceEngine.ShouldBe("Kokoro");
+        _shell.Kokoro.Stops.ShouldBe(stops, "the voice just loaded keeps running");
+        vm.Step.ShouldBe(VoiceSetupStep.Choosing);
+    }
+    [Fact]
     public async Task Cancel_gives_the_install_up_and_puts_back_the_engine_picked_before()
     {
         _shell.Qwen.IsInstalled = true; // an upgrade: Qwen3-TTS was the engine
@@ -165,8 +180,6 @@ public sealed class VoiceSetupViewModelTests : IDisposable
     private sealed class FakeSamples : IVoiceSamples
     {
         public List<(SpeechEngine, string)> Played { get; } = [];
-
-        public bool Has(SpeechEngine engine, string voice) => true;
 
         public async Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct)
         {

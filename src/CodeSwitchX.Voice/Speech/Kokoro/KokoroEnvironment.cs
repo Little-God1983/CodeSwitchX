@@ -53,8 +53,11 @@ public sealed class KokoroEnvironment : ISidecarEnvironment
 
     public IReadOnlyDictionary<string, string> Variables { get; } = new Dictionary<string, string>();
 
-    public bool IsInstalled =>
-        File.Exists(Python) && File.Exists(Stamp) && File.ReadAllText(Stamp).Trim() == RecipeVersion && HasModel(Model);
+    /// <summary>The environment and the model; with the model only short, an install fetches just the missing files.</summary>
+    public bool IsInstalled => HasEnvironment && HasModel(Model);
+
+    /// <summary>The Python environment, installed completely by this version of the recipe.</summary>
+    private bool HasEnvironment => File.Exists(Python) && File.Exists(Stamp) && File.ReadAllText(Stamp).Trim() == RecipeVersion;
 
     public bool HasModel(string model) => Files.All(f => SizeOf(Path.Combine(_models, f.Name)) == f.Bytes);
 
@@ -63,7 +66,18 @@ public sealed class KokoroEnvironment : ISidecarEnvironment
 
     public string WriteScript() => SidecarScripts.Write(_root, "Kokoro.kokoro_tts_server.py");
 
+    /// <summary>Makes the environment unless it is whole, then fetches the model files not on disk whole.</summary>
     public async Task InstallAsync(IProgress<InstallStep> progress, CancellationToken ct)
+    {
+        if (!HasEnvironment)
+        {
+            await InstallEnvironmentAsync(progress, ct).ConfigureAwait(false);
+        }
+
+        await DownloadModelAsync(progress, ct).ConfigureAwait(false);
+    }
+
+    private async Task InstallEnvironmentAsync(IProgress<InstallStep> progress, CancellationToken ct)
     {
         Directory.CreateDirectory(_root);
         File.Delete(Stamp);
@@ -83,7 +97,6 @@ public sealed class KokoroEnvironment : ISidecarEnvironment
         // By name, from the environment's folder (uv runs there): uv 0.11 cuts a constraints path at its first space.
         await _uv.RunAsync(uv, _root, ["pip", "install", "--python", Python, EnginePackage, "--constraint", ConstraintsFile], ct).ConfigureAwait(false);
 
-        await DownloadModelAsync(progress, ct).ConfigureAwait(false);
         await File.WriteAllTextAsync(Stamp, RecipeVersion, ct).ConfigureAwait(false);
     }
 

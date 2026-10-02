@@ -14,7 +14,6 @@ public sealed class WhisperDictationServiceTests
         public string ModelPath => @"C:\nowhere\ggml-base.en.bin";
         public bool IsPresent => false;
         public string? LoadedRuntime => null;
-        public bool IsPresentFor(WhisperModel model) => IsPresent;
         public ModelDownload? Download => null;
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
@@ -27,7 +26,6 @@ public sealed class WhisperDictationServiceTests
         public string ModelPath => path;
         public bool IsPresent => true;
         public string? LoadedRuntime => "Vulkan";
-        public bool IsPresentFor(WhisperModel model) => IsPresent;
         public ModelDownload? Download => null;
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
@@ -61,7 +59,6 @@ public sealed class WhisperDictationServiceTests
 
         public bool IsPresent => true;
         public string? LoadedRuntime => null;
-        public bool IsPresentFor(WhisperModel model) => IsPresent;
         public ModelDownload? Download => null;
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
