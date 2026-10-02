@@ -8,6 +8,7 @@ namespace CodeSwitchX.Hook.Tests;
 public class RelayTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "csx-relay-" + Guid.NewGuid().ToString("N"));
+    private readonly StringWriter _stdout = new();
 
     public RelayTests() => Directory.CreateDirectory(_dir);
 
@@ -62,7 +63,7 @@ public class RelayTests : IDisposable
     {
         var sw = Stopwatch.StartNew();
 
-        var code = await Relay.RunAsync(["Stop"], Stdin("{}"), _dir);
+        var code = await Relay.RunAsync(["Stop"], Stdin("{}"), _stdout, _dir);
 
         code.ShouldBe(0);
         sw.ElapsedMilliseconds.ShouldBeLessThan(1000);
@@ -79,7 +80,7 @@ public class RelayTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "token"), new string('a', 64));
         var sw = Stopwatch.StartNew();
 
-        var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"s1"}"""), _dir);
+        var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"s1"}"""), _stdout, _dir);
 
         code.ShouldBe(0);
         sw.ElapsedMilliseconds.ShouldBeLessThan(3000);
@@ -90,7 +91,30 @@ public class RelayTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_dir, "endpoint.json"), """{"pipeName":"","port":1,"pid":1,"startedAtUtc":"2026-09-23T10:00:00Z"}""");
 
-        (await Relay.RunAsync(["Stop"], Stdin("{}"), _dir)).ShouldBe(0);
+        (await Relay.RunAsync(["Stop"], Stdin("{}"), _stdout, _dir)).ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("""{"stop":"Stopped."}""", "Stopped.")]
+    [InlineData("""{"stop":""}""", null)]
+    [InlineData("""{"stop":true}""", null)]
+    [InlineData("""["stop"]""", null)]
+    [InlineData("""{"other":"x"}""", null)]
+    [InlineData("not json", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void Only_a_stop_with_a_reason_is_a_stop(string? answer, string? reason)
+    {
+        Relay.StopIn(answer).ShouldBe(reason);
+    }
+
+    [Fact]
+    public void A_stop_reason_with_quotes_stays_valid_json()
+    {
+        using var answer = System.Text.Json.JsonDocument.Parse(Relay.StopAnswer("PreToolUse", "Say \"stop\"\nnow"));
+
+        answer.RootElement.GetProperty("stopReason").GetString().ShouldBe("Say \"stop\"\nnow");
+        answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("permissionDecisionReason").GetString().ShouldBe("Say \"stop\"\nnow");
     }
 
     [Fact]
@@ -184,7 +208,7 @@ public class RelayTests : IDisposable
             File.WriteAllText(Path.Combine(_dir, "token"), new string('a', 64));
             var sw = Stopwatch.StartNew();
 
-            var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"s1"}"""), _dir);
+            var code = await Relay.RunAsync(["Stop"], Stdin("""{"session_id":"s1"}"""), _stdout, _dir);
 
             code.ShouldBe(0);
             sw.ElapsedMilliseconds.ShouldBeLessThan(Relay.TotalTimeoutMs + 500, "the connection is accepted and the request never answered; the total budget must end it");

@@ -41,7 +41,11 @@ public sealed class RavenActions : IYardActions
     /// <summary>How long opening a workspace may take: VS Code started from cold takes a while to show its window.</summary>
     internal static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>How long a stop is waited for before Raven says it lands at the chat's next step: a step takes seconds.</summary>
+    internal static readonly TimeSpan StopWait = TimeSpan.FromSeconds(10);
+
     private readonly IVsCodeChats _vsCode;
+    private readonly TurnStops _stops;
     private readonly ChatSettings _chats;
     private readonly Action<string, Guid> _claim;
     private readonly Func<IRavenShell> _shell;
@@ -55,10 +59,12 @@ public sealed class RavenActions : IYardActions
     /// <param name="claim">Puts a chat on a tile before its first event (<c>SessionEngine.Claim</c>).</param>
     /// <param name="shell">The window; asked for when first needed, since it is made after the services that call this.</param>
     /// <param name="workspaceOf">The registered workspace with this id; null when it is gone.</param>
+    /// <param name="stops">Where a stop for a chat's running turn is asked for, which its hook takes at its next step.</param>
     public RavenActions(IVsCodeChats vsCode, ChatSettings chats, IEventBus bus, Action<string, Guid> claim, Func<IRavenShell> shell, IUiDispatcher ui,
-        Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TimeProvider time, ILogger<RavenActions> logger)
+        Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TurnStops stops, TimeProvider time, ILogger<RavenActions> logger)
     {
         _vsCode = vsCode;
+        _stops = stops;
         _chats = chats;
         _claim = claim;
         _shell = shell;
@@ -109,6 +115,33 @@ public sealed class RavenActions : IYardActions
         _ui.Post(() => _shell().ForgetChat(chat.Id));
         _logger.LogInformation("Raven closed chat {Id} in {Workspace}", chat.Id, chat.Workspace);
         return $"The {chat.Title} chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.";
+    }
+
+    public async Task<string> StopChatAsync(YardChat chat, CancellationToken ct)
+    {
+        if (_stops.CanStop(chat.Id) == false)
+        {
+            throw new YardActionException("The hooks Claude Code runs are an older CodeSwitchX's, which cannot stop a chat. Install the hooks "
+                + "again in CodeSwitchX's Settings, then try again; the chat can be stopped in its VS Code tab meanwhile.");
+        }
+
+        var stopped = _stops.Request(chat.Id);
+        bool taken;
+        try
+        {
+            taken = await stopped.WaitAsync(StopWait, _time, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Still asked for: it lands at the chat's next step.
+            _logger.LogInformation("Raven asked chat {Id} in {Workspace} to stop; it stops at its next step", chat.Id, chat.Workspace);
+            return $"The {chat.Title} chat stops at its next step: it is writing or in the middle of a long step, which cannot be cut off.";
+        }
+
+        _logger.LogInformation("Raven stopped chat {Id} in {Workspace}: {Taken}", chat.Id, chat.Workspace, taken);
+        return taken
+            ? $"The {chat.Title} chat is stopped. It keeps all it did; telling it to continue carries on."
+            : $"The {chat.Title} chat finished its turn before the stop came.";
     }
 
     public async Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)

@@ -29,12 +29,15 @@ public sealed class RavenActionsTests
     private readonly RavenActions _actions;
     private Workspace? _registered = Registered;
 
+    private readonly TurnStops _stops;
+
     public RavenActionsTests()
     {
         _shell = new FakeShell(_chats);
         _vsCode.Sequence = _sequence;
+        _stops = new TurnStops(_bus, _time);
         _actions = new RavenActions(_vsCode, _chats, _bus, (id, workspace) => _sequence.Add($"claim {id} {workspace}"), () => _shell, new ImmediateDispatcher(),
-            (id, _) => Task.FromResult(_registered?.Id == id ? _registered : null), _time, NullLogger<RavenActions>.Instance);
+            (id, _) => Task.FromResult(_registered?.Id == id ? _registered : null), _stops, _time, NullLogger<RavenActions>.Instance);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -85,6 +88,48 @@ public sealed class RavenActionsTests
         _shell.Forgotten.ShouldBe(["new-chat"]);
         _actions.StartedByRaven("new-chat").ShouldBeFalse();
         said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
+    }
+
+    private HookEvent Step(string session) => new() { SessionId = session, EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "Bash" };
+
+    [Fact]
+    public async Task A_stop_the_chat_s_next_step_takes_is_said_to_have_stopped_it()
+    {
+        var stop = _actions.StopChatAsync(Chat("busy", "Fix the upload"), Ct);
+        _stops.Take(Step("busy"), relayHandsItOn: true).ShouldNotBeNull();
+
+        (await stop).ShouldBe("The Fix the upload chat is stopped. It keeps all it did; telling it to continue carries on.");
+    }
+
+    [Fact]
+    public async Task A_turn_that_ends_before_the_stop_is_said_so()
+    {
+        var stop = _actions.StopChatAsync(Chat("busy", "Fix the upload"), Ct);
+        _bus.Publish(new SessionChanged(null, ChatNewsTests.Chat("busy", SessionState.Idle, _time.GetUtcNow())));
+
+        (await stop).ShouldBe("The Fix the upload chat finished its turn before the stop came.");
+    }
+
+    [Fact]
+    public async Task A_chat_whose_hooks_are_an_older_relay_s_is_not_promised_a_stop()
+    {
+        _stops.Take(Step("busy"), relayHandsItOn: false);
+
+        (await Should.ThrowAsync<YardActionException>(() => _actions.StopChatAsync(Chat("busy", "Fix the upload"), Ct))).Message
+            .ShouldStartWith("The hooks Claude Code runs are an older CodeSwitchX's");
+    }
+
+    [Fact]
+    public async Task A_stop_not_taken_in_time_lands_at_the_chat_s_next_step()
+    {
+        var stop = _actions.StopChatAsync(Chat("busy", "Fix the upload"), Ct);
+        for (var i = 0; i < 200 && !stop.IsCompleted; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        (await stop).ShouldStartWith("The Fix the upload chat stops at its next step");
     }
 
     [Fact]

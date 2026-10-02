@@ -1,7 +1,7 @@
 namespace CodeSwitchX.Core.Yard;
 
 /// <summary>
-/// What Raven's brain can do on the Yard, through the MCP tools: open and close Claude chats in a workspace's VS Code, change the
+/// What Raven's brain can do on the Yard, through the MCP tools: open, stop and close Claude chats in a workspace's VS Code, change the
 /// model and effort chats start with, and move between the Yard and a workspace in the Cab. Names are resolved before
 /// these are called (<see cref="WorkspaceMatcher"/>). A request that cannot be done throws <see cref="YardActionException"/>,
 /// whose message is written for the brain to repeat.
@@ -25,6 +25,12 @@ public interface IYardActions
     /// Returns once it has ended; its conversation stays in VS Code's session list.
     /// </summary>
     Task<string> CloseChatAsync(YardChat chat, CancellationToken ct);
+
+    /// <summary>
+    /// Stops the chat's running turn at its next tool step, keeping the chat. Returns what came of it: stopped, stopping
+    /// at its next step (it writes, or is in a long step), or done before the stop came.
+    /// </summary>
+    Task<string> StopChatAsync(YardChat chat, CancellationToken ct);
 
     /// <summary>Changes the defaults; a null leaves that one as it is.</summary>
     Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct);

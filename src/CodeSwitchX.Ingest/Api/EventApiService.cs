@@ -1,5 +1,6 @@
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Ingest.Mcp;
@@ -15,7 +16,8 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Ingest.Api;
 
 /// <summary>
-/// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus. Given the Yard, it also
+/// In-process Kestrel endpoint that receives relayed hook payloads and publishes them on the bus, and answers a tool event
+/// with the stop asked for its chat's turn, if any (<see cref="TurnStops"/>). Given the Yard, it also
 /// serves the MCP tools Raven's brain looks at it through (<see cref="YardTools"/>), and given what can be done on it,
 /// those it acts through (<see cref="YardActionTools"/>), on the loopback port under <see cref="YardMcp.Route"/>, behind the
 /// same token, and writes <c>mcp.json</c> for Claude Code to find them.
@@ -31,11 +33,17 @@ public sealed class EventApiService : IHostedService
     private readonly EventApiOptions _options;
     private readonly IYardDirectory? _yard;
     private readonly IYardActions? _actions;
+    private readonly TurnStops? _stops;
     private WebApplication? _app;
 
+    /// <summary>What a relay that hands a stop on sends along (CodeSwitchX.Hook's <c>Relay.StopsHeader</c>).</summary>
+    internal const string RelayStopsHeader = "X-CodeSwitchX-Relay-Stops";
+
+    /// <param name="stops">The stops asked for chats' turns, handed to their hook relay in its answer; null for none.</param>
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
-        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null)
+        ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null)
     {
+        _stops = stops;
         _paths = paths;
         _bus = bus;
         _tokens = tokens;
@@ -126,7 +134,16 @@ public sealed class EventApiService : IHostedService
             }
 
             _bus.Publish(new HookEventReceived(hookEvent));
-            return Results.Accepted();
+
+            // The relay waits for this answer anyway: a stop asked for the chat's turn travels in it, if the relay hands it on.
+            if (_stops is null)
+            {
+                return Results.Accepted();
+            }
+
+            return _stops.Take(hookEvent, context.Request.Headers.ContainsKey(RelayStopsHeader)) is { } reason
+                ? Results.Ok(new { stop = reason })
+                : Results.Accepted();
         });
 
         if (_yard is not null)

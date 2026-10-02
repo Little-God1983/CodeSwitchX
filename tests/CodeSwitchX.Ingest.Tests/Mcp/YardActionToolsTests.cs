@@ -168,6 +168,24 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task A_working_chat_is_stopped_at_once()
+    {
+        (await Tools.StopChat("aaaaaaaa", Ct)).ShouldBe("stopped");
+
+        _actions.Stopped.ShouldNotBeNull().Title.ShouldBe("Speech gate");
+    }
+
+    [Theory]
+    [InlineData("bbbbbbbb", "The Raven brain chat is waiting for the user, not working")]
+    [InlineData("cccccccc", "The Installer icons chat is not working on anything")]
+    public async Task Only_a_working_chat_is_stopped(string chat, string said)
+    {
+        (await Should.ThrowAsync<McpException>(() => Tools.StopChat(chat, Ct))).Message.ShouldStartWith(said);
+
+        _actions.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_chat_VS_Code_cannot_close_is_said()
     {
         _actions.Refusal = "VS Code did not close the chat: That chat is not in a tab of this VS Code window.";

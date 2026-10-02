@@ -67,6 +67,20 @@ public sealed class ChatNewsTests : IDisposable
     }
 
     [Fact]
+    public async Task The_end_of_a_turn_Raven_stopped_is_no_news_but_a_later_wait_is()
+    {
+        using var news = new ChatNews(_bus, _yard, _time, _ => null, id => id == "a");
+        _news.Dispose(); // only the one that knows the stop listens
+
+        Change("a", SessionState.Working, SessionState.Idle);
+        Change("c", SessionState.Working, SessionState.Errored);
+        (await news.TakeAsync(TestContext.Current.CancellationToken)).Select(l => l.SessionId).ShouldBe(["c"]);
+
+        Change("a", SessionState.Working, SessionState.Waiting, "Claude needs your permission to use Bash");
+        (await news.TakeAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().Kind.ShouldBe(ChatNewsKind.NeedsYou);
+    }
+
+    [Fact]
     public async Task A_chat_that_changes_twice_before_it_is_told_is_told_once_with_its_latest_news()
     {
         var arrivals = 0;

@@ -230,14 +230,14 @@ public partial class App : Application
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
+            sp.GetRequiredService<TurnStops>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
-            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path)));
+            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately));
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();
