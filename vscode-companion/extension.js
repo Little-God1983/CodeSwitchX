@@ -29,13 +29,19 @@ function activate(context) {
     recordFile = path.join(directory, `${process.pid}.json`);
 
     server = net.createServer(socket => serve(socket, token, version));
-    server.on('error', error => console.error('CodeSwitchX Companion: the pipe failed', error));
+    server.on('error', error => {
+        // A record must never point at a pipe nobody serves.
+        console.error('CodeSwitchX Companion: the pipe failed', error);
+        removeRecord();
+    });
     server.listen(pipe, () => {
         writeRecord(directory, { pid: process.pid, pipe, token, version });
     });
 
     context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
-        writeRecord(directory, { pid: process.pid, pipe, token, version });
+        if (server && server.listening) {
+            writeRecord(directory, { pid: process.pid, pipe, token, version });
+        }
     }));
 
     // Claude Code's extension activates on first use, which can take a while in a window that just started: done now,

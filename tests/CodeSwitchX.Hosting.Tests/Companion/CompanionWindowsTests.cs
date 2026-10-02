@@ -148,16 +148,35 @@ public sealed class CompanionWindowsTests : IDisposable
     [Fact]
     public async Task A_window_nobody_listens_for_is_said_not_thrown()
     {
-        var windows = new CompanionWindows(_directory, _probe) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromSeconds(1) };
+        var windows = new CompanionWindows(_directory, _probe) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromMinutes(5) };
         var nobody = new CompanionWindow(4000, @"\\.\pipe\csx-test-nobody-" + Guid.NewGuid().ToString("N"), "t", [], null, null);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
 
         var ping = await windows.SendAsync(nobody, "ping", Ct);
         var chat = await windows.SendAsync(nobody, CompanionWindows.NewChat, Ct);
 
         ping.Ok.ShouldBeFalse();
-        ping.Error.ShouldBe("The VS Code window did not answer within 0 seconds.");
-        chat.Error.ShouldBe("The VS Code window did not answer within 1 seconds. A chat tab may still open there.",
-            "opening a chat has its own, longer wait, and the tab may come after it");
+        ping.Error.ShouldNotBeNull().ShouldStartWith("The CodeSwitchX companion in that VS Code window does not answer.");
+        chat.Error.ShouldBe(ping.Error);
+        watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(30), "a pipe nobody serves costs the short wait, not the long one a chat may take to open");
+    }
+
+    [Fact]
+    public async Task A_chat_that_takes_longer_than_its_wait_may_still_open()
+    {
+        var name = "csx-test-" + Guid.NewGuid().ToString("N");
+        await using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var serving = Task.Run(async () =>
+        {
+            await server.WaitForConnectionAsync(Ct);
+            await new StreamReader(server, Encoding.UTF8).ReadLineAsync(Ct); // and never answers
+        }, Ct);
+        var windows = new CompanionWindows(_directory, _probe) { ChatTimeout = TimeSpan.FromMilliseconds(300) };
+
+        var result = await windows.SendAsync(new CompanionWindow(4000, name, "t", [], null, null), CompanionWindows.NewChat, Ct);
+        await serving;
+
+        result.Error.ShouldBe("The VS Code window did not answer within 0 seconds. A chat tab may still open there.");
     }
 
     [Fact]

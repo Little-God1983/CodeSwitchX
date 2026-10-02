@@ -215,7 +215,8 @@ public partial class App : Application
         services.AddSingleton<ICompanionInstaller>(sp => new CompanionInstaller(sp.GetRequiredService<AppPaths>().Root,
             sp.GetRequiredService<ILogger<CompanionInstaller>>()));
         services.AddHostedService(sp => new CompanionSetup(sp.GetRequiredService<ICompanionInstaller>(), sp.GetRequiredService<IWorkspaceStore>(),
-            sp.GetRequiredService<IUiDispatcher>(), () => sp.GetRequiredService<RavenPanelViewModel>(), sp.GetRequiredService<ILogger<CompanionSetup>>()));
+            sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<IUiDispatcher>(), () => sp.GetRequiredService<RavenPanelViewModel>(),
+            sp.GetRequiredService<ILogger<CompanionSetup>>()));
         services.AddSingleton<IVsCodeChats>(sp => new VsCodeChats(sp.GetRequiredService<ICompanionWindows>(), sp.GetRequiredService<ICompanionInstaller>(),
             async (workspace, ct) =>
             {
@@ -225,7 +226,7 @@ public partial class App : Application
             },
             sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.Snapshot,
             id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
+            sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),

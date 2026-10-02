@@ -34,8 +34,8 @@ public sealed record VsCodeChat(string SessionId, string Folder, string SendTo);
 /// it in <c>~/.claude/sessions</c> before any message: the new chat is a record that was not there before, whose process
 /// that host started, and which has no conversation yet. Other tabs of the window can start their claude.exe meanwhile: a
 /// window VS Code just started restores the tabs it had, and the user may open one by hand. A restored tab goes on a
-/// conversation that is on disk, so it is never taken, and only a process started while the tab was being opened counts;
-/// of two empty tabs that both fit, the newer process is taken, and both are empty chats in that window. Chats are started
+/// conversation that is on disk, so it is never taken, and only a process started after the tab was asked for counts; of
+/// two empty tabs that both fit, the newer process is taken, and both are empty chats in that window. Chats are started
 /// one at a time per folder, so two starts never take each other's chat or model.
 /// </summary>
 public sealed class VsCodeChats : IVsCodeChats
@@ -52,8 +52,9 @@ public sealed class VsCodeChats : IVsCodeChats
     internal static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
-    /// How far outside the opening of the tab its claude.exe may start and still count: the extension may start it just
-    /// after it has answered, and the process's start and this clock are not read alike.
+    /// How much earlier than the request to open the tab its claude.exe may have started and still count: the process's
+    /// start and this clock are not read alike. There is no bound after: in a window that just started, the tab's process
+    /// may come long after VS Code has answered.
     /// </summary>
     internal static readonly TimeSpan StartSlack = TimeSpan.FromSeconds(5);
 
@@ -63,6 +64,7 @@ public sealed class VsCodeChats : IVsCodeChats
     private readonly Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> _running;
     private readonly Func<IReadOnlyDictionary<int, int>> _parents;
     private readonly Func<string, bool> _hasConversation;
+    private readonly string _pendingSettings;
     private readonly TimeProvider _time;
     private readonly ILogger<VsCodeChats> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _folders = new();
@@ -71,10 +73,12 @@ public sealed class VsCodeChats : IVsCodeChats
     /// <param name="running">The chats open in VS Code tabs right now, but those of the processes given (<see cref="ClaudeLiveSessions.RunningNow"/>).</param>
     /// <param name="parents">Every running process with its parent, from one snapshot.</param>
     /// <param name="hasConversation">Whether a session has a conversation on disk: one it goes on, not a new chat.</param>
+    /// <param name="pendingSettings">Where what puts a folder's settings back is kept while a chat starts (<see cref="StartSettings"/>).</param>
     public VsCodeChats(ICompanionWindows windows, ICompanionInstaller installer, Func<Workspace, CancellationToken, Task<string?>> openVsCode,
         Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> running, Func<IReadOnlyDictionary<int, int>> parents, Func<string, bool> hasConversation,
-        TimeProvider time, ILogger<VsCodeChats> logger)
+        string pendingSettings, TimeProvider time, ILogger<VsCodeChats> logger)
     {
+        _pendingSettings = pendingSettings;
         _windows = windows;
         _installer = installer;
         _openVsCode = openVsCode;
@@ -100,7 +104,7 @@ public sealed class VsCodeChats : IVsCodeChats
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var settings = StartSettings.Apply(chatFolder, model, effort);
+            var settings = StartSettings.Apply(chatFolder, model, effort, _pendingSettings);
             try
             {
                 return await OpenChatAsync(workspace, window, chatFolder, ct).ConfigureAwait(false);
@@ -110,7 +114,7 @@ public sealed class VsCodeChats : IVsCodeChats
                 settings?.Dispose();
                 if (settings is { Restored: false })
                 {
-                    _logger.LogWarning("{File} was not put back as it was: it changed while the chat started", StartSettings.FileIn(chatFolder));
+                    _logger.LogWarning("{File} could not be put back yet; the next start of CodeSwitchX does it", StartSettings.FileIn(chatFolder));
                 }
             }
         }
@@ -152,6 +156,9 @@ public sealed class VsCodeChats : IVsCodeChats
                 {
                     throw new YardActionException($"The CodeSwitchX companion could not be installed into VS Code ({why}), so no chat can be opened there.");
                 }
+
+                // The install may have waited behind the one at startup: the companion gets its own time to start after it.
+                started = _time.GetUtcNow();
             }
 
             await Task.Delay(Poll, _time, ct).ConfigureAwait(false);
@@ -170,12 +177,11 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         var host = answer.Pid ?? window.Pid;
-        var answered = _time.GetUtcNow();
-        var span = ((sent - StartSlack).ToFileTime(), (answered + StartSlack).ToFileTime());
-        var until = answered + NewChatWait;
+        var since = (sent - StartSlack).ToFileTime();
+        var until = _time.GetUtcNow() + NewChatWait;
         while (true)
         {
-            if (NewChatOf(host, span, known) is { } chat)
+            if (NewChatOf(host, since, known) is { } chat)
             {
                 _logger.LogInformation("Opened chat {Id} ({Name}) in VS Code for {Workspace}", chat.SessionId, chat.Name, workspace.Name);
                 return new VsCodeChat(chat.SessionId, chatFolder, chat.Name);
@@ -192,12 +198,12 @@ public sealed class VsCodeChats : IVsCodeChats
     }
 
     /// <summary>
-    /// The newest chat that came since, that the window's host started while it opened the tab (<paramref name="span"/>,
-    /// as UTC file times), and that has no conversation yet; null for none so far. A chat seen once and found to be none
+    /// The newest chat that came since, that the window's host started after the tab was asked for (<paramref name="since"/>,
+    /// a UTC file time), and that has no conversation yet; null for none so far. A chat seen once and found to be none
     /// is added to <paramref name="known"/>; one whose parent is not in the snapshot yet (it started after it) is looked
     /// at again.
     /// </summary>
-    private LiveChat? NewChatOf(int host, (long From, long To) span, HashSet<int> known)
+    private LiveChat? NewChatOf(int host, long since, HashSet<int> known)
     {
         var fresh = _running(known);
         if (fresh.Count == 0)
@@ -214,7 +220,7 @@ public sealed class VsCodeChats : IVsCodeChats
                 continue;
             }
 
-            if (parent == host && chat.ProcessStart >= span.From && chat.ProcessStart <= span.To && !_hasConversation(chat.SessionId))
+            if (parent == host && chat.ProcessStart >= since && !_hasConversation(chat.SessionId))
             {
                 candidates.Add(chat);
             }

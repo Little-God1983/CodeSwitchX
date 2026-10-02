@@ -24,6 +24,7 @@ public sealed class VsCodeChatsTests : IDisposable
     private readonly List<IReadOnlySet<int>?> _skipped = [];
     private readonly List<string> _opened = [];
     private readonly FakeTimeProvider _time = new();
+    private readonly DateTimeOffset _startedAt;
     private readonly VsCodeChats _chats;
     private string? _openFailure;
 
@@ -32,6 +33,7 @@ public sealed class VsCodeChatsTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_root, "App"));
         Directory.CreateDirectory(Path.Combine(_root, "Lib"));
         _workspace = new Workspace { Name = "App", RootPath = Path.Combine(_root, "App") };
+        _startedAt = _time.GetUtcNow();
         Starts(100, "old-chat", Host, _time.GetUtcNow() - TimeSpan.FromHours(1));
         _windows.NewChat = () => Starts(200, "new-chat", Host);
         _chats = new VsCodeChats(_windows, _installer, (w, _) =>
@@ -54,7 +56,7 @@ public sealed class VsCodeChatsTests : IDisposable
                     return new Dictionary<int, int>(_parents);
                 }
             },
-            id => _conversations.Contains(id), _time, NullLogger<VsCodeChats>.Instance);
+            id => _conversations.Contains(id), Path.Combine(_root, "pending"), _time, NullLogger<VsCodeChats>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -128,6 +130,51 @@ public sealed class VsCodeChatsTests : IDisposable
         };
 
         (await _chats.StartAsync(_workspace, null, null, null, Ct)).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task A_tab_whose_process_starts_long_after_VS_Code_answered_is_still_taken()
+    {
+        // In a window that just started, the tab's webview and its claude.exe can come well after the command returned.
+        _windows.Shown = Window();
+        _windows.NewChat = () => { };
+        var start = _chats.StartAsync(_workspace, null, null, null, Ct);
+        for (var i = 0; i < 400 && _time.GetUtcNow() - _startedAt < TimeSpan.FromSeconds(20); i++)
+        {
+            await Task.Delay(1, Ct);
+            _time.Advance(VsCodeChats.Poll);
+        }
+
+        Starts(200, "new-chat", Host);
+        await Advance(() => start.IsCompleted);
+
+        (await start).SessionId.ShouldBe("new-chat");
+    }
+
+    [Fact]
+    public async Task After_a_late_install_the_companion_gets_its_full_wait_to_start()
+    {
+        // The install waited behind the one at startup until the wait was nearly over: the companion comes a moment later.
+        _windows.Installer = _installer;
+        _installer.Took = () => _time.Advance(VsCodeChats.CompanionWait - VsCodeChats.InstallAfter - TimeSpan.FromSeconds(1));
+        var start = _chats.StartAsync(_workspace, null, null, null, Ct);
+        for (var i = 0; i < 400 && _installer.Calls.Count == 0; i++)
+        {
+            await Task.Delay(1, Ct);
+            _time.Advance(VsCodeChats.Poll);
+        }
+
+        for (var i = 0; i < 20; i++)
+        {
+            await Task.Delay(1, Ct);
+            _time.Advance(VsCodeChats.Poll); // 5 s more: past the first wait, within the second
+        }
+
+        start.IsCompleted.ShouldBeFalse();
+        _windows.Shown = Window();
+        await Advance(() => start.IsCompleted);
+
+        (await start).SessionId.ShouldBe("new-chat");
     }
 
     [Fact]
@@ -404,8 +451,12 @@ public sealed class VsCodeChatsTests : IDisposable
 
         public string? Failure { get; set; }
 
+        /// <summary>What the install does to the clock: how long it took.</summary>
+        public Action Took { get; set; } = () => { };
+
         public Task<CompanionInstall> EnsureAsync(IEnumerable<string?> profiles, CancellationToken ct)
         {
+            Took();
             Calls.Add(profiles.ToArray());
             return Task.FromResult(Failure is { } failure ? new CompanionInstall([], [failure]) : new CompanionInstall(["Work"], []));
         }

@@ -104,7 +104,22 @@ public sealed class CompanionWindows : ICompanionWindows
         {
             var name = window.Pipe.StartsWith(@"\\.\pipe\", StringComparison.OrdinalIgnoreCase) ? window.Pipe[@"\\.\pipe\".Length..] : window.Pipe;
             await using var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await pipe.ConnectAsync(timeout.Token).ConfigureAwait(false);
+
+            // A companion that listens takes the connection at once: a pipe nobody serves any more (a record left behind by a
+            // host that stopped listening) costs this, not the long wait a chat may take to open.
+            using (var connect = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token))
+            {
+                connect.CancelAfter(Timeout);
+                try
+                {
+                    await pipe.ConnectAsync(connect.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    return new CompanionAnswer(false, Error: "The CodeSwitchX companion in that VS Code window does not answer. Reload the window "
+                        + "(Developer: Reload Window) and try again.");
+                }
+            }
             var request = JsonSerializer.Serialize(new { token = window.Token, command }) + "\n";
             await pipe.WriteAsync(Encoding.UTF8.GetBytes(request), timeout.Token).ConfigureAwait(false);
             await pipe.FlushAsync(timeout.Token).ConfigureAwait(false);

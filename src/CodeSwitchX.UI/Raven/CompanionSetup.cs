@@ -7,23 +7,28 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
-/// At startup, in the background, puts the shipped companion into every VS Code profile the Yard's workspaces open with,
+/// At startup, in the background, puts back any folder settings a voice start left set when the app ended in its middle,
+/// then puts the shipped companion into every VS Code profile the Yard's workspaces open with,
 /// where it is missing or another version, and says so in Raven's log. Raven opens chats in VS Code through it.
 /// </summary>
 public sealed class CompanionSetup : IHostedService
 {
     private readonly ICompanionInstaller _installer;
     private readonly IWorkspaceStore _store;
+    private readonly string _pendingSettings;
     private readonly IUiDispatcher _ui;
     private readonly Func<RavenPanelViewModel> _raven;
     private readonly ILogger<CompanionSetup> _logger;
     private readonly CancellationTokenSource _stopping = new();
 
+    /// <param name="pendingSettings">Where a start that never ended left what puts a folder's settings back (<see cref="StartSettings"/>).</param>
     /// <param name="raven">Raven's panel; asked for when there is something to say, as it is made after this starts.</param>
-    public CompanionSetup(ICompanionInstaller installer, IWorkspaceStore store, IUiDispatcher ui, Func<RavenPanelViewModel> raven, ILogger<CompanionSetup> logger)
+    public CompanionSetup(ICompanionInstaller installer, IWorkspaceStore store, string pendingSettings, IUiDispatcher ui, Func<RavenPanelViewModel> raven,
+        ILogger<CompanionSetup> logger)
     {
         _installer = installer;
         _store = store;
+        _pendingSettings = pendingSettings;
         _ui = ui;
         _raven = raven;
         _logger = logger;
@@ -48,6 +53,13 @@ public sealed class CompanionSetup : IHostedService
     {
         try
         {
+            // A run that ended in the middle of a voice start left a folder with Raven's model in its settings.
+            if (StartSettings.RecoverAll(_pendingSettings) is [_, ..] stuck)
+            {
+                var files = string.Join(", ", stuck);
+                _ui.Post(() => _raven().Warn($"Raven set a model in {files} for a chat that was starting when CodeSwitchX ended, and could not put it back. Check the file."));
+            }
+
             var workspaces = await _store.GetAllAsync(ct).ConfigureAwait(false);
             var profiles = workspaces.Select(w => w.VsCodeProfile).DefaultIfEmpty(null);
             var result = await _installer.EnsureAsync(profiles, ct).ConfigureAwait(false);
