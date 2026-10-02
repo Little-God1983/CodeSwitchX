@@ -16,9 +16,10 @@ namespace CodeSwitchX.Ingest.Live;
 /// that lacks what this needs is logged once, as that is what a new format looks like.
 /// </summary>
 /// <remarks>
-/// Not the engine's <see cref="SessionSnapshot.ClaudePid"/>: that is known only for chats whose hooks were seen, and the
-/// engine keeps a process it may not open as alive, which is right for not flagging a chat Errored and wrong for naming
-/// one to send to (a chat of the user's can always be opened).
+/// Not the engine's <see cref="SessionSnapshot.ClaudePid"/>: the engine learns it from a chat's hooks, and a tab opened
+/// again may have run none since (seen: a tab reopened while the app ran, open and idle, that the Yard showed Stale
+/// without one). The engine also keeps a process it may not open as alive, which is right for not flagging a chat Errored and
+/// wrong for naming one to send to (a chat of the user's can always be opened).
 /// </remarks>
 public sealed class ClaudeLiveSessions
 {
