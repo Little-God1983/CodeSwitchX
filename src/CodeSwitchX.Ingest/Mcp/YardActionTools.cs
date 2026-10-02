@@ -7,7 +7,7 @@ using ModelContextProtocol.Server;
 namespace CodeSwitchX.Ingest.Mcp;
 
 /// <summary>
-/// What Raven's brain can do on the Yard, as MCP tools: open and close Claude chats in a workspace's VS Code by voice, set the model
+/// What Raven's brain can do on the Yard, as MCP tools: open, stop and close Claude chats in a workspace's VS Code by voice, set the model
 /// and effort chats start with, and move between the Yard and a workspace. Names are matched here, like the looking tools
 /// match them; what cannot be done comes back as a tool error in words the brain can repeat.
 /// </summary>
@@ -111,6 +111,29 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
         }
 
         return await Act(() => actions.CloseChatAsync(one, cancellationToken)).ConfigureAwait(false);
+    }
+
+    [McpServerTool(Name = "stop_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Stops what a working chat is doing (\"stop the … chat\"), as its stop button would, and keeps the chat with all it did. "
+        + "Call it at once, without asking first. The stop lands at the chat's next tool step: one that is writing its answer or in a "
+        + "long step (a test run, say) stops when that is done. It returns what came of it; say that. To carry on, the user tells the "
+        + "chat to continue, through SendMessage.")]
+    public async Task<string> StopChat(
+        [Description("The chat's id from list_chats or start_chat; its start is enough.")] string chat,
+        CancellationToken cancellationToken = default)
+    {
+        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        if (one.NeedsYou)
+        {
+            throw new McpException($"The {one.Title} chat is waiting for the user, not working: they can answer or refuse it in its VS Code tab. Nothing was stopped.");
+        }
+
+        if (one.State != SessionState.Working)
+        {
+            throw new McpException($"The {one.Title} chat is not working on anything, so there is nothing to stop.");
+        }
+
+        return await Act(() => actions.StopChatAsync(one, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>The one chat on the Yard whose id starts so; none or more than one is an error.</summary>

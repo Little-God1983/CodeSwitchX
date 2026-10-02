@@ -39,6 +39,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult("closed");
     }
 
+    public YardChat? Stopped { get; private set; }
+
+    public Task<string> StopChatAsync(YardChat chat, CancellationToken ct)
+    {
+        Act("stop_chat");
+        Stopped = chat;
+        return Task.FromResult("stopped");
+    }
+
     public Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)
     {
         Act($"set_defaults {model} {effort}");

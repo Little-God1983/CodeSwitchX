@@ -8,7 +8,9 @@ namespace CodeSwitchX.Hook;
 
 /// <summary>
 /// Forwards one Claude Code hook payload (stdin) to the running CodeSwitchX instance.
-/// Never writes to stdout, never throws, always exits 0, so Claude Code is never disturbed.
+/// Never throws and always exits 0, so Claude Code is never disturbed. It writes to stdout only when CodeSwitchX answers
+/// a tool event with a stop for the chat's turn (the user asked Raven to stop it): then it tells Claude Code to end the
+/// turn, and on PreToolUse not to take the step it was about to.
 /// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
 /// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
@@ -31,7 +33,19 @@ internal static class Relay
     internal static string DefaultDataDirectory =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodeSwitchX");
 
-    internal static async Task<int> RunAsync(string[] args, Stream stdin, string dataDirectory)
+    /// <summary>The events whose answer may carry a stop: the turn's tool steps.</summary>
+    private static bool MayStop(string eventName) => eventName is "PreToolUse" or "PostToolUse";
+
+    /// <summary>
+    /// Says this relay hands a stop on, so CodeSwitchX can tell the user when the hooks Claude Code runs are an older
+    /// relay's, which drops it. The Event API reads the same name.
+    /// </summary>
+    internal const string StopsHeader = "X-CodeSwitchX-Relay-Stops";
+
+    /// <summary>An answer far bigger than a stop is no stop.</summary>
+    private const int MaxAnswerBytes = 4 * 1024;
+
+    internal static async Task<int> RunAsync(string[] args, Stream stdin, TextWriter stdout, string dataDirectory)
     {
         try
         {
@@ -53,7 +67,12 @@ internal static class Relay
             var envelope = BuildEnvelope(eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth));
 
             using var cts = new CancellationTokenSource(TotalTimeoutMs);
-            await PostAsync(endpoint, token, envelope, cts.Token).ConfigureAwait(false);
+            var answer = await PostAsync(endpoint, token, envelope, cts.Token).ConfigureAwait(false);
+            if (MayStop(eventName) && StopIn(answer) is { } reason)
+            {
+                await stdout.WriteAsync(StopAnswer(eventName, reason)).ConfigureAwait(false);
+                await stdout.FlushAsync().ConfigureAwait(false);
+            }
         }
         catch
         {
@@ -343,14 +362,60 @@ internal static class Relay
         }
     }
 
-    private static async Task PostAsync(EndpointInfo endpoint, string token, string envelope, CancellationToken ct)
+    /// <summary>The stop reason in CodeSwitchX's answer (<c>{"stop": "…"}</c>); null for none or anything else.</summary>
+    internal static string? StopIn(string? answer)
+    {
+        if (string.IsNullOrEmpty(answer) || !TryParseJson(answer, out var document))
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("stop", out var stop)
+                && stop.ValueKind == JsonValueKind.String
+                && stop.GetString() is { Length: > 0 } reason
+                    ? Truncate(reason)
+                    : null;
+        }
+    }
+
+    /// <summary>
+    /// What tells Claude Code to end the turn: <c>continue: false</c> with the reason, which the chat reads; on PreToolUse
+    /// also a deny, so the step it was about to take is not taken but shown as stopped.
+    /// </summary>
+    internal static string StopAnswer(string eventName, string reason)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteBoolean("continue", false);
+            writer.WriteString("stopReason", reason);
+            if (eventName == "PreToolUse")
+            {
+                writer.WriteStartObject("hookSpecificOutput");
+                writer.WriteString("hookEventName", "PreToolUse");
+                writer.WriteString("permissionDecision", "deny");
+                writer.WriteString("permissionDecisionReason", reason);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
+    }
+
+    /// <returns>The body of a 200 answer; null for any other.</returns>
+    private static async Task<string?> PostAsync(EndpointInfo endpoint, string token, string envelope, CancellationToken ct)
     {
         if (!string.IsNullOrEmpty(endpoint.PipeName))
         {
             try
             {
-                await PostViaPipeAsync(endpoint.PipeName, token, envelope, ct).ConfigureAwait(false);
-                return;
+                return await PostViaPipeAsync(endpoint.PipeName, token, envelope, ct).ConfigureAwait(false);
             }
             catch when (endpoint.Port > 0)
             {
@@ -358,13 +423,10 @@ internal static class Relay
             }
         }
 
-        if (endpoint.Port > 0)
-        {
-            await PostViaLoopbackAsync(endpoint.Port, token, envelope, ct).ConfigureAwait(false);
-        }
+        return endpoint.Port > 0 ? await PostViaLoopbackAsync(endpoint.Port, token, envelope, ct).ConfigureAwait(false) : null;
     }
 
-    private static async Task PostViaPipeAsync(string pipeName, string token, string envelope, CancellationToken ct)
+    private static async Task<string?> PostViaPipeAsync(string pipeName, string token, string envelope, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler
         {
@@ -377,23 +439,31 @@ internal static class Relay
             },
         };
         using var client = new HttpClient(handler) { BaseAddress = new Uri("http://pipe/"), Timeout = TimeSpan.FromMilliseconds(TotalTimeoutMs) };
-        await SendAsync(client, token, envelope, ct).ConfigureAwait(false);
+        return await SendAsync(client, token, envelope, ct).ConfigureAwait(false);
     }
 
-    private static async Task PostViaLoopbackAsync(int port, string token, string envelope, CancellationToken ct)
+    private static async Task<string?> PostViaLoopbackAsync(int port, string token, string envelope, CancellationToken ct)
     {
         using var handler = new SocketsHttpHandler { ConnectTimeout = TimeSpan.FromMilliseconds(ConnectTimeoutMs) };
         using var client = new HttpClient(handler) { BaseAddress = new Uri($"http://127.0.0.1:{port}/"), Timeout = TimeSpan.FromMilliseconds(TotalTimeoutMs) };
-        await SendAsync(client, token, envelope, ct).ConfigureAwait(false);
+        return await SendAsync(client, token, envelope, ct).ConfigureAwait(false);
     }
 
-    private static async Task SendAsync(HttpClient client, string token, string envelope, CancellationToken ct)
+    private static async Task<string?> SendAsync(HttpClient client, string token, string envelope, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "events")
         {
             Content = new StringContent(envelope, Encoding.UTF8, "application/json"),
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Add(StopsHeader, "1");
         using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
+        if (response.StatusCode != System.Net.HttpStatusCode.OK || response.Content.Headers.ContentLength is > MaxAnswerBytes)
+        {
+            return null;
+        }
+
+        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        return body.Length > MaxAnswerBytes ? null : body;
     }
 }
