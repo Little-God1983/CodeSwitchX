@@ -75,10 +75,10 @@ samples it has been fed, so tests drive it frame by frame.
 - **Fallbacks:** the turn ends anyway after **3 s** of silence, or when it reaches **120 s** (the recorder's limit, and
   Whisper's sensible length).
 - **Raven speaking, barge-in off:** while the listener is told Raven is speaking, no new turn starts, and a turn that
-  had not raised `SpeechStarted` yet is dropped. A turn already started is not cut off (the user may still be finishing
-  a sentence), but it ends at the user's first 0.2 s pause without asking Smart Turn, counting only frames under 0.5 as
-  that pause (Raven heard faintly through speakers may sit between 0.35 and 0.5), and the clip stops at the pause, so
-  Raven's voice after it is never sent to Whisper.
+  had not raised `SpeechStarted` yet is dropped; her voice is not kept as pre-roll. A turn already started is the
+  user's and ends as any turn does (Smart Turn, or the 3 s fallback): the panel keeps Raven quiet while the user talks,
+  so she only starts over a started turn in a short race, and ending the turn at the user's first pause would lose
+  their words.
 - `Reset()`: back to waiting, with nothing kept (pause, a mode switch, a new microphone).
 
 ### OpenMicListener
@@ -89,8 +89,8 @@ samples it has been fed, so tests drive it frame by frame.
   while it is still the current one, so a late stop never closes a newer run. Both are serialised by the listener and
   called off the UI thread. `IgnoreSpeech { set; }`. A pause is a stop: the microphone is closed, so Windows'
   microphone indicator goes off while Open mic is paused; resume starts it again. The panel sets `IgnoreSpeech` while
-  Raven speaks with voice barge-in off: no new turn starts then, but a turn already started goes on to the user's
-  pause (the user may still be finishing a sentence when an earlier answer starts to play), and ends there.
+  Raven speaks with voice barge-in off: no new turn starts then, but a turn already started goes on and ends as any
+  turn does.
 - Events, raised on the worker thread (the panel posts them to the UI thread): `SpeechStarted(run)`,
   `TurnEnded(run, clip)`, `Heard(HeardAudio)` (about 50 ms of captured audio: its loudest block's RMS for the orb's
   level, its quietest block's RMS for the silent-microphone watch, so one click in a batch of digital zeros is not
@@ -184,7 +184,8 @@ samples it has been fed, so tests drive it frame by frame.
 - **TurnDetector**, with fake models, frame by frame: a 0.4 s burst is ignored; a pause Smart Turn calls incomplete,
   then more speech, makes one turn; a complete pause ends the turn after 0.2 s; the 3 s fallback; the 0.5 s pre-roll is
   in the clip; the 120 s cap; `Reset` drops a half-spoken turn; with barge-in off, speech while Raven speaks is not a
-  turn, and a turn already started ends at the user's 0.2 s pause without Smart Turn, its clip cut there.
+  turn, and a turn already started ends as any turn does (Smart Turn, the 3 s fallback), keeping the words after a
+  short pause.
 - **WhisperFeatures** against Pipecat's numpy code on a fixed clip: the reference features are made once with uv and
   committed as a test fixture, and the C# port must match them closely.
 - **The real models** (tests that run only when the model files are present): Silero finds speech in the warm-up sample

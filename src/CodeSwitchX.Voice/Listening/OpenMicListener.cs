@@ -30,7 +30,8 @@ public interface IOpenMic
     /// <paramref name="run"/> is still the current run; an old run is left alone. Call off the UI thread.</summary>
     void Stop(OpenMicRun run);
 
-    /// <summary>What is heard is not taken as speech: Raven speaks and voice barge-in is off.</summary>
+    /// <summary>Raven speaks and voice barge-in is off: what is heard starts no turn, and a turn already started ends
+    /// as usual.</summary>
     bool IgnoreSpeech { get; set; }
 
     /// <summary>Half a second of speech: the user is talking. Carries the run. On the worker thread.</summary>
