@@ -8,7 +8,7 @@ public enum TurnStopOutcome
     /// <summary>The chat's relay took it: the turn ended at that step.</summary>
     Stopped,
 
-    /// <summary>The turn ended first (the chat idled, ended, failed, or was given a new prompt), or the stop expired.</summary>
+    /// <summary>The turn ended first (the chat idled, ended, failed, or started a new turn), or the stop expired.</summary>
     TurnEnded,
 
     /// <summary>The chat's hooks are an older CodeSwitchX's relay, which drops a stop: it would never land.</summary>
@@ -21,7 +21,7 @@ public enum TurnStopOutcome
 /// (<see cref="Take"/>) and answers Claude Code <c>continue: false</c>, and on <c>PreToolUse</c> denies the step it was
 /// about to take. So a stop lands at the chat's next tool step: a turn that only writes, or one in a long step, runs on
 /// until then. Only the main agent's events take it: what a stop does inside a sub-agent was never tried. A stop whose
-/// turn ends first (the chat idles, ends, fails, or gets a new prompt) is dropped, and so is one older than
+/// turn ends first (the chat idles, ends, fails, or starts a new turn) is dropped, and so is one older than
 /// <see cref="Lifetime"/>. Thread-safe: hooks and the bus come on any thread.
 /// </summary>
 public sealed class TurnStops : IDisposable
@@ -68,32 +68,22 @@ public sealed class TurnStops : IDisposable
     }
 
     /// <summary>
-    /// The stop for this hook event, taken; null when none is asked for it, or the event cannot carry one. A new prompt of
-    /// the chat drops a stop still asked: it was for the turn before. A relay that does not hand a stop on (an older
+    /// The stop for this hook event, taken; null when none is asked for it, or the event cannot carry one. The event is
+    /// published before this is asked, so a new turn it starts has already dropped a stop asked for the turn before. A
+    /// relay that does not hand a stop on (an older
     /// CodeSwitchX's, still in Claude Code's settings) is never given it: the stop ends as <see cref="TurnStopOutcome.OldRelay"/>,
     /// and the chat is noted as one that cannot be stopped (<see cref="CanStop"/>).
     /// </summary>
     /// <param name="relayHandsItOn">Whether the relay that sent the event tells Claude Code a stop.</param>
     public string? Take(HookEvent hookEvent, bool relayHandsItOn)
     {
-        if (hookEvent.AgentId is not null)
+        if (hookEvent.EventName is not ("PreToolUse" or "PostToolUse") || hookEvent.AgentId is not null)
         {
             return null;
         }
 
         lock (_lock)
         {
-            if (hookEvent.EventName == "UserPromptSubmit")
-            {
-                End(hookEvent.SessionId, TurnStopOutcome.TurnEnded);
-                return null;
-            }
-
-            if (hookEvent.EventName is not ("PreToolUse" or "PostToolUse"))
-            {
-                return null;
-            }
-
             _relayHandsItOn[hookEvent.SessionId] = relayHandsItOn;
             if (!relayHandsItOn)
             {
@@ -147,10 +137,12 @@ public sealed class TurnStops : IDisposable
         {
             if (state == SessionState.Working)
             {
-                // A new turn (told to continue, say): the stopped one is over, and this one's end is news again.
+                // A new turn (told to continue, say, or typed in the tab): the stopped one is over, and this one's end is news
+                // again. A stop still asked was for a turn that ended unseen (the Yard lags the bus): it must not cut this one off.
                 if (change.Previous?.State is not (SessionState.Working or SessionState.Waiting))
                 {
                     _stopped.Remove(id);
+                    End(id, TurnStopOutcome.TurnEnded);
                 }
 
                 return;

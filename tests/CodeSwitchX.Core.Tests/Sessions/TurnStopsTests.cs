@@ -72,16 +72,30 @@ public sealed class TurnStopsTests : IDisposable
     }
 
     [Fact]
-    public async Task A_new_prompt_drops_a_stop_its_turn_ended_before_it_was_asked()
+    public async Task A_new_turn_drops_a_stop_asked_after_the_turn_before_had_ended()
     {
-        // The Yard still showed the chat working when the stop was asked; its turn had ended, unseen. The user types its
-        // next one in the tab: that one is not stopped.
+        // The Yard still showed the chat working when the stop was asked; its turn had ended, unseen. The user has it
+        // continue, through Raven or in the tab: that turn is not stopped, however it started.
+        Turn("s1", SessionState.Idle, from: SessionState.Working);
         var stopped = _stops.Request("s1");
 
-        _stops.Take(Step("s1", "UserPromptSubmit"), true).ShouldBeNull();
+        Turn("s1", SessionState.Working, from: SessionState.Idle);
 
         (await stopped).ShouldBe(TurnStopOutcome.TurnEnded);
         _stops.Take(Step("s1"), true).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_prompt_heard_in_the_middle_of_a_turn_leaves_its_stop()
+    {
+        // A message that reaches a busy chat: whatever hook it fires, the turn goes on, and so does its stop.
+        var stopped = _stops.Request("s1");
+
+        _stops.Take(Step("s1", "UserPromptSubmit"), true).ShouldBeNull();
+        Turn("s1", SessionState.Working, from: SessionState.Working);
+
+        stopped.IsCompleted.ShouldBeFalse();
+        _stops.Take(Step("s1"), true).ShouldNotBeNull();
     }
 
     [Fact]
