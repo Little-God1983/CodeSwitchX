@@ -43,7 +43,9 @@ public sealed class YardTools(IYardDirectory yard)
     [McpServerTool(Name = "list_chats", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Lists the Claude Code chats the Yard shows: title, workspace, state, how long it has been in it, model, last tool "
         + "and how full its context is. \"needs you\" means the chat is stopped on the user: a question to answer or something "
-        + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me.")]
+        + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me. send_to is the name "
+        + "SendMessage takes to tell the chat something; a chat without one is not open in a VS Code tab (closed, or run in a "
+        + "terminal) and cannot be told anything from here.")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
@@ -151,18 +153,23 @@ public sealed record WorkspaceView(string Name, string Track, IReadOnlyList<stri
 public sealed record WorkspaceMatchView(string MatchedName, double Score, WorkspaceView Workspace);
 
 /// <param name="StartedByRaven">Raven started it: it can be told something (send_to_chat) or stopped (stop_chat).</param>
+/// <param name="SendTo">
+/// The name SendMessage takes to tell this chat something; null for a chat not open in a VS Code tab (closed, or run in a
+/// terminal) and for one Raven started, which takes send_to_chat.
+/// </param>
 public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
-    bool StartedByRaven)
+    bool StartedByRaven, string? SendTo)
 {
     internal static ChatView Of(YardChat chat) => new(
         chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool, YardTools.Percent(chat.ContextFill),
-        chat.Voice);
+        chat.Voice, chat.SendName);
 }
 
+/// <param name="SendTo">As <see cref="ChatView.SendTo"/>.</param>
 public sealed record ChatDetailView(string Id, string Title, string Workspace, string State, string For, DateTimeOffset Since, string? Model,
-    string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven)
+    string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven, string? SendTo)
 {
     internal static ChatDetailView Of(YardChat chat) => new(
         chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
-        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice);
+        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName);
 }

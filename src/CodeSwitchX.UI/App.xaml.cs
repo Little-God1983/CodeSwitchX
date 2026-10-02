@@ -13,6 +13,7 @@ using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Ingest;
+using CodeSwitchX.Ingest.Live;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
@@ -198,8 +199,11 @@ public partial class App : Application
         services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),
             sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), BrainRole.Teller));
+        // Which chats run right now, and the name Raven's brain messages each by.
+        services.AddSingleton<ClaudeLiveSessions>();
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
-            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IAgentLauncher>().Find(id) is not null));
+            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IAgentLauncher>().Find(id) is not null,
+            sp.GetRequiredService<ClaudeLiveSessions>().NameOf));
 
         // The chats Raven starts, and what else it does on the Yard through the MCP tools. The shell is asked for when an
         // action first needs it: the Event API that serves the tools starts before the window is made.

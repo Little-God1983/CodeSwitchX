@@ -44,7 +44,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions)
 
     [McpServerTool(Name = "send_to_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Sends the user's words to a chat Raven started, as its next message. Only chats Raven started take this (started_by_raven "
-        + "in list_chats); one that is working takes it once its turn is over.")]
+        + "in list_chats); one that is working takes it once its turn is over. Every other chat is told with SendMessage, to its send_to "
+        + "name from list_chats.")]
     public async Task<VoiceChatInfo> SendToChat(
         [Description("The chat's id from start_chat or list_chats; its first 8 characters are enough.")] string chat,
         [Description("What to tell the chat, as the user said it.")] string text,

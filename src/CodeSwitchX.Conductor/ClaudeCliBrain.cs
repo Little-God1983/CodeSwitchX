@@ -8,9 +8,9 @@ namespace CodeSwitchX.Conductor;
 
 /// <summary>
 /// Raven's brain on Claude Code: one long-lived <c>claude -p</c> that takes the turns as stream-json on its standard input,
-/// so the conversation carries on from turn to turn. It works only through the Yard: no built-in tools at all, the Yard's MCP tools
-/// from <c>mcp.json</c> and no others, anything not allowed denied without asking, and a working folder that is no
-/// repository. The user's settings are loaded (a proxy, a base URL or an API key helper in them is how some users reach
+/// so the conversation carries on from turn to turn. It works only through the Yard: of the built-in tools just
+/// <c>SendMessage</c>, with which it tells a chat running in VS Code something, the Yard's MCP tools from <c>mcp.json</c>
+/// and no others, anything not allowed denied without asking, and a working folder that is no repository. The user's settings are loaded (a proxy, a base URL or an API key helper in them is how some users reach
 /// the API at all), but with every hook turned off, so their hooks (the Yard's own, RAIVEN's) do not fire for its turns;
 /// nothing of it is saved as a session. A process that dies is started again for the next turn, which says so; one whose
 /// model no longer is the one set is replaced, and so is one that could not connect to the Yard (a few times) and one
@@ -50,8 +50,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Hooks off, everything else of the user's settings kept.</summary>
     internal const string NoHooks = """{"disableAllHooks":true}""";
 
-    /// <summary>Every tool of the Yard's server, and only those.</summary>
-    internal const string AllowedTools = "mcp__" + YardMcp.ServerName;
+    /// <summary>
+    /// The one built-in tool Raven has: Claude Code's own way for one session to message another on this machine. It
+    /// reaches the chats in VS Code's tabs, which nothing else can send to (checked with CLI 2.1.287). It asks no
+    /// permission: neither the allowed tools nor a permission prompt tool are asked about a send, so nothing here can limit
+    /// whom it sends to. It refuses a name no running session has; the system prompt keeps it to the send_to names of the
+    /// Yard's chats. A CLI that does not know it drops it from <c>--tools</c> and starts without it.
+    /// </summary>
+    internal const string SendTool = "SendMessage";
+
+    /// <summary>Every tool of the Yard's server, and sending to another chat; nothing else.</summary>
+    internal const string AllowedTools = "mcp__" + YardMcp.ServerName + "," + SendTool;
 
     private readonly AppPaths _paths;
     private readonly BrainSettings _settings;
@@ -68,6 +77,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since; kept across a restart.</summary>
     private bool _yardWarned;
+
+    /// <summary>It was said that this Claude Code cannot send to other chats; said once, as an update is what changes it.</summary>
+    private bool _sendWarned;
 
     /// <summary>Processes replaced in a row because their Yard tools failed; back to 0 once they connect.</summary>
     private int _yardRetries;
@@ -189,6 +201,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                                 _yardWarned = true;
                                 yield return new BrainNotice(problem + (_replaceAfterTurn ? " Raven tries again with the next question." : ""), Warning: true);
                             }
+                        }
+
+                        if (!_sendWarned && init.Tools is { } tools && !tools.Contains(SendTool))
+                        {
+                            _sendWarned = true;
+                            yield return new BrainNotice(
+                                "Raven cannot tell chats in VS Code anything: this Claude Code has no SendMessage tool. Update Claude Code.", Warning: true);
                         }
 
                         break;
@@ -314,7 +333,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             "--model", model,
             "--mcp-config", teller ? NoMcpServers : _paths.McpConfigFile,
             "--strict-mcp-config",
-            "--tools", "",
+            "--tools", teller ? "" : SendTool,
             "--permission-mode", "dontAsk",
             "--settings", NoHooks,
             "--no-session-persistence",

@@ -174,6 +174,24 @@ public sealed class YardDirectoryTests
     }
 
     [Fact]
+    public async Task A_running_chat_has_its_send_name_and_one_the_app_runs_has_none()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        Chat("s-code", _codeSwitchX, SessionState.Idle, "In VS Code");
+        Chat("s-closed", _codeSwitchX, SessionState.Idle, "Tab closed");
+        Chat("s-voice", _diffusion, SessionState.Working, "Raven's own");
+        var directory = new YardDirectory(_yard, id => _sessions.GetValueOrDefault(id), new ImmediateDispatcher(), _ => null,
+            isVoice: id => id == "s-voice",
+            sendNameOf: id => id == "s-closed" ? null : "name-of-" + id);
+
+        var chats = await directory.ChatsAsync(CancellationToken.None);
+
+        chats.Single(c => c.Id == "s-code").SendName.ShouldBe("name-of-s-code");
+        chats.Single(c => c.Id == "s-closed").SendName.ShouldBeNull();
+        chats.Single(c => c.Id == "s-voice").SendName.ShouldBeNull("the app runs it, and tells it things itself");
+    }
+
+    [Fact]
     public async Task A_UI_thread_that_never_answers_fails_the_read_instead_of_hanging_it()
     {
         await _yard.InitializeAsync(CancellationToken.None);
