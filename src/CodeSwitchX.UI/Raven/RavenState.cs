@@ -3,6 +3,13 @@ namespace CodeSwitchX.UI.Raven;
 public enum RavenState
 {
     Idle,
+
+    /// <summary>Open mic waits for the user: the microphone is live. The orb shows its light ring.</summary>
+    Attending,
+
+    /// <summary>Open mic is paused: the light ring, still and dimmed.</summary>
+    AttendingPaused,
+
     Listening,
     Transcribing,
 

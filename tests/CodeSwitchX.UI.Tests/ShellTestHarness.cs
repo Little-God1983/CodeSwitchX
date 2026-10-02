@@ -33,6 +33,7 @@ public sealed class ShellTestHarness
     public IWorkspaceStore Workspaces { get; } = Substitute.For<IWorkspaceStore>();
     public IUsageStore Usage { get; } = Substitute.For<IUsageStore>();
     public ISettingsStore Settings { get; } = Substitute.For<ISettingsStore>();
+    internal Raven.FakeOpenMic OpenMic { get; } = new();
     public IWindowEnumerator Windows { get; } = Substitute.For<IWindowEnumerator>();
     public IWindowDocker Docker { get; } = Substitute.For<IWindowDocker>();
     public IVsCodeLauncher Launcher { get; } = Substitute.For<IVsCodeLauncher>();
@@ -77,7 +78,7 @@ public sealed class ShellTestHarness
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
-            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance);
+            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic);
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
     }
 

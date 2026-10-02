@@ -4,4 +4,8 @@ namespace CodeSwitchX.UI.Infrastructure;
 public interface IUiDispatcher
 {
     void Post(Action action);
+
+    /// <summary>Posts <paramref name="action"/> with its <paramref name="state"/>: for work posted many times a second, a
+    /// cached static delegate and the state as a struct, so the caller allocates no closure per post.</summary>
+    void Post<T>(Action<T> action, T state);
 }

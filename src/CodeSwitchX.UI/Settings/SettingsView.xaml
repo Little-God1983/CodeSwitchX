@@ -57,6 +57,9 @@
       <CheckBox Margin="140,10,0,0" IsChecked="{Binding RavenSpeakNews}" AutomationProperties.Name="Speak chat news"
                 Content="Speak chat news"
                 ToolTip="When chats finish, fail or need you, Raven tells you in one remark once nobody is talking. Off, the news is only written in Raven's log." />
+      <CheckBox Margin="140,6,0,0" IsChecked="{Binding RavenBargeIn}" AutomationProperties.Name="Stop Raven when I talk over it"
+                Content="Stop Raven when I talk over it"
+                ToolTip="In Open mic, talking while Raven speaks stops it. Turn this off if Raven hears its own voice through your speakers: Open mic then ignores what it hears while Raven speaks." />
 
       <TextBlock Text="Chats Raven starts" FontSize="13" FontWeight="SemiBold" Margin="0,16,0,4" />
       <TextBlock TextWrapping="Wrap" Opacity="0.8"

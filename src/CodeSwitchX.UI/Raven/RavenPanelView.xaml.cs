@@ -11,11 +11,14 @@ public partial class RavenPanelView : UserControl
 {
     private RavenPanelViewModel? _viewModel;
 
+    private readonly MicModeSwitch _modeSwitch;
+
     /// <summary>The mic button the mouse is holding down, if any.</summary>
     private Button? _heldMic;
 
     public RavenPanelView()
     {
+        _modeSwitch = new MicModeSwitch(() => _viewModel);
         InitializeComponent();
         DataContextChanged += (_, _) => Bind(DataContext as RavenPanelViewModel);
     }
@@ -133,4 +136,8 @@ public partial class RavenPanelView : UserControl
 
         _ = _viewModel.TapMic(TalkInput.MicButton);
     }
+
+    private void OnModeChecked(object sender, RoutedEventArgs e) => _modeSwitch.OnChecked(sender);
+
+    private void OnModeClick(object sender, RoutedEventArgs e) => _modeSwitch.OnClicked(sender);
 }

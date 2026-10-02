@@ -14,6 +14,8 @@ public static class SettingKeys
     public const string RavenModelAliases = "raven.modelAliases";
     public const string RavenMuted = "raven.muted";
     public const string RavenSpeakNews = "raven.speakNews";
+    public const string RavenMicMode = "raven.micMode";
+    public const string RavenBargeIn = "raven.bargeIn";
     public const string RavenVoice = "raven.voice";
     public const string RavenVoiceModel = "raven.voiceModel";
 }

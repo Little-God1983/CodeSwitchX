@@ -87,6 +87,10 @@ public class YardViewModelTests : IDisposable
         public void Post(Action action)
         {
         }
+
+        public void Post<T>(Action<T> action, T state)
+        {
+        }
     }
 
     private SessionSnapshot Snapshot(string id, Guid workspaceId, SessionState state) => new()
@@ -838,6 +842,8 @@ public class YardViewModelTests : IDisposable
         private readonly Queue<Action> _posted = new();
 
         public void Post(Action action) => _posted.Enqueue(action);
+
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
 
         public void RunAll()
         {

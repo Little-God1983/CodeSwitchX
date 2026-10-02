@@ -17,25 +17,43 @@ public sealed class WpfUiDispatcher : IUiDispatcher
         _dispatcher = dispatcher;
     }
 
-    public void Post(Action action)
+    public void Post(Action action) => Post(static a => a(), action);
+
+    /// <summary>
+    /// Inline, nothing is allocated. Queued, WPF's own work item (its DispatcherOperation) and one small holder of the
+    /// action and its state are: the callback the dispatcher runs is cached.
+    /// </summary>
+    public void Post<T>(Action<T> action, T state)
     {
         if (_dispatcher.CheckAccess() && Volatile.Read(ref _queued) == 0)
         {
-            action();
+            action(state);
             return;
         }
 
         Interlocked.Increment(ref _queued);
-        _dispatcher.BeginInvoke(DispatcherPriority.Normal, () =>
+        _dispatcher.BeginInvoke(DispatcherPriority.Normal, RunQueued, new Queued<T>(this, action, state));
+    }
+
+    private static readonly SendOrPostCallback RunQueued = static queued => ((IQueued)queued!).Run();
+
+    private interface IQueued
+    {
+        void Run();
+    }
+
+    private sealed class Queued<T>(WpfUiDispatcher owner, Action<T> action, T state) : IQueued
+    {
+        public void Run()
         {
             try
             {
-                action();
+                action(state);
             }
             finally
             {
-                Interlocked.Decrement(ref _queued);
+                Interlocked.Decrement(ref owner._queued);
             }
-        });
+        }
     }
 }

@@ -672,4 +672,75 @@ public class ShellViewModelTests
         await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenSpeakNews, true, Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task The_mic_mode_is_restored_and_stored()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.MicMode.ShouldBe(MicMode.OpenMic);
+
+        _h.Shell.Raven.ChooseMicModeCommand.Execute(MicMode.PushToTalk); // the user's switch
+
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenMicMode, "PushToTalk", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_fall_back_to_push_to_talk_after_a_failed_download_leaves_the_stored_Open_mic_alone()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
+        _h.OpenMic.ModelsPresent = false;
+        _h.OpenMic.DownloadFails = new System.Net.Http.HttpRequestException("offline");
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingOpenMic.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _h.Shell.Raven.MicMode.ShouldBe(MicMode.PushToTalk);
+        _h.Shell.Raven.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicMode, "PushToTalk", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task After_a_fall_back_the_user_choosing_push_to_talk_is_stored()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
+        _h.OpenMic.ModelsPresent = false;
+        _h.OpenMic.DownloadFails = new System.Net.Http.HttpRequestException("offline");
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingOpenMic.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        _h.Shell.Raven.MicMode.ShouldBe(MicMode.PushToTalk);
+
+        _h.Shell.Raven.ChooseMicModeCommand.Execute(MicMode.PushToTalk); // the half already checked
+
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenMicMode, "PushToTalk", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_unknown_stored_mic_mode_reads_as_push_to_talk()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Shout"));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.MicMode.ShouldBe(MicMode.PushToTalk);
+    }
+
+    [Fact]
+    public async Task Barge_in_follows_the_setting()
+    {
+        _h.Settings.GetAsync<bool?>(SettingKeys.RavenBargeIn, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.BargeIn.ShouldBeFalse();
+
+        _h.Shell.Settings.RavenBargeIn = true;
+
+        _h.Shell.Raven.BargeIn.ShouldBeTrue();
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenBargeIn, true, Arg.Any<CancellationToken>());
+    }
 }

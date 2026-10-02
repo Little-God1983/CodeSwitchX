@@ -71,4 +71,33 @@ public class WpfUiDispatcherTests
             thread.Join(TimeSpan.FromSeconds(5));
         }
     }
+
+    // Fourth review of #89: a post with state, for work posted many times a second
+    [Fact]
+    public async Task A_post_with_state_from_another_thread_runs_on_the_ui_thread_in_order()
+    {
+        var ready = new TaskCompletionSource<Dispatcher>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            ready.SetResult(Dispatcher.CurrentDispatcher);
+            Dispatcher.Run();
+        }) { IsBackground = true, Name = "test-ui" };
+        thread.Start();
+        var dispatcher = await ready.Task;
+        var sut = new WpfUiDispatcher(dispatcher);
+        var order = new List<(int Value, bool OnUi)>();
+        try
+        {
+            sut.Post(static s => s.Order.Add((s.Value, s.Ui.CheckAccess())), (Order: order, Value: 1, Ui: dispatcher));
+            sut.Post(() => order.Add((2, dispatcher.CheckAccess())));
+            await dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle, TestContext.Current.CancellationToken);
+
+            order.ShouldBe([(1, true), (2, true)]);
+        }
+        finally
+        {
+            dispatcher.InvokeShutdown();
+            thread.Join(TimeSpan.FromSeconds(5));
+        }
+    }
 }

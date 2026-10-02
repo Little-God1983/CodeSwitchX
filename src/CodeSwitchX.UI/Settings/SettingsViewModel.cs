@@ -64,6 +64,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether Raven tells what the chats did; off, its digest cards are only written. On by default.</summary>
     [ObservableProperty] private bool _ravenSpeakNews = true;
 
+    /// <summary>The mic mode as stored ("PushToTalk", "OpenMic"); the panel owns it (see <see cref="Raven.RavenPanelViewModel.MicMode"/>).</summary>
+    [ObservableProperty] private string _ravenMicMode = nameof(Raven.MicMode.PushToTalk);
+
+    [ObservableProperty] private bool _ravenBargeIn = true;
+
     /// <summary>The preset voice Raven speaks with: an id of <see cref="SpeechSettings.Voices"/>.</summary>
     [ObservableProperty] private string _ravenVoice = SpeechSettings.DefaultVoice;
 
@@ -117,6 +122,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenChatEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenChatEffort, "the chat effort", ct));
             RavenMuted = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenMuted, "whether Raven is muted", ct) ?? false;
             RavenSpeakNews = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenSpeakNews, "whether Raven speaks chat news", ct) ?? true;
+            RavenMicMode = await LoadOrDefaultAsync<string?>(SettingKeys.RavenMicMode, "Raven's mic mode", ct) ?? nameof(Raven.MicMode.PushToTalk);
+            RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
             _speech.Voice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultVoice;
             RavenVoice = _speech.Voice; // the setter keeps a known voice, or the default
             RavenVoiceModel = await LoadOrDefaultAsync<SpeechModel?>(SettingKeys.RavenVoiceModel, "Raven's voice model", ct) is { } speechModel
@@ -238,6 +245,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenMutedChanged(bool value) => Persist(SettingKeys.RavenMuted, value);
 
     partial void OnRavenSpeakNewsChanged(bool value) => Persist(SettingKeys.RavenSpeakNews, value);
+
+    partial void OnRavenMicModeChanged(string value) => Persist(SettingKeys.RavenMicMode, value);
+
+    partial void OnRavenBargeInChanged(bool value) => Persist(SettingKeys.RavenBargeIn, value);
 
     partial void OnRavenVoiceChanged(string value)
     {

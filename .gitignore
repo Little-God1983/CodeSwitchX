@@ -8,3 +8,4 @@ TestResults/
 artifacts/
 node_modules/
 design-time.db*
+__pycache__/
