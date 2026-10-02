@@ -117,6 +117,69 @@ public class RelayTests : IDisposable
         answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("permissionDecisionReason").GetString().ShouldBe("Say \"stop\"\nnow");
     }
 
+    private const string Question = """
+        {"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_1",
+         "tool_input":{"questions":[{"question":"Which fruit?","header":"Fruit","options":[{"label":"Apple"},{"label":"Banana"}],"multiSelect":false},
+                                    {"question":"Which \"colour\"?","options":[{"label":"Red"}],"multiSelect":true}],"metadata":{"source":"x"}}}
+        """;
+
+    [Fact]
+    public void Answers_go_back_as_the_tool_s_input_keyed_by_each_question_s_own_text()
+    {
+        using var output = System.Text.Json.JsonDocument.Parse(Relay.AnswerOutput(Question, ["Banana", "Red, my own"])!);
+
+        var specific = output.RootElement.GetProperty("hookSpecificOutput");
+        specific.GetProperty("hookEventName").GetString().ShouldBe("PreToolUse");
+        specific.GetProperty("permissionDecision").GetString().ShouldBe("allow");
+        var input = specific.GetProperty("updatedInput");
+        input.GetProperty("questions").GetArrayLength().ShouldBe(2, "the questions stay as the chat asked them");
+        input.GetProperty("metadata").GetProperty("source").GetString().ShouldBe("x");
+        var answers = input.GetProperty("answers");
+        answers.GetProperty("Which fruit?").GetString().ShouldBe("Banana");
+        answers.GetProperty("Which \"colour\"?").GetString().ShouldBe("Red, my own");
+        output.RootElement.TryGetProperty("continue", out _).ShouldBeFalse("the chat carries on");
+    }
+
+    [Fact]
+    public void Answers_that_do_not_fit_the_questions_leave_them_to_VS_Code()
+    {
+        Relay.AnswerOutput(Question, ["Banana"]).ShouldBeNull();
+        Relay.AnswerOutput(Question, null).ShouldBeNull();
+        Relay.AnswerOutput("""{"tool_input":{}}""", ["Banana"]).ShouldBeNull();
+        Relay.AnswerOutput("not json", ["Banana"]).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"answers":["Apple","Red"]}""", 2)]
+    [InlineData("""{"answers":[]}""", -1)]
+    [InlineData("""{"answers":["Apple",""]}""", -1)]
+    [InlineData("""{"answers":["Apple",3]}""", -1)]
+    [InlineData("""{"stop":"x"}""", -1)]
+    [InlineData(null, -1)]
+    public void Only_a_list_of_answers_is_an_answer(string? answer, int count)
+    {
+        var answers = Relay.AnswersIn(answer);
+
+        if (count < 0)
+        {
+            answers.ShouldBeNull();
+        }
+        else
+        {
+            answers.ShouldNotBeNull().Count.ShouldBe(count);
+        }
+    }
+
+    [Fact]
+    public void A_question_s_envelope_keeps_its_tool_input_where_an_event_s_drops_a_big_one()
+    {
+        var options = string.Join(",", Enumerable.Range(1, 200).Select(i => $$"""{"label":"Option {{i}}","description":"{{new string('d', 60)}}"}"""));
+        var payload = $$$"""{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Q?","options":[{{{options}}}]}]}}""";
+
+        Relay.BuildEnvelope("PreToolUse", payload, DateTimeOffset.UtcNow, 1, []).ShouldNotContain("Option 200");
+        Relay.BuildEnvelope("PreToolUse", payload, DateTimeOffset.UtcNow, 1, [], maxNestedBytes: 256 * 1024).ShouldContain("Option 200");
+    }
+
     [Fact]
     public void Envelope_trims_oversized_fields_so_the_event_still_fits_the_api_body_limit()
     {

@@ -15,6 +15,7 @@ public class RelayEndToEndTests : IAsyncLifetime
     private readonly List<HookEvent> _received = [];
     private readonly StringWriter _stdout = new();
     private TurnStops _stops = null!;
+    private ChatAsks _asks = null!;
     private EventApiService _api = null!;
 
     public async ValueTask InitializeAsync()
@@ -22,8 +23,9 @@ public class RelayEndToEndTests : IAsyncLifetime
         _paths.EnsureCreated();
         _bus.Subscribe<HookEventReceived>(m => _received.Add(m.Event));
         _stops = new TurnStops(_bus, TimeProvider.System);
+        _asks = new ChatAsks(_bus, TimeProvider.System);
         _api = new EventApiService(_paths, _bus, new AccessTokenStore(_paths), TimeProvider.System, NullLoggerFactory.Instance,
-            new EventApiOptions { PipeName = "csx-e2e-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, stops: _stops);
+            new EventApiOptions { PipeName = "csx-e2e-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, stops: _stops, asks: _asks);
         await _api.StartAsync(CancellationToken.None);
     }
 
@@ -31,7 +33,71 @@ public class RelayEndToEndTests : IAsyncLifetime
     {
         await _api.StopAsync(CancellationToken.None);
         _stops.Dispose();
+        _asks.Dispose();
         Directory.Delete(_paths.Root, recursive: true);
+    }
+
+    private const string Question = """
+        {"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_1",
+         "tool_input":{"questions":[{"question":"Which fruit?","header":"Fruit","options":[{"label":"Apple"},{"label":"Banana"}],"multiSelect":false}]}}
+        """;
+
+    [Fact]
+    public async Task A_question_answered_in_the_panel_goes_back_to_Claude_Code_as_the_tool_s_input()
+    {
+        _asks.Takes = _ => true;
+        _asks.Opened += ask => _asks.Answer(ask.Id, ["Banana"]);
+
+        var code = await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        var specific = answer.RootElement.GetProperty("hookSpecificOutput");
+        specific.GetProperty("permissionDecision").GetString().ShouldBe("allow");
+        specific.GetProperty("updatedInput").GetProperty("answers").GetProperty("Which fruit?").GetString().ShouldBe("Banana");
+        _received.Select(e => (e.EventName, e.Signal)).ShouldBe([("PermissionRequest", SessionSignal.Notification)],
+            "the chat waits for the user while the panel holds it; the step itself is told by the other PreToolUse hook");
+    }
+
+    [Fact]
+    public async Task A_question_the_panel_does_not_take_is_left_to_VS_Code()
+    {
+        _asks.Takes = _ => false;
+
+        var code = await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        _stdout.ToString().ShouldBeEmpty("VS Code asks it in the chat's tab");
+        _received.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_question_left_to_VS_Code_from_the_panel_says_nothing_to_Claude_Code()
+    {
+        _asks.Takes = _ => true;
+        _asks.Opened += ask => _asks.ToVsCode(ask.Id);
+
+        await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
+
+        _stdout.ToString().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_stop_asked_while_the_panel_holds_the_chat_s_question_ends_its_turn_there()
+    {
+        _asks.Takes = _ => true;
+        Task<TurnStopOutcome>? stopped = null;
+        _asks.Opened += _ => stopped = Task.Delay(200).ContinueWith(_ => _stops.Request("s1")).Unwrap();
+
+        var code = await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        (await stopped.ShouldNotBeNull()).ShouldBe(TurnStopOutcome.Stopped, "the held step takes the stop: no later step comes while it is held");
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        answer.RootElement.GetProperty("continue").GetBoolean().ShouldBeFalse();
+        answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("permissionDecision").GetString().ShouldBe("deny");
+        _received.Select(e => (e.EventName, e.Signal)).ShouldBe([("PermissionRequest", SessionSignal.Notification), ("Stop", SessionSignal.Stop)]);
+        (_received[1].At - _received[0].At).ShouldBeGreaterThan(TimeSpan.FromMilliseconds(150), "the turn ends when it is stopped, not when it asked");
     }
 
     private static Stream Stdin(string text) => new MemoryStream(Encoding.UTF8.GetBytes(text));

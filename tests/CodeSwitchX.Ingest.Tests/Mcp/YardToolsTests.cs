@@ -154,6 +154,42 @@ public sealed class YardToolsTests
         chat.LastTool.ShouldBe("AskUserQuestion");
     }
 
+    [Fact]
+    public async Task A_chat_s_question_waiting_in_the_panel_is_shown_with_its_options()
+    {
+        var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),
+            TimeProvider.System) { Takes = _ => true };
+        _ = asks.HoldAsync(new ChatAsk("toolu_1", ChatAskKind.Question,
+            new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow },
+            [new ChatQuestion("Which fruit?", null, [new ChatQuestionOption("Apple", null), new ChatQuestionOption("Banana", null)], false)]),
+            CancellationToken.None);
+        var tools = new YardTools(_yard, asks);
+
+        var chats = await tools.ListChats("all", null, CancellationToken.None);
+        var chat = await tools.GetChat("bbbbbbbb", CancellationToken.None);
+
+        chats.Single(c => c.Title == "Raven brain").Asks.ShouldBe("\"Which fruit?\" (one of: Apple, Banana)");
+        chats.Where(c => c.Title != "Raven brain").ShouldAllBe(c => c.Asks == null);
+        chat.Asks.ShouldBe("\"Which fruit?\" (one of: Apple, Banana)");
+    }
+
+    [Fact]
+    public async Task Two_questions_asked_side_by_side_read_apart_from_one_ask_of_two_questions()
+    {
+        var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),
+            TimeProvider.System) { Takes = _ => true };
+        var at = DateTimeOffset.UtcNow;
+        foreach (var (id, text) in new[] { ("toolu_1", "Which fruit?"), ("toolu_2", "Which colour?") })
+        {
+            _ = asks.HoldAsync(new ChatAsk(id, ChatAskKind.Question, new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = at = at.AddSeconds(1) },
+                [new ChatQuestion(text, null, [], false)]), CancellationToken.None);
+        }
+
+        var chat = await new YardTools(_yard, asks).GetChat("bbbbbbbb", CancellationToken.None);
+
+        chat.Asks.ShouldBe("\"Which fruit?\" | Separately, it also asks: \"Which colour?\"");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("zzzz")]

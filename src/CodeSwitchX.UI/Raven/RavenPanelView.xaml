@@ -269,6 +269,106 @@
         </StackPanel>
       </Border>
     </DataTemplate>
+    <!-- A button on a question card: Send, Answer in VS Code. -->
+    <Style x:Key="CardButton" TargetType="Button">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="#D1D5DB" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Box" Background="#1F2937" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="10,3,10,4">
+              <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Box" Property="Background" Value="#374151" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Box" Property="Opacity" Value="0.5" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <!-- A chat's question: each question with its options to click. A card of one question that takes one option is answered by
+         the click; any other is sent with Send. Answer in VS Code leaves it to the chat's tab. Answered or let go, it says how. -->
+    <DataTemplate x:Key="QuestionEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border x:Name="Card" Background="#0F172A" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="6" Padding="10,6,10,8">
+        <StackPanel DataContext="{Binding Question}">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#F59E0B" Text="&#xE897;" VerticalAlignment="Center" Margin="0,1,7,0" />
+            <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250">
+              <Run Text="{Binding Chat, Mode=OneWay}" /><Run Text=" asks" />
+            </TextBlock>
+          </StackPanel>
+          <ItemsControl ItemsSource="{Binding Questions}" Focusable="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="{x:Type raven:ChatQuestionView}">
+                <StackPanel Margin="0,6,0,0">
+                  <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding Text}" />
+                  <ItemsControl ItemsSource="{Binding Options}" Focusable="False" Margin="0,5,0,0">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="{x:Type raven:ChatOptionView}">
+                        <Button Command="{Binding DataContext.ChooseOptionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                CommandParameter="{Binding}" IsEnabled="{Binding Question.Card.IsOpen}" Cursor="Hand" Margin="0,0,0,4"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Label}" FocusVisualStyle="{StaticResource FocusRing}">
+                          <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                              <Border x:Name="Box" Background="#1F2937" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="8,4,8,5">
+                                <StackPanel>
+                                  <TextBlock FontSize="12" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding Label}" />
+                                  <TextBlock x:Name="Description" FontSize="11" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Description}" />
+                                </StackPanel>
+                              </Border>
+                              <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                  <Setter TargetName="Box" Property="Background" Value="#374151" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsChosen}" Value="True">
+                                  <Setter TargetName="Box" Property="Background" Value="#2662D0E8" />
+                                  <Setter TargetName="Box" Property="BorderBrush" Value="#62D0E8" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Description}" Value="{x:Null}">
+                                  <Setter TargetName="Description" Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                  <Setter TargetName="Box" Property="Opacity" Value="0.6" />
+                                </Trigger>
+                              </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                          </Button.Template>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <StackPanel x:Name="Buttons" Orientation="Horizontal" Margin="0,4,0,0">
+            <Button Style="{StaticResource CardButton}" Content="Send" IsEnabled="{Binding CanSend}"
+                    Visibility="{Binding NeedsSend, Converter={StaticResource BoolVisible}}"
+                    Command="{Binding DataContext.SendAnswersCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                    ToolTip="Send the chosen options to the chat" />
+            <Button Style="{StaticResource CardButton}" Content="Answer in VS Code"
+                    Command="{Binding DataContext.AnswerInVsCodeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                    ToolTip="Leave the question to the chat's VS Code tab, which asks it there" />
+          </StackPanel>
+          <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
+        </StackPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Question.IsOpen}" Value="False">
+          <Setter TargetName="Card" Property="BorderBrush" Value="#1F2937" />
+          <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
+          <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
     <DataTemplate x:Key="NoteEntry" DataType="{x:Type raven:RavenLogEntry}">
       <TextBlock FontSize="13" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="2,0" Text="{Binding Text}" />
     </DataTemplate>
@@ -402,6 +502,9 @@
                           <DataTrigger Binding="{Binding Kind}" Value="News">
                             <Setter Property="ContentTemplate" Value="{StaticResource NewsEntry}" />
                           </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="Question">
+                            <Setter Property="ContentTemplate" Value="{StaticResource QuestionEntry}" />
+                          </DataTrigger>
                         </Style.Triggers>
                       </Style>
                     </ContentControl.Style>
@@ -456,6 +559,28 @@
                   Visibility="{Binding IsOpen, Converter={StaticResource BoolCollapsed}}">
         <Button Style="{StaticResource IconButton}" Content="&#xE76C;" Command="{Binding TogglePanelCommand}"
                 ToolTip="Expand Raven (Ctrl+Alt+J)" AutomationProperties.Name="Expand Raven" HorizontalAlignment="Center" />
+        <!-- Chats' questions that still wait for an answer here: a click opens the panel to answer them. -->
+        <Button Command="{Binding TogglePanelCommand}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,10,0,0"
+                ToolTip="{Binding OpenQuestions, StringFormat='Questions waiting for you: {0}. Click to answer.'}"
+                AutomationProperties.Name="{Binding OpenQuestions, StringFormat='{}{0} questions waiting'}" FocusVisualStyle="{StaticResource RoundFocusRing}">
+          <Button.Style>
+            <Style TargetType="Button">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding OpenQuestions}" Value="0">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Button.Style>
+          <Button.Template>
+            <ControlTemplate TargetType="Button">
+              <Border Width="22" Height="22" CornerRadius="11" Background="#F59E0B">
+                <TextBlock Text="{Binding OpenQuestions}" FontSize="11" FontWeight="SemiBold" Foreground="#111827"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+            </ControlTemplate>
+          </Button.Template>
+        </Button>
         <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
                         State="{Binding State}" Level="{Binding Level}">
           <raven:RavenOrb.Style>

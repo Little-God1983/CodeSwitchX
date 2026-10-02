@@ -36,6 +36,14 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     private bool _shellMinimized;
 
+    /// <summary>
+    /// What a chat's question is taken and kept by (<see cref="TakesAsks"/>, <see cref="KeepsAsks"/>), kept for the hook
+    /// threads that ask: the panel is open, and the workspace the Cab shows.
+    /// </summary>
+    private readonly Lock _askGate = new();
+    private bool _ravenOpen;
+    private Guid? _cabShowing;
+
     /// <summary>Counts the opens; the status strip belongs to the latest one (see <see cref="ReportFor"/>).</summary>
     private int _openAttempt;
 
@@ -98,6 +106,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // The same for the Raven panel: it owns its open state and microphone choice, the settings store them. Only the
         // user's choice is stored, never a fallback to the default, so the choice comes back when its device does.
         Raven.IsOpen = Settings.RavenPanelOpen;
+        TrackRavenOpen();
         Raven.PreferredMicrophone = Settings.RavenMicrophone;
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
@@ -111,6 +120,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             if (e.PropertyName == nameof(RavenPanelViewModel.IsOpen))
             {
                 Settings.RavenPanelOpen = Raven.IsOpen;
+                TrackRavenOpen();
             }
             else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicrophone))
             {
@@ -258,10 +268,64 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// VS Code (the rule of <see cref="RaiseHostedWindow()"/>). Told on every change of any part of that rule, not asked:
     /// the host's discovery runs on another thread.
     /// </summary>
-    private void TellHostWhereTheCabWaits() =>
+    private void TellHostWhereTheCabWaits()
+    {
         _host.WaitInCab(!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect
             ? (id, rect)
             : null);
+        bool changed;
+        lock (_askGate)
+        {
+            var cabShowing = !_shellMinimized && Mode == ShellMode.Cab ? ActiveWorkspaceId : null;
+            changed = cabShowing != _cabShowing;
+            _cabShowing = cabShowing;
+        }
+
+        if (changed)
+        {
+            AskRulesChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// Whether Raven takes a chat's question (<c>ChatAsks.Takes</c>): while its panel is open and it is kept
+    /// (<see cref="KeepsAsks"/>). Asked on the hook's thread.
+    /// </summary>
+    /// <param name="workspaceId">The chat's workspace on the Yard; null when it is on none.</param>
+    public bool TakesAsks(Guid? workspaceId)
+    {
+        lock (_askGate)
+        {
+            return _ravenOpen && Keeps(workspaceId);
+        }
+    }
+
+    /// <summary>
+    /// Whether Raven keeps a question it holds (<c>ChatAsks.Keeps</c>): not once the Cab shows the chat's own VS Code,
+    /// where the user answers it in the tab. A collapsed panel keeps it: the rail counts it. A minimised window keeps it
+    /// too: push-to-talk answers what Raven reads out.
+    /// </summary>
+    public bool KeepsAsks(Guid? workspaceId)
+    {
+        lock (_askGate)
+        {
+            return Keeps(workspaceId);
+        }
+    }
+
+    /// <summary>Under <see cref="_askGate"/>.</summary>
+    private bool Keeps(Guid? workspaceId) => workspaceId is null || workspaceId != _cabShowing;
+
+    /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
+    public event EventHandler? AskRulesChanged;
+
+    private void TrackRavenOpen()
+    {
+        lock (_askGate)
+        {
+            _ravenOpen = Raven.IsOpen;
+        }
+    }
 
     partial void OnModeChanged(ShellMode value) => TellHostWhereTheCabWaits();
 

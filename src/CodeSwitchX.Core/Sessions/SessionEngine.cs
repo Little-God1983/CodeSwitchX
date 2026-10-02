@@ -222,6 +222,7 @@ public sealed class SessionEngine : IDisposable
     /// and so does its SubagentStop; the Waiting ends when the set is empty, as Working, or as Idle when the main turn ended
     /// meanwhile. A tool use by any other agent leaves the Waiting alone. The main turn's stop or idle prompt takes the main
     /// agent out and ends the Waiting unless a sub-agent still waits; a new prompt takes the main agent out and works on.
+    /// The PreToolUse of the very step a prompt waits for, when the prompt names it and it comes late, is no progress.
     /// Without a set (a restored Waiting, an inferred one) the first tool use ends it, as before.
     /// </summary>
     private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s)
@@ -268,8 +269,17 @@ public sealed class SessionEngine : IDisposable
                 if (WaitingAgentOf(e, agents) is { } waiting)
                 {
                     agents.Waiting.Add(waiting);
+                    if (e.ToolUseId is { } asking)
+                    {
+                        agents.WaitingSteps.Add(asking);
+                    }
                 }
 
+                break;
+            case SessionSignal.ToolUse when s.State == SessionState.Waiting && e.EventName == "PreToolUse" && e.ToolUseId is { } step
+                && agents.WaitingSteps.Contains(step):
+                // The start of the very step that waits, told late (its relay and the one that asks run side by side): no progress.
+                signal = null;
                 break;
             case SessionSignal.ToolUse when s.State == SessionState.Waiting && agents.Waiting.Count > 0:
                 signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents);
@@ -299,6 +309,11 @@ public sealed class SessionEngine : IDisposable
             case SessionSignal.SessionStart or SessionSignal.SessionEnd:
                 agents = new Agents();
                 break;
+        }
+
+        if (agents.Waiting.Count == 0)
+        {
+            agents.WaitingSteps.Clear();
         }
 
         if (agents.Idle)
@@ -350,6 +365,9 @@ public sealed class SessionEngine : IDisposable
         public List<(string Agent, string? ToolUseId)> Open { get; } = [];
 
         public HashSet<string> Waiting { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The tool uses whose prompt waits, where the prompt named one: their own late PreToolUse is no progress.</summary>
+        public HashSet<string> WaitingSteps { get; } = new(StringComparer.Ordinal);
 
         public bool TurnEnded { get; set; }
 

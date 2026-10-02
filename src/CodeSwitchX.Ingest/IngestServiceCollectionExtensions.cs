@@ -13,7 +13,7 @@ namespace CodeSwitchX.Ingest;
 /// </summary>
 public static class IngestServiceCollectionExtensions
 {
-    /// <summary>The Event API (the hook pipe and its token), the stops it hands the hooks, and the hook installer.</summary>
+    /// <summary>The Event API (the hook pipe and its token), the stops it hands the hooks, the asks it holds, and the hook installer.</summary>
     public static IServiceCollection AddCodeSwitchXEventApi(this IServiceCollection services, Action<EventApiOptions>? configure = null)
     {
         var options = new EventApiOptions();
@@ -21,6 +21,7 @@ public static class IngestServiceCollectionExtensions
         services.AddSingleton(options);
         services.AddSingleton<AccessTokenStore>();
         services.AddSingleton<TurnStops>();
+        services.AddSingleton<ChatAsks>();
         services.AddSingleton<EventApiService>();
         services.AddHostedService(sp => sp.GetRequiredService<EventApiService>());
         services.AddSingleton<ClaudeHookInstaller>();

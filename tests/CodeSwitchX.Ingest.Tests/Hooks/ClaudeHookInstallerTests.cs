@@ -30,6 +30,16 @@ public class ClaudeHookInstallerTests : IDisposable
 
     private JsonObject Settings() => JsonNode.Parse(File.ReadAllText(_paths.SettingsFile))!.AsObject();
 
+    /// <summary>The event's groups without a matcher: those of the entries every tool runs, not the one for questions.</summary>
+    private List<JsonObject> MainGroups(string eventName) =>
+        Settings()["hooks"]![eventName]!.AsArray().Select(g => g!.AsObject()).Where(g => !g.ContainsKey("matcher")).ToList();
+
+    private (JsonObject Group, JsonObject Hook) AskEntry() =>
+        Settings()["hooks"]!["PreToolUse"]!.AsArray().Select(g => g!.AsObject())
+            .SelectMany(g => g["hooks"]!.AsArray().Select(h => (Group: g, Hook: h!.AsObject())))
+            .Where(e => e.Hook["args"]?.AsArray().Select(a => a!.GetValue<string>()).SequenceEqual([ClaudeHookInstaller.AskArgument]) == true)
+            .ShouldHaveSingleItem();
+
     private void WriteSettings(string json)
     {
         Directory.CreateDirectory(_paths.ClaudeDirectory);
@@ -45,12 +55,70 @@ public class ClaudeHookInstallerTests : IDisposable
         result.BackupFile.ShouldBeNull();
         var hooks = Settings()["hooks"]!.AsObject();
         hooks.Select(kv => kv.Key).ShouldBe(ClaudeHookInstaller.Events, ignoreOrder: true);
-        var pre = hooks["PreToolUse"]!.AsArray().ShouldHaveSingleItem()!.AsObject();
-        pre.ContainsKey("matcher").ShouldBeFalse();
+        var pre = MainGroups("PreToolUse").ShouldHaveSingleItem();
         var hook = pre["hooks"]!.AsArray().ShouldHaveSingleItem()!.AsObject();
         hook["type"]!.GetValue<string>().ShouldBe("command");
         hook["timeout"]!.GetValue<int>().ShouldBe(5);
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+    }
+
+    [Fact]
+    public void Install_adds_the_entry_that_holds_a_chats_question_with_its_own_matcher_and_a_long_timeout()
+    {
+        // Only a question runs it, and it waits while the user answers in Raven's panel: the 5 s of the other entries would cut that off.
+        _installer.Install(Exe);
+
+        var (group, hook) = AskEntry();
+        group["matcher"]!.GetValue<string>().ShouldBe("AskUserQuestion");
+        group["hooks"]!.AsArray().ShouldHaveSingleItem();
+        hook["command"]!.GetValue<string>().ShouldBe(Exe);
+        hook["timeout"]!.GetValue<int>().ShouldBe(ClaudeHookInstaller.AskTimeoutSeconds);
+        ClaudeHookInstaller.AskTimeoutSeconds.ShouldBeGreaterThan((int)Core.Sessions.ChatAsks.Lifetime.TotalSeconds,
+            "CodeSwitchX lets a question go to VS Code before Claude Code kills the hook");
+    }
+
+    [Fact]
+    public void An_install_from_before_questions_is_Outdated_and_reinstall_adds_the_entry_once()
+    {
+        _installer.Install(Exe);
+        var settings = Settings();
+        var pre = settings["hooks"]!["PreToolUse"]!.AsArray();
+        pre.Remove(pre.Single(g => g!.AsObject().ContainsKey("matcher")));
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+        _installer.Install(Exe).Changed.ShouldBeFalse();
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        AskEntry().Group["matcher"]!.GetValue<string>().ShouldBe("AskUserQuestion");
+        MainGroups("PreToolUse").ShouldHaveSingleItem()["hooks"]!.AsArray().ShouldHaveSingleItem()!["args"]![0]!.GetValue<string>().ShouldBe("PreToolUse");
+    }
+
+    [Fact]
+    public void A_question_entry_moved_out_of_its_matcher_is_put_back_so_no_other_tool_waits_on_it()
+    {
+        _installer.Install(Exe);
+        var settings = Settings();
+        var pre = settings["hooks"]!["PreToolUse"]!.AsArray();
+        pre.Single(g => g!.AsObject().ContainsKey("matcher"))!.AsObject().Remove("matcher");
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+
+        _installer.Install(Exe);
+
+        AskEntry().Group["matcher"]!.GetValue<string>().ShouldBe("AskUserQuestion");
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+    }
+
+    [Fact]
+    public void Uninstall_removes_the_question_entry_with_the_others()
+    {
+        _installer.Install(Exe);
+
+        _installer.Uninstall();
+
+        File.ReadAllText(_paths.SettingsFile).ShouldNotContain(ClaudeHookInstaller.Marker);
     }
 
     [Fact]
@@ -86,7 +154,7 @@ public class ClaudeHookInstallerTests : IDisposable
         _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
         foreach (var eventName in ClaudeHookInstaller.Events)
         {
-            var hook = Settings()["hooks"]![eventName]!.AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+            var hook = MainGroups(eventName).ShouldHaveSingleItem()["hooks"]!.AsArray().ShouldHaveSingleItem()!;
             hook["command"]!.GetValue<string>().ShouldBe(Exe);
             hook["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe([eventName]);
         }
@@ -233,7 +301,7 @@ public class ClaudeHookInstallerTests : IDisposable
         var settings = Settings();
         settings["permissions"]!["allow"]![0]!.GetValue<string>().ShouldBe("Bash(git *)");
         var pre = settings["hooks"]!["PreToolUse"]!.AsArray();
-        pre.Count.ShouldBe(2);
+        pre.Count.ShouldBe(3, "the foreign group, ours for every tool, and ours for questions");
         pre[0]!["matcher"]!.GetValue<string>().ShouldBe("Bash");
         settings["hooks"]!["Stop"]!.AsArray().Count.ShouldBe(2);
     }

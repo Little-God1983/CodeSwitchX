@@ -155,7 +155,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             HookInstallState.Installed => $"Installed ({status.InstalledEvents.Count} of {ClaudeHookInstaller.Events.Length} events)",
             HookInstallState.Partial => $"Partial: missing {string.Join(", ", status.MissingEvents)}. Install again to add {(status.MissingEvents.Count == 1 ? "it" : "them")}.",
-            HookInstallState.Outdated => "Installed, but the entries are out of date (an older path or form). Install again to update them.",
+            HookInstallState.Outdated => "Installed, but the entries are out of date (an older path or form, or none yet for chats' questions). Install again to update them.",
             HookInstallState.Unreadable => $"Unknown: {status.Problem}",
             _ => "Not installed. Tile states fall back to transcript inference.",
         };

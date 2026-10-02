@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -193,10 +195,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// starts once the listing is applied.</summary>
     private bool _openMicWaitsForList;
 
+    private readonly ChatAsks? _asks;
+    private readonly IYardDirectory? _yard;
+
+    /// <summary>The question cards still open, by their ask's id (UI thread).</summary>
+    private readonly Dictionary<string, ChatQuestionCard> _askCards = new(StringComparer.Ordinal);
+
+    /// <summary>Questions shown and not yet read out: they go before the news when the floor is free (UI thread).</summary>
+    private readonly List<ChatQuestionCard> _untold = [];
+
+    /// <param name="asks">What chats ask, held while the user answers it here; null shows no questions.</param>
+    /// <param name="yard">Names the chat that asks, as the Yard shows it.</param>
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
-        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null)
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -248,7 +261,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             openMic.Heard += (_, heard) => _dispatcher.Post(static s => s.Panel.OnOpenHeard(s.Heard), (Panel: this, Heard: heard));
             openMic.Failed += (_, run) => _dispatcher.Post(() => OnOpenMicFailed(run));
         }
+
+        _asks = asks;
+        _yard = yard;
+        if (asks is not null)
+        {
+            asks.Opened += ask => _dispatcher.Post(() => OnAsked(ask));
+            asks.Closed += closed => _dispatcher.Post(() => OnAskClosed(closed));
+        }
     }
+
+    /// <summary>How many chats' questions wait for an answer here: the collapsed rail shows it.</summary>
+    [ObservableProperty]
+    private int _openQuestions;
 
     /// <summary>Raised when the user clicks a chat's line on a digest card: the shell shows its tile.</summary>
     public event EventHandler<Guid>? TileRequested;
@@ -1634,7 +1659,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void ScheduleNews()
     {
-        if (_news is { HasNews: true } && FloorIsFree)
+        if ((_news is { HasNews: true } || _untold.Count > 0) && FloorIsFree)
         {
             _newsTimer.Change(NewsGrace, Timeout.InfiniteTimeSpan);
         }
@@ -1645,7 +1670,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private void TellNewsIfFree()
     {
-        if (_news is not { HasNews: true } || !FloorIsFree)
+        if ((_news is not { HasNews: true } && _untold.Count == 0) || !FloorIsFree)
         {
             return; // the next change of state schedules it again
         }
@@ -1655,8 +1680,199 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _digest = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
         _telling = true;
         UpdateState();
-        _conversation = TellNewsAsync(_conversation, _news, _digest.Token);
+        // A chat's question goes before the news: the chat is stopped on it. The news follows once the floor is free again.
+        _conversation = _untold.Count > 0
+            ? TellQuestionsAsync(_conversation, _digest.Token)
+            : TellNewsAsync(_conversation, _news!, _digest.Token);
     }
+
+    /// <summary>A chat asks something: its card goes in the log, to be read out when the floor is free.</summary>
+    private void OnAsked(ChatAsk ask)
+    {
+        if (_asks?.IsHeld(ask.Id) == false)
+        {
+            return; // it ended before it got here (the Cab changed, say): its Closed found no card, and a card now would stay open
+        }
+
+        var card = new ChatQuestionCard(ask);
+        var entry = new RavenLogEntry(RavenLogKind.Question, "asks", _time.GetUtcNow()) { Question = card };
+        Append(entry);
+        _askCards[ask.Id] = card;
+        _untold.Add(card);
+        OpenQuestions = _askCards.Count;
+        card.Naming = NameAsync(card);
+        ScheduleNews();
+    }
+
+    /// <summary>Names the chat as the Yard shows it, for the card and for what Raven says. Never faults.</summary>
+    private async Task NameAsync(ChatQuestionCard card)
+    {
+        if (_yard is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var chat = (await _yard.ChatsAsync(CancellationToken.None)).FirstOrDefault(c => c.Id == card.Ask.SessionId);
+            if (chat is not null)
+            {
+                card.Chat = $"{chat.Workspace} · {chat.Title}";
+                card.Said = $"{chat.Workspace}, chat \"{chat.Title}\"";
+                card.WorkspaceId = chat.WorkspaceId;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(ex, "Could not name the chat that asks");
+        }
+    }
+
+    /// <summary>A held question ended: its card shows how, and takes no more clicks.</summary>
+    private void OnAskClosed(ChatAskClosed closed)
+    {
+        if (!_askCards.Remove(closed.Ask.Id, out var card))
+        {
+            return;
+        }
+
+        _untold.Remove(card);
+        // Not told yet to the brain that acts, it is not told at all: the chat waits for no answer here any more.
+        var fact = QuestionFact(card);
+        _toldNews.RemoveAll(t => t.Fact == fact);
+        OpenQuestions = _askCards.Count;
+        card.IsOpen = false;
+        card.Outcome = closed.Outcome switch
+        {
+            ChatAskOutcome.Answered => "Answered: " + string.Join("; ", closed.Answers ?? []),
+            ChatAskOutcome.ToVsCode => "Left to VS Code: it asks there.",
+            ChatAskOutcome.TimedOut => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
+            ChatAskOutcome.Stopped => "The chat was stopped.",
+            _ => "The chat stopped waiting for it.",
+        };
+    }
+
+    /// <summary>An option was clicked: chosen, and for a card of one question that takes one option, sent at once.</summary>
+    [RelayCommand]
+    private void ChooseOption(ChatOptionView? option)
+    {
+        if (option is null || !option.Question.Card.IsOpen)
+        {
+            return;
+        }
+
+        option.Question.Choose(option);
+        if (!option.Question.Card.NeedsSend)
+        {
+            SendAnswers(option.Question.Card);
+        }
+    }
+
+    /// <summary>The card's answers go to the chat, which carries on with them.</summary>
+    [RelayCommand]
+    private void SendAnswers(ChatQuestionCard? card)
+    {
+        if (card is not { CanSend: true } || _asks is null)
+        {
+            return;
+        }
+
+        if (!_asks.Answer(card.Ask.Id, card.Answers()) && card.IsOpen)
+        {
+            card.IsOpen = false;
+            card.Outcome = "The chat no longer waits for it.";
+        }
+    }
+
+    /// <summary>The question goes to the chat's VS Code tab, which asks it there.</summary>
+    [RelayCommand]
+    private void AnswerInVsCode(ChatQuestionCard? card)
+    {
+        if (card is { IsOpen: true })
+        {
+            _asks?.ToVsCode(card.Ask.Id);
+        }
+    }
+
+    /// <summary>
+    /// Reads out the questions not read yet: who asks, what, and the options. The brain that acts is told them with the
+    /// user's next question, so "the first one" answers it. Muted, or with news not to be spoken, the cards are only shown.
+    /// Never faults.
+    /// </summary>
+    private async Task TellQuestionsAsync(Task previous, CancellationToken floor)
+    {
+        ReplyVoice.SpokenReply? spoken = null;
+        try
+        {
+            await previous;
+            var cards = _untold.Where(c => c.IsOpen).ToList();
+            _untold.Clear();
+            foreach (var card in cards)
+            {
+                await card.Naming;
+            }
+
+            cards.RemoveAll(c => !c.IsOpen);
+            if (cards.Count == 0)
+            {
+                return;
+            }
+
+            var at = _time.GetUtcNow();
+            _toldNews.AddRange(cards.Select(c => (at, QuestionFact(c))));
+            if (!SpeakNews || IsMuted || floor.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _voice.Expect();
+            spoken = _voice.Begin();
+            spoken.Add(QuestionSentence(cards));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reading out a chat's question failed");
+        }
+        finally
+        {
+            spoken?.Complete();
+            _telling = false;
+            UpdateState();
+        }
+    }
+
+    /// <summary>What Raven says of the questions: "CodeSwitchX, chat "Fix the upload" asks: Which fruit? Apple, Banana or Cherry."</summary>
+    internal static string QuestionSentence(IReadOnlyList<ChatQuestionCard> cards)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (var card in cards)
+        {
+            text.Append(text.Length == 0 ? "" : " ").Append(card.Said)
+                .Append(card.Questions.Count == 1 ? " asks: " : $" asks {card.Questions.Count} questions. ");
+            foreach (var question in card.Questions)
+            {
+                text.Append(Sentence(question.Text));
+                var labels = question.Options.Select(o => o.Label).ToList();
+                if (labels.Count > 0)
+                {
+                    text.Append(' ').Append(question.MultiSelect ? "Any of " : "")
+                        .Append(labels.Count == 1 ? labels[0] : string.Join(", ", labels[..^1]) + " or " + labels[^1]).Append(". ");
+                }
+                else
+                {
+                    text.Append(' ');
+                }
+            }
+        }
+
+        return text.ToString().TrimEnd();
+    }
+
+    private static string Sentence(string text) => text.TrimEnd() is var t && t.Length > 0 && ".?!".Contains(t[^1]) ? t : t + ".";
+
+    /// <summary>The question as the brain that acts is told it: the chat, its id, each question and its options.</summary>
+    internal static string QuestionFact(ChatQuestionCard card) =>
+        $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. answer_question answers it";
 
     /// <summary>
     /// The digest: one card that lists the news, and the teller wording it in a few words, as conversation. Muted, or
@@ -1950,9 +2166,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>The oldest entries go first: the log of a panel left open for days of dictation would grow for good.</summary>
-    private RavenLogEntry AddEntry(RavenLogKind kind, string text)
+    private RavenLogEntry AddEntry(RavenLogKind kind, string text) => Append(new RavenLogEntry(kind, text, _time.GetUtcNow()));
+
+    private RavenLogEntry Append(RavenLogEntry entry)
     {
-        var entry = new RavenLogEntry(kind, text, _time.GetUtcNow());
         while (Log.Count >= MaximumLogEntries)
         {
             Log.RemoveAt(0);
