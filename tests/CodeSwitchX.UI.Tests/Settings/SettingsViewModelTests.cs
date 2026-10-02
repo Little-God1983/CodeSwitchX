@@ -501,14 +501,12 @@ public class SettingsViewModelTests : IDisposable
         _store.GetAsync<string>(SettingKeys.RavenVoiceEngine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Kokoro"));
         _store.GetAsync<string>(SettingKeys.RavenVoice, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("aiden"));
         await _vm.LoadAsync(CancellationToken.None);
-        (_vm.IsQwen, _vm.RavenVoice).ShouldBe((false, "af_heart"));
-        _vm.VoiceChoices.ShouldBe(SpeechSettings.KokoroVoices);
+        (_vm.IsKokoro, _vm.IsQwen, _vm.RavenKokoroVoice).ShouldBe((true, false, "af_heart"));
 
-        _vm.RavenVoice = "bf_emma";
+        _vm.RavenKokoroVoice = "bf_emma";
         _vm.RavenVoiceEngine = "Qwen";
 
-        (_vm.IsQwen, _vm.RavenVoice).ShouldBe((true, "aiden"));
-        _vm.VoiceChoices.ShouldBe(SpeechSettings.QwenVoices);
+        (_vm.IsKokoro, _vm.IsQwen, _vm.RavenQwenVoice).ShouldBe((false, true, "aiden"));
         (_speech.Engine, _speech.KokoroVoice, _speech.QwenVoice).ShouldBe((SpeechEngine.Qwen, "bf_emma", "aiden"));
         await FlushAsync();
         await _store.Received().SetAsync(SettingKeys.RavenKokoroVoice, "bf_emma", Arg.Any<CancellationToken>());
@@ -522,7 +520,7 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.PickVoice(SpeechEngine.Kokoro, "am_michael");
 
-        (_vm.RavenVoiceEngine, _vm.RavenVoice, _speech.Engine, _speech.KokoroVoice).ShouldBe(("Kokoro", "am_michael", SpeechEngine.Kokoro, "am_michael"));
+        (_vm.RavenVoiceEngine, _vm.RavenKokoroVoice, _speech.Engine, _speech.KokoroVoice).ShouldBe(("Kokoro", "am_michael", SpeechEngine.Kokoro, "am_michael"));
         await FlushAsync();
         await _store.Received().SetAsync(SettingKeys.RavenKokoroVoice, "am_michael", Arg.Any<CancellationToken>());
     }

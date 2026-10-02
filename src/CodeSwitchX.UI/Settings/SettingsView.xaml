@@ -2,6 +2,13 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice">
+  <UserControl.Resources>
+    <DataTemplate x:Key="VoiceChoice">
+      <TextBlock>
+        <Run Text="{Binding Name, Mode=OneTime}" /><Run Text=" · " /><Run Text="{Binding Description, Mode=OneTime}" Foreground="Gray" />
+      </TextBlock>
+    </DataTemplate>
+  </UserControl.Resources>
   <ScrollViewer VerticalScrollBarVisibility="Auto">
     <StackPanel Margin="24" MaxWidth="760" HorizontalAlignment="Left">
       <DockPanel>
@@ -45,18 +52,18 @@
         <Button Content="Voice setup…" Command="{Binding OpenVoiceSetupCommand}" Margin="12,0,0,0" HorizontalAlignment="Left"
                 ToolTip="Pick an engine and a voice, hear them, and install the engine now." />
       </DockPanel>
-      <DockPanel Margin="0,8,0,0" Visibility="{Binding HasEngine, Converter={StaticResource BoolVisible}}">
+      <!-- One Voice box per engine, each with its own list: the one of the engine picked shows. -->
+      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsKokoro, Converter={StaticResource BoolVisible}}">
         <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
         <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
-                  ItemsSource="{Binding VoiceChoices}" SelectedValuePath="Id" SelectedValue="{Binding RavenVoice}">
-          <ComboBox.ItemTemplate>
-            <DataTemplate>
-              <TextBlock>
-                <Run Text="{Binding Name, Mode=OneTime}" /><Run Text=" · " /><Run Text="{Binding Description, Mode=OneTime}" Foreground="Gray" />
-              </TextBlock>
-            </DataTemplate>
-          </ComboBox.ItemTemplate>
-        </ComboBox>
+                  ItemsSource="{Binding KokoroVoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenKokoroVoice}"
+                  ItemTemplate="{StaticResource VoiceChoice}" />
+      </DockPanel>
+      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsQwen, Converter={StaticResource BoolVisible}}">
+        <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
+        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
+                  ItemsSource="{Binding QwenVoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenQwenVoice}"
+                  ItemTemplate="{StaticResource VoiceChoice}" />
       </DockPanel>
       <DockPanel Margin="0,8,0,0" Visibility="{Binding IsQwen, Converter={StaticResource BoolVisible}}">
         <TextBlock Text="Voice model" VerticalAlignment="Center" Width="140" />

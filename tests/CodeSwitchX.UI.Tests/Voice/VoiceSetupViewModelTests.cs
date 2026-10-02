@@ -137,6 +137,16 @@ public sealed class VoiceSetupViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Opened_with_an_engine_in_use_it_says_so_and_closes_rather_than_skips()
+    {
+        _shell.Qwen.IsInstalled = true;
+        var vm = await OpenAsync();
+
+        (vm.SelectedCard.Engine, vm.CloseText).ShouldBe((SpeechEngine.Qwen, "Close"));
+        vm.FooterText.ShouldBe("Raven speaks with Qwen3-TTS now. Pick another engine or voice, or close.");
+    }
+
+    [Fact]
     public async Task Skipping_leaves_Raven_answering_in_text()
     {
         var vm = await OpenAsync();
@@ -146,6 +156,7 @@ public sealed class VoiceSetupViewModelTests : IDisposable
         vm.CloseCommand.Execute(null);
 
         closed.ShouldBeTrue();
+        vm.CloseText.ShouldBe("Skip for now");
         _shell.Speech.Engine.ShouldBeNull();
         _shell.Kokoro.Installs.ShouldBe(0, "nothing is installed in the background");
     }

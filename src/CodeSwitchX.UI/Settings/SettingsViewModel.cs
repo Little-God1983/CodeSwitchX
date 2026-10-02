@@ -75,18 +75,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RavenVoice), nameof(VoiceChoices), nameof(HasEngine), nameof(IsQwen))]
+    [NotifyPropertyChangedFor(nameof(HasEngine), nameof(IsQwen), nameof(IsKokoro))]
     private string _ravenVoiceEngine = NoEngine;
 
     /// <summary>Qwen3-TTS's preset voice: an id of <see cref="SpeechSettings.QwenVoices"/>.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RavenVoice))]
-    private string _ravenQwenVoice = SpeechSettings.DefaultQwenVoice;
+    [ObservableProperty] private string _ravenQwenVoice = SpeechSettings.DefaultQwenVoice;
 
     /// <summary>Kokoro's voice: an id of <see cref="SpeechSettings.KokoroVoices"/>.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(RavenVoice))]
-    private string _ravenKokoroVoice = SpeechSettings.DefaultKokoroVoice;
+    [ObservableProperty] private string _ravenKokoroVoice = SpeechSettings.DefaultKokoroVoice;
 
     /// <summary>The Qwen3-TTS model Raven speaks with; a change restarts the voice.</summary>
     [ObservableProperty] private SpeechModel _ravenVoiceModel = SpeechModel.Small;
@@ -344,46 +340,28 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The model choice is Qwen3-TTS's only.</summary>
     public bool IsQwen => Engine == SpeechEngine.Qwen;
 
-    /// <summary>The voice of the engine picked, as the Voice box shows and changes it.</summary>
-    public string RavenVoice
-    {
-        get => Engine == SpeechEngine.Kokoro ? RavenKokoroVoice : RavenQwenVoice;
-        set
-        {
-            if (value is null)
-            {
-                return; // the box clears its selection as its list changes with the engine
-            }
+    public bool IsKokoro => Engine == SpeechEngine.Kokoro;
 
-            if (Engine == SpeechEngine.Kokoro)
-            {
-                RavenKokoroVoice = value;
-            }
-            else
-            {
-                RavenQwenVoice = value;
-            }
-        }
-    }
+    /// <summary>Kokoro's voices; each engine has its own Voice box, the one of the engine picked shows.</summary>
+    public static IReadOnlyList<SpeechVoice> KokoroVoiceChoices => SpeechSettings.KokoroVoices;
 
-    /// <summary>The voices of the engine picked.</summary>
-    public IReadOnlyList<SpeechVoice> VoiceChoices => SpeechSettings.VoicesOf(Engine ?? SpeechEngine.Kokoro);
-
+    /// <summary>Qwen3-TTS's voices.</summary>
+    public static IReadOnlyList<SpeechVoice> QwenVoiceChoices => SpeechSettings.QwenVoices;
     /// <summary>The engines the Settings view offers, none first.</summary>
     public static IReadOnlyList<EngineChoice> EngineChoices { get; } =
     [
         new(NoEngine, "None: Raven answers in text"),
-        new(nameof(SpeechEngine.Kokoro), "Kokoro (small, runs on any PC)"),
-        new(nameof(SpeechEngine.Qwen), "Qwen3-TTS (more natural, needs an NVIDIA graphics card)"),
+        new(nameof(SpeechEngine.Kokoro), "Kokoro: small, any PC"),
+        new(nameof(SpeechEngine.Qwen), "Qwen3-TTS: more natural, NVIDIA GPU"),
     ];
 
     /// <summary>The speech-to-text models the Settings view offers.</summary>
     public static IReadOnlyList<WhisperChoice> WhisperChoices { get; } =
     [
-        new(WhisperModel.TinyEnglish, "Tiny: English only, 78 MB, the fastest"),
-        new(WhisperModel.BaseEnglish, "Base: English only, 148 MB"),
-        new(WhisperModel.SmallEnglish, "Small: English only, 488 MB"),
-        new(WhisperModel.LargeV3Turbo, "Large v3 Turbo: any language, 1.6 GB, best on a graphics card"),
+        new(WhisperModel.TinyEnglish, "Tiny: English, 78 MB, fastest"),
+        new(WhisperModel.BaseEnglish, "Base: English, 148 MB"),
+        new(WhisperModel.SmallEnglish, "Small: English, 488 MB"),
+        new(WhisperModel.LargeV3Turbo, "Large v3 Turbo: any language, 1.6 GB"),
     ];
 
     /// <summary>The voice setup picked an engine and a voice: shown here and stored, and Raven speaks with them from now on.</summary>

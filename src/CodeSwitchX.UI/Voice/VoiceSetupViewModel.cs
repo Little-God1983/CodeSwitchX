@@ -47,7 +47,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
     private VoiceSetupStep _step = VoiceSetupStep.Choosing;
 
     /// <summary>The footer's line while installing, when ready, or why it failed.</summary>
-    [ObservableProperty] private string _footerText = "Skip, and Raven answers in text until you choose.";
+    [ObservableProperty] private string _footerText;
 
     /// <summary>"142 of 330 MB" while a download of known size runs.</summary>
     [ObservableProperty] private string? _amount;
@@ -70,6 +70,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
             new EngineCard(SpeechEngine.Qwen, "More natural and expressive. Needs an NVIDIA graphics card.", ["~5 GB", "GPU", "0.6B / 1.7B"], recommended: false),
         ];
         _selectedCard = Cards.First(c => c.Engine == (settings.Engine ?? SpeechEngine.Kokoro));
+        _footerText = ChoosingText;
         ShowVoices();
         ShowLamps();
         _onEngineStatus = (_, status) => _ui.Post(() => OnEngineStatus(status));
@@ -95,6 +96,14 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
     /// <summary>"Install Kokoro", or "Use Kokoro" once it is on this PC.</summary>
     public string InstallText => (SelectedCard.Lamp.Dot is ModelDot.Red ? "Install " : "Use ") + SelectedCard.Name;
 
+    /// <summary>"Skip for now" while Raven only writes; "Close" once it speaks with an engine.</summary>
+    public string CloseText => _settings.Engine is null ? "Skip for now" : "Close";
+
+    /// <summary>The footer's line while picking.</summary>
+    private string ChoosingText => _settings.Engine is { } engine
+        ? $"Raven speaks with {ModelLamp.NameOf(engine)} now. Pick another engine or voice, or close."
+        : "Skip, and Raven answers in text until you choose.";
+
     /// <summary>Raised when the window should close.</summary>
     public event Action? CloseRequested;
 
@@ -110,7 +119,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         if (Step is VoiceSetupStep.Ready or VoiceSetupStep.Failed)
         {
             Step = VoiceSetupStep.Choosing; // another engine: its own install, or use
-            FooterText = "Skip, and Raven answers in text until you choose.";
+            FooterText = ChoosingText;
         }
     }
 
@@ -163,6 +172,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         var engine = SelectedCard.Engine;
         _engineBefore ??= _settings.RavenVoiceEngine;
         _settings.PickVoice(engine, SelectedVoice?.Voice.Id ?? SpeechSettings.DefaultVoiceOf(engine));
+        OnPropertyChanged(nameof(CloseText));
         Step = VoiceSetupStep.Installing;
         FooterText = $"Installing {SelectedCard.Name}: starting";
         Amount = null;
@@ -180,10 +190,11 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
         {
             _settings.RavenVoiceEngine = before;
             _engineBefore = null;
+            OnPropertyChanged(nameof(CloseText));
         }
 
         Step = VoiceSetupStep.Choosing;
-        FooterText = "Skip, and Raven answers in text until you choose.";
+        FooterText = ChoosingText;
         Amount = null;
         Progress = null;
     }
