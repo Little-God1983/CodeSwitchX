@@ -358,7 +358,7 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
             wasOn = _server is not null || _preparing is not null;
         }
 
-        Halt();
+        Halt(report: !wasOn); // a restart that loads the new model at once says Loading, not Off: the install's note goes on
         if (wasOn)
         {
             Prepare(install: false);
@@ -415,8 +415,8 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
         Prepare(install: true);
     }
 
-    /// <summary>Kills the sidecar on the thread pool and cancels the preparation, then says Off.</summary>
-    private void Halt()
+    /// <summary>Kills the sidecar on the thread pool and cancels the preparation, then says Off unless told not to.</summary>
+    private void Halt(bool report = true)
     {
         ISidecarServer? server;
         lock (_lock)
@@ -433,7 +433,10 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
             _ = Task.Run(server.Dispose);
         }
 
-        Report(TextToSpeechStatus.Off);
+        if (report)
+        {
+            Report(TextToSpeechStatus.Off);
+        }
     }
 
     public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)

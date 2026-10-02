@@ -94,6 +94,35 @@ public sealed class VoiceSetupViewModelTests : IDisposable
         vm.Step.ShouldBe(VoiceSetupStep.Choosing);
     }
     [Fact]
+    public async Task Back_on_the_ready_engine_s_card_a_voice_picked_applies_at_once()
+    {
+        var vm = await OpenAsync();
+        vm.InstallCommand.Execute(null);
+        _shell.Kokoro.Report(new TextToSpeechStatus(TextToSpeechState.Ready));
+        vm.SelectedCard = vm.Cards.Single(c => c.Engine == SpeechEngine.Qwen);
+        vm.SelectedCard = vm.Cards.Single(c => c.Engine == SpeechEngine.Kokoro);
+
+        vm.SelectedVoice = vm.Voices.Single(v => v.Voice.Id == "bm_george");
+
+        _shell.Speech.KokoroVoice.ShouldBe("bm_george", "Close must not drop it");
+        (vm.Step, vm.FooterText).ShouldBe((VoiceSetupStep.Ready, "Kokoro is ready. Raven speaks with George from now on."));
+    }
+
+    [Fact]
+    public async Task Opened_from_Settings_on_the_ready_engine_a_voice_picked_applies_at_once()
+    {
+        _shell.Settings.GetAsync<string>(CodeSwitchX.UI.Settings.SettingKeys.RavenVoiceEngine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Kokoro"));
+        _shell.Kokoro.IsInstalled = true;
+        var vm = await OpenAsync();
+        _shell.Kokoro.Report(new TextToSpeechStatus(TextToSpeechState.Ready));
+        vm.Step.ShouldBe(VoiceSetupStep.Choosing, "opening picks nothing");
+
+        vm.SelectedVoice = vm.Voices.Single(v => v.Voice.Id == "bf_emma");
+
+        _shell.Speech.KokoroVoice.ShouldBe("bf_emma");
+        vm.Step.ShouldBe(VoiceSetupStep.Ready);
+    }
+    [Fact]
     public async Task Cancel_gives_the_install_up_and_puts_back_the_engine_picked_before()
     {
         _shell.Qwen.IsInstalled = true; // an upgrade: Qwen3-TTS was the engine

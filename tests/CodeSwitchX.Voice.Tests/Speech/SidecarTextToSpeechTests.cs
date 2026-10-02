@@ -497,6 +497,19 @@ public sealed class SidecarTextToSpeechTests : IDisposable
         public override void Post(SendOrPostCallback d, object? state) => Interlocked.Increment(ref _posted);
     }
 
+    [Fact]
+    public async Task A_new_model_loaded_at_once_goes_from_loading_to_loading_without_off()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+
+        _settings.Model = SpeechModel.Large;
+        await Until(() => _launcher.Starts.Count == 2 && _tts.Status.State == TextToSpeechState.Ready);
+
+        States.ShouldBe([TextToSpeechState.Loading, TextToSpeechState.Ready, TextToSpeechState.Loading, TextToSpeechState.Ready],
+            "no Off between: the panel's install note would read it as an install stopped");
+    }
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

@@ -30,6 +30,9 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
     private DictationStatus? _told;
     private bool _disposed;
 
+    /// <summary>A model was loaded, or a warm-up asked for, since the start: a switch then warms the new model up. Never cleared.</summary>
+    private volatile bool _warmedOnce;
+
     public WhisperDictationService(IWhisperModelStore store, IOptions<DictationOptions> options, ILogger<WhisperDictationService> logger)
     {
         this.store = store;
@@ -106,7 +109,7 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
 
     /// <summary>
     /// Another model was picked: the one loaded is freed once no clip uses it, and the new one is warmed up if it is on
-    /// disk and one was loaded or warming up before. The model read from the settings at the start is not: the startup
+    /// disk and a model was loaded, or a warm-up asked for, since the start (a switch to a model not on disk in between does not change that). The model read from the settings at the start is not: the startup
     /// warm-up loads it after its delay. On the thread pool: Settings picks it on the UI thread, and freeing waits for a
     /// running transcription.
     /// </summary>
@@ -117,7 +120,7 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
             bool warm;
             lock (_warmUpLock)
             {
-                warm = _factory is not null || _warmUp is not null;
+                warm = _warmedOnce;
             }
 
             await _gate.WaitAsync().ConfigureAwait(false);
@@ -203,6 +206,7 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
             {
                 // Ready is told only once the clip below has gone through: until then it is loading.
                 _factory ??= WhisperFactory.FromPath(store.ModelPath);
+                _warmedOnce = true;
                 builder = _factory.CreateBuilder().WithLanguage(options.Value.Language);
                 RememberFailedLoad(null, null);
             }
@@ -280,6 +284,7 @@ public sealed class WhisperDictationService : IDictationService, IDisposable
         {
             if (_warmUp is null or { IsCompletedSuccessfully: true, Result: false })
             {
+                _warmedOnce = true;
                 _warmUp = Task.Run(() => WarmUpOnPoolAsync(ct), CancellationToken.None);
             }
 

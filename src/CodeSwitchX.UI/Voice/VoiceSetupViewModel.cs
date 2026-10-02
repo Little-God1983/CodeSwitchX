@@ -133,9 +133,14 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
             row.IsSelected = row == value;
         }
 
-        if (Step == VoiceSetupStep.Ready && value is not null && SelectedCard.Engine == _settings.Engine)
+        // Another voice of the engine in use, ready, applies at once, also after a look at the other card or when the
+        // dialog was opened from Settings: Close must not drop it. A card only looked at picks nothing.
+        var engine = SelectedCard.Engine;
+        if (value is not null && Step is VoiceSetupStep.Ready or VoiceSetupStep.Choosing && engine == _settings.Engine
+            && _engines.StatusOf(engine).State == TextToSpeechState.Ready && value.Voice.Id != _settings.VoiceOf(engine))
         {
-            _settings.PickVoice(SelectedCard.Engine, value.Voice.Id); // ready: another voice applies at once
+            _settings.PickVoice(engine, value.Voice.Id);
+            Step = VoiceSetupStep.Ready;
             FooterText = $"{SelectedCard.Name} is ready. Raven speaks with {value.Voice.Name} from now on.";
         }
     }
@@ -143,7 +148,7 @@ public sealed partial class VoiceSetupViewModel : ObservableObject, IDisposable
     private void ShowVoices()
     {
         var engine = SelectedCard.Engine;
-        var picked = engine == SpeechEngine.Kokoro ? _settings.RavenKokoroVoice : _settings.RavenQwenVoice;
+        var picked = _settings.VoiceOf(engine);
         Voices.Clear();
         foreach (var voice in SpeechSettings.VoicesOf(engine))
         {

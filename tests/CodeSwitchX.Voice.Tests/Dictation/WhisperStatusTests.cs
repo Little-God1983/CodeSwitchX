@@ -133,6 +133,21 @@ public sealed class WhisperStatusTests : IDisposable
     }
 
     [Fact]
+    public async Task A_switch_to_a_model_not_on_disk_does_not_stop_later_switches_warming_up()
+    {
+        Directory.CreateDirectory(_folder);
+        await File.WriteAllBytesAsync(_store.ModelPath, new byte[4096], TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(Path.Combine(_folder, WhisperModelStore.FileName(WhisperModel.TinyEnglish)), new byte[4096], TestContext.Current.CancellationToken);
+        await _service.WarmUpAsync(TestContext.Current.CancellationToken);
+
+        _store.Model = WhisperModel.SmallEnglish; // not on disk: nothing to warm up
+        await Until(() => Told.LastOrDefault() == new DictationStatus(DictationState.NotDownloaded, WhisperModel.SmallEnglish));
+        _store.Model = WhisperModel.TinyEnglish;
+
+        await Until(() => Told.LastOrDefault() is { State: DictationState.Failed, Model: WhisperModel.TinyEnglish });
+        Told.ShouldContain(new DictationStatus(DictationState.Loading, WhisperModel.TinyEnglish));
+    }
+    [Fact]
     public async Task A_model_picked_again_while_its_download_runs_joins_that_download()
     {
         var downloads = new List<GatedStream>();

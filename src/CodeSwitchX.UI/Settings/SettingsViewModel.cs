@@ -362,6 +362,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         new(WhisperModel.LargeV3Turbo, "Large v3 Turbo: any language, 1.6 GB"),
     ];
 
+    /// <summary>The voice stored for <paramref name="engine"/>.</summary>
+    public string VoiceOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? RavenKokoroVoice : RavenQwenVoice;
+
     /// <summary>The voice setup picked an engine and a voice: shown here and stored, and Raven speaks with them from now on.</summary>
     public void PickVoice(SpeechEngine engine, string voice)
     {
