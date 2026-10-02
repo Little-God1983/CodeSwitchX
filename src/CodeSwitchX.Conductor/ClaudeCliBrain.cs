@@ -52,7 +52,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     /// <summary>
     /// The one built-in tool Raven has: Claude Code's own way for one session to message another on this machine. It
-    /// reaches the chats in VS Code's tabs, which nothing else can send to (checked with CLI 2.1.287).
+    /// reaches the chats in VS Code's tabs, which nothing else can send to (checked with CLI 2.1.287). It asks no
+    /// permission: neither the allowed tools nor a permission prompt tool are asked about a send, so nothing here can limit
+    /// whom it sends to. It refuses a name no running session has; the system prompt keeps it to the send_to names of the
+    /// Yard's chats. A CLI that does not know it drops it from <c>--tools</c> and starts without it.
     /// </summary>
     internal const string SendTool = "SendMessage";
 
