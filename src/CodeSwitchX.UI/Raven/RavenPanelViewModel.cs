@@ -1464,15 +1464,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _asking++;
         UpdateState();
         var asked = new StrongBox<DateTimeOffset>();
+        // In the user's next Open mic turn the answer is only written: Raven's voice would talk over the turn and, heard
+        // through speakers, end up in it, and the question being spoken replaces the answer anyway. TakeFloor hushed already.
         var spoken = _voice.Begin(heard => _logger.LogInformation(
             "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
-            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds));
-        if (_openSpeech)
-        {
-            // The user is in their next Open mic turn: Raven's voice would talk over it and, heard through speakers, end up
-            // in it. The answer is only written; the question being spoken replaces it anyway.
-            _voice.Hush();
-        }
+            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds), silent: _openSpeech);
 
         _conversation = AnswerInTurnAsync(_conversation, question, spoken, asked, floor);
     }

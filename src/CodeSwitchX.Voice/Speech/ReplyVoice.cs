@@ -152,10 +152,11 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>Begins a reply; feed it the text as it streams in, then complete it.</summary>
     /// <param name="onFirstAudio">Called once, when the reply's first audio is queued to play; on any thread.</param>
-    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null)
+    /// <param name="silent">The reply is only written: nothing of it is spoken, as while muted, and nothing else is hushed.</param>
+    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null, bool silent = false)
     {
         Interlocked.Increment(ref _open);
-        return new(this, Interlocked.Increment(ref _replies), _muted, onFirstAudio);
+        return new(this, Interlocked.Increment(ref _replies), _muted || silent, onFirstAudio);
     }
 
     /// <summary>

@@ -112,6 +112,23 @@ public sealed class ReplyVoiceTests : IDisposable
         _tts.Spoken.ShouldContain("New one.");
     }
 
+    // Fourth review of #89: a reply begun silent, for an answer that arrives during an Open mic turn
+    [Fact]
+    public async Task A_reply_begun_silent_is_not_spoken_and_hushes_nothing()
+    {
+        var silent = _voice.Begin(silent: true);
+        silent.Add("Not said.");
+        silent.Complete();
+        var spoken = _voice.Begin();
+        spoken.Add("Said.");
+        spoken.Complete();
+
+        await _voice.WhenQuietAsync();
+
+        _tts.Spoken.ShouldBe(["Said."]);
+        _player.Stops.ShouldBe(1, "only the play-out's own stop: no hush");
+    }
+
     [Fact]
     public async Task Nothing_is_spoken_while_muted_and_muting_hushes()
     {
