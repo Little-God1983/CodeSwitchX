@@ -164,7 +164,7 @@ public sealed class McpEndpointTests : IAsyncLifetime
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-mcp-" + Guid.NewGuid().ToString("N")));
         paths.EnsureCreated();
         var tokens = new AccessTokenStore(paths);
-        var actions = new FakeActions { Refusal = "No chat Raven started runs with the id 'x'." };
+        var actions = new FakeActions { Refusal = "VS Code could not be opened for CodeSwitchX: VS Code executable not found." };
         var api = new EventApiService(paths, new EventBus(NullLogger<EventBus>.Instance), tokens, TimeProvider.System, NullLoggerFactory.Instance,
             new EventApiOptions { PipeName = "csx-test-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, _yard, actions);
         try
@@ -178,14 +178,14 @@ public sealed class McpEndpointTests : IAsyncLifetime
             }), cancellationToken: TestContext.Current.CancellationToken);
 
             var tools = await client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
-            var stop = await client.CallToolAsync("stop_chat", new Dictionary<string, object?> { ["chat"] = "x" },
+            var start = await client.CallToolAsync("start_chat", new Dictionary<string, object?> { ["workspace"] = "CodeSwitchX" },
                 cancellationToken: TestContext.Current.CancellationToken);
 
             tools.Select(t => t.Name).Order().ShouldBe(["back_to_yard", "find_workspace", "get_chat", "list_chats", "list_workspaces", "open_workspace",
-                "send_to_chat", "set_defaults", "start_chat", "stop_chat"]);
-            tools.Single(t => t.Name == "stop_chat").ProtocolTool.Annotations!.DestructiveHint.ShouldBe(true);
-            stop.IsError.ShouldBe(true);
-            stop.Content.OfType<TextContentBlock>().ShouldHaveSingleItem().Text.ShouldContain("No chat Raven started runs with the id 'x'.");
+                "set_defaults", "start_chat"]);
+            tools.ShouldAllBe(t => t.ProtocolTool.Annotations!.DestructiveHint != true, "nothing Raven does on the Yard destroys anything");
+            start.IsError.ShouldBe(true);
+            start.Content.OfType<TextContentBlock>().ShouldHaveSingleItem().Text.ShouldContain("VS Code executable not found.");
         }
         finally
         {

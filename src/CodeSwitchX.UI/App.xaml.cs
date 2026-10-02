@@ -12,6 +12,8 @@ using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
+using CodeSwitchX.Hosting.VsCode.Companion;
+using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest;
 using CodeSwitchX.Ingest.Live;
 using CodeSwitchX.Ingest.Transcripts;
@@ -202,37 +204,40 @@ public partial class App : Application
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
-            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IAgentLauncher>().Find(id) is not null,
+            sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IYardActions>().StartedByRaven(id),
             sp.GetRequiredService<ClaudeLiveSessions>().NameOf));
 
-        // The chats Raven starts, and what else it does on the Yard through the MCP tools. The shell is asked for when an
-        // action first needs it: the Event API that serves the tools starts before the window is made.
+        // The chats Raven starts, as tabs of the workspace's VS Code through the companion extension, and what else it does
+        // on the Yard through the MCP tools. The shell is asked for when an action first needs it: the Event API that serves
+        // the tools starts before the window is made.
         services.AddSingleton<ChatSettings>();
-        services.AddSingleton<IAgentLauncher>(sp => new ClaudeAgentLauncher(sp.GetRequiredService<IBrainProcessLauncher>(),
-            () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeAgentLauncher>>()));
-        services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IAgentLauncher>(), sp.GetRequiredService<ChatSettings>(),
-            sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
-            sp.GetRequiredService<IVsCodeLauncher>().OpenUrl,
+        services.AddSingleton<ICompanionWindows>(_ => new CompanionWindows(CompanionWindows.DefaultDirectory));
+        services.AddSingleton<ICompanionInstaller>(sp => new CompanionInstaller(sp.GetRequiredService<AppPaths>().Root,
+            sp.GetRequiredService<ILogger<CompanionInstaller>>()));
+        services.AddHostedService(sp => new CompanionSetup(sp.GetRequiredService<ICompanionInstaller>(), sp.GetRequiredService<IWorkspaceStore>(),
+            sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<IUiDispatcher>(), () => sp.GetRequiredService<RavenPanelViewModel>(),
+            sp.GetRequiredService<ILogger<CompanionSetup>>()));
+        services.AddSingleton<IVsCodeChats>(sp => new VsCodeChats(sp.GetRequiredService<ICompanionWindows>(), sp.GetRequiredService<ICompanionInstaller>(),
+            async (workspace, ct) =>
+            {
+                // Opened, not shown: the window stays hidden until the user opens the workspace in the Cab.
+                var hosted = await sp.GetRequiredService<HostManager>().OpenAsync(workspace, ct).ConfigureAwait(false);
+                return hosted.State == HostState.Running ? null : hosted.Error ?? "VS Code did not show its window.";
+            },
+            sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.Snapshot,
+            id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
+            sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
+        services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
+            sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
+            async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
-        services.AddSingleton(sp =>
-        {
-            var news = new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(), sp.GetRequiredService<TimeProvider>(),
-                path => TranscriptLastReply.Read(path));
-            // A chat the app stopped (stop_chat, a hand-over) dies without its hooks, which looks like a failure: it is none.
-            sp.GetRequiredService<IAgentLauncher>().Changed += chat =>
-            {
-                if (chat.Stopped)
-                {
-                    news.StoppedOnPurpose(chat.Id);
-                }
-            };
-            return news;
-        });
+        services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
+            sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path)));
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();

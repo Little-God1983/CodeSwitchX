@@ -16,4 +16,9 @@
     <!-- The hook's own process walker, so the two never differ: ClaudeIdeWindows walks up from a claude the way the hook does. -->
     <Compile Include="..\CodeSwitchX.Hook\ProcessChain.cs" Link="Win32\ProcessChain.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The VS Code companion, packed into a .vsix at run time (CompanionPackage). -->
+    <EmbeddedResource Include="..\..\vscode-companion\package.json" LogicalName="Companion.package.json" />
+    <EmbeddedResource Include="..\..\vscode-companion\extension.js" LogicalName="Companion.extension.js" />
+  </ItemGroup>
 </Project>

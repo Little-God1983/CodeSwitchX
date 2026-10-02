@@ -174,7 +174,7 @@ public sealed class YardDirectoryTests
     }
 
     [Fact]
-    public async Task A_running_chat_has_its_send_name_and_one_the_app_runs_has_none()
+    public async Task A_chat_open_in_VS_Code_has_its_send_name_whoever_started_it()
     {
         await _yard.InitializeAsync(CancellationToken.None);
         Chat("s-code", _codeSwitchX, SessionState.Idle, "In VS Code");
@@ -188,7 +188,10 @@ public sealed class YardDirectoryTests
 
         chats.Single(c => c.Id == "s-code").SendName.ShouldBe("name-of-s-code");
         chats.Single(c => c.Id == "s-closed").SendName.ShouldBeNull();
-        chats.Single(c => c.Id == "s-voice").SendName.ShouldBeNull("the app runs it, and tells it things itself");
+        var voice = chats.Single(c => c.Id == "s-voice");
+        voice.SendName.ShouldBe("name-of-s-voice", "Raven's chats are VS Code chats like any other");
+        voice.Voice.ShouldBeTrue();
+        chats.Single(c => c.Id == "s-code").Voice.ShouldBeFalse();
     }
 
     [Fact]

@@ -212,6 +212,45 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.NameOf(Issues).ShouldBe("codeswitchx-ea");
     }
 
+    [Fact]
+    public void The_running_chats_are_read_afresh_each_time_and_only_those_in_VS_Code_tabs_whose_process_runs()
+    {
+        _live.NameOf(Issues).ShouldBeNull(); // a read that would still serve
+        Record(21688, Issues, "codeswitchx-ea");
+        Record(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2");
+        Record(31000, "e1", "cli-chat", entrypoint: "cli");
+        Record(32000, "e2", "gone-chat");
+        _processes.Gone.Add(32000);
+
+        _live.RunningNow().OrderBy(c => c.Pid).ShouldBe([
+            new LiveChat(21688, Issues, "codeswitchx-ea", FakeProcesses.StartOfEach),
+            new LiveChat(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2", FakeProcesses.StartOfEach),
+        ]);
+    }
+
+    [Fact]
+    public void The_processes_a_caller_knows_are_neither_read_nor_looked_up()
+    {
+        Record(21688, Issues, "codeswitchx-ea");
+        Record(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2");
+
+        _live.RunningNow(new HashSet<int> { 21688 }).ShouldHaveSingleItem().Pid.ShouldBe(30000);
+
+        _processes.Asked.ShouldBe([30000]);
+    }
+
+    [Fact]
+    public void A_fresh_read_of_the_running_chats_leaves_the_names_read_alone()
+    {
+        // A start waiting for its chat reads every quarter second: the Yard's names must not be read again each time.
+        _live.NameOf(Issues).ShouldBeNull();
+        Record(21688, Issues, "codeswitchx-ea");
+
+        _live.RunningNow().ShouldHaveSingleItem();
+
+        _live.NameOf(Issues).ShouldBeNull("the names' own read still serves");
+    }
+
     private void Record(int pid, string sessionId, string name, long updatedAt = 1_000, string entrypoint = "claude-vscode", string kind = "interactive") =>
         File.WriteAllText(Path.Combine(_sessions, $"{pid}.json"),
             $$"""{"pid":{{pid}},"sessionId":"{{sessionId}}","cwd":"e:\\Repos\\CodeSwitchX","procStart":"{{FakeProcesses.StartOfEach}}","kind":"{{kind}}","entrypoint":"{{entrypoint}}","name":"{{name}}","updatedAt":{{updatedAt}},"status":"idle"}""");

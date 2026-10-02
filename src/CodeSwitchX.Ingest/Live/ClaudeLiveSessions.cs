@@ -91,10 +91,18 @@ public sealed class ClaudeLiveSessions
         }
     }
 
+    /// <summary>
+    /// Every chat open in a VS Code tab right now, read afresh: a chat whose tab opened a moment ago is there. The
+    /// records of the processes in <paramref name="skip"/> are not opened, nor their processes looked up: a caller
+    /// waiting for a new chat names the ones it knows. Leaves <see cref="NameOf"/>'s read alone. Any thread; never throws.
+    /// </summary>
+    public IReadOnlyList<LiveChat> RunningNow(IReadOnlySet<int>? skip = null) =>
+        Read(skip).Values.SelectMany(r => r).Where(Runs).Select(r => new LiveChat(r.Pid, r.SessionId, r.Name, r.ProcessStart)).ToList();
+
     private bool Runs(Record record) => _startOf(record.Pid) is { } start && Math.Abs(start - record.ProcessStart) < StartTolerance;
 
-    /// <summary>The records of the chats in VS Code tabs by session, the one updated last first.</summary>
-    private Dictionary<string, List<Record>> Read()
+    /// <summary>The records of the chats in VS Code tabs by session, the one updated last first; none of the processes in <paramref name="skip"/>.</summary>
+    private Dictionary<string, List<Record>> Read(IReadOnlySet<int>? skip = null)
     {
         var records = new Dictionary<string, List<Record>>(StringComparer.OrdinalIgnoreCase);
         try
@@ -107,7 +115,8 @@ public sealed class ClaudeLiveSessions
             // The key files next to the records (<pid>.<hash>.key) are secrets of the chats, and never opened.
             foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
             {
-                if (!int.TryParse(Path.GetFileNameWithoutExtension(file), out var pid) || ReadRecord(file) is not { } record || record.Pid != pid)
+                if (!int.TryParse(Path.GetFileNameWithoutExtension(file), out var pid) || skip?.Contains(pid) == true
+                    || ReadRecord(file) is not { } record || record.Pid != pid)
                 {
                     continue;
                 }
@@ -216,3 +225,9 @@ public sealed class ClaudeLiveSessions
     /// <param name="ProcessStart">When the process that wrote it started, as a UTC file time.</param>
     private sealed record Record(int Pid, string SessionId, string Name, long UpdatedAt, long ProcessStart);
 }
+
+/// <summary>A chat open in a VS Code tab.</summary>
+/// <param name="Pid">Its claude.exe.</param>
+/// <param name="Name">The name it is messaged by (<c>SendMessage</c>).</param>
+/// <param name="ProcessStart">When its claude.exe started, as a UTC file time.</param>
+public sealed record LiveChat(int Pid, string SessionId, string Name, long ProcessStart);

@@ -1,0 +1,21 @@
+{
+  "name": "companion",
+  "displayName": "CodeSwitchX Companion",
+  "description": "Lets CodeSwitchX open Claude Code chats in this VS Code window. Installed and updated by CodeSwitchX.",
+  "version": "0.1.2",
+  "publisher": "codeswitchx",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js"
+}

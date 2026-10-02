@@ -30,6 +30,9 @@ public sealed class AppPaths
     /// <summary>The working folder of Raven's brain: no repository, so it has no code to look at.</summary>
     public string RavenDirectory => Path.Combine(Root, "raven");
 
+    /// <summary>What puts a folder's <c>.claude\settings.local.json</c> back while a voice chat starts there; empty between starts.</summary>
+    public string StartSettingsDirectory => Path.Combine(Root, "start-settings");
+
     public void EnsureCreated()
     {
         Directory.CreateDirectory(Root);
