@@ -88,6 +88,27 @@ public sealed class ListeningModelsTests
         }
     }
 
+    // Fourth review of #89: a model with other input names lets go of all it made
+    [Fact(Explicit = true)]
+    public void A_valid_model_with_other_inputs_fails_as_Silero_and_lets_go_of_the_file()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"not-silero-{Guid.NewGuid():N}.onnx");
+        File.Copy(PathOf(ListeningModelStore.SmartTurn), path); // a real model, whose input is not Silero's "input"
+        try
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                Should.Throw<Microsoft.ML.OnnxRuntime.OnnxRuntimeException>(() => new SileroVad(path));
+            }
+        }
+        finally
+        {
+            File.Delete(path); // throws if the failed constructor still held the file
+        }
+
+        File.Exists(path).ShouldBeFalse();
+    }
+
     private static IEnumerable<float[]> Frames(float[] audio)
     {
         for (var i = 0; i + SileroVad.FrameSamples <= audio.Length; i += SileroVad.FrameSamples)

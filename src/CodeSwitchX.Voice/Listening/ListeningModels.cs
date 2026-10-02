@@ -57,24 +57,47 @@ public sealed class SileroVad : IVoiceActivity
     {
         using var options = new SessionOptions { InterOpNumThreads = 1, IntraOpNumThreads = 1 };
         options.AddSessionConfigEntry("session.intra_op.allow_spinning", "0"); // no core spun hot between frames
-        _session = new InferenceSession(modelPath, options);
-        var input = OrtValue.CreateTensorValueFromMemory(_input, [1, _input.Length]);
-        var rate = OrtValue.CreateTensorValueFromMemory(new long[] { AudioMath.TargetRate }, []);
-        var output = OrtValue.CreateTensorValueFromMemory(_output, [1, 1]);
-        var stateA = OrtValue.CreateTensorValueFromMemory(_stateA, [2, 1, 128]);
-        var stateB = OrtValue.CreateTensorValueFromMemory(_stateB, [2, 1, 128]);
-        _values = [input, rate, output, stateA, stateB];
-        _bindings = [Bind(stateA, stateB), Bind(stateB, stateA)];
-
-        OrtIoBinding Bind(OrtValue state, OrtValue stateN)
+        // A model whose inputs are not named as Silero's makes a binding throw: what was made so far is let go, so the
+        // file is not held open and nothing leaks on each start that tries it again.
+        var made = new List<IDisposable> { _run };
+        try
         {
-            var binding = _session.CreateIoBinding();
-            binding.BindInput("input", input);
-            binding.BindInput("state", state);
-            binding.BindInput("sr", rate);
-            binding.BindOutput("output", output);
-            binding.BindOutput("stateN", stateN);
-            return binding;
+            _session = new InferenceSession(modelPath, options);
+            made.Add(_session);
+            var input = Made(OrtValue.CreateTensorValueFromMemory(_input, [1, _input.Length]));
+            var rate = Made(OrtValue.CreateTensorValueFromMemory(new long[] { AudioMath.TargetRate }, []));
+            var output = Made(OrtValue.CreateTensorValueFromMemory(_output, [1, 1]));
+            var stateA = Made(OrtValue.CreateTensorValueFromMemory(_stateA, [2, 1, 128]));
+            var stateB = Made(OrtValue.CreateTensorValueFromMemory(_stateB, [2, 1, 128]));
+            _values = [input, rate, output, stateA, stateB];
+            _bindings = [Bind(stateA, stateB), Bind(stateB, stateA)];
+
+            OrtIoBinding Bind(OrtValue state, OrtValue stateN)
+            {
+                var binding = Made(_session.CreateIoBinding());
+                binding.BindInput("input", input);
+                binding.BindInput("state", state);
+                binding.BindInput("sr", rate);
+                binding.BindOutput("output", output);
+                binding.BindOutput("stateN", stateN);
+                return binding;
+            }
+        }
+        catch
+        {
+            for (var i = made.Count - 1; i >= 0; i--)
+            {
+                made[i].Dispose();
+            }
+
+            throw;
+        }
+
+        T Made<T>(T value)
+            where T : IDisposable
+        {
+            made.Add(value);
+            return value;
         }
     }
 
