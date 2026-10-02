@@ -21,6 +21,16 @@ public sealed class CompanionSetup : IHostedService
     private readonly ILogger<CompanionSetup> _logger;
     private readonly CancellationTokenSource _stopping = new();
 
+    /// <summary>When this run of CodeSwitchX began: notes written since are its own starts', not left over.</summary>
+    private static DateTime RunStarted
+    {
+        get
+        {
+            using var me = System.Diagnostics.Process.GetCurrentProcess();
+            return me.StartTime.ToUniversalTime();
+        }
+    }
+
     /// <param name="pendingSettings">Where a start that never ended left what puts a folder's settings back (<see cref="StartSettings"/>).</param>
     /// <param name="raven">Raven's panel; asked for when there is something to say, as it is made after this starts.</param>
     public CompanionSetup(ICompanionInstaller installer, IWorkspaceStore store, string pendingSettings, IUiDispatcher ui, Func<RavenPanelViewModel> raven,
@@ -54,7 +64,7 @@ public sealed class CompanionSetup : IHostedService
         try
         {
             // A run that ended in the middle of a voice start left a folder with Raven's model in its settings.
-            if (StartSettings.RecoverAll(_pendingSettings) is [_, ..] stuck)
+            if (StartSettings.RecoverAll(_pendingSettings, RunStarted) is [_, ..] stuck)
             {
                 var files = string.Join(", ", stuck);
                 _ui.Post(() => _raven().Warn($"Raven set a model in {files} for a chat that was starting when CodeSwitchX ended, and could not put it back. Check the file."));

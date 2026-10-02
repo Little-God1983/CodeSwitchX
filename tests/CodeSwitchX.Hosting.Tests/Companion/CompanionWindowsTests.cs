@@ -1,7 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
-using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.VsCode.Companion;
 
@@ -10,13 +9,13 @@ namespace CodeSwitchX.Hosting.Tests.Companion;
 public sealed class CompanionWindowsTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "csx-companion-" + Guid.NewGuid().ToString("N"));
-    private readonly FakeProbe _probe = new();
+    private readonly FakeProcesses _processes = new();
     private readonly CompanionWindows _windows;
 
     public CompanionWindowsTests()
     {
         Directory.CreateDirectory(_directory);
-        _windows = new CompanionWindows(_directory, _probe);
+        _windows = new CompanionWindows(_directory, _processes.StartOf);
     }
 
     public void Dispose() => Directory.Delete(_directory, recursive: true);
@@ -76,13 +75,46 @@ public sealed class CompanionWindowsTests : IDisposable
     }
 
     [Fact]
-    public void A_record_whose_process_is_gone_is_no_window()
+    public void A_record_whose_process_is_gone_is_no_window_and_is_deleted()
     {
         // VS Code killed: the record stays behind.
         Record(11, [@"E:\Repos\App"]);
-        _probe.Gone.Add(11);
+        _processes.Gone.Add(11);
 
         _windows.Find(App).ShouldBeNull();
+
+        File.Exists(Path.Combine(_directory, "11.json")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_record_whose_id_a_process_that_may_not_be_opened_took_is_no_window()
+    {
+        // Windows restarted with the window open; its id now belongs to a SYSTEM process the app may not look at.
+        Record(11, [@"E:\Repos\App"]);
+        _processes.Unopenable.Add(11);
+
+        _windows.Find(App).ShouldBeNull();
+
+        File.Exists(Path.Combine(_directory, "11.json")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_record_whose_id_a_later_process_took_is_no_window()
+    {
+        Record(11, [@"E:\Repos\App"]);
+        _processes.Started[11] = DateTime.UtcNow.AddMinutes(5).ToFileTimeUtc();
+
+        _windows.Find(App).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_live_window_s_record_stays()
+    {
+        Record(11, [@"E:\Repos\App"]);
+
+        _windows.Find(App).ShouldNotBeNull();
+
+        File.Exists(Path.Combine(_directory, "11.json")).ShouldBeTrue();
     }
 
     [Fact]
@@ -99,7 +131,7 @@ public sealed class CompanionWindowsTests : IDisposable
     [Fact]
     public void No_folder_is_no_window()
     {
-        new CompanionWindows(Path.Combine(_directory, "missing"), _probe).Find(App).ShouldBeNull();
+        new CompanionWindows(Path.Combine(_directory, "missing"), _processes.StartOf).Find(App).ShouldBeNull();
     }
 
     [Fact]
@@ -148,7 +180,7 @@ public sealed class CompanionWindowsTests : IDisposable
     [Fact]
     public async Task A_window_nobody_listens_for_is_said_not_thrown()
     {
-        var windows = new CompanionWindows(_directory, _probe) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromMinutes(5) };
+        var windows = new CompanionWindows(_directory, _processes.StartOf) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromMinutes(5) };
         var nobody = new CompanionWindow(4000, @"\\.\pipe\csx-test-nobody-" + Guid.NewGuid().ToString("N"), "t", [], null, null);
         var watch = System.Diagnostics.Stopwatch.StartNew();
 
@@ -171,7 +203,7 @@ public sealed class CompanionWindowsTests : IDisposable
             await server.WaitForConnectionAsync(Ct);
             await new StreamReader(server, Encoding.UTF8).ReadLineAsync(Ct); // and never answers
         }, Ct);
-        var windows = new CompanionWindows(_directory, _probe) { ChatTimeout = TimeSpan.FromMilliseconds(300) };
+        var windows = new CompanionWindows(_directory, _processes.StartOf) { ChatTimeout = TimeSpan.FromMilliseconds(300) };
 
         var result = await windows.SendAsync(new CompanionWindow(4000, name, "t", [], null, null), CompanionWindows.NewChat, Ct);
         await serving;
@@ -187,10 +219,23 @@ public sealed class CompanionWindowsTests : IDisposable
         CompanionWindows.RequestTimeout.ShouldBeLessThan(CompanionWindows.NewChatTimeout);
     }
 
-    private sealed class FakeProbe : IProcessProbe
+    /// <summary>Every process started an hour ago, before any record, unless set otherwise.</summary>
+    private sealed class FakeProcesses
     {
         public HashSet<int> Gone { get; } = [];
 
-        public bool IsAlive(int pid, DateTimeOffset seenAt) => !Gone.Contains(pid);
+        /// <summary>Runs, but may not be opened: the system's lookup throws.</summary>
+        public HashSet<int> Unopenable { get; } = [];
+
+        public Dictionary<int, long> Started { get; } = [];
+
+        /// <summary>Through the same conversion as the system's: a process that may not be opened throws there.</summary>
+        public long? StartOf(int pid) => CompanionWindows.StartOf(pid, Read);
+
+        private long? Read(int pid) =>
+            Unopenable.Contains(pid) ? throw new System.ComponentModel.Win32Exception(5, "Access is denied.")
+            : Gone.Contains(pid) ? null
+            : Started.TryGetValue(pid, out var start) ? start
+            : DateTime.UtcNow.AddHours(-1).ToFileTimeUtc();
     }
 }

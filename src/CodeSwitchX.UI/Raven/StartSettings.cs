@@ -14,13 +14,18 @@ namespace CodeSwitchX.UI.Raven;
 /// byte for byte when nobody wrote it meanwhile (deleted when there was none), else only the two keys set here are
 /// undone, and only while they still hold what was set, so what Claude Code or the user wrote meanwhile stays. What is
 /// needed to put it back is saved first in <c>pendingDirectory</c>, so a CodeSwitchX that dies in between puts it back at
-/// its next start (<see cref="RecoverAll"/>). A chat the user opens by hand in the same folder in that moment gets them too.
+/// its next start (<see cref="RecoverAll"/>), and a put-back that failed is done by the next start in the folder before it
+/// reads the file; when that fails too, the start is refused, as the file would pass Raven's model off as the user's. A
+/// chat the user opens by hand in the same folder in that moment gets them too.
 /// </summary>
 public sealed class StartSettings : IDisposable
 {
     private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
 
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+
+    /// <summary>The notes and the files they put back are touched by one start, put-back or recovery at a time.</summary>
+    private static readonly Lock Gate = new();
 
     private readonly Pending _pending;
     private readonly string _pendingFile;
@@ -50,45 +55,83 @@ public sealed class StartSettings : IDisposable
 
         var file = FileIn(folder);
         var directory = Path.GetDirectoryName(file)!;
+        var pendingFile = PendingFileOf(pendingDirectory, file);
+        lock (Gate)
+        {
+            try
+            {
+                return ApplyLocked(file, directory, pendingFile, model, effort);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new YardActionException($"The model and effort could not be set for the chat: {file} could not be written ({ex.Message}).");
+            }
+        }
+    }
+
+    private static StartSettings ApplyLocked(string file, string directory, string pendingFile, string? model, string? effort)
+    {
+        // An earlier start that could not put the file back left its note: read now, the file would pass Raven's model off
+        // as the user's, and that note, the one that knows what the file really was, would be written over.
+        if (File.Exists(pendingFile))
+        {
+            if (ReadPending(pendingFile) is { } earlier && !PutBack(earlier))
+            {
+                throw new YardActionException($"{file} still holds the model of an earlier chat Raven started, and it could not be put back. "
+                    + "Start the chat without a model and effort, or check the file.");
+            }
+
+            File.Delete(pendingFile);
+        }
+
+        var original = File.Exists(file) ? File.ReadAllBytes(file) : null;
+        var settings = ParseOrNull(original) ?? throw new YardActionException(
+            $"{file} is not valid JSON, so the model and effort cannot be set for the chat. Fix the file, or start the chat without them.");
+
+        var set = new Dictionary<string, string>();
+        if (model is not null)
+        {
+            set["model"] = model;
+        }
+
+        if (effort is not null)
+        {
+            set["effortLevel"] = effort;
+        }
+
+        var before = set.Keys.ToDictionary(key => key, key => settings[key]?.ToJsonString());
+        foreach (var (key, value) in set)
+        {
+            settings[key] = value;
+        }
+
+        var written = JsonSerializer.SerializeToUtf8Bytes(settings, Indented);
+        var pending = new Pending(file, original is null ? null : Convert.ToBase64String(original), !Directory.Exists(directory),
+            Convert.ToBase64String(written), set, before);
+
+        // Saved before the file is touched: from here on, a crash leaves what puts it back.
+        Directory.CreateDirectory(Path.GetDirectoryName(pendingFile)!);
+        File.WriteAllText(pendingFile, JsonSerializer.Serialize(pending));
+
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(file, written);
+        return new StartSettings(pending, pendingFile);
+    }
+
+    /// <summary>One note per settings file, named after its path.</summary>
+    private static string PendingFileOf(string pendingDirectory, string file) =>
+        Path.Combine(pendingDirectory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(file.ToUpperInvariant())))[..16] + ".json");
+
+    /// <summary>The note; null when it cannot be read as one (cut short, or not ours): nothing it says can be trusted.</summary>
+    private static Pending? ReadPending(string pendingFile)
+    {
         try
         {
-            var original = File.Exists(file) ? File.ReadAllBytes(file) : null;
-            var settings = ParseOrNull(original) ?? throw new YardActionException(
-                $"{file} is not valid JSON, so the model and effort cannot be set for the chat. Fix the file, or start the chat without them.");
-
-            var set = new Dictionary<string, string>();
-            if (model is not null)
-            {
-                set["model"] = model;
-            }
-
-            if (effort is not null)
-            {
-                set["effortLevel"] = effort;
-            }
-
-            var before = set.Keys.ToDictionary(key => key, key => settings[key]?.ToJsonString());
-            foreach (var (key, value) in set)
-            {
-                settings[key] = value;
-            }
-
-            var written = JsonSerializer.SerializeToUtf8Bytes(settings, Indented);
-            var pending = new Pending(file, original is null ? null : Convert.ToBase64String(original), !Directory.Exists(directory),
-                Convert.ToBase64String(written), set, before);
-
-            // Saved before the file is touched: from here on, a crash leaves what puts it back.
-            Directory.CreateDirectory(pendingDirectory);
-            var pendingFile = Path.Combine(pendingDirectory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(file.ToUpperInvariant())))[..16] + ".json");
-            File.WriteAllText(pendingFile, JsonSerializer.Serialize(pending));
-
-            Directory.CreateDirectory(directory);
-            File.WriteAllBytes(file, written);
-            return new StartSettings(pending, pendingFile);
+            return JsonSerializer.Deserialize<Pending>(File.ReadAllText(pendingFile));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (JsonException)
         {
-            throw new YardActionException($"The model and effort could not be set for the chat: {file} could not be written ({ex.Message}).");
+            return null;
         }
     }
 
@@ -101,16 +144,24 @@ public sealed class StartSettings : IDisposable
         }
 
         _disposed = true;
-        Restored = PutBack(_pending);
-        if (Restored)
+        lock (Gate)
         {
-            TryDelete(_pendingFile);
+            // Kept when it fails: the next start in the folder, or of CodeSwitchX, puts the file back from it.
+            Restored = PutBack(_pending);
+            if (Restored)
+            {
+                TryDelete(_pendingFile);
+            }
         }
     }
 
-    /// <summary>Puts back every file a start left set, as a CodeSwitchX that ended in the middle of one did; never throws.</summary>
+    /// <summary>
+    /// Puts back every file a start of an earlier run left set, as a CodeSwitchX that ended in the middle of one did. Notes
+    /// written since <paramref name="runStarted"/> belong to starts of this run, which put their files back themselves.
+    /// Never throws.
+    /// </summary>
     /// <returns>The settings files it could not put back.</returns>
-    public static IReadOnlyList<string> RecoverAll(string pendingDirectory)
+    public static IReadOnlyList<string> RecoverAll(string pendingDirectory, DateTime runStarted)
     {
         var failed = new List<string>();
         try
@@ -120,25 +171,23 @@ public sealed class StartSettings : IDisposable
                 return failed;
             }
 
-            foreach (var pendingFile in Directory.EnumerateFiles(pendingDirectory, "*.json"))
+            foreach (var pendingFile in Directory.GetFiles(pendingDirectory, "*.json"))
             {
-                Pending? pending;
-                try
+                lock (Gate)
                 {
-                    pending = JsonSerializer.Deserialize<Pending>(File.ReadAllText(pendingFile));
-                }
-                catch (JsonException)
-                {
-                    pending = null; // not one of ours, or cut short: nothing it says can be trusted
-                }
+                    if (!File.Exists(pendingFile) || File.GetLastWriteTimeUtc(pendingFile) >= runStarted)
+                    {
+                        continue;
+                    }
 
-                if (pending is null || PutBack(pending))
-                {
-                    TryDelete(pendingFile);
-                }
-                else
-                {
-                    failed.Add(pending.File);
+                    if (ReadPending(pendingFile) is not { } pending || PutBack(pending))
+                    {
+                        TryDelete(pendingFile);
+                    }
+                    else
+                    {
+                        failed.Add(pending.File);
+                    }
                 }
             }
         }

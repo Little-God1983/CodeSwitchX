@@ -211,7 +211,7 @@ public partial class App : Application
         // on the Yard through the MCP tools. The shell is asked for when an action first needs it: the Event API that serves
         // the tools starts before the window is made.
         services.AddSingleton<ChatSettings>();
-        services.AddSingleton<ICompanionWindows>(sp => new CompanionWindows(CompanionWindows.DefaultDirectory, sp.GetRequiredService<IProcessProbe>()));
+        services.AddSingleton<ICompanionWindows>(_ => new CompanionWindows(CompanionWindows.DefaultDirectory));
         services.AddSingleton<ICompanionInstaller>(sp => new CompanionInstaller(sp.GetRequiredService<AppPaths>().Root,
             sp.GetRequiredService<ILogger<CompanionInstaller>>()));
         services.AddHostedService(sp => new CompanionSetup(sp.GetRequiredService<ICompanionInstaller>(), sp.GetRequiredService<IWorkspaceStore>(),

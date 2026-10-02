@@ -150,22 +150,69 @@ public sealed class StartSettingsTests : IDisposable
         var original = File.ReadAllBytes(_file);
         _ = Apply("claude-opus-5-5", "high"); // CodeSwitchX dies here: never disposed
 
-        StartSettings.RecoverAll(_pending).ShouldBeEmpty();
+        StartSettings.RecoverAll(_pending, NextRun).ShouldBeEmpty();
 
         File.ReadAllBytes(_file).ShouldBe(original);
         Directory.EnumerateFiles(_pending).ShouldBeEmpty();
     }
 
     [Fact]
+    public void Recovery_leaves_the_notes_of_this_run_s_own_starts_alone()
+    {
+        // A voice start right after launch, while the recovery still runs: its note is no leftover.
+        var settings = Apply("claude-opus-5-5", null);
+
+        StartSettings.RecoverAll(_pending, DateTime.UtcNow.AddMinutes(-1)).ShouldBeEmpty();
+
+        Current()["model"]!.GetValue<string>().ShouldBe("claude-opus-5-5", "the chat is still starting");
+        settings.Dispose();
+        File.Exists(_file).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_start_after_a_put_back_that_failed_puts_the_first_back_before_it_reads_the_file()
+    {
+        // The first start's put-back failed (the file was locked): its note is kept. The next start in the folder must not
+        // take Raven's first model for the user's own.
+        UserFile("{ \"model\": \"sonnet\" }");
+        var original = File.ReadAllBytes(_file);
+        _ = Apply("claude-opus-5-5", "high"); // its put-back never happened
+
+        using (var second = Apply("claude-haiku-4-5-20251001", null))
+        {
+            Current()["model"]!.GetValue<string>().ShouldBe("claude-haiku-4-5-20251001");
+            Current().ContainsKey("effortLevel").ShouldBeFalse("the first start's effort is gone with it");
+        }
+
+        File.ReadAllBytes(_file).ShouldBe(original);
+        Directory.EnumerateFiles(_pending).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_start_whose_earlier_put_back_still_cannot_be_done_is_refused()
+    {
+        _ = Apply("claude-opus-5-5", null); // its put-back never happened
+        using var locked = new FileStream(_file, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Should.Throw<YardActionException>(() => StartSettings.Apply(_folder, "claude-haiku-4-5-20251001", null, _pending)).Message
+            .ShouldContain("still holds the model of an earlier chat Raven started");
+
+        Directory.EnumerateFiles(_pending).ShouldHaveSingleItem("the note that knows what the file was is kept");
+    }
+
+    [Fact]
     public void Recovering_without_anything_left_does_nothing()
     {
-        StartSettings.RecoverAll(_pending).ShouldBeEmpty();
+        StartSettings.RecoverAll(_pending, NextRun).ShouldBeEmpty();
 
         Directory.CreateDirectory(_pending);
         File.WriteAllText(Path.Combine(_pending, "junk.json"), "{ half");
-        StartSettings.RecoverAll(_pending).ShouldBeEmpty();
+        StartSettings.RecoverAll(_pending, NextRun).ShouldBeEmpty();
         Directory.EnumerateFiles(_pending).ShouldBeEmpty("what cannot be read is no instruction to touch anything");
     }
+
+    /// <summary>A run that began after every note here was written: they are all left over from an earlier one.</summary>
+    private static DateTime NextRun => DateTime.UtcNow.AddMinutes(1);
 
     [Fact]
     public void Putting_back_twice_does_it_once()

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -31,7 +32,7 @@ public sealed record CompanionAnswer(bool Ok, int? Pid = null, string? Version =
 /// Reads the records the companion extension (<c>vscode-companion/</c>) writes: each window's companion listens on a named
 /// pipe of its own and writes <c>companion\&lt;extension host pid&gt;.json</c> with the pipe, a token, its folders and its
 /// workspace file. A record stays behind when VS Code is killed, and Windows reuses process ids, so one counts only while a
-/// process with its id runs that started before the record was written.
+/// process with its id runs that started before the record was written and may be opened; any other is deleted.
 /// </summary>
 public sealed class CompanionWindows : ICompanionWindows
 {
@@ -52,13 +53,22 @@ public sealed class CompanionWindows : ICompanionWindows
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
 
-    private readonly string _directory;
-    private readonly IProcessProbe _probe;
+    /// <summary>How much later than its record a process may have started and still be the one that wrote it: two clocks.</summary>
+    internal static readonly TimeSpan ClockSlack = TimeSpan.FromSeconds(2);
 
-    public CompanionWindows(string directory, IProcessProbe probe)
+    private readonly string _directory;
+    private readonly Func<int, long?> _startOf;
+
+    public CompanionWindows(string directory)
+        : this(directory, pid => StartOf(pid, SystemProcessProbe.StartOf))
+    {
+    }
+
+    /// <param name="startOf">When the process with an id started, as a UTC file time; null when none runs or it may not be opened.</param>
+    internal CompanionWindows(string directory, Func<int, long?> startOf)
     {
         _directory = directory;
-        _probe = probe;
+        _startOf = startOf;
     }
 
     /// <summary>Where the companion writes its records: <c>%LOCALAPPDATA%\CodeSwitchX\companion</c>, as its extension.js has it.</summary>
@@ -150,7 +160,8 @@ public sealed class CompanionWindows : ICompanionWindows
             yield break;
         }
 
-        foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
+        // Listed whole first: dead records are deleted on the way.
+        foreach (var file in Directory.GetFiles(_directory, "*.json"))
         {
             if (!int.TryParse(Path.GetFileNameWithoutExtension(file), out var pid) || Read(file) is not { } window || window.Pid != pid)
             {
@@ -158,10 +169,45 @@ public sealed class CompanionWindows : ICompanionWindows
             }
 
             var written = File.GetLastWriteTimeUtc(file);
-            if (_probe.IsAlive(pid, new DateTimeOffset(written, TimeSpan.Zero)))
+            if (_startOf(pid) is { } start && start <= (written + ClockSlack).ToFileTimeUtc())
             {
                 yield return (window, written);
             }
+            else
+            {
+                // Its window is gone without its companion saying so (VS Code killed, Windows restarted), and its id may
+                // belong to another process by now: a record of ours that is never true again.
+                TryDelete(file);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The process's start; one that may not be opened is no VS Code of the user's (theirs always can be), so it counts as
+    /// gone: a protected process that took the id of a window that was killed would otherwise pass for that window.
+    /// </summary>
+    /// <param name="read">Reads it from the system; throws <see cref="Win32Exception"/> for a process that may not be opened.</param>
+    internal static long? StartOf(int pid, Func<int, long?> read)
+    {
+        try
+        {
+            return read(pid);
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void TryDelete(string file)
+    {
+        try
+        {
+            File.Delete(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // looked at again next time
         }
     }
 
