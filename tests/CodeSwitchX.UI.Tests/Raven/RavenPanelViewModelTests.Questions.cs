@@ -49,7 +49,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.ChooseOptionCommand.Execute(card.Questions[0].Options[1]);
 
         await WithinAsync(held);
-        (await held).ShouldBe(["Banana"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["Banana"]);
         card.IsOpen.ShouldBeFalse();
         card.Outcome.ShouldBe("Answered: Banana");
         vm.OpenQuestions.ShouldBe(0);
@@ -76,7 +76,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SendAnswersCommand.Execute(card);
 
         await WithinAsync(held);
-        (await held).ShouldBe(["Banana", "Red, Blue"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["Banana", "Red, Blue"]);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.AnswerInVsCodeCommand.Execute(card);
 
         await WithinAsync(held);
-        (await held).ShouldBeNull();
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
         card.IsOpen.ShouldBeFalse();
         card.Outcome.ShouldBe("Left to VS Code: it asks there.");
     }
@@ -124,6 +124,34 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_answered_since_it_was_read_out_is_not_told_to_the_brain_as_waiting()
+    {
+        _brain.Answer = _ => [new BrainText("Nothing waits.")];
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Asking(), CancellationToken.None);
+        await GraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.ChooseOptionCommand.Execute(Card(vm).Questions[0].Options[1]);
+
+        Type(vm, "does anything wait for me?");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldHaveSingleItem().ShouldNotContain("waits for the answer here");
+    }
+
+    [Fact]
+    public async Task A_chat_stopped_while_its_question_waits_says_so_on_the_card()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Asking(), CancellationToken.None);
+
+        asks.Stop("a");
+
+        await WithinAsync(held);
+        Card(vm).Outcome.ShouldBe("The chat was stopped.");
+    }
+
+    [Fact]
     public async Task A_question_answered_by_voice_shows_its_answer_on_the_card()
     {
         var (vm, asks) = await QuestionsVmAsync();
@@ -132,7 +160,7 @@ public sealed partial class RavenPanelViewModelTests
         asks.Answer("toolu_1", ["something of my own"]);
 
         await WithinAsync(held);
-        (await held).ShouldBe(["something of my own"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["something of my own"]);
         Card(vm).Outcome.ShouldBe("Answered: something of my own");
     }
 
@@ -141,6 +169,19 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, asks) = await QuestionsVmAsync();
         vm.IsMuted = true;
+        _ = asks.HoldAsync(Asking(), CancellationToken.None);
+
+        await GraceAsync(vm);
+
+        _speech.Spoken.ShouldBeEmpty();
+        Card(vm).IsOpen.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task With_news_not_to_be_spoken_the_question_is_only_shown()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        vm.SpeakNews = false;
         _ = asks.HoldAsync(Asking(), CancellationToken.None);
 
         await GraceAsync(vm);
@@ -164,7 +205,8 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Waiting);
         await GraceAsync(vm);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count >= 2);
+        // The question is read in two pieces: wait for the news itself.
+        await Until(() => _speech.Spoken.Contains("Release notes is done."));
 
         string.Join(" ", _speech.Spoken).ShouldStartWith("ContentAutomatorX, chat \"Fix the upload retry\" asks: Which fruit?");
         _speech.Spoken[^1].ShouldBe("Release notes is done.");

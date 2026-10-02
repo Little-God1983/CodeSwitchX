@@ -58,6 +58,11 @@ public sealed class EventApiService : IHostedService
         _actions = actions;
         _stops = stops;
         _asks = asks;
+        if (stops is not null && asks is not null)
+        {
+            // A held question holds the step a stop waits for: the stop goes back in the question's answer (/asks).
+            stops.Requested += asks.Stop;
+        }
     }
 
     public EndpointDescriptor? Endpoint { get; private set; }
@@ -161,8 +166,8 @@ public sealed class EventApiService : IHostedService
             return Results.Ok(new { stop = reason });
         });
 
-        // A chat's question, from its relay's Ask hook, which waits for the answer: 200 with one answer per question, or 204
-        // for VS Code to ask it in the chat's tab.
+        // A chat's question, from its relay's Ask hook, which waits for the answer: 200 with one answer per question, 200 with
+        // a stop when the user stopped the chat meanwhile, or 204 for VS Code to ask it in the chat's tab.
         app.MapPost("/asks", async (HttpContext context) =>
         {
             if (!IsAuthorized(context, token))
@@ -177,8 +182,20 @@ public sealed class EventApiService : IHostedService
                 return Results.NoContent();
             }
 
-            var answers = await _asks.HoldAsync(ask, context.RequestAborted);
-            return answers is null ? Results.NoContent() : Results.Ok(new { answers });
+            var closed = await _asks.HoldAsync(ask, context.RequestAborted);
+            if (closed is { Outcome: ChatAskOutcome.Answered, Answers: { } answers })
+            {
+                return Results.Ok(new { answers });
+            }
+
+            // Only a relay with the Ask hook asks here, and every one of those hands a stop on.
+            if (closed is { Outcome: ChatAskOutcome.Stopped } && _stops?.Take(ask.Step, relayHandsItOn: true) is { } reason)
+            {
+                _bus.Publish(new HookEventReceived(TurnStops.EndOf(ask.Step)));
+                return Results.Ok(new { stop = reason });
+            }
+
+            return Results.NoContent();
         });
 
         if (_yard is not null)

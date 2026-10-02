@@ -67,7 +67,7 @@ public sealed class ChatAsksTests : IDisposable
 
         _asks.Answer("toolu_1", [" Banana "]).ShouldBeTrue();
 
-        (await held).ShouldBe(["Banana"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["Banana"]);
         _asks.Holds("s1").ShouldBeFalse();
         _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.Answered);
         _asks.Answer("toolu_1", ["Apple"]).ShouldBeFalse("it is answered already");
@@ -83,7 +83,7 @@ public sealed class ChatAsksTests : IDisposable
         held.IsCompleted.ShouldBeFalse("a wrong answer leaves it open");
 
         _asks.Answer("toolu_1", ["Apple", "my own words"]).ShouldBeTrue();
-        (await held).ShouldBe(["Apple", "my own words"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["Apple", "my own words"]);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class ChatAsksTests : IDisposable
 
         _asks.ToVsCode("toolu_1").ShouldBeTrue();
 
-        (await held).ShouldBeNull();
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
         _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
         _published.Count.ShouldBe(1, "VS Code's form keeps the chat waiting: nothing ends it here");
     }
@@ -105,7 +105,7 @@ public sealed class ChatAsksTests : IDisposable
 
         _time.Advance(ChatAsks.Lifetime);
 
-        (await held).ShouldBeNull();
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.TimedOut);
         _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.TimedOut);
     }
 
@@ -117,7 +117,7 @@ public sealed class ChatAsksTests : IDisposable
 
         await hook.CancelAsync();
 
-        (await held).ShouldBeNull();
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Gone);
         _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.Gone);
         var letGo = _published[^1];
         (letGo.EventName, letGo.Signal, letGo.ToolUseId).ShouldBe(("PostToolUse", SessionSignal.ToolUse, "toolu_1"));
@@ -136,10 +136,62 @@ public sealed class ChatAsksTests : IDisposable
         held.IsCompleted.ShouldBeFalse("waiting is the ask itself");
         Turn("s1", state);
 
-        (await held).ShouldBeNull();
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Gone);
         _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.Gone);
         other.IsCompleted.ShouldBeFalse();
         _asks.Open().ShouldHaveSingleItem().SessionId.ShouldBe("s2");
+    }
+
+    [Fact]
+    public async Task An_answer_given_as_the_hook_gives_up_still_goes_to_the_chat()
+    {
+        using var hook = new CancellationTokenSource();
+        var held = _asks.HoldAsync(Ask(), hook.Token);
+        // Run before the hold's own wait sees the cancel (callbacks run last registered first): the answer wins the race.
+        hook.Token.Register(() => _asks.Answer("toolu_1", ["Banana"]));
+
+        await hook.CancelAsync();
+
+        var closed = (await held).ShouldNotBeNull();
+        closed.Outcome.ShouldBe(ChatAskOutcome.Answered);
+        closed.Answers.ShouldBe(["Banana"]);
+        _closed.ShouldHaveSingleItem().Outcome.ShouldBe(ChatAskOutcome.Answered, "the card said it was answered");
+    }
+
+    [Fact]
+    public async Task A_stop_ends_what_the_chats_main_agent_asks_and_leaves_the_rest()
+    {
+        var held = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var subAgent = _asks.HoldAsync(Ask(toolUse: "toolu_2") with
+        {
+            Step = new HookEvent { SessionId = "s1", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolUseId = "toolu_2", AgentId = "agent_1" },
+        }, CancellationToken.None);
+        var otherChat = _asks.HoldAsync(Ask("s2", "toolu_3"), CancellationToken.None);
+
+        _asks.Stop("s1");
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Stopped);
+        subAgent.IsCompleted.ShouldBeFalse("a stop is never handed to a sub-agent");
+        otherChat.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_window_that_no_longer_keeps_an_ask_lets_it_go_to_VS_Code()
+    {
+        var kept = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var shownInCab = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
+        _asks.Recheck();
+        kept.IsCompleted.ShouldBeFalse("nothing changed for it");
+
+        _asks.Keeps = ask => ask.SessionId != "s2";
+        _asks.Recheck();
+
+        (await shownInCab).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+        kept.IsCompleted.ShouldBeFalse();
+
+        _asks.Keeps = _ => throw new InvalidOperationException("the window is gone");
+        _asks.Recheck();
+        kept.IsCompleted.ShouldBeFalse("a window that cannot say leaves it where it is");
     }
 
     [Fact]
@@ -148,8 +200,8 @@ public sealed class ChatAsksTests : IDisposable
         var first = _asks.HoldAsync(Ask(), CancellationToken.None);
         var second = _asks.HoldAsync(Ask(), CancellationToken.None);
 
-        (await first).ShouldBeNull();
+        (await first).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Gone);
         _asks.Answer("toolu_1", ["Apple"]).ShouldBeTrue();
-        (await second).ShouldBe(["Apple"]);
+        (await second).ShouldNotBeNull().Answers.ShouldBe(["Apple"]);
     }
 }

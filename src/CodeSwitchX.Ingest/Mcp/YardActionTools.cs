@@ -162,7 +162,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         if (given.Count != ask.Questions.Count || given.Any(a => a.Length == 0))
         {
             throw new McpException($"Give one answer for each of its {ask.Questions.Count} question{(ask.Questions.Count == 1 ? "" : "s")}, "
-                + $"none of them blank. It asks: {YardTools.Describe(ask)}.");
+                + $"none of them blank. It asks: {ask.Describe()}.");
         }
 
         return asks!.Answer(ask.Id, given)

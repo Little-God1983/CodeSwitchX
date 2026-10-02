@@ -12,7 +12,8 @@ namespace CodeSwitchX.Hook;
 /// a tool event with a stop for the chat's turn (the user asked Raven to stop it): then it tells Claude Code to end the
 /// turn, and on PreToolUse not to take the step it was about to. Run as <see cref="AskArgument"/> (the PreToolUse hook of
 /// a chat's question), it hands the question to CodeSwitchX and waits: answered there, it gives Claude Code the answers as
-/// the tool's input; otherwise it says nothing, and VS Code asks the question in the chat's tab.
+/// the tool's input; stopped there, it ends the turn as above; otherwise it says nothing, and VS Code asks the question
+/// in the chat's tab.
 /// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
 /// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
@@ -56,7 +57,7 @@ internal static class Relay
     /// <summary>A question's options and an answer in the user's own words are bigger than a stop.</summary>
     private const int MaxAskBytes = 256 * 1024;
 
-    /// <summary>What the chat's step shows as the reason it was let through (CodeSwitchX's <c>ChatAsks.AnsweredReason</c>).</summary>
+    /// <summary>What the chat's step shows as the reason it was let through.</summary>
     internal const string AnsweredReason = "Answered in CodeSwitchX's Raven panel.";
 
     internal static async Task<int> RunAsync(string[] args, Stream stdin, TextWriter stdout, string dataDirectory)
@@ -86,7 +87,8 @@ internal static class Relay
             {
                 using var asking = new CancellationTokenSource(AskWaitMs);
                 var answered = await PostAsync(endpoint, token, envelope, new Route("asks", AskWaitMs, MaxAskBytes), asking.Token).ConfigureAwait(false);
-                if (AnswerOutput(payload, AnswersIn(answered)) is { } output)
+                // The user stopped the chat while its question was held: the stop ends the turn here.
+                if ((StopIn(answered) is { } stopped ? StopAnswer("PreToolUse", stopped) : AnswerOutput(payload, AnswersIn(answered))) is { } output)
                 {
                     await stdout.WriteAsync(output).ConfigureAwait(false);
                     await stdout.FlushAsync().ConfigureAwait(false);

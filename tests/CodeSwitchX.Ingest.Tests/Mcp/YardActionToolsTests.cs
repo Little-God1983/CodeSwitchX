@@ -204,7 +204,7 @@ public sealed class YardActionToolsTests
     }
 
     /// <summary>The Raven brain chat (bbbbbbbb) asks two questions in the panel; the task ends with the answers given.</summary>
-    private static (ChatAsks Asks, Task<IReadOnlyList<string>?> Held) Asking()
+    private static (ChatAsks Asks, Task<ChatAskClosed?> Held) Asking()
     {
         var asks = new ChatAsks(new EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
         var ask = new ChatAsk("toolu_1", ChatAskKind.Question,
@@ -224,7 +224,7 @@ public sealed class YardActionToolsTests
         var said = await new YardActionTools(_yard, _actions, asks).AnswerQuestion("bbbbbbbb", [" banana ", "Red, Blue"], Ct);
 
         said.ShouldBe("The Raven brain chat has its answer (Banana; Red, Blue) and carries on.");
-        (await held).ShouldBe(["Banana", "Red, Blue"]);
+        (await held).ShouldNotBeNull().Answers.ShouldBe(["Banana", "Red, Blue"]);
     }
 
     [Theory]

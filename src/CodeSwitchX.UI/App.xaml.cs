@@ -101,7 +101,11 @@ public partial class App : Application
             await shell.InitializeAsync(CancellationToken.None);
             // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
             var engine = _host.Services.GetRequiredService<SessionEngine>();
-            _host.Services.GetRequiredService<ChatAsks>().Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
+            // One it holds goes to VS Code once the Cab shows the chat's own VS Code.
+            var asks = _host.Services.GetRequiredService<ChatAsks>();
+            asks.Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
+            asks.Keeps = ask => shell.KeepsAsks(engine.Get(ask.SessionId)?.WorkspaceId);
+            shell.AskRulesChanged += (_, _) => asks.Recheck();
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = window;

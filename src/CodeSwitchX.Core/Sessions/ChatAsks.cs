@@ -24,6 +24,10 @@ public sealed record ChatAsk(string Id, ChatAskKind Kind, HookEvent Step, IReadO
     public string SessionId => Step.SessionId;
 
     public DateTimeOffset At => Step.At;
+
+    /// <summary>The questions as Raven's brain reads them: "\"Which fruit?\" (one of: Apple, Banana, Cherry)", joined by "; ".</summary>
+    public string Describe() => string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
+        + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 }
 
 /// <summary>How a held ask ended.</summary>
@@ -40,6 +44,9 @@ public enum ChatAskOutcome
 
     /// <summary>The chat stopped waiting for it: its turn ended or was stopped, or Claude Code let the hook go.</summary>
     Gone,
+
+    /// <summary>The user asked Raven to stop the chat (<see cref="ChatAsks.Stop"/>): the stop goes back in the ask's answer.</summary>
+    Stopped,
 }
 
 /// <summary>A held ask that ended, with the answers given, one per question, when it was <see cref="ChatAskOutcome.Answered"/>.</summary>
@@ -58,9 +65,6 @@ public sealed class ChatAsks : IDisposable
     /// <summary>An ask held this long goes to VS Code: the user is not answering it here. Below the hook's own timeout.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
-    /// <summary>What the chat's step shows as the reason it was let through.</summary>
-    public const string AnsweredReason = "Answered in CodeSwitchX's Raven panel.";
-
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
     private readonly IDisposable _subscription;
@@ -77,6 +81,12 @@ public sealed class ChatAsks : IDisposable
     /// <summary>Whether CodeSwitchX takes this ask, or leaves it to VS Code at once. Takes none until the app says otherwise.</summary>
     public Func<ChatAsk, bool> Takes { get; set; } = _ => false;
 
+    /// <summary>
+    /// Whether a held ask stays here when the window changes (<see cref="Recheck"/>), or goes to VS Code: the user may not
+    /// see it here any more, or may be looking at the chat's own tab. Keeps every one until the app says otherwise.
+    /// </summary>
+    public Func<ChatAsk, bool> Keeps { get; set; } = _ => true;
+
     /// <summary>An ask is held now. Raised on the hook's thread.</summary>
     public event Action<ChatAsk>? Opened;
 
@@ -84,10 +94,12 @@ public sealed class ChatAsks : IDisposable
     public event Action<ChatAskClosed>? Closed;
 
     /// <summary>
-    /// Holds the ask until it is answered here or let go: the answers, one per question in their order, or null for VS Code
-    /// to ask it. <paramref name="aborted"/> is the hook giving up (its turn stopped, Claude Code's timeout): the ask is gone.
+    /// Holds the ask until it ends: how it ended, with the answers (one per question in their order) when it was answered
+    /// here, or null when it was not taken. Any end but <see cref="ChatAskOutcome.Answered"/> or
+    /// <see cref="ChatAskOutcome.Stopped"/> leaves VS Code to ask it. <paramref name="aborted"/> is the hook giving up (its
+    /// turn stopped, Claude Code's timeout): the ask is gone.
     /// </summary>
-    public async Task<IReadOnlyList<string>?> HoldAsync(ChatAsk ask, CancellationToken aborted)
+    public async Task<ChatAskClosed?> HoldAsync(ChatAsk ask, CancellationToken aborted)
     {
         bool takes;
         try
@@ -104,7 +116,7 @@ public sealed class ChatAsks : IDisposable
             return null;
         }
 
-        var held = new Held(ask, new TaskCompletionSource<IReadOnlyList<string>?>(TaskCreationOptions.RunContinuationsAsynchronously));
+        var held = new Held(ask, new TaskCompletionSource<ChatAskClosed>(TaskCreationOptions.RunContinuationsAsynchronously));
         Held? replaced;
         lock (_lock)
         {
@@ -126,8 +138,9 @@ public sealed class ChatAsks : IDisposable
         }
         catch (TimeoutException)
         {
+            // An answer given just as the time ran out was told as given: it goes to the chat.
             Close(ask.Id, ChatAskOutcome.TimedOut, null);
-            return null;
+            return await held.Done.Task.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -137,7 +150,7 @@ public sealed class ChatAsks : IDisposable
                 _bus.Publish(new HookEventReceived(LetGo(ask, _time.GetUtcNow())));
             }
 
-            return null;
+            return await held.Done.Task.ConfigureAwait(false);
         }
     }
 
@@ -175,6 +188,28 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>Lets a held ask go to VS Code, which asks it in the chat's tab. False when it is not held any more.</summary>
     public bool ToVsCode(string askId) => Close(askId, ChatAskOutcome.ToVsCode, null);
+
+    /// <summary>
+    /// The user asked to stop the chat: what its main agent asks ends as <see cref="ChatAskOutcome.Stopped"/>, so the stop
+    /// goes back in the ask's answer. Held, the ask would hold the stop too: a stop lands at the chat's next tool step,
+    /// and the step that asks is held. A sub-agent's ask stays, as a stop is never handed to a sub-agent.
+    /// </summary>
+    public void Stop(string sessionId) => CloseWhere(h => h.Ask.SessionId == sessionId && h.Ask.Step.AgentId is null, ChatAskOutcome.Stopped);
+
+    /// <summary>The window changed: a held ask it does not keep any more (<see cref="Keeps"/>) goes to VS Code.</summary>
+    public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), ChatAskOutcome.ToVsCode);
+
+    private bool KeepsSafely(ChatAsk ask)
+    {
+        try
+        {
+            return Keeps(ask);
+        }
+        catch (Exception)
+        {
+            return true; // a window that cannot say leaves the ask where it is
+        }
+    }
 
     /// <summary>The asks held now, oldest first.</summary>
     public IReadOnlyList<ChatAsk> Open()
@@ -238,15 +273,21 @@ public sealed class ChatAsks : IDisposable
             return;
         }
 
-        List<string> gone;
+        CloseWhere(h => h.Ask.SessionId == change.Current.SessionId, ChatAskOutcome.Gone);
+    }
+
+    /// <summary>Ends the held asks that <paramref name="ends"/> picks; it is asked outside the lock.</summary>
+    private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome)
+    {
+        List<Held> held;
         lock (_lock)
         {
-            gone = _held.Values.Where(h => h.Ask.SessionId == change.Current.SessionId).Select(h => h.Ask.Id).ToList();
+            held = [.. _held.Values];
         }
 
-        foreach (var id in gone)
+        foreach (var one in held.Where(ends))
         {
-            Close(id, ChatAskOutcome.Gone, null);
+            Close(one.Ask.Id, outcome, null);
         }
     }
 
@@ -267,11 +308,12 @@ public sealed class ChatAsks : IDisposable
 
     private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers)
     {
-        held.Done.TrySetResult(outcome == ChatAskOutcome.Answered ? answers : null);
-        Closed?.Invoke(new ChatAskClosed(held.Ask, outcome, answers));
+        var closed = new ChatAskClosed(held.Ask, outcome, answers);
+        held.Done.TrySetResult(closed);
+        Closed?.Invoke(closed);
     }
 
     public void Dispose() => _subscription.Dispose();
 
-    private sealed record Held(ChatAsk Ask, TaskCompletionSource<IReadOnlyList<string>?> Done);
+    private sealed record Held(ChatAsk Ask, TaskCompletionSource<ChatAskClosed> Done);
 }

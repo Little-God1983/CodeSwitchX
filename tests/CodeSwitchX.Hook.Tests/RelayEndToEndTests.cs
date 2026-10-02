@@ -82,6 +82,23 @@ public class RelayEndToEndTests : IAsyncLifetime
         _stdout.ToString().ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task A_stop_asked_while_the_panel_holds_the_chat_s_question_ends_its_turn_there()
+    {
+        _asks.Takes = _ => true;
+        Task<TurnStopOutcome>? stopped = null;
+        _asks.Opened += _ => stopped = _stops.Request("s1");
+
+        var code = await Relay.RunAsync([Relay.AskArgument], Stdin(Question), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        (await stopped.ShouldNotBeNull()).ShouldBe(TurnStopOutcome.Stopped, "the held step takes the stop: no later step comes while it is held");
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        answer.RootElement.GetProperty("continue").GetBoolean().ShouldBeFalse();
+        answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("permissionDecision").GetString().ShouldBe("deny");
+        _received.Select(e => (e.EventName, e.Signal)).ShouldBe([("PermissionRequest", SessionSignal.Notification), ("Stop", SessionSignal.Stop)]);
+    }
+
     private static Stream Stdin(string text) => new MemoryStream(Encoding.UTF8.GetBytes(text));
 
     [Fact]

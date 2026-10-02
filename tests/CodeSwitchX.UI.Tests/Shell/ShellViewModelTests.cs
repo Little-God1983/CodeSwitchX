@@ -235,6 +235,31 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task A_question_held_lets_go_once_the_Cab_shows_its_chat_s_VS_Code_and_a_collapsed_panel_keeps_it()
+    {
+        var other = Guid.NewGuid();
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var changes = 0;
+        _h.Shell.AskRulesChanged += (_, _) => changes++;
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.KeepsAsks(_h.App.Id).ShouldBeTrue("the rail counts it");
+
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        changes.ShouldBeGreaterThan(0);
+        _h.Shell.KeepsAsks(_h.App.Id).ShouldBeFalse("the user is looking at that chat's tab");
+        _h.Shell.KeepsAsks(other).ShouldBeTrue();
+        _h.Shell.KeepsAsks(null).ShouldBeTrue();
+
+        var seen = changes;
+        _h.Shell.SetShellMinimized(true);
+        _h.Shell.KeepsAsks(_h.App.Id).ShouldBeTrue("push-to-talk answers what Raven reads out");
+        changes.ShouldBe(seen + 1);
+    }
+
+    [Fact]
     public void Before_the_shell_is_set_up_it_takes_no_question()
     {
         _h.Shell.TakesAsks(_h.App.Id).ShouldBeFalse();

@@ -54,6 +54,7 @@ public sealed class TurnStops : IDisposable
     /// </summary>
     public Task<TurnStopOutcome> Request(string sessionId)
     {
+        Task<TurnStopOutcome> stopped;
         lock (_lock)
         {
             if (!_pending.TryGetValue(sessionId, out var pending) || Expired(pending))
@@ -63,9 +64,15 @@ public sealed class TurnStops : IDisposable
                 _pending[sessionId] = pending;
             }
 
-            return pending.Done.Task;
+            stopped = pending.Done.Task;
         }
+
+        Requested?.Invoke(sessionId);
+        return stopped;
     }
+
+    /// <summary>A stop was asked for the chat (its id). Raised on the asking thread, outside the lock: a step held now can take it.</summary>
+    public event Action<string>? Requested;
 
     /// <summary>
     /// The stop for this hook event, taken; null when none is asked for it, or the event cannot carry one. The event is

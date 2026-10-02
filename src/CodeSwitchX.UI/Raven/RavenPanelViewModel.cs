@@ -1732,6 +1732,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Remove(card);
+        // Not told yet to the brain that acts, it is not told at all: the chat waits for no answer here any more.
+        var fact = QuestionFact(card);
+        _toldNews.RemoveAll(t => t.Fact == fact);
         OpenQuestions = _askCards.Count;
         card.IsOpen = false;
         card.Outcome = closed.Outcome switch
@@ -1739,6 +1742,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             ChatAskOutcome.Answered => "Answered: " + string.Join("; ", closed.Answers ?? []),
             ChatAskOutcome.ToVsCode => "Left to VS Code: it asks there.",
             ChatAskOutcome.TimedOut => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
+            ChatAskOutcome.Stopped => "The chat was stopped.",
             _ => "The chat stopped waiting for it.",
         };
     }
@@ -1787,7 +1791,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Reads out the questions not read yet: who asks, what, and the options. The brain that acts is told them with the
-    /// user's next question, so "the first one" answers it. Muted, the cards are only shown. Never faults.
+    /// user's next question, so "the first one" answers it. Muted, or with news not to be spoken, the cards are only shown.
+    /// Never faults.
     /// </summary>
     private async Task TellQuestionsAsync(Task previous, CancellationToken floor)
     {
@@ -1810,7 +1815,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             var at = _time.GetUtcNow();
             _toldNews.AddRange(cards.Select(c => (at, QuestionFact(c))));
-            if (IsMuted || floor.IsCancellationRequested)
+            if (!SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
                 return;
             }
@@ -1862,10 +1867,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The question as the brain that acts is told it: the chat, its id, each question and its options.</summary>
     internal static string QuestionFact(ChatQuestionCard card) =>
-        $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: "
-        + string.Join("; ", card.Questions.Select(q => $"\"{q.Text}\""
-            + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")))
-        + ". answer_question answers it";
+        $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. answer_question answers it";
 
     /// <summary>
     /// The digest: one card that lists the news, and the teller wording it in a few words, as conversation. Muted, or

@@ -82,7 +82,8 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
             shown = shown.Where(c => ids.Contains(c.WorkspaceId));
         }
 
-        return shown.Select(c => ChatView.Of(c, AsksOf(c.Id))).ToList();
+        var asked = asks?.Open().ToLookup(a => a.SessionId);
+        return shown.Select(c => ChatView.Of(c, AsksOf(asked, c.Id))).ToList();
     }
 
     [McpServerTool(Name = "get_chat", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -96,18 +97,15 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
         return found switch
         {
             _ when key.Length == 0 => throw new McpException("Give a chat id from list_chats."),
-            [var chat] => ChatDetailView.Of(chat, AsksOf(chat.Id)),
+            [var chat] => ChatDetailView.Of(chat, AsksOf(asks?.Open().ToLookup(a => a.SessionId), chat.Id)),
             [] => throw new McpException($"The Yard shows no chat '{id}'. list_chats lists them."),
             _ => throw new McpException($"'{id}' fits {found.Count} chats. Give more of the id."),
         };
     }
 
     /// <summary>What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there.</summary>
-    private string? AsksOf(string chatId) => asks?.Open().FirstOrDefault(a => a.SessionId == chatId) is { } ask ? Describe(ask) : null;
-
-    /// <summary>"\"Which fruit?\" (one of: Apple, Banana, Cherry)", the questions joined by "; ".</summary>
-    internal static string Describe(ChatAsk ask) => string.Join("; ", ask.Questions.Select(q => $"\"{q.Text}\""
-        + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
+    private static string? AsksOf(ILookup<string, ChatAsk>? asked, string chatId) =>
+        asked?[chatId].Select(a => a.Describe()).ToList() is { Count: > 0 } said ? string.Join("; ", said) : null;
 
     /// <summary>The workspaces and the chats, both read at once: each read waits for the UI thread.</summary>
     private async Task<(IReadOnlyList<YardWorkspace> Workspaces, IReadOnlyList<YardChat> Chats)> ReadAsync(CancellationToken ct)
