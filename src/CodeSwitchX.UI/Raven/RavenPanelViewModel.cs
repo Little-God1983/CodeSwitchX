@@ -766,7 +766,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _logger.LogWarning(ex, "Open mic's models could not be downloaded");
             // Only a request still waiting for it goes back to push to talk.
             var back = _openMicDownloadRequest == _openMicRequest ? " " + FallbackNote : "";
-            ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message}.{back}");
+            ReplaceEntry(entry, RavenLogKind.Warning, $"Open mic's models could not be downloaded: {ex.Message.TrimEnd().TrimEnd('.')}.{back}");
             return false;
         }
     }

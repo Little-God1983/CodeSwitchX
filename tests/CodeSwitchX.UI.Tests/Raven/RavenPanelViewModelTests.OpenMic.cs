@@ -584,7 +584,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_failed_download_falls_back_to_push_to_talk_but_the_choice_stays_Open_mic()
     {
         _openMic.ModelsPresent = false;
-        _openMic.DownloadFails = new HttpRequestException("no network");
+        _openMic.DownloadFails = new HttpRequestException("no network."); // HttpClient's messages end with a period
         var vm = await NewOpenMicVmAsync();
 
         vm.ChooseMicModeCommand.Execute(MicMode.OpenMic);
