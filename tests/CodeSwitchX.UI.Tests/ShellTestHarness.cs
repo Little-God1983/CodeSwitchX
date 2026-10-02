@@ -15,6 +15,7 @@ using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Telemetry;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -44,6 +45,11 @@ public sealed class ShellTestHarness
     public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
     internal Raven.FakeSpeech Voice { get; } = new();
     public IWhisperModelStore Models { get; } = Substitute.For<IWhisperModelStore>();
+    public SpeechSettings Speech { get; } = new();
+    internal Voice.FakeEngineVoice Kokoro { get; } = new(SpeechEngine.Kokoro);
+    internal Voice.FakeEngineVoice Qwen { get; } = new(SpeechEngine.Qwen);
+    public SpeechEngines Engines { get; }
+    public VoiceStatusViewModel VoiceStatus { get; }
     public WorkspaceResolver Resolver { get; } = new();
     public SessionEngine Engine { get; }
     public HostManager Host { get; }
@@ -74,8 +80,11 @@ public sealed class ShellTestHarness
         var cab = new CabViewModel();
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
-        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats, new SpeechSettings(), paths, claude, NullLogger<SettingsViewModel>.Instance);
-        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time);
+        Engines = new SpeechEngines(Speech, [Kokoro, Qwen]);
+        VoiceStatus = new VoiceStatusViewModel(Engines, Speech, Dictation, dispatcher);
+        var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
+            Speech, Engines, Models, VoiceStatus, paths, claude, NullLogger<SettingsViewModel>.Instance);
+        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic);

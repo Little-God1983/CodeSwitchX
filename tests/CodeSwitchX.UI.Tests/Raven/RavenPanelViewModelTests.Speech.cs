@@ -146,7 +146,10 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await NewVmAsync();
 
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading PyTorch (2.5 GB)"));
-        Lines(vm).ShouldBe([(RavenLogKind.Note, "Installing Raven's voice (about 5 GB, a few minutes): downloading PyTorch (2.5 GB)…")]);
+        Lines(vm).ShouldBe([(RavenLogKind.Note, "Installing Raven's voice: downloading PyTorch (2.5 GB)…")]);
+
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading the model", new global::CodeSwitchX.Voice.ByteProgress(142_000_000, 330_000_000)));
+        Lines(vm).ShouldBe([(RavenLogKind.Note, $"Installing Raven's voice: downloading the model ({142:N0} of {330:N0} MB)…")]);
 
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Loading, "downloading the model"));
         Lines(vm).ShouldBe([(RavenLogKind.Note, "Loading Raven's voice: downloading the model…")]);
@@ -155,6 +158,22 @@ public sealed partial class RavenPanelViewModelTests
         Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice is ready.")]);
     }
 
+    [Theory]
+    [InlineData(TextToSpeechState.Off)]
+    [InlineData(TextToSpeechState.NotInstalled)]
+    [InlineData(TextToSpeechState.NoEngine)]
+    public async Task An_install_stopped_says_so_in_its_note(TextToSpeechState after)
+    {
+        var vm = await NewVmAsync();
+
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading PyTorch (2.5 GB)"));
+        _speech.Report(new TextToSpeechStatus(after));
+
+        Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice stopped getting ready.")]);
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Loading, "loading the model"));
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Ready));
+        Lines(vm).ShouldBe([(RavenLogKind.Note, "Raven's voice stopped getting ready.")], "a later load of a voice on disk is quiet");
+    }
     [Fact]
     public async Task A_load_that_fails_after_the_install_turns_its_note_into_the_warning()
     {

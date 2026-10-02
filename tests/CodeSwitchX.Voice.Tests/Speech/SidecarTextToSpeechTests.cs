@@ -3,23 +3,23 @@ namespace CodeSwitchX.Voice.Tests.Speech;
 using System.Net;
 using System.Text.Json;
 using CodeSwitchX.Voice.Speech;
-using CodeSwitchX.Voice.Speech.QwenTts;
+using CodeSwitchX.Voice.Speech.Sidecar;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
-public sealed class QwenTextToSpeechTests : IDisposable
+public sealed class SidecarTextToSpeechTests : IDisposable
 {
     private readonly FakeEnvironment _environment = new();
     private readonly FakeLauncher _launcher = new();
     private readonly SpeechSettings _settings = new();
     private readonly FakeHandler _handler = new();
     private readonly FakeTimeProvider _time = new();
-    private readonly QwenTextToSpeech _tts;
+    private readonly SidecarTextToSpeech _tts;
     private readonly List<TextToSpeechState> _states = [];
 
-    public QwenTextToSpeechTests()
+    public SidecarTextToSpeechTests()
     {
-        _tts = new QwenTextToSpeech(_environment, _launcher, _settings, new HttpClient(_handler), _time, NullLogger<QwenTextToSpeech>.Instance);
+        _tts = new SidecarTextToSpeech(SpeechEngine.Qwen, _environment, _launcher, _settings, new HttpClient(_handler), _time, NullLogger<SidecarTextToSpeech>.Instance);
         _tts.StatusChanged += (_, status) => { lock (_states) { _states.Add(status.State); } };
     }
 
@@ -37,11 +37,11 @@ public sealed class QwenTextToSpeechTests : IDisposable
     }
 
     [Fact]
-    public async Task Without_an_install_a_warm_up_does_nothing()
+    public async Task Without_an_install_a_warm_up_only_says_it_is_not_installed()
     {
         _tts.Prepare(install: false);
         await _tts.Preparing;
-        _tts.Status.State.ShouldBe(TextToSpeechState.Off);
+        _tts.Status.State.ShouldBe(TextToSpeechState.NotInstalled);
         _environment.Installs.ShouldBe(0);
         _launcher.Starts.ShouldBeEmpty();
     }
@@ -76,7 +76,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         await _tts.Preparing;
         _environment.InstallFails = false;
 
-        _time.Advance(QwenTextToSpeech.RetryAfter - TimeSpan.FromSeconds(1));
+        _time.Advance(SidecarTextToSpeech.RetryAfter - TimeSpan.FromSeconds(1));
         _tts.Prepare(install: true);
         await _tts.Preparing;
         _environment.Installs.ShouldBe(1);
@@ -97,7 +97,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         _tts.Prepare(install: false);
         await Until(() => _launcher.Starts.Count == 1);
 
-        _time.Advance(QwenTextToSpeech.LoadTimeout);
+        _time.Advance(SidecarTextToSpeech.LoadTimeout);
         await _tts.Preparing;
 
         _tts.Status.ShouldBe(new TextToSpeechStatus(TextToSpeechState.Failed, "The voice did not finish loading in 20 minutes."));
@@ -193,7 +193,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
     public async Task Speech_streams_as_whole_samples_with_the_voice_of_the_settings()
     {
         _environment.Installed = true;
-        _settings.Voice = "aiden";
+        _settings.QwenVoice = "aiden";
         _tts.Prepare(install: false);
         await _tts.Preparing;
         _handler.Body = [1, 2, 3, 4, 5, 6, 7];
@@ -263,7 +263,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         _environment.Installed = true;
         _launcher.Gate = new TaskCompletionSource(); // the first sidecar finishes loading, cancelled or not
         _tts.Prepare(install: false);
-        await Until(() => _launcher.Starts.Count == 1);
+        await Until(() => _launcher.Pending is not null); // set just after the start is counted
 
         _launcher.Gate = null;
         var stale = _launcher.Pending!;
@@ -336,6 +336,180 @@ public sealed class QwenTextToSpeechTests : IDisposable
         States.ShouldBe([TextToSpeechState.Loading, TextToSpeechState.Ready, TextToSpeechState.Off, TextToSpeechState.Loading, TextToSpeechState.Ready]);
     }
 
+    [Fact]
+    public async Task Stopping_gives_up_an_install_and_says_it_is_not_installed()
+    {
+        _environment.Gate = new TaskCompletionSource();
+        _tts.Prepare(install: true);
+        await Until(() => _tts.Status.State == TextToSpeechState.Installing);
+
+        _tts.Stop();
+
+        await Until(() => _tts.Status.State == TextToSpeechState.NotInstalled);
+        await Until(() => _environment.Cancelled);
+        _launcher.Starts.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Stopping_a_running_voice_kills_its_sidecar_and_it_starts_again_when_next_needed()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+
+        _tts.Stop();
+
+        await Until(() => _launcher.Servers[0].Disposed);
+        await Until(() => _tts.Status.State == TextToSpeechState.Off);
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+        _launcher.Starts.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Stopping_a_voice_that_is_off_tells_nothing()
+    {
+        _tts.Stop();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        States.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Checking_the_install_says_whether_the_model_picked_is_on_disk()
+    {
+        _tts.CheckInstall();
+        await Until(() => _tts.Status.State == TextToSpeechState.NotInstalled);
+
+        _environment.Installed = true;
+        _environment.Models = ["Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"];
+        _tts.CheckInstall();
+        await Until(() => _tts.Status.State == TextToSpeechState.Off);
+
+        _settings.Model = SpeechModel.Large; // not downloaded: its first start would download 3.5 GB
+        await Until(() => _tts.Status.State == TextToSpeechState.NotInstalled);
+        _launcher.Starts.ShouldBeEmpty("a model picked while the voice is off does not start it");
+    }
+
+    [Fact]
+    public async Task A_check_of_the_install_never_undoes_a_voice_getting_ready()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+
+        _tts.CheckInstall();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        _tts.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task Another_engine_s_model_leaves_this_one_running()
+    {
+        using var kokoro = new SidecarTextToSpeech(SpeechEngine.Kokoro, _environment, _launcher, _settings, new HttpClient(_handler), _time,
+            NullLogger<SidecarTextToSpeech>.Instance);
+        _environment.Installed = true;
+        kokoro.Prepare(install: false);
+        await kokoro.Preparing;
+
+        _settings.Model = SpeechModel.Large;
+
+        _launcher.Starts.ShouldBe(["kokoro-v1.0"]);
+        _launcher.Servers[0].Disposed.ShouldBeFalse();
+        kokoro.Status.State.ShouldBe(TextToSpeechState.Ready);
+    }
+
+    [Fact]
+    public async Task Kokoro_speaks_with_the_Kokoro_voice_of_the_settings()
+    {
+        using var kokoro = new SidecarTextToSpeech(SpeechEngine.Kokoro, _environment, _launcher, _settings, new HttpClient(_handler), _time,
+            NullLogger<SidecarTextToSpeech>.Instance);
+        _environment.Installed = true;
+        _settings.KokoroVoice = "bm_george";
+        kokoro.Prepare(install: false);
+        await kokoro.Preparing;
+        _handler.Body = [1, 2];
+
+        await foreach (var _ in kokoro.SpeakAsync("Hello there.", CancellationToken.None))
+        {
+        }
+
+        _handler.Request!.RootElement.GetProperty("voice").GetString().ShouldBe("bm_george");
+    }
+
+    [Fact]
+    public async Task An_install_asked_for_tries_again_at_once_after_a_failure()
+    {
+        _environment.InstallFails = true;
+        _tts.Prepare(install: true);
+        await _tts.Preparing;
+        _environment.InstallFails = false;
+
+        _tts.Install();
+        await Until(() => _tts.Status.State == TextToSpeechState.Ready);
+
+        _environment.Installs.ShouldBe(2, "the user asked: no waiting out the retry time");
+    }
+
+    [Fact]
+    public async Task An_install_tells_how_far_its_download_is()
+    {
+        var statuses = new List<TextToSpeechStatus>();
+        _tts.StatusChanged += (_, status) => { lock (statuses) { statuses.Add(status); } };
+        _environment.Steps = [new InstallStep("downloading the model", new ByteProgress(142_000_000, 330_000_000))];
+
+        _tts.Prepare(install: true);
+        await _tts.Preparing;
+
+        lock (statuses)
+        {
+            statuses.ShouldContain(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading the model", new ByteProgress(142_000_000, 330_000_000)));
+        }
+    }
+
+    [Fact]
+    public async Task Looking_at_the_install_never_comes_back_to_the_UI_thread()
+    {
+        var ui = new HoldingContext(); // a UI thread busy with something else: what is posted to it never runs
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(ui);
+        try
+        {
+            _tts.CheckInstall();
+            _tts.Prepare(install: false);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        await Until(() => _tts.Status.State == TextToSpeechState.NotInstalled);
+        ui.Posted.ShouldBe(0, "the disk is read on the thread pool, not on the UI thread");
+    }
+
+    private sealed class HoldingContext : SynchronizationContext
+    {
+        private int _posted;
+
+        public int Posted => _posted;
+
+        public override void Post(SendOrPostCallback d, object? state) => Interlocked.Increment(ref _posted);
+    }
+
+    [Fact]
+    public async Task A_new_model_loaded_at_once_goes_from_loading_to_loading_without_off()
+    {
+        _environment.Installed = true;
+        _tts.Prepare(install: false);
+        await _tts.Preparing;
+
+        _settings.Model = SpeechModel.Large;
+        await Until(() => _launcher.Starts.Count == 2 && _tts.Status.State == TextToSpeechState.Ready);
+
+        States.ShouldBe([TextToSpeechState.Loading, TextToSpeechState.Ready, TextToSpeechState.Loading, TextToSpeechState.Ready],
+            "no Off between: the panel's install note would read it as an install stopped");
+    }
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -346,7 +520,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         }
     }
 
-    private sealed class FakeEnvironment : IQwenTtsEnvironment
+    private sealed class FakeEnvironment : ISidecarEnvironment
     {
         public bool Installed { get; set; }
 
@@ -371,19 +545,42 @@ public sealed class QwenTextToSpeechTests : IDisposable
             }
         }
 
+        /// <summary>The models on disk; with none named, every one.</summary>
+        public HashSet<string>? Models { get; set; }
+
+        public bool HasModel(string model) => Models?.Contains(model) ?? true;
+
         public string Python => "python.exe";
 
-        public string ModelCache => "cache";
+        public string ModelArgument(string model) => model;
+
+        public IReadOnlyDictionary<string, string> Variables { get; } = new Dictionary<string, string>();
 
         public string WriteScript() => "server.py";
 
-        public async Task InstallAsync(IProgress<string> progress, CancellationToken ct)
+        /// <summary>What the install tells as it goes.</summary>
+        public List<InstallStep> Steps { get; set; } = [];
+
+        public async Task InstallAsync(IProgress<InstallStep> progress, CancellationToken ct)
         {
             Installs++;
+            foreach (var step in Steps)
+            {
+                progress.Report(step);
+            }
+
             if (Gate is { } gate)
             {
-                using var _ = ct.Register(() => Cancelled = true);
-                await gate.Task.WaitAsync(ct);
+                // Not a callback on the token: the wait's own callback runs first and, inline, would dispose it unrun.
+                try
+                {
+                    await gate.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    Cancelled = true;
+                    throw;
+                }
             }
 
             if (InstallFails)
@@ -395,7 +592,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         }
     }
 
-    private sealed class FakeLauncher : IQwenTtsServerLauncher
+    private sealed class FakeLauncher : ISidecarLauncher
     {
         public List<string> Starts { get; } = [];
 
@@ -412,11 +609,11 @@ public sealed class QwenTextToSpeechTests : IDisposable
 
         public Action<string>? LastStatus { get; private set; }
 
-        public async Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus, CancellationToken ct)
+        public async Task<ISidecarServer> StartAsync(ISidecarEnvironment environment, string model, Action<string> onStatus, CancellationToken ct)
         {
             lock (Starts)
             {
-                Starts.Add(modelId);
+                Starts.Add(model);
             }
 
             LastStatus = onStatus;
@@ -447,7 +644,7 @@ public sealed class QwenTextToSpeechTests : IDisposable
         }
     }
 
-    private sealed class FakeServer : IQwenTtsServer
+    private sealed class FakeServer : ISidecarServer
     {
         private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

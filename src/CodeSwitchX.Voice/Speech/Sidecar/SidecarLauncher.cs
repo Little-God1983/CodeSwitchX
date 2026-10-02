@@ -4,10 +4,10 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
-namespace CodeSwitchX.Voice.Speech.QwenTts;
+namespace CodeSwitchX.Voice.Speech.Sidecar;
 
-/// <summary>A running sidecar (<c>qwen_tts_server.py</c>), ready to speak.</summary>
-public interface IQwenTtsServer : IDisposable
+/// <summary>A running sidecar (<c>tts_sidecar.py</c> under an engine's script), ready to speak.</summary>
+public interface ISidecarServer : IDisposable
 {
     /// <summary>Where it listens: http://127.0.0.1:port/.</summary>
     Uri Address { get; }
@@ -20,12 +20,12 @@ public interface IQwenTtsServer : IDisposable
 }
 
 /// <summary>Starts sidecars; the tests start fakes.</summary>
-public interface IQwenTtsServerLauncher
+public interface ISidecarLauncher
 {
-    /// <summary>Starts one for <paramref name="modelId"/> and waits until it has loaded the model and is ready.</summary>
+    /// <summary>Starts one for <paramref name="model"/> and waits until it has loaded the model and is ready.</summary>
     /// <param name="onStatus">What it is doing meanwhile, in a few words.</param>
     /// <exception cref="TextToSpeechException">It failed to start, or ended before it was ready.</exception>
-    Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus, CancellationToken ct);
+    Task<ISidecarServer> StartAsync(ISidecarEnvironment environment, string model, Action<string> onStatus, CancellationToken ct);
 }
 
 /// <summary>
@@ -34,16 +34,16 @@ public interface IQwenTtsServerLauncher
 /// stderr reaches the app's log: while it loads at debug level (libraries chatter), and the tail as a warning when the
 /// load fails; once it is ready, every line as a warning, since then it writes only what went wrong (a traceback).
 /// </summary>
-public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
+public sealed class SidecarLauncher : ISidecarLauncher
 {
-    private readonly ILogger<QwenTtsServerLauncher> _logger;
+    private readonly ILogger<SidecarLauncher> _logger;
 
-    public QwenTtsServerLauncher(ILogger<QwenTtsServerLauncher> logger)
+    public SidecarLauncher(ILogger<SidecarLauncher> logger)
     {
         _logger = logger;
     }
 
-    public async Task<IQwenTtsServer> StartAsync(IQwenTtsEnvironment environment, string modelId, Action<string> onStatus,
+    public async Task<ISidecarServer> StartAsync(ISidecarEnvironment environment, string model, Action<string> onStatus,
         CancellationToken ct)
     {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
@@ -56,15 +56,17 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        foreach (var argument in new[] { "-u", environment.WriteScript(), "--model", modelId, "--parent-pid", Environment.ProcessId.ToString() })
+        foreach (var argument in new[] { "-u", environment.WriteScript(), "--model", environment.ModelArgument(model), "--parent-pid", Environment.ProcessId.ToString() })
         {
             start.ArgumentList.Add(argument);
         }
 
         start.Environment["CSX_TTS_TOKEN"] = token;
-        start.Environment["HF_HOME"] = environment.ModelCache;
-        start.Environment["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1";
         start.Environment["PYTHONIOENCODING"] = "utf-8";
+        foreach (var (name, value) in environment.Variables)
+        {
+            start.Environment[name] = value;
+        }
 
         Process process;
         try
@@ -89,7 +91,7 @@ public sealed class QwenTtsServerLauncher : IQwenTtsServerLauncher
         }
     }
 
-    private sealed class Server : IQwenTtsServer
+    private sealed class Server : ISidecarServer
     {
         private const int ErrorLinesKept = 15;
         private readonly Process _process;

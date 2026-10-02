@@ -31,6 +31,7 @@ public sealed partial class RavenPanelViewModelTests
         _catalog.List().Returns([Headset, Desk]);
         _catalog.Default().Returns(Headset);
         _models.IsPresent.Returns(true);
+        _models.Model.Returns(WhisperModel.LargeV3Turbo);
         _vocabulary.GetAsync(Arg.Any<CancellationToken>()).Returns(DictationVocabulary.Empty);
         _recorder.Stop().Returns(new RecordedClip(new float[32000], TimeSpan.FromSeconds(2)));
         Transcribes(Task.FromResult(new DictationResult("Hallo Raven, open Diffusion Nexus", TimeSpan.FromSeconds(2))));
@@ -292,6 +293,28 @@ public sealed partial class RavenPanelViewModelTests
         seen.ShouldBe(["Downloading the speech model (1.6 GB)… 0%", "Downloading the speech model (1.6 GB)… 42%"]);
     }
 
+    [Theory]
+    [InlineData(WhisperModel.TinyEnglish, "78 MB")]
+    [InlineData(WhisperModel.BaseEnglish, "148 MB")]
+    [InlineData(WhisperModel.SmallEnglish, "488 MB")]
+    [InlineData(WhisperModel.LargeV3Turbo, "1.6 GB")]
+    public async Task The_download_note_says_the_size_of_the_model_picked(WhisperModel model, string size)
+    {
+        _models.IsPresent.Returns(false);
+        _models.Model.Returns(model);
+        string? said = null;
+        RavenPanelViewModel? vm = null;
+        _models.DownloadAsync(Arg.Any<IProgress<double>?>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            said = vm!.Log[0].Text;
+            return Task.CompletedTask;
+        });
+        vm = await NewVmAsync();
+
+        await HoldAsync(vm);
+
+        said.ShouldBe($"Downloading the speech model ({size})… 0%");
+    }
     [Fact]
     public async Task A_failed_download_is_reported_and_retried_next_time()
     {
@@ -646,6 +669,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.Caption.ShouldBe("Downloading the speech model…");
 
         _models.IsPresent.Returns(true);
+        _models.Model.Returns(WhisperModel.LargeV3Turbo);
         download.SetResult();
         await WithinAsync(firstRelease);
         await WithinAsync(secondRelease);

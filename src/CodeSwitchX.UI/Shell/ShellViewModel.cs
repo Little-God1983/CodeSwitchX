@@ -77,6 +77,24 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Raven opens a workspace: the window comes forward, from behind other windows or minimised.</summary>
     public event Action? ForwardRequested;
 
+    /// <summary>The voice setup is to open: from Settings, or by itself the first time the Raven panel is used.</summary>
+    public event Action? VoiceSetupRequested;
+
+    /// <summary>
+    /// Opens the voice setup if the Raven panel is open, no engine is picked, and it never opened by itself: the first use
+    /// of the panel. The window calls this once it shows, and the panel's unfolding does.
+    /// </summary>
+    public void OfferVoiceSetup()
+    {
+        if (!Raven.IsOpen || !Settings.NeedsVoiceSetup)
+        {
+            return;
+        }
+
+        Settings.RavenVoiceSetupShown = true;
+        VoiceSetupRequested?.Invoke();
+    }
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         await Yard.InitializeAsync(ct);
@@ -84,6 +102,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         await Settings.LoadAsync(ct);
         Settings.BudgetChanged += PerformanceBar.SetBudget;
         Settings.CloseRequested += CloseSettings;
+        Settings.VoiceSetupRequested += () => VoiceSetupRequested?.Invoke();
         // The Yard's "Hooks not installed" banner follows the installer, so it goes when Install hooks is clicked.
         Yard.HooksInstalled = HooksReachUs(Settings.HookState);
         Settings.PropertyChanged += (_, e) =>
@@ -121,6 +140,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 Settings.RavenPanelOpen = Raven.IsOpen;
                 TrackRavenOpen();
+                OfferVoiceSetup();
             }
             else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicrophone))
             {

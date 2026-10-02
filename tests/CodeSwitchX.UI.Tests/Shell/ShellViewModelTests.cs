@@ -800,4 +800,40 @@ public class ShellViewModelTests
         await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenBargeIn, true, Arg.Any<CancellationToken>());
     }
-}
+
+    [Fact]
+    public async Task The_voice_setup_opens_by_itself_once_when_the_Raven_panel_is_first_used_with_no_engine()
+    {
+        _h.Settings.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var opened = 0;
+        _h.Shell.VoiceSetupRequested += () => opened++;
+
+        _h.Shell.OfferVoiceSetup(); // the window shows, the panel folded
+        opened.ShouldBe(0);
+
+        _h.Shell.Raven.IsOpen = true;
+        opened.ShouldBe(1);
+        _h.Shell.Settings.RavenVoiceSetupShown.ShouldBeTrue();
+
+        _h.Shell.Raven.IsOpen = false;
+        _h.Shell.Raven.IsOpen = true;
+        _h.Shell.OfferVoiceSetup();
+        opened.ShouldBe(1, "skipped once, it opens from Settings only");
+
+        _h.Shell.Settings.OpenVoiceSetupCommand.Execute(null);
+        opened.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task With_an_engine_picked_the_voice_setup_does_not_open_by_itself()
+    {
+        _h.Qwen.IsInstalled = true;
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var opened = 0;
+        _h.Shell.VoiceSetupRequested += () => opened++;
+
+        _h.Shell.OfferVoiceSetup();
+
+        opened.ShouldBe(0);
+    }}

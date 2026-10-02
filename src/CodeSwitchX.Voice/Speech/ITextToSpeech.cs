@@ -1,8 +1,9 @@
 namespace CodeSwitchX.Voice.Speech;
 
 /// <summary>
-/// Speaks text: the audio comes back in chunks while it is generated, and stops when the call is cancelled. One engine
-/// behind it for now (Qwen3-TTS, see <see cref="QwenTts.QwenTextToSpeech"/>); others can follow behind this interface.
+/// Speaks text: the audio comes back in chunks while it is generated, and stops when the call is cancelled. Each engine
+/// (Qwen3-TTS, Kokoro) is one (see <see cref="Sidecar.SidecarTextToSpeech"/>), and <see cref="SpeechEngines"/> speaks with
+/// the one picked.
 /// </summary>
 public interface ITextToSpeech
 {
@@ -20,7 +21,7 @@ public interface ITextToSpeech
     void Prepare(bool install);
 
     /// <summary>
-    /// Speaks <paramref name="text"/> with the voice and model of <see cref="SpeechSettings"/>; chunks of 16-bit PCM
+    /// Speaks <paramref name="text"/> with the engine, voice and model of <see cref="SpeechSettings"/>; chunks of 16-bit PCM
     /// come as they are generated. Cancelling stops the generation, too.
     /// </summary>
     /// <exception cref="TextToSpeechNotReadyException">The engine is not ready yet (or failed); it is getting ready, if it can.</exception>
@@ -39,8 +40,14 @@ public sealed record SpeechChunk(ReadOnlyMemory<byte> Pcm16, int SampleRate);
 
 public enum TextToSpeechState
 {
-    /// <summary>Not started; it starts when asked to get ready or to speak.</summary>
+    /// <summary>Not started, and on disk; it starts when asked to get ready or to speak.</summary>
     Off,
+
+    /// <summary>Not on disk (not installed, or its model not downloaded); it is installed when Raven first speaks, or from the voice setup.</summary>
+    NotInstalled,
+
+    /// <summary>No engine is picked: Raven answers in text only, until one is picked in the voice setup or Settings.</summary>
+    NoEngine,
 
     /// <summary>Downloading and installing the engine (a first run).</summary>
     Installing,
@@ -55,7 +62,8 @@ public enum TextToSpeechState
 }
 
 /// <param name="Detail">What it is doing (Installing, Loading) or why it failed (Failed); null otherwise.</param>
-public sealed record TextToSpeechStatus(TextToSpeechState State, string? Detail = null)
+/// <param name="Bytes">How far the download of this step of the install is, when it is one of a known size.</param>
+public sealed record TextToSpeechStatus(TextToSpeechState State, string? Detail = null, ByteProgress? Bytes = null)
 {
     public static readonly TextToSpeechStatus Off = new(TextToSpeechState.Off);
 }

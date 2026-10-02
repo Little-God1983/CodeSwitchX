@@ -330,10 +330,10 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
-    /// <summary>Null when the status speaks for itself: a failure was reported as it happened.</summary>
+    /// <summary>Null when the status speaks for itself: a failure was reported as it happened, and with no engine picked Raven only writes.</summary>
     private static string? NotReady(TextToSpeechStatus status) => status.State switch
     {
-        TextToSpeechState.Failed => null,
+        TextToSpeechState.Failed or TextToSpeechState.NoEngine => null,
         TextToSpeechState.Installing => "Raven's voice is being installed, so this answer is not spoken.",
         _ => "Raven's voice is still loading, so this answer is not spoken.",
     };

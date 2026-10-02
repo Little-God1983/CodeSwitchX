@@ -24,6 +24,7 @@ using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Telemetry;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Workspaces;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice;
@@ -106,6 +107,8 @@ public partial class App : Application
             asks.Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
             asks.Keeps = ask => shell.KeepsAsks(engine.Get(ask.SessionId)?.WorkspaceId);
             shell.AskRulesChanged += (_, _) => asks.Recheck();
+            // The dots: the engines and the speech-to-text model say whether they are on disk (after Settings picked the engine).
+            _host.Services.GetRequiredService<VoiceStatusViewModel>().Start();
 
             var window = _host.Services.GetRequiredService<MainWindow>();
             MainWindow = window;
@@ -242,6 +245,9 @@ public partial class App : Application
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
+        services.AddSingleton<VoiceStatusViewModel>();
+        services.AddTransient<VoiceSetupViewModel>();
+        services.AddSingleton<Func<VoiceSetupViewModel>>(sp => () => sp.GetRequiredService<VoiceSetupViewModel>());
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
             sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,

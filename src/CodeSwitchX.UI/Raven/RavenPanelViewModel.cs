@@ -867,13 +867,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// The voice's install and its first load after it are told in one note that follows them; the warm-up of a voice
     /// installed before is quiet. A failure is a warning, once: the voice is not tried again until the settings change.
+    /// An install stopped (cancelled, another engine picked) says so in the note.
     /// </summary>
     private void OnVoiceStatus(TextToSpeechStatus status)
     {
         switch (status.State)
         {
             case TextToSpeechState.Installing:
-                SetVoiceNote($"Installing Raven's voice (about 5 GB, a few minutes): {status.Detail}…");
+                SetVoiceNote($"Installing Raven's voice: {status.Detail}{(status.Bytes is { } bytes ? $" ({bytes})" : "")}…");
                 break;
             case TextToSpeechState.Loading when _voiceNote is not null:
                 SetVoiceNote($"Loading Raven's voice: {status.Detail}…");
@@ -889,6 +890,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 break;
             case TextToSpeechState.Failed:
                 AddEntry(RavenLogKind.Warning, $"Raven cannot speak: {status.Detail}");
+                break;
+            case TextToSpeechState.Off or TextToSpeechState.NotInstalled or TextToSpeechState.NoEngine when _voiceNote is not null:
+                // Cancelled in the voice setup, or another engine (or none) picked: the note does not go on claiming an install.
+                _voiceNote.Text = "Raven's voice stopped getting ready.";
+                _voiceNote = null;
                 break;
         }
     }
@@ -2046,9 +2052,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="quiet">For an Open mic turn: the warning says the next turn tries again, as pressing the mic would pause Open mic.</param>
     private async Task<bool> DownloadModelAsync(long number, bool quiet)
     {
-        const string Prefix = "Downloading the speech model (1.6 GB)… ";
-        var entry = AddEntry(RavenLogKind.Note, Prefix + "0%");
-        var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{Prefix}{percent}%");
+        // The size of the model picked in Settings: Tiny is 78 MB, Large v3 Turbo 1.6 GB.
+        var prefix = $"Downloading the speech model ({SizeOf(_models.Model)})… ";
+        var entry = AddEntry(RavenLogKind.Note, prefix + "0%");
+        var progress = new PostedPercent(_dispatcher, percent => entry.Text = $"{prefix}{percent}%");
         _downloading = true;
         UpdateState();
         try
@@ -2073,6 +2080,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         entry.Text = "Speech model downloaded.";
         return true;
+    }
+
+    /// <summary>"78 MB", "1.6 GB": a Whisper model's size, as the download note says it.</summary>
+    internal static string SizeOf(WhisperModel model)
+    {
+        var bytes = WhisperModelStore.ApproximateBytes(model);
+        return bytes >= 1_000_000_000
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / 1e9:0.0} GB")
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / 1e6:0} MB");
     }
 
     private string DropWarning() => _dropReason + _dropped switch

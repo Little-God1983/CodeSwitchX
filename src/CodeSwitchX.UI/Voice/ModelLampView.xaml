@@ -1,0 +1,16 @@
+<UserControl x:Class="CodeSwitchX.UI.Voice.ModelLampView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance voice:ModelLamp}"
+             ToolTip="{Binding Detail}" ToolTipService.InitialShowDelay="200"
+             AutomationProperties.Name="{Binding Text}" AutomationProperties.HelpText="{Binding Detail}">
+  <!-- A model's dot and a word or two beside it; the tooltip says what it means. DataContext: a ModelLamp. -->
+  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+    <Ellipse Width="9" Height="9" Margin="0,0,6,0" VerticalAlignment="Center" Fill="{Binding Dot, Converter={StaticResource DotBrush}}" />
+    <TextBlock Text="{Binding Text}" VerticalAlignment="Center" />
+  </StackPanel>
+</UserControl>

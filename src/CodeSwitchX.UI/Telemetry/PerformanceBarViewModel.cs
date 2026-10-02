@@ -5,12 +5,13 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CodeSwitchX.UI.Telemetry;
 
-/// <summary>Slim bottom bar: tokens today, estimated cost, 5-hour window against a soft budget, rate sparkline, session counts.</summary>
+/// <summary>Slim bottom bar: tokens today, estimated cost, 5-hour window against a soft budget, rate sparkline, session counts; and on the right where Raven's voice and speech-to-text models stand.</summary>
 public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposable
 {
     private readonly TelemetryService _telemetry;
@@ -32,8 +33,10 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     [ObservableProperty] private double[] _rateNormalized = new double[TelemetryService.RateMinutes];
     [ObservableProperty] private bool _isExpanded = true;
 
-    public PerformanceBarViewModel(TelemetryService telemetry, SessionEngine engine, IEventBus bus, IUiDispatcher ui, ISettingsStore settings, TimeProvider time)
+    public PerformanceBarViewModel(TelemetryService telemetry, SessionEngine engine, IEventBus bus, IUiDispatcher ui, ISettingsStore settings, TimeProvider time,
+        VoiceStatusViewModel voice)
     {
+        Voice = voice;
         _telemetry = telemetry;
         _engine = engine;
         _bus = bus;
@@ -41,6 +44,9 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
         _settings = settings;
         _time = time;
     }
+
+    /// <summary>The dots of Raven's models.</summary>
+    public VoiceStatusViewModel Voice { get; }
 
     public async Task InitializeAsync(CancellationToken ct)
     {

@@ -6,6 +6,9 @@ using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Tests.Voice;
+using CodeSwitchX.UI.Voice;
+using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,6 +24,12 @@ public class SettingsViewModelTests : IDisposable
     private readonly PersistenceWriterOptions _writerOptions = new();
     private readonly BrainSettings _brain = new();
     private readonly ChatSettings _chats = new();
+    private readonly SpeechSettings _speech = new();
+    private readonly FakeEngineVoice _kokoro = new(SpeechEngine.Kokoro);
+    private readonly FakeEngineVoice _qwen = new(SpeechEngine.Qwen);
+    private readonly IWhisperModelStore _whisper = Substitute.For<IWhisperModelStore>();
+    private readonly IDictationService _dictation = Substitute.For<IDictationService>();
+    private readonly VoiceStatusViewModel _voice;
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -28,7 +37,10 @@ public class SettingsViewModelTests : IDisposable
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
-        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats, new SpeechSettings(), _paths, _claude, NullLogger<SettingsViewModel>.Instance);
+        var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
+        _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
+        _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
+            _speech, engines, _whisper, _voice, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
     }
 
     public void Dispose()
@@ -459,4 +471,84 @@ public class SettingsViewModelTests : IDisposable
         _vm.ChatModelChoices.ShouldBe([SettingsViewModel.ClaudeDefault, "Fable", "Nova"]);
         await _store.Received().SetAsync(SettingKeys.RavenModelAliases, "Fable = claude-fable-6-0\nNova = claude-nova-1", Arg.Any<CancellationToken>());
     }
-}
+
+    [Fact]
+    public async Task Whoever_has_Qwen3_TTS_installed_keeps_it_and_sees_no_voice_setup()
+    {
+        _qwen.IsInstalled = true;
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenVoiceEngine, _speech.Engine, _vm.NeedsVoiceSetup).ShouldBe(("Qwen", SpeechEngine.Qwen, false));
+        await FlushAsync();
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenVoiceEngine, Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task On_a_fresh_install_no_engine_is_picked_until_the_voice_setup()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenVoiceEngine, _speech.Engine, _vm.IsKokoro, _vm.IsQwen, _vm.NeedsVoiceSetup).ShouldBe((SettingsViewModel.NoEngine, (SpeechEngine?)null, false, false, true));
+
+        _vm.RavenVoiceSetupShown = true;
+        _vm.NeedsVoiceSetup.ShouldBeFalse("it opens by itself once");
+    }
+
+    [Fact]
+    public async Task The_voice_list_follows_the_engine_and_each_engine_keeps_its_own_voice()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenVoiceEngine, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("Kokoro"));
+        _store.GetAsync<string>(SettingKeys.RavenVoice, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("aiden"));
+        await _vm.LoadAsync(CancellationToken.None);
+        (_vm.IsKokoro, _vm.IsQwen, _vm.RavenKokoroVoice).ShouldBe((true, false, "af_heart"));
+
+        _vm.RavenKokoroVoice = "bf_emma";
+        _vm.RavenVoiceEngine = "Qwen";
+
+        (_vm.IsKokoro, _vm.IsQwen, _vm.RavenQwenVoice).ShouldBe((false, true, "aiden"));
+        (_speech.Engine, _speech.KokoroVoice, _speech.QwenVoice).ShouldBe((SpeechEngine.Qwen, "bf_emma", "aiden"));
+        await FlushAsync();
+        await _store.Received().SetAsync(SettingKeys.RavenKokoroVoice, "bf_emma", Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenVoiceEngine, "Qwen", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_voice_setup_s_pick_is_shown_and_stored()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.PickVoice(SpeechEngine.Kokoro, "am_michael");
+
+        (_vm.RavenVoiceEngine, _vm.RavenKokoroVoice, _speech.Engine, _speech.KokoroVoice).ShouldBe(("Kokoro", "am_michael", SpeechEngine.Kokoro, "am_michael"));
+        await FlushAsync();
+        await _store.Received().SetAsync(SettingKeys.RavenKokoroVoice, "am_michael", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_speech_to_text_model_is_loaded_into_the_store_and_saved()
+    {
+        _store.GetAsync<WhisperModel?>(SettingKeys.RavenWhisperModel, Arg.Any<CancellationToken>()).Returns(Task.FromResult<WhisperModel?>(WhisperModel.SmallEnglish));
+        await _vm.LoadAsync(CancellationToken.None);
+        _whisper.Model.ShouldBe(WhisperModel.SmallEnglish);
+
+        _vm.RavenWhisperModel = WhisperModel.TinyEnglish;
+        await FlushAsync();
+
+        _whisper.Model.ShouldBe(WhisperModel.TinyEnglish);
+        await _store.Received().SetAsync(SettingKeys.RavenWhisperModel, WhisperModel.TinyEnglish, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_speech_to_text_model_not_on_disk_offers_its_download()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.NotDownloaded, WhisperModel.TinyEnglish));
+        _vm.WhisperMissing.ShouldBeTrue();
+
+        await _vm.DownloadWhisperCommand.ExecuteAsync(null);
+        await _whisper.Received().DownloadAsync(null, Arg.Any<CancellationToken>());
+
+        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.Asleep, WhisperModel.TinyEnglish));
+        _vm.WhisperMissing.ShouldBeFalse();
+    }}

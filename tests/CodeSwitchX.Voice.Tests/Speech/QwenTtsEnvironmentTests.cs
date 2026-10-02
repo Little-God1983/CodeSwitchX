@@ -2,6 +2,7 @@ namespace CodeSwitchX.Voice.Tests.Speech;
 
 using CodeSwitchX.Voice.Speech;
 using CodeSwitchX.Voice.Speech.QwenTts;
+using CodeSwitchX.Voice.Speech.Sidecar;
 using Microsoft.Extensions.Logging.Abstractions;
 
 public sealed class QwenTtsEnvironmentTests : IDisposable
@@ -18,8 +19,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
     }
 
     private QwenTtsEnvironment Environment(HttpMessageHandler? download = null) =>
-        new(_root, Path.Combine(_root, "hf"), _runner, new HttpClient(download ?? new ZipHandler()), () => "uv.exe",
-            NullLogger<QwenTtsEnvironment>.Instance);
+        new(_root, Path.Combine(_root, "hf"), new Uv(_root, _runner, new HttpClient(download ?? new ZipHandler()), () => "uv.exe", NullLogger.Instance));
 
     [Fact]
     public async Task An_install_makes_a_managed_python_then_cuda_torch_then_the_engine_within_the_pins()
@@ -27,7 +27,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
         var environment = Environment();
         environment.IsInstalled.ShouldBeFalse();
 
-        await environment.InstallAsync(new Progress<string>(), CancellationToken.None);
+        await environment.InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
 
         _runner.Calls.Select(c => c.Arguments[0] + " " + c.Arguments[1]).ShouldBe(["venv " + Path.Combine(_root, "venv"), "pip install", "pip install"]);
         _runner.Calls[0].Arguments.ShouldContain("--managed-python");
@@ -44,7 +44,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
     public async Task Only_a_complete_install_counts_as_installed()
     {
         var environment = Environment();
-        await environment.InstallAsync(new Progress<string>(), CancellationToken.None);
+        await environment.InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
         environment.IsInstalled.ShouldBeFalse(); // the fake made no python.exe
 
         Directory.CreateDirectory(Path.GetDirectoryName(environment.Python)!);
@@ -52,7 +52,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
         environment.IsInstalled.ShouldBeTrue();
 
         _runner.FailAt = _runner.Calls.Count + 2; // the third step of the next install
-        await Should.ThrowAsync<TextToSpeechException>(() => environment.InstallAsync(new Progress<string>(), CancellationToken.None));
+        await Should.ThrowAsync<TextToSpeechException>(() => environment.InstallAsync(new Progress<InstallStep>(), CancellationToken.None));
         environment.IsInstalled.ShouldBeFalse();
     }
 
@@ -64,7 +64,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
     [InlineData("", false)]
     public void Only_the_pinned_uv_on_the_path_is_used(string versionOutput, bool used)
     {
-        QwenTtsEnvironment.IsPinnedVersion(versionOutput).ShouldBe(used);
+        Uv.IsPinnedVersion(versionOutput).ShouldBe(used);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
     {
         _runner.VersionOutput = "uv 0.11.6 (65950801c 2026-04-09 x86_64-pc-windows-msvc)";
 
-        await Environment().InstallAsync(new Progress<string>(), CancellationToken.None);
+        await Environment().InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
 
         _runner.Calls.ShouldAllBe(c => c.Executable == "uv.exe");
     }
@@ -83,17 +83,46 @@ public sealed class QwenTtsEnvironmentTests : IDisposable
         _runner.VersionOutput = "uv 0.5.31 (abc 2024-12-01)";
         var download = new ZipHandler();
 
-        await Environment(download).InstallAsync(new Progress<string>(), CancellationToken.None);
+        await Environment(download).InstallAsync(new Progress<InstallStep>(), CancellationToken.None);
 
         download.Asked.ShouldBe(["https://github.com/astral-sh/uv/releases/download/0.11.6/uv-x86_64-pc-windows-msvc.zip"]);
         _runner.Calls.ShouldAllBe(c => c.Executable == Path.Combine(_root, "uv", "0.11.6", "uv.exe"));
     }
 
     [Fact]
-    public void The_sidecar_script_is_written_into_the_voice_folder()
+    public void The_sidecar_script_is_written_into_the_voice_folder_with_the_server_it_runs_under()
     {
         var script = Environment().WriteScript();
-        File.ReadAllText(script).ShouldContain("/v1/audio/speech");
+
+        script.ShouldBe(Path.Combine(_root, "qwen_tts_server.py"));
+        File.ReadAllText(script).ShouldContain("tts_sidecar.run(load, speak");
+        File.ReadAllText(Path.Combine(_root, "tts_sidecar.py")).ShouldContain("/v1/audio/speech");
+    }
+
+    [Fact]
+    public void A_model_counts_as_downloaded_once_its_weights_are_in_the_cache_and_nothing_is_still_downloading()
+    {
+        var environment = Environment();
+        const string model = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice";
+        var folder = Path.Combine(_root, "hf", "hub", "models--Qwen--Qwen3-TTS-12Hz-0.6B-CustomVoice");
+        var snapshot = Path.Combine(folder, "snapshots", "85e237c1");
+        Directory.CreateDirectory(snapshot);
+        File.WriteAllText(Path.Combine(snapshot, "config.json"), "{}");
+        environment.HasModel(model).ShouldBeFalse("the weights are not there yet");
+
+        File.WriteAllText(Path.Combine(snapshot, "model.safetensors"), "");
+        environment.HasModel(model).ShouldBeTrue();
+        environment.HasModel("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice").ShouldBeFalse();
+
+        Directory.CreateDirectory(Path.Combine(folder, "blobs"));
+        File.WriteAllText(Path.Combine(folder, "blobs", "abc.incomplete"), "");
+        environment.HasModel(model).ShouldBeFalse("a download cut off is finished by the next start");
+    }
+
+    [Fact]
+    public void The_sidecar_downloads_its_models_into_the_app_s_cache()
+    {
+        Environment().Variables["HF_HOME"].ShouldBe(Path.Combine(_root, "hf"));
     }
 
     private sealed class FakeRunner : IProcessRunner
