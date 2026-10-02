@@ -80,7 +80,11 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingOpenMic);
 
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
-        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Warning && e.Text.Contains("smart-turn"));
+        var warning = vm.Log.Last();
+        warning.Kind.ShouldBe(RavenLogKind.Warning);
+        warning.Text.ShouldContain("smart-turn");
+        warning.Text.ShouldEndWith(". Back to push to talk for now; Open mic is tried again at the next launch. Click Push to talk to stop trying Open mic.");
+        warning.Text.ShouldNotContain("next time", Case.Insensitive, "one retry promise: the fallback's");
     }
 
     [Fact]
@@ -367,8 +371,8 @@ public sealed partial class RavenPanelViewModelTests
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
         var warning = vm.Log.Last();
         warning.Kind.ShouldBe(RavenLogKind.Warning);
-        warning.Text.ShouldBe("Open mic could not start: onnxruntime.dll was not found. Back to push to talk for now; Open mic stays "
-            + "your choice and is tried again at the next launch. Pick Push to talk to keep it.");
+        warning.Text.ShouldBe("Open mic could not start: onnxruntime.dll was not found. "
+            + "Back to push to talk for now; Open mic is tried again at the next launch. Click Push to talk to stop trying Open mic.");
         warning.Text.ShouldNotContain("downloaded");
     }
 
@@ -588,8 +592,8 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.MicMode.ShouldBe(MicMode.PushToTalk);
         vm.PreferredMicMode.ShouldBe(MicMode.OpenMic);
-        vm.Log.Last().Text.ShouldBe("Open mic's models could not be downloaded: no network. Back to push to talk for now; Open mic stays "
-            + "your choice and is tried again at the next launch. Pick Push to talk to keep it.");
+        vm.Log.Last().Text.ShouldBe("Open mic's models could not be downloaded: no network. "
+            + "Back to push to talk for now; Open mic is tried again at the next launch. Click Push to talk to stop trying Open mic.");
 
         _openMic.DownloadFails = null;
         vm.ChooseMicModeCommand.Execute(MicMode.OpenMic); // the user tries again: the choice has not changed, the mode does

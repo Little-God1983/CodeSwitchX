@@ -672,7 +672,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _logger.LogWarning(ex, "Open mic's models would not load");
             BackToPushToTalk(request,
-                $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. The file is downloaded again the next time Open mic starts. {FallbackNote}");
+                $"Open mic could not start: {ex.Message.TrimEnd().TrimEnd('.')}. {FallbackNote}");
             return;
         }
         catch (MicrophoneException ex)
@@ -734,9 +734,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>What a fallback does, said with its warning: the stored choice is still Open mic, so the next launch tries it
-    /// again unless the user picks Push to talk.</summary>
+    /// again (downloading a model file that would not load) unless the user clicks Push to talk, checked as it is. The
+    /// only retry promise in the warning.</summary>
     private const string FallbackNote =
-        "Back to push to talk for now; Open mic stays your choice and is tried again at the next launch. Pick Push to talk to keep it.";
+        "Back to push to talk for now; Open mic is tried again at the next launch. Click Push to talk to stop trying Open mic.";
 
     /// <summary>A start that failed for good: if it is still the current request, the warning and back to push to talk
     /// (the user's stored choice stays Open mic, for the next launch).</summary>

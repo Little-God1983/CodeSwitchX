@@ -117,8 +117,8 @@ samples it has been fed, so tests drive it frame by frame.
   user's choice (`PreferredMicMode`): a fall back to Push to talk after a failure changes the mode, not the choice, so
   the next launch tries Open mic again. The switch shows the mode in effect, and every click on either half is the
   user's choice (`ChooseMicModeCommand`), a click on the half already checked too: after a fallback, Push to talk saves
-  push to talk, and Open mic tries again. The fallback's warning says so: "Back to push to talk for now; Open mic stays
-  your choice and is tried again at the next launch. Pick Push to talk to keep it."
+  push to talk, and Open mic tries again. The fallback's warning says so: "Back to push to talk for now; Open mic is
+  tried again at the next launch. Click Push to talk to stop trying Open mic." It is the warning's only retry promise.
 - **Switching to Open mic:** downloads the models if they are missing, with the progress in the log as the Whisper
   model's download shows it, then starts the listener on the selected microphone. A failed download warns and switches
   back to Push to talk.
@@ -167,8 +167,8 @@ samples it has been fed, so tests drive it frame by frame.
 ## 3. Failures
 
 - **The models cannot be downloaded:** a warning with the reason, and the mode goes back to Push to talk.
-- **A model will not load:** a file ONNX Runtime refuses is deleted, a warning says it is downloaded again the next
-  time Open mic starts, and the mode goes back to Push to talk. Any other failure to start the listener warns with its message and goes back to Push to talk, deleting
+- **A model will not load:** a file ONNX Runtime refuses is deleted (so the next start downloads it again), a warning
+  says which, and the mode goes back to Push to talk. Any other failure to start the listener warns with its message and goes back to Push to talk, deleting
   nothing.
 - **The microphone fails** (unplugged, gone): the same warning as today; the listener stops, the mode stays Open mic and
   shows paused, and the mic button tries again. The silent-microphone watch is push to talk's, per start: "No sound
