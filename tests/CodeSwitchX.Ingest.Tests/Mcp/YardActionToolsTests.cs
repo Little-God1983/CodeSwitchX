@@ -243,6 +243,22 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task Two_questions_waiting_in_one_chat_at_once_are_answered_on_their_cards_not_by_voice()
+    {
+        // Sub-agents ask side by side: an answer meant for one must not land on the other.
+        var (asks, first) = Asking();
+        var second = asks.HoldAsync(new ChatAsk("toolu_2", ChatAskKind.Question,
+            new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow, AgentId = "agent-7" },
+            [new ChatQuestion("Which port?", null, [new ChatQuestionOption("8080", null)], false)]), CancellationToken.None);
+
+        var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, asks).AnswerQuestion("bbbbbbbb", ["Apple", "Red"], Ct));
+
+        error.Message.ShouldStartWith("The Raven brain chat waits on 2 questions at once");
+        first.IsCompleted.ShouldBeFalse();
+        second.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_chat_that_asks_nothing_in_the_panel_is_said()
     {
         var (asks, _) = Asking();

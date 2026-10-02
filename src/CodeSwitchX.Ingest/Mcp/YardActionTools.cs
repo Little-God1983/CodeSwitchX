@@ -149,8 +149,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
-        var ask = asks?.Open().FirstOrDefault(a => a.SessionId == one.Id)
-            ?? throw new McpException($"The {one.Title} chat asks nothing in Raven's panel now: it was answered, left to VS Code, or never asked here.");
+        var open = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
+        var ask = open switch
+        {
+            [var only] => only,
+            [] => throw new McpException($"The {one.Title} chat asks nothing in Raven's panel now: it was answered, left to VS Code, or never asked here."),
+            // Its agents ask side by side: an answer meant for one must not land on the other.
+            _ => throw new McpException($"The {one.Title} chat waits on {open.Count} questions at once, from agents working side by side. Nothing was "
+                + "answered. Tell the user to answer them on their cards in Raven's panel, where each has its own buttons."),
+        };
         var given = (answers ?? []).Select((a, i) => i < ask.Questions.Count ? AsOption(a, ask.Questions[i]) : (a ?? "").Trim()).ToList();
         if (given.Count != ask.Questions.Count || given.Any(a => a.Length == 0))
         {
