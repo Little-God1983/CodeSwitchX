@@ -315,7 +315,7 @@
                       <DataTemplate DataType="{x:Type raven:ChatOptionView}">
                         <Button Command="{Binding DataContext.ChooseOptionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                 CommandParameter="{Binding}" IsEnabled="{Binding Question.Card.IsOpen}" Cursor="Hand" Margin="0,0,0,4"
-                                HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Label}" FocusVisualStyle="{StaticResource FocusRing}">
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" AutomationProperties.Name="{Binding Label}" FocusVisualStyle="{StaticResource FocusRing}">
                           <Button.Template>
                             <ControlTemplate TargetType="Button">
                               <Border x:Name="Box" Background="#1F2937" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="8,4,8,5">
