@@ -58,25 +58,6 @@ public class VsCodeLauncherTests
     private const string ElectronRunAsNode = "ELECTRON_RUN_AS_NODE";
 
     [Fact]
-    public void A_link_goes_to_VS_Code_the_way_Windows_hands_it_over_without_the_electron_variable()
-    {
-        var before = Environment.GetEnvironmentVariable(ElectronRunAsNode);
-        Environment.SetEnvironmentVariable(ElectronRunAsNode, "1");
-        try
-        {
-            var info = VsCodeLauncher.BuildOpenUrlStartInfo(@"C:\VS Code\Code.exe", "vscode://anthropic.claude-code/open?session=abc");
-
-            info.ArgumentList.ShouldBe(["--open-url", "--", "vscode://anthropic.claude-code/open?session=abc"]);
-            info.UseShellExecute.ShouldBeFalse();
-            info.Environment.ShouldNotContainKey(ElectronRunAsNode);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(ElectronRunAsNode, before);
-        }
-    }
-
-    [Fact]
     public void Launch_without_an_executable_reports_an_error_instead_of_throwing()
     {
         var launcher = new VsCodeLauncher(() => @"C:\definitely\missing\Code.exe");

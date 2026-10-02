@@ -12,28 +12,22 @@ internal sealed class FakeActions : IYardActions
     /// <summary>What every action throws instead, when set: the app failed, it did not refuse.</summary>
     public Exception? Failure { get; set; }
 
-    public (YardWorkspace Workspace, YardFolder Folder, string Prompt, string? Model, string? Effort)? Started { get; private set; }
+    public (YardWorkspace Workspace, YardFolder? Folder, string? Model, string? Effort)? Started { get; private set; }
 
-    public (YardWorkspace? Workspace, string? Chat)? Opened { get; private set; }
+    public YardWorkspace? Opened { get; private set; }
 
-    public List<VoiceChatView> Voice { get; } = [];
+    public HashSet<string> Voice { get; } = [];
 
     public ChatDefaults Defaults { get; private set; } = new(null, null);
 
-    public IReadOnlyList<VoiceChatView> VoiceChats => Voice;
+    public bool StartedByRaven(string chatId) => Voice.Contains(chatId);
 
-    public Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder folder, string prompt, string? model, string? effort, CancellationToken ct)
+    public Task<StartedChat> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
     {
         Act("start_chat");
-        Started = (workspace, folder, prompt, model, effort);
-        return Task.FromResult(new StartedChat(new VoiceChatView("dddddddd-0004", workspace.Id, workspace.Name, folder.Path, "claude-fable-5-1", "high", true,
-            "auto"), null));
-    }
-
-    public Task<VoiceChatView> SendToChatAsync(string chatId, string text, CancellationToken ct)
-    {
-        Act($"send_to_chat {chatId}: {text}");
-        return Task.FromResult(new VoiceChatView(chatId, Guid.Empty, "CodeSwitchX", @"E:\Repos\CodeSwitchX", null, null, true, "auto"));
+        Started = (workspace, folder, model, effort);
+        return Task.FromResult(new StartedChat(new VoiceChatView("dddddddd-0004", workspace.Id, workspace.Name, folder?.Path ?? workspace.RootPath,
+            "claude-fable-5-1", "high", "diffusionnexus-4f"), null));
     }
 
     public Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct)
@@ -43,10 +37,10 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult(Defaults);
     }
 
-    public Task<string> OpenWorkspaceAsync(YardWorkspace? workspace, string? chatId, CancellationToken ct)
+    public Task<string> OpenWorkspaceAsync(YardWorkspace workspace, CancellationToken ct)
     {
         Act("open_workspace");
-        Opened = (workspace, chatId);
+        Opened = workspace;
         return Task.FromResult("open");
     }
 
@@ -54,12 +48,6 @@ internal sealed class FakeActions : IYardActions
     {
         Act("back_to_yard");
         return Task.CompletedTask;
-    }
-
-    public Task<string> StopChatAsync(string chatId, CancellationToken ct)
-    {
-        Act($"stop_chat {chatId}");
-        return Task.FromResult("stopped");
     }
 
     private void Act(string call)

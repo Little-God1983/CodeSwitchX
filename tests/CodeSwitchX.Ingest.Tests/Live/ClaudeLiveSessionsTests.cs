@@ -212,6 +212,23 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.NameOf(Issues).ShouldBe("codeswitchx-ea");
     }
 
+    [Fact]
+    public void The_running_chats_are_read_afresh_each_time_and_only_those_in_VS_Code_tabs_whose_process_runs()
+    {
+        _live.NameOf(Issues).ShouldBeNull(); // a read that would still serve
+        Record(21688, Issues, "codeswitchx-ea");
+        Record(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2");
+        Record(31000, "e1", "cli-chat", entrypoint: "cli");
+        Record(32000, "e2", "gone-chat");
+        _processes.Gone.Add(32000);
+
+        _live.RunningNow().OrderBy(c => c.Pid).ShouldBe([
+            new LiveChat(21688, Issues, "codeswitchx-ea"),
+            new LiveChat(30000, "dad99026-7394-4bab-a46a-acc38f04593e", "codeswitchx-c2"),
+        ]);
+        _live.NameOf(Issues).ShouldBe("codeswitchx-ea", "the fresh read serves the names too");
+    }
+
     private void Record(int pid, string sessionId, string name, long updatedAt = 1_000, string entrypoint = "claude-vscode", string kind = "interactive") =>
         File.WriteAllText(Path.Combine(_sessions, $"{pid}.json"),
             $$"""{"pid":{{pid}},"sessionId":"{{sessionId}}","cwd":"e:\\Repos\\CodeSwitchX","procStart":"{{FakeProcesses.StartOfEach}}","kind":"{{kind}}","entrypoint":"{{entrypoint}}","name":"{{name}}","updatedAt":{{updatedAt}},"status":"idle"}""");

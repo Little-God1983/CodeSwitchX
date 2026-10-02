@@ -152,10 +152,10 @@ public sealed record WorkspaceView(string Name, string Track, IReadOnlyList<stri
 /// <param name="MatchedName">The name that matched: the workspace's, or one of its folders'.</param>
 public sealed record WorkspaceMatchView(string MatchedName, double Score, WorkspaceView Workspace);
 
-/// <param name="StartedByRaven">Raven started it: it can be told something (send_to_chat) or stopped (stop_chat).</param>
+/// <param name="StartedByRaven">Raven started it (start_chat) while CodeSwitchX ran.</param>
 /// <param name="SendTo">
 /// The name SendMessage takes to tell this chat something; null for a chat not open in a VS Code tab (closed, or run in a
-/// terminal) and for one Raven started, which takes send_to_chat.
+/// terminal).
 /// </param>
 public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
     bool StartedByRaven, string? SendTo)

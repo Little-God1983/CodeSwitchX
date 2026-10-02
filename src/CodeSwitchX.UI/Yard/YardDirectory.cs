@@ -21,7 +21,7 @@ public sealed class YardDirectory : IYardDirectory
     private readonly Func<string, string?> _sendNameOf;
 
     /// <param name="sessionOf">The engine's snapshot of a chat (<see cref="SessionEngine.Get"/>).</param>
-    /// <param name="isVoice">Whether Raven started the chat and the app runs it; none is, without it.</param>
+    /// <param name="isVoice">Whether Raven started the chat while the app runs; none did, without it.</param>
     /// <param name="sendNameOf">The name a chat open in a VS Code tab is messaged by, null when it is not open in one; none has one, without it.</param>
     public YardDirectory(YardViewModel yard, Func<string, SessionSnapshot?> sessionOf, IUiDispatcher ui, Func<string, IReadOnlyList<WorkspaceFolder>?> foldersOf,
         Func<string, bool>? isVoice = null, Func<string, string?>? sendNameOf = null)
@@ -64,11 +64,9 @@ public sealed class YardDirectory : IYardDirectory
         return rows.Select(r =>
             {
                 var snapshot = _sessionOf(r.Row.Id);
-                // A chat the app runs is told things through the app (send_to_chat), which knows when it is taken.
-                var voice = _isVoice(r.Row.Id);
                 return new YardChat(r.Row.Id, r.Row.Title, r.Workspace.Id, r.Workspace.Name, r.Row.State, r.Row.NeedsYou, r.Row.StateSince,
-                    r.Row.StateFor, snapshot?.Model, r.Row.LastTool, r.Row.ContextFill, snapshot?.LastNotification, snapshot?.Cwd, voice,
-                    voice ? null : _sendNameOf(r.Row.Id));
+                    r.Row.StateFor, snapshot?.Model, r.Row.LastTool, r.Row.ContextFill, snapshot?.LastNotification, snapshot?.Cwd, _isVoice(r.Row.Id),
+                    _sendNameOf(r.Row.Id));
             })
             .ToList();
     }

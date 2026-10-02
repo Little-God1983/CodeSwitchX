@@ -291,8 +291,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 
-    bool IRavenShell.IsVsCodeInFront(Guid workspaceId) => _host.IsInFront(workspaceId);
-
     /// <summary>A line of Raven's digest card was clicked: the Yard shows, with the chat's tile lit.</summary>
     internal void ShowTile(Guid workspaceId)
     {
@@ -311,8 +309,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     void IRavenShell.SetChatDefaults(ChatDefaults defaults) => Settings.SetChatDefaults(defaults);
 
     void IRavenShell.MarkVoice(string sessionId, string? label) => Yard.MarkVoice(sessionId, label);
-
-    void IRavenShell.Warn(string text) => Raven.Warn(text);
 
     [RelayCommand]
     public void BackToYard()

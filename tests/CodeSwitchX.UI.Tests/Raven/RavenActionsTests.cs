@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,47 +12,64 @@ public sealed class RavenActionsTests
     private static readonly YardWorkspace Diffusion = new(Guid.Parse("22222222-2222-2222-2222-222222222222"), "Diffusion-Full", "Apps",
         @"E:\Repos\DiffusionNexus.Installer.SDK", [new("DiffusionNexus", @"E:\Repos\DiffusionNexus")], []);
 
-    private static readonly YardFolder Nexus = Diffusion.Folders[0];
+    private static readonly Workspace Registered = new()
+    {
+        Id = Diffusion.Id, Name = "Diffusion-Full", RootPath = @"E:\Repos\DiffusionNexus.Installer.SDK",
+        WorkspaceFile = @"E:\Repos\Diffusion-Full.code-workspace",
+    };
 
-    private readonly FakeAgents _agents = new();
+    private readonly FakeVsCode _vsCode = new();
     private readonly ChatSettings _chats = new();
     private readonly FakeShell _shell;
     private readonly List<string> _sequence = [];
-    private readonly List<string> _urls = [];
-    private string? _urlFailure;
     private readonly FakeTimeProvider _time = new();
     private readonly RavenActions _actions;
+    private Workspace? _registered = Registered;
 
     public RavenActionsTests()
     {
         _shell = new FakeShell(_chats);
-        _agents.Sequence = _sequence;
-        _actions = new RavenActions(_agents, _chats, (id, workspace) => _sequence.Add($"claim {id} {workspace}"), () => _shell, new ImmediateDispatcher(),
-            url =>
-            {
-                _urls.Add(url);
-                return _urlFailure;
-            }, _time, NullLogger<RavenActions>.Instance)
-        {
-            HandOverDelay = TimeSpan.Zero,
-        };
+        _vsCode.Sequence = _sequence;
+        _actions = new RavenActions(_vsCode, _chats, (id, workspace) => _sequence.Add($"claim {id} {workspace}"), () => _shell, new ImmediateDispatcher(),
+            (id, _) => Task.FromResult(_registered?.Id == id ? _registered : null), _time, NullLogger<RavenActions>.Instance);
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private Task<StartedChat> StartAsync(string? model = null, string? effort = null) =>
-        _actions.StartChatAsync(Diffusion, Nexus, "Filter the LoRA list by base model.", model, effort, Ct);
+    private Task<StartedChat> StartAsync(string? model = null, string? effort = null, YardFolder? folder = null) =>
+        _actions.StartChatAsync(Diffusion, folder, model, effort, Ct);
 
     [Fact]
-    public async Task A_chat_is_put_on_its_tile_before_it_starts_in_the_folder_the_name_matched()
+    public async Task A_chat_opens_in_the_workspace_s_VS_Code_and_is_put_on_its_tile()
     {
-        await StartAsync();
+        var started = await StartAsync();
 
-        var request = _agents.Requests.ShouldHaveSingleItem();
-        _sequence.ShouldBe([$"claim {request.Id} {Diffusion.Id}", $"start {request.Id}"]);
-        (request.WorkspaceId, request.Workspace, request.Folder).ShouldBe((Diffusion.Id, "Diffusion-Full", @"E:\Repos\DiffusionNexus"));
-        request.Prompt.ShouldBe("Filter the LoRA list by base model.");
-        Guid.TryParse(request.Id, out _).ShouldBeTrue();
+        var request = _vsCode.Requests.ShouldHaveSingleItem();
+        request.Workspace.ShouldBeSameAs(Registered);
+        _sequence.ShouldBe(["start Diffusion-Full", $"claim new-chat {Diffusion.Id}"]);
+        started.Chat.ShouldBe(new VoiceChatView("new-chat", Diffusion.Id, "Diffusion-Full", @"E:\Repos\DiffusionNexus.Installer.SDK", null, null,
+            "diffusionnexus-4f"));
+        started.Note.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_chat_counts_as_Raven_s_and_its_row_is_marked_with_how_it_started()
+    {
+        _actions.StartedByRaven("new-chat").ShouldBeFalse();
+
+        await StartAsync("Fable", "high");
+
+        _actions.StartedByRaven("new-chat").ShouldBeTrue();
+        _actions.StartedByRaven("NEW-CHAT").ShouldBeTrue();
+        _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high")]);
+    }
+
+    [Fact]
+    public async Task A_folder_the_user_named_is_passed_on()
+    {
+        await StartAsync(folder: Diffusion.Folders[0]);
+
+        _vsCode.Requests[0].Folder.ShouldBe(@"E:\Repos\DiffusionNexus");
     }
 
     [Fact]
@@ -61,15 +79,16 @@ public sealed class RavenActionsTests
 
         await StartAsync();
 
-        (_agents.Requests[0].Model, _agents.Requests[0].Effort).ShouldBe(("claude-fable-5-1", "high"));
+        (_vsCode.Requests[0].Model, _vsCode.Requests[0].Effort).ShouldBe(("claude-fable-5-1", "high"));
     }
 
     [Fact]
-    public async Task With_no_defaults_it_leaves_them_to_Claude_Code()
+    public async Task With_no_defaults_it_leaves_them_to_VS_Code()
     {
         await StartAsync();
 
-        (_agents.Requests[0].Model, _agents.Requests[0].Effort).ShouldBe((null, null));
+        (_vsCode.Requests[0].Model, _vsCode.Requests[0].Effort).ShouldBe((null, null));
+        _shell.Marks.ShouldBe([("new-chat", "default model · default effort")]);
     }
 
     [Fact]
@@ -81,7 +100,7 @@ public sealed class RavenActionsTests
         await StartAsync("", " ");
         (await _actions.SetDefaultsAsync("", "low", Ct)).ShouldBe(new ChatDefaults("Fable", "low"));
 
-        (_agents.Requests[0].Model, _agents.Requests[0].Effort).ShouldBe(("claude-fable-5-1", "high"));
+        (_vsCode.Requests[0].Model, _vsCode.Requests[0].Effort).ShouldBe(("claude-fable-5-1", "high"));
     }
 
     [Fact]
@@ -91,7 +110,7 @@ public sealed class RavenActionsTests
 
         await StartAsync("Opus 5.5", "extra high");
 
-        (_agents.Requests[0].Model, _agents.Requests[0].Effort).ShouldBe(("claude-opus-5-5", "xhigh"));
+        (_vsCode.Requests[0].Model, _vsCode.Requests[0].Effort).ShouldBe(("claude-opus-5-5", "xhigh"));
         _chats.Defaults.ShouldBe(new ChatDefaults("Fable", "high")); // for this one only
     }
 
@@ -106,25 +125,25 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
-    public async Task A_start_that_failed_is_refused_with_its_reason()
+    public async Task A_start_that_failed_is_refused_with_its_reason_and_marks_nothing()
     {
-        _agents.Failure = "The chat could not start: There's an issue with the selected model.";
+        _vsCode.Failure = "VS Code could not open a chat in Diffusion-Full: Wrong token.";
 
-        (await Should.ThrowAsync<YardActionException>(() => StartAsync())).Message.ShouldBe(_agents.Failure);
+        (await Should.ThrowAsync<YardActionException>(() => StartAsync())).Message.ShouldBe(_vsCode.Failure);
+
+        _sequence.ShouldBe(["start Diffusion-Full"]);
+        _shell.Marks.ShouldBeEmpty();
+        _actions.StartedByRaven("new-chat").ShouldBeFalse();
     }
 
     [Fact]
-    public async Task A_model_that_cannot_run_in_auto_mode_comes_with_a_note()
+    public async Task A_workspace_gone_from_the_Yard_starts_nothing()
     {
-        _agents.Mode = "default";
+        _registered = null;
 
-        var started = await StartAsync("Haiku");
+        (await Should.ThrowAsync<YardActionException>(() => StartAsync())).Message.ShouldBe("Diffusion-Full is not on the Yard any more.");
 
-        started.Note.ShouldNotBeNull().ShouldStartWith("Haiku 4.5 cannot run in auto mode, so the chat runs in default mode");
-        started.Note.ShouldContain("is refused"); // in -p nothing can approve it: it is no question for VS Code
-        (await StartAsync("Opus")).Note.ShouldNotBeNull(); // the mode is what counts
-        _agents.Mode = "auto";
-        (await StartAsync("Opus")).Note.ShouldBeNull();
+        _sequence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -166,45 +185,12 @@ public sealed class RavenActionsTests
         _shell.Defaults.ShouldBeEmpty();
     }
 
-    [Theory]
-    [InlineData(false, "Diffusion-Full is open, and the chat opens in VS Code's Claude Code panel.")]
-    [InlineData(true, "Diffusion-Full is open, and the chat opens in VS Code's Claude Code panel. It was still working, and that turn was cut off; its input box says to go on.")]
-    public async Task Opening_a_chat_Raven_started_stops_it_shows_its_workspace_and_opens_it_in_VS_Code(bool working, string said)
+    [Fact]
+    public async Task Opening_a_workspace_shows_it_in_the_Cab()
     {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working);
+        (await _actions.OpenWorkspaceAsync(Diffusion, Ct)).ShouldBe("Diffusion-Full is open.");
 
-        var result = await _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
-
-        result.ShouldBe(said);
-        _sequence.ShouldBe(["stop dddddddd-0004"]);
         _shell.Opened.ShouldBe([Diffusion.Id]);
-        _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", working)]);
-    }
-
-    [Fact]
-    public async Task A_hand_over_once_the_chat_is_stopped_is_seen_through_though_the_call_is_cancelled()
-    {
-        // Raven's chat is stopped by then: given up, it would run neither here nor in VS Code.
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
-        _actions.HandOverDelay = TimeSpan.FromSeconds(1);
-        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(Ct);
-        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", cancel.Token);
-        _sequence.ShouldContain("stop dddddddd-0004");
-
-        await cancel.CancelAsync();
-        _time.Advance(TimeSpan.FromSeconds(1));
-
-        (await open).ShouldBe("Diffusion-Full is open, and the chat opens in VS Code's Claude Code panel.");
-        _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", cutOff: false)]);
-    }
-
-    [Fact]
-    public async Task Opening_a_workspace_by_itself_opens_no_chat()
-    {
-        (await _actions.OpenWorkspaceAsync(Diffusion, null, Ct)).ShouldBe("Diffusion-Full is open.");
-
-        _urls.ShouldBeEmpty();
-        _sequence.ShouldBeEmpty();
     }
 
     [Fact]
@@ -212,135 +198,25 @@ public sealed class RavenActionsTests
     {
         _shell.OpenProblem = "VS Code did not start.";
 
-        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, null, Ct));
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, Ct));
 
         error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not start.");
     }
 
     [Fact]
-    public async Task A_chat_whose_workspace_does_not_open_goes_on_running()
+    public async Task A_workspace_that_takes_too_long_to_show_is_said()
     {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: true);
-        _shell.OpenProblem = "It is not on the Yard any more.";
-
-        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(null, "dddddddd", Ct));
-
-        error.Message.ShouldBe("Diffusion-Full could not be opened: It is not on the Yard any more. The chat goes on running here.");
-        _sequence.ShouldBeEmpty();
-        _urls.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public async Task A_workspace_that_takes_too_long_to_show_is_said_and_its_chat_goes_on_running()
-    {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: true);
         _shell.Showing = new TaskCompletionSource<string?>().Task; // VS Code never shows its window
-        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
-        await AdvanceUntil(() => open.IsCompleted, RavenActions.OpenTimeout);
+        var open = _actions.OpenWorkspaceAsync(Diffusion, Ct);
+        for (var i = 0; i < 200 && !open.IsCompleted; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(TimeSpan.FromSeconds(1));
+        }
 
         var error = await Should.ThrowAsync<YardActionException>(() => open);
 
-        error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not show its window within 90 seconds. The chat goes on running here.");
-        _sequence.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public async Task A_VS_Code_that_cannot_be_asked_to_open_the_chat_is_said()
-    {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
-        _urlFailure = "VS Code executable not found.";
-
-        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(null, "dddddddd", Ct));
-
-        error.Message.ShouldContain("could not be asked to open the chat: VS Code executable not found.");
-    }
-
-    [Fact]
-    public async Task An_unknown_chat_without_a_workspace_opens_nothing()
-    {
-        await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(null, "zzzz", Ct));
-
-        _shell.Opened.ShouldBeEmpty();
-    }
-
-    [Theory]
-    [InlineData(true, "The chat in Diffusion-Full is stopped. It was in the middle of its work.")]
-    [InlineData(false, "The chat in Diffusion-Full is stopped.")]
-    public async Task A_stop_says_whether_it_cut_the_chat_off(bool working, string said)
-    {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working);
-
-        (await _actions.StopChatAsync("dddddddd", Ct)).ShouldBe(said);
-    }
-
-    [Fact]
-    public void The_chats_it_runs_mark_their_rows_and_their_failures_reach_the_log()
-    {
-        var chat = new AgentChat("dddddddd-0004", Diffusion.Id, "Diffusion-Full", @"E:\Repos\DiffusionNexus", "claude-fable-5-1", "high", true, "auto", false);
-
-        _agents.RaiseChanged(chat);
-        _agents.RaiseFailed(chat, "Claude Code stopped (exit code 3).");
-        _agents.RaiseChanged(chat with { Ended = true });
-
-        _shell.Marks.ShouldBe([("dddddddd-0004", "Fable 5.1 · high"), ("dddddddd-0004", null)]);
-        _shell.Warnings.ShouldBe(["Raven's chat in Diffusion-Full (DiffusionNexus): Claude Code stopped (exit code 3)."]);
-    }
-
-    [Fact]
-    public void The_link_opens_the_session_and_fills_in_go_on_only_for_a_chat_that_was_cut_off()
-    {
-        RavenActions.ChatUrl("abc", cutOff: false).ShouldBe("vscode://anthropic.claude-code/open?session=abc");
-        RavenActions.ChatUrl("abc", cutOff: true).ShouldBe("vscode://anthropic.claude-code/open?session=abc&prompt=Go%20on%20where%20you%20stopped.");
-    }
-
-    [Fact]
-    public async Task A_chat_handed_over_while_the_user_is_in_another_app_opens_once_VS_Code_comes_to_the_front()
-    {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
-        _shell.InFront = false;
-        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
-        await AdvanceUntil(() => open.IsCompleted, RavenActions.FrontWait);
-
-        (await open).ShouldBe("Diffusion-Full is open in CodeSwitchX, which is not in front: the chat opens in VS Code as soon as the user switches to it.");
-        _urls.ShouldBeEmpty(); // it would go to whichever VS Code window was used last
-
-        _shell.InFront = true;
-        await AdvanceUntil(() => _actions.PendingHandOverTask.IsCompleted, RavenActions.FrontPoll);
-
-        _urls.ShouldBe([RavenActions.ChatUrl("dddddddd-0004", cutOff: false)]);
-        _shell.Warnings.ShouldBeEmpty();
-    }
-
-    [Fact]
-    public async Task A_hand_over_VS_Code_never_comes_forward_for_is_given_up_in_the_log()
-    {
-        _agents.Add("dddddddd-0004", Diffusion.Id, working: false);
-        _shell.InFront = false;
-        var open = _actions.OpenWorkspaceAsync(null, "dddddddd", Ct);
-        await AdvanceUntil(() => open.IsCompleted, RavenActions.FrontWait);
-
-        await AdvanceUntil(() => _actions.PendingHandOverTask.IsCompleted, RavenActions.PendingHandOver);
-
-        _urls.ShouldBeEmpty();
-        _shell.Warnings.ShouldHaveSingleItem().ShouldContain("was not opened in VS Code: it never came to the front");
-    }
-
-    /// <summary>Moves the clock on a poll at a time, up to a little more than <paramref name="span"/>, until the condition holds.</summary>
-    private async Task AdvanceUntil(Func<bool> condition, TimeSpan span)
-    {
-        var until = _time.GetUtcNow() + span + TimeSpan.FromSeconds(2);
-        while (!condition() && _time.GetUtcNow() < until)
-        {
-            await Task.Delay(5, Ct);
-            _time.Advance(RavenActions.FrontPoll);
-        }
-
-        for (var i = 0; i < 100 && !condition(); i++)
-        {
-            await Task.Delay(10, Ct);
-        }
-
-        condition().ShouldBeTrue();
+        error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not show its window within 90 seconds.");
     }
 
     private sealed class FakeShell(ChatSettings chats) : IRavenShell
@@ -349,7 +225,6 @@ public sealed class RavenActionsTests
         public string? OpenProblem { get; set; }
         public List<ChatDefaults> Defaults { get; } = [];
         public List<(string, string?)> Marks { get; } = [];
-        public List<string> Warnings { get; } = [];
 
         /// <summary>The showing itself, when a test holds it up; else it is done at once, with <see cref="OpenProblem"/>.</summary>
         public Task<string?>? Showing { get; set; }
@@ -364,11 +239,6 @@ public sealed class RavenActionsTests
         {
         }
 
-        /// <summary>Whether VS Code is in front; it is, unless a test says otherwise.</summary>
-        public bool InFront { get; set; } = true;
-
-        public bool IsVsCodeInFront(Guid workspaceId) => InFront;
-
         public void SetChatDefaults(ChatDefaults defaults)
         {
             Defaults.Add(defaults);
@@ -376,53 +246,21 @@ public sealed class RavenActionsTests
         }
 
         public void MarkVoice(string sessionId, string? label) => Marks.Add((sessionId, label));
-
-        public void Warn(string text) => Warnings.Add(text);
     }
 
-    private sealed class FakeAgents : IAgentLauncher
+    private sealed class FakeVsCode : IVsCodeChats
     {
-        private readonly List<AgentChat> _chats = [];
-
-        public List<AgentRequest> Requests { get; } = [];
+        public List<(Workspace Workspace, string? Folder, string? Model, string? Effort)> Requests { get; } = [];
         public List<string> Sequence { get; set; } = [];
         public string? Failure { get; set; }
-        public string Mode { get; set; } = "auto";
 
-        public IReadOnlyList<AgentChat> Chats => _chats;
-
-        public event Action<AgentChat>? Changed;
-        public event Action<AgentChat, string>? Failed;
-
-        public void Add(string id, Guid workspaceId, bool working) =>
-            _chats.Add(new AgentChat(id, workspaceId, "Diffusion-Full", @"E:\Repos\DiffusionNexus", null, null, working, "auto", false));
-
-        public void RaiseChanged(AgentChat chat) => Changed?.Invoke(chat);
-
-        public void RaiseFailed(AgentChat chat, string why) => Failed?.Invoke(chat, why);
-
-        public Task<AgentStart> StartAsync(AgentRequest request, CancellationToken ct)
+        public Task<VsCodeChat> StartAsync(Workspace workspace, string? folder, string? model, string? effort, CancellationToken ct)
         {
-            Sequence.Add($"start {request.Id}");
-            Requests.Add(request);
-            var chat = new AgentChat(request.Id, request.WorkspaceId, request.Workspace, request.Folder, request.Model, request.Effort, true, Mode, false);
-            return Task.FromResult(new AgentStart(chat, Failure));
-        }
-
-        public Task<AgentChat> SendAsync(string chatId, string text, CancellationToken ct) => Task.FromResult(Find(chatId)!);
-
-        public Task<AgentChat> StopAsync(string chatId, CancellationToken ct)
-        {
-            var chat = Find(chatId) ?? throw new YardActionException("not ours");
-            Sequence.Add($"stop {chat.Id}");
-            _chats.Remove(chat);
-            return Task.FromResult(chat);
-        }
-
-        public AgentChat? Find(string idOrPrefix) => _chats.FirstOrDefault(c => c.Id.StartsWith(idOrPrefix, StringComparison.Ordinal));
-
-        public void Dispose()
-        {
+            Sequence.Add($"start {workspace.Name}");
+            Requests.Add((workspace, folder, model, effort));
+            return Failure is { } failure
+                ? Task.FromException<VsCodeChat>(new YardActionException(failure))
+                : Task.FromResult(new VsCodeChat("new-chat", folder ?? workspace.RootPath, "diffusionnexus-4f"));
         }
     }
 }

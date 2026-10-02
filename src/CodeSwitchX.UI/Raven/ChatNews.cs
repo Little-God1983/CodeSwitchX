@@ -84,7 +84,7 @@ public sealed class ChatNews : IDisposable
         }
     }
 
-    /// <summary>The app stopped this chat itself (stop_chat, a hand-over to VS Code): its end is no news. Any thread.</summary>
+    /// <summary>The app ended this chat itself: its end is no news. Any thread.</summary>
     public void StoppedOnPurpose(string sessionId)
     {
         lock (_lock)

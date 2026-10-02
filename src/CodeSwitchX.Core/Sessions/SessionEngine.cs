@@ -136,7 +136,8 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// Puts a chat the app starts itself on the tile of <paramref name="workspaceId"/>, before its first event: a folder
     /// two workspaces share, or one a folder workspace registers too, would otherwise put it on the other tile. Applies to
-    /// a chat already known as well. Not stored: the claim lasts as long as this process, as does the chat it started.
+    /// a chat already known as well. Not stored: the claim lasts as long as this process; after a restart the chat's VS
+    /// Code window places it.
     /// </summary>
     public void Claim(string sessionId, Guid workspaceId)
     {

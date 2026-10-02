@@ -64,21 +64,6 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Whether the workspace's VS Code window is the one the user works in now. VS Code gives a <c>vscode://</c> link to
-    /// the window focused last, so a link meant for this one waits for this.
-    /// </summary>
-    public bool IsInFront(Guid workspaceId)
-    {
-        nint hwnd;
-        lock (_gate)
-        {
-            hwnd = _hosted.TryGetValue(workspaceId, out var hosted) && hosted.State == HostState.Running ? hosted.Hwnd : 0;
-        }
-
-        return hwnd != 0 && _windows.ForegroundWindow() == hwnd;
-    }
-
     public HostedWorkspace? Get(Guid workspaceId)
     {
         lock (_gate)

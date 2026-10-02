@@ -91,6 +91,21 @@ public sealed class ClaudeLiveSessions
         }
     }
 
+    /// <summary>
+    /// Every chat open in a VS Code tab right now, read afresh: a chat whose tab opened a moment ago is there. Any
+    /// thread; never throws.
+    /// </summary>
+    public IReadOnlyList<LiveChat> RunningNow()
+    {
+        lock (_gate)
+        {
+            _records = Read();
+            _names.Clear();
+            _readAt = _time.GetTimestamp();
+            return _records.Values.SelectMany(r => r).Where(Runs).Select(r => new LiveChat(r.Pid, r.SessionId, r.Name)).ToList();
+        }
+    }
+
     private bool Runs(Record record) => _startOf(record.Pid) is { } start && Math.Abs(start - record.ProcessStart) < StartTolerance;
 
     /// <summary>The records of the chats in VS Code tabs by session, the one updated last first.</summary>
@@ -216,3 +231,8 @@ public sealed class ClaudeLiveSessions
     /// <param name="ProcessStart">When the process that wrote it started, as a UTC file time.</param>
     private sealed record Record(int Pid, string SessionId, string Name, long UpdatedAt, long ProcessStart);
 }
+
+/// <summary>A chat open in a VS Code tab.</summary>
+/// <param name="Pid">Its claude.exe.</param>
+/// <param name="Name">The name it is messaged by (<c>SendMessage</c>).</param>
+public sealed record LiveChat(int Pid, string SessionId, string Name);

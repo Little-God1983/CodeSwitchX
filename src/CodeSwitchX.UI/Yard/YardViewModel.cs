@@ -166,12 +166,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         return true;
     }
 
-    /// <summary>The voice label of each chat the app runs for Raven (UI thread); a row that comes later gets it as it is added.</summary>
+    /// <summary>The voice label of each chat Raven started (UI thread); a row that comes later gets it as it is added.</summary>
     private readonly Dictionary<string, string> _voiceLabels = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Marks a chat as one the app runs because Raven started it, with how it runs; null when it no longer does (stopped,
-    /// handed over to VS Code). Its row may not be there yet: the chat shows once its hooks report it.
+    /// Marks a chat as one Raven started, with the model and effort it started with; null takes the mark off. Its row may
+    /// not be there yet: the chat shows once its hooks report it.
     /// </summary>
     public void MarkVoice(string sessionId, string? label)
     {

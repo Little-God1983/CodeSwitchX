@@ -90,39 +90,6 @@ public sealed class VsCodeLauncher : IVsCodeLauncher
     }
 
     /// <summary>
-    /// Hands a <c>vscode://</c> link to the running VS Code, which gives it to its most recently active window: the way
-    /// Windows opens such a link (<c>Code.exe --open-url -- &lt;url&gt;</c>), but started here, without the environment
-    /// variable that would make Code.exe a plain Node. Null when it was handed over, else why not.
-    /// </summary>
-    public string? OpenUrl(string url)
-    {
-        if (!TryLocate(out var executable))
-        {
-            return $"VS Code executable not found ({executable ?? "no candidate"}).";
-        }
-
-        try
-        {
-            using var process = Process.Start(BuildOpenUrlStartInfo(executable, url));
-            return null;
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
-        {
-            return ex.Message;
-        }
-    }
-
-    internal static ProcessStartInfo BuildOpenUrlStartInfo(string executable, string url)
-    {
-        var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true };
-        info.ArgumentList.Add("--open-url");
-        info.ArgumentList.Add("--");
-        info.ArgumentList.Add(url);
-        info.Environment.Remove("ELECTRON_RUN_AS_NODE");
-        return info;
-    }
-
-    /// <summary>
     /// CodeSwitchX's own environment without ELECTRON_RUN_AS_NODE. A VS Code terminal or extension host (a Claude Code
     /// session) sets it, a CodeSwitchX started from there inherits it, and a Code.exe started with it runs as plain Node
     /// and exits with code 9, without a window.
