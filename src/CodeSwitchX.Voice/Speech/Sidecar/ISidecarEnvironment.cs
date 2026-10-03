@@ -2,7 +2,7 @@ namespace CodeSwitchX.Voice.Speech.Sidecar;
 
 /// <summary>
 /// The Python environment a speech engine's sidecar runs in (Qwen3-TTS, Kokoro); installed on first need, or from the
-/// voice setup.
+/// Settings → Voice page.
 /// </summary>
 public interface ISidecarEnvironment
 {

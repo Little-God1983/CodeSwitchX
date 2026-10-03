@@ -8,6 +8,7 @@ using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Tests.Voice;
 using CodeSwitchX.UI.Voice;
+using CodeSwitchX.Voice;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Speech;
@@ -40,7 +41,7 @@ public class SettingsViewModelTests : IDisposable
         var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
-            _speech, engines, _whisper, _voice, _paths, _claude, NullLogger<SettingsViewModel>.Instance);
+            _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance);
     }
 
     public void Dispose()
@@ -540,15 +541,96 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_speech_to_text_model_not_on_disk_offers_its_download()
+    public async Task Each_speech_to_text_model_shows_its_own_state_and_downloads_from_its_row()
+    {
+        _whisper.IsPresentOf(WhisperModel.LargeV3Turbo).Returns(true);
+        _whisper.Downloads.Returns([]);
+        await _vm.LoadAsync(CancellationToken.None);
+        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.Ready, WhisperModel.LargeV3Turbo));
+        var tiny = _vm.WhisperRows.Single(r => r.Model == WhisperModel.TinyEnglish);
+        var turbo = _vm.WhisperRows.Single(r => r.Model == WhisperModel.LargeV3Turbo);
+
+        _vm.WhisperRows.Select(r => r.Name).ShouldBe(["Tiny", "Base", "Small", "Large v3 Turbo"]);
+        (turbo.Lamp.Dot, turbo.Lamp.Text, turbo.CanDownload).ShouldBe((ModelDot.Green, "ready", false), "the model in use shows the dictation's state");
+        (tiny.Lamp.Dot, tiny.CanDownload).ShouldBe((ModelDot.Red, true));
+
+        await tiny.DownloadCommand.ExecuteAsync(null);
+        await _whisper.Received().DownloadAsync(WhisperModel.TinyEnglish, null, Arg.Any<CancellationToken>());
+        _vm.RavenWhisperModel.ShouldBe(WhisperModel.LargeV3Turbo, "a download picks nothing");
+
+        _whisper.Downloads.Returns([new ModelDownload(WhisperModel.TinyEnglish, new ByteProgress(39_000_000, 78_000_000))]);
+        _whisper.DownloadChanged += Raise.Event();
+        (tiny.Lamp.Dot, tiny.CanDownload, tiny.Progress).ShouldBe((ModelDot.Yellow, false, 0.5));
+
+        _whisper.Downloads.Returns([]);
+        _whisper.IsPresentOf(WhisperModel.TinyEnglish).Returns(true);
+        _whisper.DownloadChanged += Raise.Event();
+        (tiny.Lamp.Text, tiny.CanDownload, tiny.Progress).ShouldBe(("on this PC", false, (double?)null));
+    }
+
+    [Fact]
+    public async Task A_failed_download_says_so()
+    {
+        _whisper.Downloads.Returns([]);
+        _whisper.DownloadAsync(WhisperModel.BaseEnglish, null, Arg.Any<CancellationToken>()).Returns(Task.FromException(new IOException("no network")));
+        await _vm.LoadAsync(CancellationToken.None);
+
+        await _vm.WhisperRows.Single(r => r.Model == WhisperModel.BaseEnglish).DownloadCommand.ExecuteAsync(null);
+
+        _vm.LastMessage.ShouldBe("Whisper Base could not be downloaded: no network");
+    }
+
+    [Fact]
+    public async Task The_search_lists_the_pages_with_a_setting_of_that_name()
     {
         await _vm.LoadAsync(CancellationToken.None);
-        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.NotDownloaded, WhisperModel.TinyEnglish));
-        _vm.WhisperMissing.ShouldBeTrue();
+        _vm.SelectedPage.Page.ShouldBe(SettingsPage.Voice);
 
-        await _vm.DownloadWhisperCommand.ExecuteAsync(null);
-        await _whisper.Received().DownloadAsync(null, Arg.Any<CancellationToken>());
+        _vm.Search = "whisper";
+        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Listening]);
+        _vm.Page.ShouldBe(SettingsPage.Listening, "the page shown is one found");
 
-        _dictation.StatusChanged += Raise.Event<EventHandler<DictationStatus>>(_dictation, new DictationStatus(DictationState.Asleep, WhisperModel.TinyEnglish));
-        _vm.WhisperMissing.ShouldBeFalse();
-    }}
+        _vm.Search = "model";
+        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Brain]);
+
+        _vm.Search = "nothing like it";
+        (_vm.Pages.Count, _vm.Page, _vm.ListedPage).ShouldBe((0, SettingsPage.Brain, (SettingsPageItem?)null), "the page shown stays");
+
+        _vm.OpenPage(SettingsPage.Privacy);
+        (_vm.Search, _vm.Pages.Count, _vm.Page).ShouldBe(("", SettingsPageItem.All.Count, SettingsPage.Privacy));
+        _vm.ListedPage!.Page.ShouldBe(SettingsPage.Privacy);
+    }
+
+    [Fact]
+    public async Task The_model_names_table_edits_the_stored_names()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.Aliases.Select(a => a.Name).ShouldBe(["Fable", "Opus", "Sonnet", "Haiku"]);
+
+        _vm.Aliases.Single(a => a.Name == "Haiku").RemoveCommand.Execute(null);
+        _vm.AddAliasCommand.Execute(null);
+        _vm.Aliases.Count.ShouldBe(4, "the new row stays while it is blank");
+        _chats.Aliases.Select(a => a.Name).ShouldBe(["Fable", "Opus", "Sonnet"], "a blank row is not stored");
+
+        _vm.Aliases[^1].Name = "Mythos";
+        _vm.Aliases[^1].Id = "claude-mythos-1";
+        await FlushAsync();
+
+        _chats.Aliases.ShouldContain(new ModelAlias("Mythos", "claude-mythos-1"));
+        _vm.ChatModelChoices.ShouldContain("Mythos");
+        await _store.Received().SetAsync(SettingKeys.RavenModelAliases,
+            ChatModels.FormatAliases([new("Fable", "claude-fable-5-1"), new("Opus", "claude-opus-5-5"), new("Sonnet", "claude-sonnet-5-5"), new("Mythos", "claude-mythos-1")]),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_hooks_card_offers_install_or_reinstall_and_remove()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        (_vm.HookHeading, _vm.HooksInPlace).ShouldBe(("Hooks not installed", false));
+
+        await _vm.InstallHooksCommand.ExecuteAsync(null);
+
+        (_vm.HookHeading, _vm.HooksInPlace).ShouldBe(("Hooks installed", true));
+    }
+}

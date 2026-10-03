@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using CodeSwitchX.Conductor;
@@ -7,6 +8,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
@@ -27,6 +29,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly SpeechEngines _engines;
     private readonly IWhisperModelStore _whisper;
     private readonly ChatSettings _chats;
+    private readonly IUiDispatcher _ui;
     private readonly ILogger<SettingsViewModel> _logger;
     private bool _loading;
     private readonly Lock _saveGate = new();
@@ -35,7 +38,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool _draining;
 
     [ObservableProperty] private string _relayExecutable;
-    [ObservableProperty] private HookInstallState _hookState;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HooksInPlace), nameof(HookHeading))]
+    private HookInstallState _hookState;
     [ObservableProperty] private string _hookStatusText = string.Empty;
     [ObservableProperty] private string? _lastMessage;
     [ObservableProperty] private bool _storePayloads;
@@ -87,14 +92,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The Qwen3-TTS model Raven speaks with; a change restarts the voice.</summary>
     [ObservableProperty] private SpeechModel _ravenVoiceModel = SpeechModel.Small;
 
-    /// <summary>Whether the voice setup opened once by itself: then it opens only from here.</summary>
+    /// <summary>Whether Settings → Voice opened once by itself on the first run: then only the user opens it. The key keeps its older name.</summary>
     [ObservableProperty] private bool _ravenVoiceSetupShown;
 
     /// <summary>The Whisper model dictation uses; a change frees the one loaded and loads this one.</summary>
     [ObservableProperty] private WhisperModel _ravenWhisperModel = WhisperModel.LargeV3Turbo;
 
-    /// <summary>The speech-to-text model picked is not on disk: the Download button shows.</summary>
-    [ObservableProperty] private bool _whisperMissing;
+    /// <summary>The page shown.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Page), nameof(ListedPage))]
+    private SettingsPageItem _selectedPage = SettingsPageItem.All[0];
+
+    /// <summary>What the sidebar's search box holds: it lists the pages with a setting of that name.</summary>
+    [ObservableProperty] private string _search = "";
 
     /// <summary>What <see cref="RavenVoiceEngine"/> holds when no engine is picked.</summary>
     public const string NoEngine = "None";
@@ -104,7 +114,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
-        ClaudeCodePaths claude, ILogger<SettingsViewModel> logger)
+        ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger)
     {
         _installer = installer;
         _settings = settings;
@@ -114,20 +124,157 @@ public sealed partial class SettingsViewModel : ObservableObject
         _speech = speech;
         _engines = engines;
         _whisper = whisper;
+        _ui = ui;
         Voice = voice;
-        Voice.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(VoiceStatusViewModel.ListeningState))
-            {
-                WhisperMissing = Voice.ListeningState == DictationState.NotDownloaded;
-            }
-        };
         _logger = logger;
         DataFolder = paths.Root;
         LogsFolder = paths.LogsDirectory;
         SettingsFile = claude.SettingsFile;
         _relayExecutable = DefaultRelayExecutable;
+        Pages = [.. SettingsPageItem.All];
+        WhisperRows =
+        [
+            new(WhisperModel.TinyEnglish, "English only, the fastest", "78 MB", DownloadWhisperAsync),
+            new(WhisperModel.BaseEnglish, "English only", "148 MB", DownloadWhisperAsync),
+            new(WhisperModel.SmallEnglish, "English only, more accurate", "488 MB", DownloadWhisperAsync),
+            new(WhisperModel.LargeV3Turbo, "Any language, the most accurate", "1.6 GB", DownloadWhisperAsync),
+        ];
+        Aliases = [];
+        ShowAliases();
+        VoicePage = new VoicePageViewModel(this, engines, voice, samples, logger);
+        Voice.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(VoiceStatusViewModel.Listening) or nameof(VoiceStatusViewModel.ListeningState))
+            {
+                ShowWhisperRows();
+            }
+        };
+        _whisper.DownloadChanged += (_, _) => _ui.Post(ShowWhisperRows);
+        ShowWhisperRows();
     }
+
+    /// <summary>The Voice page: engine cards, voices and samples.</summary>
+    public VoicePageViewModel VoicePage { get; }
+
+    /// <summary>The pages the sidebar lists: those the search finds.</summary>
+    public ObservableCollection<SettingsPageItem> Pages { get; }
+
+    /// <summary>The page shown, for the view to pick its content by.</summary>
+    public SettingsPage Page => SelectedPage.Page;
+
+    /// <summary>
+    /// The sidebar's selection. A page the search hides leaves the list with none, and the list clears its selection:
+    /// the page shown stays (<see cref="SelectedPage"/>).
+    /// </summary>
+    public SettingsPageItem? ListedPage
+    {
+        get => Pages.Contains(SelectedPage) ? SelectedPage : null;
+        set
+        {
+            if (value is not null)
+            {
+                SelectedPage = value;
+            }
+        }
+    }
+
+    /// <summary>Shows <paramref name="page"/>, with every page listed again.</summary>
+    public void OpenPage(SettingsPage page)
+    {
+        Search = "";
+        SelectedPage = SettingsPageItem.All.First(p => p.Page == page);
+    }
+
+    /// <summary>Settings closed: a sample still playing stops, and the welcome line has had its turn.</summary>
+    public void Closed()
+    {
+        VoicePage.StopSample();
+        VoicePage.ShowWelcome = false;
+    }
+
+    partial void OnSearchChanged(string value)
+    {
+        var found = SettingsPageItem.All.Where(p => p.Matches(value)).ToList();
+        Pages.Clear();
+        foreach (var page in found)
+        {
+            Pages.Add(page);
+        }
+
+        // The page shown stays while the search finds it, or finds nothing; else the first page found shows.
+        if (found.Count > 0 && !found.Contains(SelectedPage))
+        {
+            SelectedPage = found[0];
+        }
+
+        OnPropertyChanged(nameof(ListedPage));
+    }
+
+    /// <summary>The speech-to-text models, each with its size, state and Download.</summary>
+    public IReadOnlyList<SpeechToTextRow> WhisperRows { get; }
+
+    private void ShowWhisperRows()
+    {
+        var downloads = _whisper.Downloads;
+        foreach (var row in WhisperRows)
+        {
+            row.Show(downloads.FirstOrDefault(d => d.Model == row.Model), _whisper.IsPresentOf(row.Model),
+                row.Model == RavenWhisperModel && Voice.ListeningState is not (null or DictationState.NotDownloaded or DictationState.Downloading)
+                    ? Voice.Listening
+                    : null);
+        }
+    }
+
+    /// <summary>The model names table, a row a name; rows not filled in yet stay here and are left out of what is stored.</summary>
+    public ObservableCollection<AliasRow> Aliases { get; }
+
+    /// <summary>Set while the table writes <see cref="RavenModelAliases"/>: the table is not built again from it.</summary>
+    private bool _writingAliases;
+
+    private void ShowAliases()
+    {
+        Aliases.Clear();
+        foreach (var alias in ChatModels.ParseAliases(RavenModelAliases))
+        {
+            Aliases.Add(NewAliasRow(alias.Name, alias.Id));
+        }
+    }
+
+    private AliasRow NewAliasRow(string name, string id) => new(name, id, _ => WriteAliases(), row =>
+    {
+        Aliases.Remove(row);
+        WriteAliases();
+    });
+
+    private void WriteAliases()
+    {
+        _writingAliases = true;
+        try
+        {
+            RavenModelAliases = ChatModels.FormatAliases(Aliases
+                .Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.Id))
+                .Select(a => new ModelAlias(a.Name.Trim(), a.Id.Trim())));
+        }
+        finally
+        {
+            _writingAliases = false;
+        }
+    }
+
+    /// <summary>A blank row at the end of the table, to type a name and its model id into.</summary>
+    [RelayCommand]
+    private void AddAlias() => Aliases.Add(NewAliasRow("", ""));
+
+    /// <summary>Installed, partly or with old entries: the card offers Reinstall and Remove; else Install.</summary>
+    public bool HooksInPlace => HookState is HookInstallState.Installed or HookInstallState.Partial or HookInstallState.Outdated;
+
+    public string HookHeading => HookState switch
+    {
+        HookInstallState.Installed => "Hooks installed",
+        HookInstallState.Partial or HookInstallState.Outdated => "Hooks need an update",
+        HookInstallState.Unreadable => "Hooks unknown",
+        _ => "Hooks not installed",
+    };
 
     public static string DefaultRelayExecutable => Path.Combine(AppContext.BaseDirectory, "relay", "csx-hook.exe");
 
@@ -169,7 +316,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                 : SpeechModel.Small;
             RavenVoiceSetupShown = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenVoiceSetupShown, "whether the voice setup was shown", ct) ?? false;
             // Never picked: Qwen3-TTS for whoever has it installed already (it was the only engine), else none until the
-            // voice setup. Not stored, so it is looked at again until a pick is.
+            // first run picks. Not stored, so it is looked at again until a pick is.
             RavenVoiceEngine = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoiceEngine, "Raven's voice engine", ct) is { Length: > 0 } engine
                 ? (Enum.TryParse<SpeechEngine>(engine, out var known) ? known.ToString() : NoEngine)
                 : await Task.Run(() => _engines.IsInstalled(SpeechEngine.Qwen), ct) ? nameof(SpeechEngine.Qwen) : NoEngine;
@@ -327,6 +474,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _whisper.Model = value;
         Persist(SettingKeys.RavenWhisperModel, value);
+        ShowWhisperRows();
     }
 
     /// <summary>Where Raven's models stand, for the dots beside the engine and the speech-to-text model.</summary>
@@ -340,32 +488,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public bool IsKokoro => Engine == SpeechEngine.Kokoro;
 
-    /// <summary>Kokoro's voices; each engine has its own Voice box, the one of the engine picked shows.</summary>
-    public static IReadOnlyList<SpeechVoice> KokoroVoiceChoices => SpeechSettings.KokoroVoices;
-
-    /// <summary>Qwen3-TTS's voices.</summary>
-    public static IReadOnlyList<SpeechVoice> QwenVoiceChoices => SpeechSettings.QwenVoices;
-    /// <summary>The engines the Settings view offers, none first.</summary>
-    public static IReadOnlyList<EngineChoice> EngineChoices { get; } =
-    [
-        new(NoEngine, "None: Raven answers in text"),
-        new(nameof(SpeechEngine.Kokoro), "Kokoro: small, any PC"),
-        new(nameof(SpeechEngine.Qwen), "Qwen3-TTS: more natural, NVIDIA GPU"),
-    ];
-
-    /// <summary>The speech-to-text models the Settings view offers.</summary>
-    public static IReadOnlyList<WhisperChoice> WhisperChoices { get; } =
-    [
-        new(WhisperModel.TinyEnglish, "Tiny: English, 78 MB, fastest"),
-        new(WhisperModel.BaseEnglish, "Base: English, 148 MB"),
-        new(WhisperModel.SmallEnglish, "Small: English, 488 MB"),
-        new(WhisperModel.LargeV3Turbo, "Large v3 Turbo: any language, 1.6 GB"),
-    ];
-
     /// <summary>The voice stored for <paramref name="engine"/>.</summary>
     public string VoiceOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? RavenKokoroVoice : RavenQwenVoice;
 
-    /// <summary>The voice setup picked an engine and a voice: shown here and stored, and Raven speaks with them from now on.</summary>
+    /// <summary>An engine and a voice picked on the Voice page: stored, and Raven speaks with them from now on.</summary>
     public void PickVoice(SpeechEngine engine, string voice)
     {
         if (engine == SpeechEngine.Kokoro)
@@ -380,35 +506,32 @@ public sealed partial class SettingsViewModel : ObservableObject
         RavenVoiceEngine = engine.ToString();
     }
 
-    /// <summary>The voice setup opens by itself once: when the Raven panel is first used and no engine is picked.</summary>
+    /// <summary>Settings → Voice opens by itself once, with a welcome line: when the Raven panel is first used and no engine is picked.</summary>
     public bool NeedsVoiceSetup => !RavenVoiceSetupShown && Engine is null;
 
-    /// <summary>Asks for the voice setup; the shell opens it.</summary>
-    public event Action? VoiceSetupRequested;
-
-    [RelayCommand]
-    private void OpenVoiceSetup() => VoiceSetupRequested?.Invoke();
-
-    /// <summary>Downloads the speech-to-text model picked; the dot beside it shows how far it is.</summary>
-    [RelayCommand]
-    private async Task DownloadWhisperAsync()
+    /// <summary>Downloads a speech-to-text model from its row; the row shows how far it is.</summary>
+    private async Task DownloadWhisperAsync(WhisperModel model)
     {
         try
         {
-            await _whisper.DownloadAsync(null, CancellationToken.None);
+            await _whisper.DownloadAsync(model, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "The speech model could not be downloaded");
-            LastMessage = $"The speech-to-text model could not be downloaded: {ex.Message}";
+            _logger.LogWarning(ex, "The speech model {Model} could not be downloaded", model);
+            LastMessage = $"{ModelLamp.NameOf(model)} could not be downloaded: {ex.Message}";
+        }
+        finally
+        {
+            ShowWhisperRows();
         }
     }
 
-    /// <summary>The voice models the Settings view offers.</summary>
+    /// <summary>The Qwen3-TTS models its card offers.</summary>
     public static IReadOnlyList<VoiceModelChoice> VoiceModelChoices { get; } =
     [
-        new(SpeechModel.Small, "Qwen3-TTS 0.6B (faster)"),
-        new(SpeechModel.Large, "Qwen3-TTS 1.7B (sounds better, a little slower)"),
+        new(SpeechModel.Small, "0.6B · faster"),
+        new(SpeechModel.Large, "1.7B · richer"),
     ];
 
     /// <summary>Stored as typed, and not tidied in the box while it is typed in; the brain trims it, and runs the default model for a blank one.</summary>
@@ -452,6 +575,10 @@ public sealed partial class SettingsViewModel : ObservableObject
         _chats.Aliases = ChatModels.ParseAliases(value);
         OnPropertyChanged(nameof(ChatModelChoices));
         Persist(SettingKeys.RavenModelAliases, value);
+        if (!_writingAliases)
+        {
+            ShowAliases();
+        }
     }
 
     /// <summary>As <see cref="ChatSettings.Blank"/>, and the choice that stands for Claude Code's default is none too.</summary>
@@ -553,9 +680,3 @@ public sealed partial class SettingsViewModel : ObservableObject
 
 /// <summary>A voice model as the Settings view offers it.</summary>
 public sealed record VoiceModelChoice(SpeechModel Model, string Label);
-
-/// <summary>An engine as the Settings view offers it: a name of <see cref="SpeechEngine"/>, or <see cref="SettingsViewModel.NoEngine"/>.</summary>
-public sealed record EngineChoice(string Engine, string Label);
-
-/// <summary>A speech-to-text model as the Settings view offers it.</summary>
-public sealed record WhisperChoice(WhisperModel Model, string Label);

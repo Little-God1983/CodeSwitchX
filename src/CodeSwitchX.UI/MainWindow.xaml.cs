@@ -5,7 +5,6 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Shell;
-using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Workspaces;
 using Microsoft.Extensions.Logging;
 
@@ -19,8 +18,6 @@ public partial class MainWindow : Window
     private readonly HostManager _host;
     private readonly AddWorkspaceLauncher _addWorkspace;
     private readonly ILogger<WindowLocationWatcher> _watcherLogger;
-    private readonly Func<VoiceSetupViewModel> _voiceSetupFactory;
-    private VoiceSetupWindow? _voiceSetup;
     private WindowLocationWatcher? _locationWatcher;
     private MouseBackButtonHook? _backButtonHook;
     private System.Windows.Threading.DispatcherTimer? _livenessTimer;
@@ -31,8 +28,7 @@ public partial class MainWindow : Window
     private bool _raiseHostedWhenMoved;
 
     public MainWindow(ShellViewModel shell, HotkeyService hotkeys, TrayIconService tray, HostManager host,
-        Func<AddWorkspaceViewModel> addWorkspaceFactory, ILogger<AddWorkspaceLauncher> addWorkspaceLogger, ILogger<WindowLocationWatcher> watcherLogger,
-        Func<VoiceSetupViewModel> voiceSetupFactory)
+        Func<AddWorkspaceViewModel> addWorkspaceFactory, ILogger<AddWorkspaceLauncher> addWorkspaceLogger, ILogger<WindowLocationWatcher> watcherLogger)
     {
         InitializeComponent();
         _shell = shell;
@@ -45,26 +41,8 @@ public partial class MainWindow : Window
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         shell.ForwardRequested += () => WindowActivation.BringUp(this);
-        _voiceSetupFactory = voiceSetupFactory;
-        // Posted: the request can come from inside the Raven panel's IsOpen change, and a modal loop there would hold the
-        // panel's opening, and everything else that follows that change, until the dialog closed.
-        shell.VoiceSetupRequested += () => Dispatcher.BeginInvoke(new Action(ShowVoiceSetup));
-        // The first use of the Raven panel: open at the start, the voice setup opens once the window shows.
+        // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
-    }
-
-    /// <summary>The voice setup over the shell, one at a time; asked for again while open, it comes forward.</summary>
-    private void ShowVoiceSetup()
-    {
-        if (_voiceSetup is { } open)
-        {
-            open.Activate();
-            return;
-        }
-
-        _voiceSetup = new VoiceSetupWindow(_voiceSetupFactory()) { Owner = this };
-        _voiceSetup.Closed += (_, _) => _voiceSetup = null;
-        _voiceSetup.ShowDialog();
     }
 
     /// <summary>Shows the Add workspace dialog over the shell until it is closed.</summary>

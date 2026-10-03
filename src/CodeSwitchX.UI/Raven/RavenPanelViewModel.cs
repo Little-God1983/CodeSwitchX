@@ -892,7 +892,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 AddEntry(RavenLogKind.Warning, $"Raven cannot speak: {status.Detail}");
                 break;
             case TextToSpeechState.Off or TextToSpeechState.NotInstalled or TextToSpeechState.NoEngine when _voiceNote is not null:
-                // Cancelled in the voice setup, or another engine (or none) picked: the note does not go on claiming an install.
+                // Cancelled on the Voice page, or another engine (or none) picked: the note does not go on claiming an install.
                 _voiceNote.Text = "Raven's voice stopped getting ready.";
                 _voiceNote = null;
                 break;

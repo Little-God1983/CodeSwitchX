@@ -29,7 +29,7 @@ public sealed record EngineStatus(SpeechEngine Engine, TextToSpeechStatus Status
 /// <summary>
 /// Speaks with the engine <see cref="SpeechSettings.Engine"/> picks, and with none while none is: then Raven answers in
 /// text only. Picking another engine stops the one before, so it frees its memory; the new one starts when Raven next
-/// needs it. The voice setup and Settings see every engine through it, picked or not.
+/// needs it. Settings → Voice sees every engine through it, picked or not.
 /// </summary>
 public sealed class SpeechEngines : ITextToSpeech, IDisposable
 {
@@ -67,10 +67,10 @@ public sealed class SpeechEngines : ITextToSpeech, IDisposable
 
     public void Prepare(bool install) => Current?.Prepare(install);
 
-    /// <summary>The voice setup's install: <paramref name="engine"/> is installed if needed and started.</summary>
+    /// <summary>The Voice page's install: <paramref name="engine"/> is installed if needed and started.</summary>
     public void Install(SpeechEngine engine) => _engines[engine].Install();
 
-    /// <summary>The voice setup's cancel: an install or load of <paramref name="engine"/> is given up.</summary>
+    /// <summary>The Voice page's cancel: an install or load of <paramref name="engine"/> is given up.</summary>
     public void Cancel(SpeechEngine engine) => _engines[engine].Stop();
 
     /// <summary>Has every engine say whether it is on disk; once at the start, before anything else asks them.</summary>

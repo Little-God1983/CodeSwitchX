@@ -42,9 +42,9 @@ public sealed record ModelLamp(ModelDot Dot, string Text, string Detail, double?
         return status.State switch
         {
             TextToSpeechState.NoEngine => new(ModelDot.Grey, "text only",
-                "No voice is picked: Raven answers in text. Pick one with Voice setup in Settings."),
+                "No voice is picked: Raven answers in text. Pick one in Settings → Voice."),
             TextToSpeechState.NotInstalled => new(ModelDot.Red, "not downloaded",
-                $"{name} is not on this PC yet. It is installed when Raven first speaks, or from Voice setup."),
+                $"{name} is not on this PC yet. It is installed when Raven first speaks, or from Settings → Voice."),
             TextToSpeechState.Off => new(ModelDot.Grey, "asleep", $"{name} is on this PC; it loads when Raven next speaks."),
             TextToSpeechState.Installing => new(ModelDot.Yellow, "installing", $"Installing {name}: {status.Detail}{bytes}", status.Bytes?.Fraction),
             TextToSpeechState.Loading => new(ModelDot.Yellow, "loading",

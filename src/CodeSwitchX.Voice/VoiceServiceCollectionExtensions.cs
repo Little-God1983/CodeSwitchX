@@ -31,8 +31,8 @@ public static class VoiceServiceCollectionExtensions
         services.AddSingleton<IMicrophoneStream, WasapiMicrophoneStream>();
         services.AddSingleton<IOpenMic, OpenMicListener>();
 
-        // Speech: the engine picked (Kokoro or Qwen3-TTS), each in a sidecar of its own, installed on first need or from the
-        // voice setup. The requests stream for as long as a sentence takes, so the client has no timeout of its own;
+        // Speech: the engine picked (Kokoro or Qwen3-TTS), each in a sidecar of its own, installed on first need or from the Settings
+        // Voice page. The requests stream for as long as a sentence takes, so the client has no timeout of its own;
         // ReplyVoice watches for a stalled one.
         services.AddSingleton<SpeechSettings>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();

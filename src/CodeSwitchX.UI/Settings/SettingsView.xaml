@@ -1,132 +1,812 @@
 <UserControl x:Class="CodeSwitchX.UI.Settings.SettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice">
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance settings:SettingsViewModel}"
+             d:DesignWidth="1100" d:DesignHeight="800">
+  <!-- One Settings window (#105): every setting on exactly one page. Live controls stay where they are used: the mic
+       button, mode and Mute on Raven's panel; tile size and Needs me first on the Yard. -->
   <UserControl.Resources>
-    <DataTemplate x:Key="VoiceChoice">
-      <TextBlock>
-        <Run Text="{Binding Name, Mode=OneTime}" /><Run Text=" · " /><Run Text="{Binding Description, Mode=OneTime}" Foreground="Gray" />
-      </TextBlock>
-    </DataTemplate>
+    <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="Mono">Cascadia Mono, Consolas</FontFamily>
+    <SolidColorBrush x:Key="Bg" Color="#0B1220" />
+    <SolidColorBrush x:Key="Side" Color="#0E1627" />
+    <SolidColorBrush x:Key="CardBg" Color="#121A2B" />
+    <SolidColorBrush x:Key="Line" Color="#26324A" />
+    <SolidColorBrush x:Key="RowLine" Color="#1E2940" />
+    <SolidColorBrush x:Key="Accent" Color="#4CC9E8" />
+    <SolidColorBrush x:Key="AccentText" Color="#8FE0F2" />
+    <SolidColorBrush x:Key="AccentDim" Color="#133847" />
+    <SolidColorBrush x:Key="Pick" Color="#0F2A36" />
+    <SolidColorBrush x:Key="Text" Color="#E5ECF6" />
+    <SolidColorBrush x:Key="Muted" Color="#9AA8BD" />
+    <SolidColorBrush x:Key="Faint" Color="#7D8BA1" />
+    <SolidColorBrush x:Key="Chip" Color="#1C2740" />
+    <SolidColorBrush x:Key="Danger" Color="#F87171" />
+
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource CardBg}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="14" />
+      <Setter Property="Padding" Value="22,20" />
+      <Setter Property="Margin" Value="0,0,0,16" />
+    </Style>
+    <Style x:Key="H3" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="16" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+    <Style x:Key="Help" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="13.5" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="LineHeight" Value="20" />
+      <Setter Property="Margin" Value="0,4,0,14" />
+    </Style>
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource Muted}" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style x:Key="Caps" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource Faint}" />
+    </Style>
+
+    <!-- Buttons: one accent action a place, quiet ones beside it. -->
+    <Style x:Key="BaseButton" TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="14,7" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Box" CornerRadius="9" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Box" Property="Opacity" Value="0.88" />
+                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Accent}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Box" Property="BorderBrush" Value="{StaticResource Accent}" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Box" Property="Opacity" Value="0.45" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+      <Setter Property="Background" Value="{StaticResource Accent}" />
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+      <Setter Property="Foreground" Value="#0B1220" />
+    </Style>
+    <Style x:Key="Secondary" TargetType="Button" BasedOn="{StaticResource BaseButton}" />
+    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+      <Setter Property="Foreground" Value="{StaticResource Danger}" />
+    </Style>
+    <Style x:Key="Ghost" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Foreground" Value="{StaticResource AccentText}" />
+      <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style x:Key="Small" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="FontSize" Value="12.5" />
+    </Style>
+
+    <!-- A switch: a CheckBox drawn as a track and a knob. -->
+    <Style x:Key="Switch" TargetType="CheckBox">
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Border x:Name="Track" Width="42" Height="24" CornerRadius="12" Background="#26324A" BorderThickness="2" BorderBrush="Transparent">
+              <Ellipse x:Name="Knob" Width="16" Height="16" Fill="#9AA8BD" HorizontalAlignment="Left" Margin="2,0,0,0" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Track" Property="Background" Value="{StaticResource Accent}" />
+                <Setter TargetName="Knob" Property="Fill" Value="#0B1220" />
+                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                <Setter TargetName="Knob" Property="Margin" Value="0,0,2,0" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource AccentText}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A list item without the list's own selection chrome: the item's template draws the picked state. -->
+    <Style x:Key="Plain" TargetType="ListBoxItem">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Foreground" Value="{StaticResource Text}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <ContentPresenter />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="PlainList" TargetType="ListBox">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="ItemContainerStyle" Value="{StaticResource Plain}" />
+      <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+      <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+    </Style>
+
+    <!-- A row of buttons, one picked: the effort, the Qwen3-TTS model. -->
+    <Style x:Key="SegmentItem" TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Seg" CornerRadius="7" Padding="12,6" Background="Transparent">
+              <ContentPresenter x:Name="Content" TextElement.Foreground="{StaticResource Muted}" TextElement.FontWeight="SemiBold" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Seg" Property="Background" Value="#18233A" />
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Seg" Property="Background" Value="{StaticResource AccentDim}" />
+                <Setter TargetName="Content" Property="TextElement.Foreground" Value="{StaticResource AccentText}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Seg" Property="BorderBrush" Value="{StaticResource Accent}" />
+                <Setter TargetName="Seg" Property="BorderThickness" Value="1" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Segmented" TargetType="ListBox">
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="ItemContainerStyle" Value="{StaticResource SegmentItem}" />
+      <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+      <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Disabled" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBox">
+            <Border Background="{StaticResource Side}" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" Padding="3">
+              <ItemsPresenter />
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Setter Property="ItemsPanel">
+        <Setter.Value>
+          <ItemsPanelTemplate>
+            <StackPanel Orientation="Horizontal" />
+          </ItemsPanelTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- A radio's ring; the dot shows when the list item holding it is picked. -->
+    <Style x:Key="RadioDot" TargetType="Ellipse">
+      <Setter Property="Width" Value="9" />
+      <Setter Property="Height" Value="9" />
+      <Setter Property="Fill" Value="{StaticResource Accent}" />
+      <Setter Property="Visibility" Value="Collapsed" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+          <Setter Property="Visibility" Value="Visible" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <Style x:Key="RadioRing" TargetType="Ellipse">
+      <Setter Property="Width" Value="18" />
+      <Setter Property="Height" Value="18" />
+      <Setter Property="Stroke" Value="#64748B" />
+      <Setter Property="StrokeThickness" Value="2" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+          <Setter Property="Stroke" Value="{StaticResource Accent}" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+    <!-- A picked row: tinted, with an accent edge. -->
+    <Style x:Key="PickRow" TargetType="Border">
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+          <Setter Property="Background" Value="#151F33" />
+        </Trigger>
+        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+          <Setter Property="Background" Value="{StaticResource Pick}" />
+          <Setter Property="BorderBrush" Value="#1F5566" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Padding" Value="8,6" />
+    </Style>
+
+    <!-- The sidebar's pages, under their group's heading. -->
+    <CollectionViewSource x:Key="PageGroups" Source="{Binding Pages}">
+      <CollectionViewSource.GroupDescriptions>
+        <PropertyGroupDescription PropertyName="Group" />
+      </CollectionViewSource.GroupDescriptions>
+    </CollectionViewSource>
+    <Style x:Key="NavItem" TargetType="ListBoxItem">
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Margin" Value="0,1" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Nav" CornerRadius="9" Padding="12,9" Background="Transparent" BorderThickness="1" BorderBrush="Transparent">
+              <ContentPresenter x:Name="Content" TextElement.Foreground="#C7D2E2" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Nav" Property="Background" Value="#151F33" />
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Nav" Property="Background" Value="{StaticResource AccentDim}" />
+                <Setter TargetName="Content" Property="TextElement.Foreground" Value="{StaticResource AccentText}" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Nav" Property="BorderBrush" Value="{StaticResource Accent}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </UserControl.Resources>
-  <ScrollViewer VerticalScrollBarVisibility="Auto">
-    <StackPanel Margin="24" MaxWidth="760" HorizontalAlignment="Left">
-      <DockPanel>
-        <Button DockPanel.Dock="Right" Content="Back to Yard" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-        <TextBlock Text="Settings" FontSize="22" FontWeight="SemiBold" />
-      </DockPanel>
 
-      <TextBlock Text="Claude Code hooks" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
-      <TextBlock TextWrapping="Wrap" Opacity="0.8"
-                 Text="CodeSwitchX adds csx-hook.exe to the user-level Claude Code settings so every session reports its state. Existing hooks are kept; a backup is written first." />
-      <TextBlock Margin="0,8,0,0"><Run Text="Status: " FontWeight="SemiBold" /><Run Text="{Binding HookStatusText, Mode=OneWay}" /></TextBlock>
-      <TextBlock Margin="0,4,0,0" Opacity="0.7"><Run Text="Settings file: " /><Run Text="{Binding SettingsFile, Mode=OneWay}" /></TextBlock>
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Relay executable" VerticalAlignment="Center" Width="140" />
-        <TextBox Text="{Binding RelayExecutable, UpdateSourceTrigger=LostFocus}" />
+  <Grid Background="{StaticResource Bg}" TextElement.Foreground="{StaticResource Text}">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="260" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <!-- The sidebar: back, search, the pages, and how changes are kept. -->
+    <Border Background="{StaticResource Side}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+      <DockPanel Margin="14,16,14,16">
+        <Button DockPanel.Dock="Top" Style="{StaticResource Ghost}" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                AutomationProperties.Name="Back to Yard" Padding="6,4">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock Text="Back to Yard" />
+          </StackPanel>
+        </Button>
+        <TextBlock DockPanel.Dock="Top" Text="Settings" FontSize="22" FontWeight="SemiBold" Margin="6,14,0,14" />
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
+          <TextBox x:Name="SearchBox" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="30,7,8,7" FontSize="13.5"
+                   AutomationProperties.Name="Search settings" />
+          <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}" Margin="11,0,0,0"
+                     VerticalAlignment="Center" IsHitTestVisible="False" />
+          <TextBlock Text="Search settings" Foreground="{StaticResource Faint}" FontSize="13.5" Margin="31,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Search}" Value="">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </Grid>
+        <StackPanel DockPanel.Dock="Bottom" Margin="6,12,0,0">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock Text="Changes save as you make them" FontSize="12.5" Foreground="{StaticResource Muted}" />
+          </StackPanel>
+        </StackPanel>
+        <Grid>
+          <ListBox ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}"
+                   Background="Transparent" BorderThickness="0" AutomationProperties.Name="Settings pages"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.GroupStyle>
+              <GroupStyle>
+                <GroupStyle.HeaderTemplate>
+                  <DataTemplate>
+                    <TextBlock Style="{StaticResource Caps}" Text="{Binding Name}" Margin="12,10,0,6" />
+                  </DataTemplate>
+                </GroupStyle.HeaderTemplate>
+              </GroupStyle>
+            </ListBox.GroupStyle>
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="settings:SettingsPageItem">
+                <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding Title}">
+                  <TextBlock FontFamily="{StaticResource Icons}" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Center" Margin="0,0,12,0" />
+                  <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <TextBlock Text="No setting by that name." Foreground="{StaticResource Faint}" Margin="12,8,0,0" FontSize="13">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Pages.Count}" Value="0">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </Grid>
       </DockPanel>
-      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-        <Button Content="Install hooks" Command="{Binding InstallHooksCommand}" MinWidth="120" Margin="0,0,8,0" />
-        <Button Content="Remove hooks" Command="{Binding RemoveHooksCommand}" MinWidth="120" />
+    </Border>
+
+    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="40,30,40,40" MaxWidth="860" HorizontalAlignment="Left">
+        <TextBlock Text="{Binding SelectedPage.Title}" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding SelectedPage.Subtitle}" Style="{StaticResource Help}" FontSize="14.5" Margin="0,6,0,22" />
+        <Border CornerRadius="10" Background="#3A1A20" Padding="14,10" Margin="0,0,0,16"
+                Visibility="{Binding LastMessage, Converter={StaticResource NullToCollapsed}}">
+          <TextBlock Text="{Binding LastMessage}" TextWrapping="Wrap" Foreground="#FCA5A5" AutomationProperties.LiveSetting="Polite" />
+        </Border>
+
+        <!-- Voice -->
+        <StackPanel DataContext="{Binding VoicePage}"
+                    Visibility="{Binding DataContext.Page, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource EnumVisible}, ConverterParameter=Voice}">
+          <Border CornerRadius="14" Background="{StaticResource Pick}" BorderBrush="#1F5566" BorderThickness="1" Padding="18,16" Margin="0,0,0,16"
+                  Visibility="{Binding ShowWelcome, Converter={StaticResource BoolVisible}}">
+            <DockPanel>
+              <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE767;" FontSize="22" Foreground="{StaticResource Accent}" Margin="0,2,14,0" VerticalAlignment="Top" />
+              <StackPanel>
+                <TextBlock Text="Welcome. Choose how Raven speaks." FontWeight="SemiBold" FontSize="15" />
+                <TextBlock Style="{StaticResource Help}" Foreground="#B4C3D6" Margin="0,4,0,0"
+                           Text="Pick an engine and a voice and install it now, rather than the first time Raven answers. You can come back here any time." />
+              </StackPanel>
+            </DockPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Engine" />
+              <TextBlock Style="{StaticResource Help}" Text="Each engine shows where its model stands. Picking another one stops the old engine and frees its memory." />
+              <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding Cards}" SelectedItem="{Binding SelectedCard}" AutomationProperties.Name="Voice engine">
+                <ListBox.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <UniformGrid Columns="3" />
+                  </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                  <DataTemplate DataType="settings:EngineCard">
+                    <Border x:Name="Card" CornerRadius="12" BorderThickness="1.5" BorderBrush="{StaticResource Line}" Background="{StaticResource CardBg}"
+                            Padding="16,14" Margin="0,0,10,0" AutomationProperties.Name="{Binding Name}">
+                      <StackPanel>
+                        <DockPanel>
+                          <Grid Width="18" Height="18" Margin="0,0,10,0" VerticalAlignment="Center">
+                            <Ellipse Style="{StaticResource RadioRing}" />
+                            <Ellipse Style="{StaticResource RadioDot}" />
+                          </Grid>
+                          <Border DockPanel.Dock="Right" CornerRadius="9" Background="{StaticResource AccentDim}" Padding="8,2" VerticalAlignment="Center"
+                                  Visibility="{Binding Recommended, Converter={StaticResource BoolVisible}}">
+                            <TextBlock Text="Recommended" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource AccentText}" />
+                          </Border>
+                          <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <TextBlock Text="{Binding Pitch}" TextWrapping="Wrap" FontSize="13.5" Foreground="{StaticResource Muted}" LineHeight="19" Margin="0,8,0,10" />
+                        <ItemsControl ItemsSource="{Binding Tags}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                              <WrapPanel />
+                            </ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                              <Border CornerRadius="9" Background="{StaticResource Chip}" Padding="8,2" Margin="0,0,6,6">
+                                <TextBlock Text="{Binding}" FontSize="12" Foreground="#C7D2E2" />
+                              </Border>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0" Visibility="{Binding Lamp, Converter={StaticResource NullToCollapsed}}"
+                                    ToolTip="{Binding Lamp.Detail}" AutomationProperties.Name="{Binding StatusText}">
+                          <Ellipse Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" Fill="{Binding Lamp.Dot, Converter={StaticResource DotBrush}}" />
+                          <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <!-- Qwen3-TTS's model, while it is the engine picked. -->
+                        <StackPanel x:Name="Model" Margin="0,14,0,0" Visibility="Collapsed">
+                          <TextBlock Style="{StaticResource Label}" Text="Model" />
+                          <ListBox Style="{StaticResource Segmented}" AutomationProperties.Name="Qwen3-TTS model"
+                                   ItemsSource="{Binding DataContext.VoiceModelChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                   DisplayMemberPath="Label" SelectedValuePath="Model"
+                                   SelectedValue="{Binding DataContext.RavenVoiceModel, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                          <TextBlock Text="1.7B sounds better and is a little slower; it downloads (3.5 GB) the first time Raven speaks with it." FontSize="12"
+                                     Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                        </StackPanel>
+                        <Button Style="{StaticResource Primary}" Content="{Binding InstallText}" Command="{Binding InstallCommand}" Margin="0,14,0,0"
+                                Visibility="{Binding CanInstall, Converter={StaticResource BoolVisible}}" />
+                        <StackPanel Margin="0,14,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolVisible}}">
+                          <ProgressBar Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}"
+                                       IsIndeterminate="{Binding Progress, Converter={StaticResource IsNull}}" Foreground="{StaticResource Accent}" />
+                          <Button Style="{StaticResource Small}" Content="Cancel" Command="{Binding CancelCommand}" Margin="0,10,0,0"
+                                  AutomationProperties.Name="{Binding Name, StringFormat='Cancel the install of {0}'}" />
+                        </StackPanel>
+                      </StackPanel>
+                    </Border>
+                    <DataTemplate.Triggers>
+                      <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                        <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource Accent}" />
+                        <Setter TargetName="Card" Property="Background" Value="{StaticResource Pick}" />
+                      </DataTrigger>
+                      <MultiDataTrigger>
+                        <MultiDataTrigger.Conditions>
+                          <Condition Binding="{Binding IsSelected}" Value="True" />
+                          <Condition Binding="{Binding HasModelChoice}" Value="True" />
+                        </MultiDataTrigger.Conditions>
+                        <Setter TargetName="Model" Property="Visibility" Value="Visible" />
+                      </MultiDataTrigger>
+                    </DataTemplate.Triggers>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}" Visibility="{Binding HasVoices, Converter={StaticResource BoolVisible}}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="{Binding VoicesHeading}" />
+              <TextBlock Style="{StaticResource Help}" Text="Press play to hear one. The voice you pick is the one Raven speaks with." />
+              <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding Voices}" SelectedItem="{Binding SelectedVoice}" AutomationProperties.Name="Voice">
+                <ListBox.ItemTemplate>
+                  <DataTemplate DataType="settings:VoiceRow">
+                    <Border Style="{StaticResource PickRow}" Padding="14,8" Margin="0,0,0,4" AutomationProperties.Name="{Binding Voice.Name}">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="32" />
+                          <ColumnDefinition Width="150" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid Width="18" Height="18" HorizontalAlignment="Left">
+                          <Ellipse Style="{StaticResource RadioRing}" />
+                          <Ellipse Style="{StaticResource RadioDot}" />
+                        </Grid>
+                        <TextBlock Grid.Column="1" Text="{Binding Voice.Name}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding Voice.Description}" Foreground="{StaticResource Muted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <Button x:Name="Play" Grid.Column="3" Width="34" Height="34" Command="{Binding PlayCommand}" Cursor="Hand"
+                                AutomationProperties.Name="{Binding Voice.Name, StringFormat='Play {0}'}" ToolTip="Hear this voice">
+                          <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                              <Border x:Name="Circle" CornerRadius="17" BorderThickness="1.5" BorderBrush="#64748B" Background="Transparent">
+                                <TextBlock x:Name="Glyph" FontFamily="{StaticResource Icons}" Text="&#xE768;" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                              </Border>
+                              <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                  <Setter TargetName="Circle" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                  <Setter TargetName="Glyph" Property="Text" Value="&#xE71A;" />
+                                  <Setter TargetName="Circle" Property="BorderBrush" Value="{StaticResource Accent}" />
+                                  <Setter TargetName="Glyph" Property="Foreground" Value="{StaticResource Accent}" />
+                                </DataTrigger>
+                              </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                          </Button.Template>
+                        </Button>
+                      </Grid>
+                    </Border>
+                    <DataTemplate.Triggers>
+                      <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                        <Setter TargetName="Play" Property="AutomationProperties.Name" Value="Stop" />
+                      </DataTrigger>
+                    </DataTemplate.Triggers>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Border>
+          <Border Style="{StaticResource Card}" BorderBrush="#33405A" Visibility="{Binding HasVoices, Converter={StaticResource BoolCollapsed}}">
+            <TextBlock Text="Raven answers in text only. Pick Kokoro or Qwen3-TTS above to hear it speak." Foreground="{StaticResource Muted}" FontSize="14" />
+          </Border>
+
+          <Border Style="{StaticResource Card}" DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=UserControl}}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="While you work" Margin="0,0,0,14" />
+              <DockPanel>
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding RavenSpeakNews}" AutomationProperties.Name="Speak chat news" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="Speak chat news" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="When chats finish, fail or need you, Raven says so in one remark once nobody is talking. Off, the news is only written in Raven's log." />
+                </StackPanel>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Listening -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Listening}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Microphone" />
+              <TextBlock Style="{StaticResource Help}" Text="The mic Raven hears. The level moves while Raven listens. Push to talk or Open mic is switched on Raven's panel, where you talk." />
+              <ComboBox Width="460" HorizontalAlignment="Left" FontSize="14" AutomationProperties.Name="Microphone"
+                        ItemsSource="{Binding DataContext.Raven.Microphones, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
+                        SelectedItem="{Binding DataContext.Raven.SelectedMicrophone, RelativeSource={RelativeSource AncestorType=Window}}" />
+              <DockPanel Width="460" HorizontalAlignment="Left" Margin="0,12,0,0">
+                <TextBlock Text="Level" FontSize="12" Foreground="{StaticResource Muted}" Width="44" VerticalAlignment="Center" />
+                <Border Height="6" CornerRadius="3" Background="{StaticResource Line}" ClipToBounds="True" VerticalAlignment="Center" ToolTip="Mic level">
+                  <Border Background="{StaticResource Accent}" CornerRadius="3" RenderTransformOrigin="0,0.5">
+                    <Border.RenderTransform>
+                      <ScaleTransform ScaleX="{Binding DataContext.Raven.Level, RelativeSource={RelativeSource AncestorType=Window}, FallbackValue=0}" />
+                    </Border.RenderTransform>
+                  </Border>
+                </Border>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Speech to text" />
+              <TextBlock Style="{StaticResource Help}" Text="The Whisper model that writes down what you say. The English-only ones are smaller and faster; Large v3 Turbo also hears German. A model not on this PC downloads from its row, or with your next dictation." />
+              <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding WhisperRows}" SelectedValuePath="Model" SelectedValue="{Binding RavenWhisperModel}"
+                       AutomationProperties.Name="Speech-to-text model">
+                <ListBox.ItemTemplate>
+                  <DataTemplate DataType="settings:SpeechToTextRow">
+                    <Border Style="{StaticResource PickRow}" Padding="14,10" Margin="0,0,0,6" AutomationProperties.Name="{Binding Name}">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="32" />
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="70" />
+                          <ColumnDefinition Width="150" />
+                          <ColumnDefinition Width="104" />
+                        </Grid.ColumnDefinitions>
+                        <Grid Width="18" Height="18" HorizontalAlignment="Left">
+                          <Ellipse Style="{StaticResource RadioRing}" />
+                          <Ellipse Style="{StaticResource RadioDot}" />
+                        </Grid>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Name}" FontSize="14.5" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding Description}" FontSize="13" Foreground="{StaticResource Muted}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+                        <voice:ModelLampView Grid.Column="3" DataContext="{Binding Lamp}" Foreground="#C7D2E2" />
+                        <Button Grid.Column="4" Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" HorizontalAlignment="Right"
+                                AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
+                                Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
+                        <ProgressBar Grid.Column="4" Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}" VerticalAlignment="Center"
+                                     Foreground="#FBBF24" Visibility="{Binding Progress, Converter={StaticResource NullToCollapsed}}" />
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Talking over Raven" Margin="0,0,0,14" />
+              <DockPanel>
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding RavenBargeIn}" AutomationProperties.Name="Stop Raven when I talk over it" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="Stop Raven when I talk over it" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="In Open mic, talking while Raven speaks stops it. Turn this off if Raven hears its own voice through your speakers: Open mic then ignores what it hears while Raven speaks." />
+                </StackPanel>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Brain & chats -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Brain}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Raven's brain" />
+              <TextBlock Style="{StaticResource Help}" Text="The model Raven answers with, through the Yard's tools only. A faster model answers sooner. A change starts a new conversation." />
+              <TextBlock Style="{StaticResource Label}" Text="Model" />
+              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Raven model"
+                        ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
+                        Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                        ToolTip="A full model id. Pick one or type another." />
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="New chats Raven starts" />
+              <TextBlock Style="{StaticResource Help}" Text="They run in auto mode with these unless you name others for one chat. Saying &quot;from now on Opus&quot; changes them here too. Default leaves it to Claude Code." />
+              <TextBlock Style="{StaticResource Label}" Text="Model" />
+              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontSize="14" AutomationProperties.Name="Chat model"
+                        ItemsSource="{Binding ChatModelChoices}"
+                        Text="{Binding RavenChatModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                        ToolTip="A name from the table below, a full model id, or default." />
+              <TextBlock Style="{StaticResource Label}" Text="Effort" Margin="0,18,0,6" />
+              <ListBox Style="{StaticResource Segmented}" ItemsSource="{Binding EffortChoices, Mode=OneTime}" SelectedItem="{Binding RavenChatEffort}"
+                       AutomationProperties.Name="Chat effort" />
+
+              <TextBlock Style="{StaticResource Label}" Text="Model names" Margin="0,22,0,2" />
+              <TextBlock Text="The name you say, and the model it starts. Edit a row when a new model comes out." FontSize="13" Foreground="{StaticResource Muted}" Margin="0,0,0,10" />
+              <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+                <StackPanel>
+                  <Grid Background="{StaticResource Side}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="170" />
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="44" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Style="{StaticResource Caps}" Text="YOU SAY" Margin="14,9" />
+                    <TextBlock Grid.Column="1" Style="{StaticResource Caps}" Text="MODEL ID" Margin="8,9" />
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding Aliases}" Focusable="False">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate DataType="settings:AliasRow">
+                        <Border BorderBrush="{StaticResource RowLine}" BorderThickness="0,1,0,0" Padding="6,5">
+                          <Grid>
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="164" />
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="38" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}" FontWeight="SemiBold" Margin="0,0,6,0" AutomationProperties.Name="Name you say" />
+                            <TextBox Grid.Column="1" Text="{Binding Id, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource Mono}" FontSize="13" AutomationProperties.Name="Model id" />
+                            <Button Grid.Column="2" Style="{StaticResource Ghost}" Command="{Binding RemoveCommand}" Foreground="{StaticResource Muted}" Padding="6"
+                                    HorizontalAlignment="Center" AutomationProperties.Name="{Binding Name, StringFormat='Remove {0}'}" ToolTip="Remove">
+                              <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE711;" FontSize="12" />
+                            </Button>
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+              <Button Style="{StaticResource Ghost}" Command="{Binding AddAliasCommand}" Margin="0,8,0,0" AutomationProperties.Name="Add a name">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE710;" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                  <TextBlock Text="Add a name" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Claude Code -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=ClaudeCode}">
+          <Border Style="{StaticResource Card}">
+            <DockPanel>
+              <Border DockPanel.Dock="Left" Width="44" Height="44" CornerRadius="22" Margin="0,0,16,0" VerticalAlignment="Top">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Setter Property="Background" Value="#3A1A20" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HooksInPlace}" Value="True">
+                        <Setter Property="Background" Value="#0F3A2E" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+                <TextBlock FontFamily="{StaticResource Icons}" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="Text" Value="&#xE7BA;" />
+                      <Setter Property="Foreground" Value="{StaticResource Danger}" />
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding HookState}" Value="Installed">
+                          <Setter Property="Text" Value="&#xE73E;" />
+                          <Setter Property="Foreground" Value="#34D399" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+              </Border>
+              <StackPanel>
+                <TextBlock Text="{Binding HookHeading}" FontSize="17" FontWeight="SemiBold" />
+                <TextBlock Style="{StaticResource Help}" Text="{Binding HookStatusText}" Margin="0,3,0,0" />
+                <TextBlock Style="{StaticResource Help}" Margin="0,6,0,14"
+                           Text="CodeSwitchX adds csx-hook.exe to the user-level Claude Code settings so every session reports its state. Existing hooks are kept; a backup is written first." />
+                <StackPanel Orientation="Horizontal" Visibility="{Binding HooksInPlace, Converter={StaticResource BoolVisible}}">
+                  <Button Style="{StaticResource Secondary}" Content="Reinstall" Command="{Binding InstallHooksCommand}" Margin="0,0,8,0" />
+                  <Button Style="{StaticResource DangerButton}" Content="Remove" Command="{Binding RemoveHooksCommand}" AutomationProperties.Name="Remove hooks" />
+                </StackPanel>
+                <Button Style="{StaticResource Primary}" Content="Install hooks" Command="{Binding InstallHooksCommand}"
+                        Visibility="{Binding HooksInPlace, Converter={StaticResource BoolCollapsed}}" />
+              </StackPanel>
+            </DockPanel>
+          </Border>
+
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Settings file" />
+              <TextBlock Style="{StaticResource Help}" Text="Where Claude Code keeps its user settings, and the hooks." />
+              <DockPanel>
+                <Button DockPanel.Dock="Right" Style="{StaticResource Small}" Content="Open folder" Command="{Binding OpenSettingsFileCommand}" Margin="12,0,0,0"
+                        AutomationProperties.Name="Open the settings file's folder" />
+                <TextBlock Text="{Binding SettingsFile}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+              </DockPanel>
+              <Expander Header="Advanced" Margin="0,18,0,0" Foreground="{StaticResource Muted}">
+                <StackPanel Margin="0,10,0,0">
+                  <TextBlock Style="{StaticResource Label}" Text="Relay executable" />
+                  <TextBox Text="{Binding RelayExecutable, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource Mono}" FontSize="13" AutomationProperties.Name="Relay executable" />
+                  <TextBlock Text="The program the hooks run. Change it only to try another build of csx-hook.exe; install the hooks again after." FontSize="12.5"
+                             Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+              </Expander>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Usage -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Usage}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="5-hour soft budget" />
+              <TextBlock Style="{StaticResource Help}" Text="A reminder line on the bottom bar's 5-hour window, not a hard limit: CodeSwitchX cannot read your real plan limit. Leave it empty for no budget." />
+              <StackPanel Orientation="Horizontal">
+                <TextBox Text="{Binding FiveHourBudgetTokens, UpdateSourceTrigger=LostFocus, TargetNullValue=''}" Width="200" FontFamily="{StaticResource Mono}" FontSize="14"
+                         AutomationProperties.Name="5-hour soft budget in tokens" />
+                <TextBlock Text="tokens" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="10,0,0,0" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <!-- Privacy & data -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Privacy}">
+          <Border Style="{StaticResource Card}">
+            <DockPanel>
+              <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding StorePayloads}" AutomationProperties.Name="Store raw hook payloads" Margin="16,0,0,0" />
+              <StackPanel>
+                <TextBlock Text="Store raw hook payloads" FontSize="14.5" FontWeight="SemiBold" />
+                <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0" Text="Keeps every hook event as Claude Code sent it, in the database. They contain your prompts and file paths." />
+              </StackPanel>
+            </DockPanel>
+          </Border>
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Data folder" />
+              <TextBlock Style="{StaticResource Help}" Text="The database, the logs and the downloaded models." />
+              <TextBlock Text="{Binding DataFolder}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" Margin="0,0,0,14" />
+              <StackPanel Orientation="Horizontal">
+                <Button Style="{StaticResource Secondary}" Content="Open folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" AutomationProperties.Name="Open data folder" />
+                <Button Style="{StaticResource Secondary}" Content="Open logs" Command="{Binding OpenLogsFolderCommand}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
       </StackPanel>
-      <TextBlock Text="{Binding LastMessage}" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#2563EB"
-                 Visibility="{Binding LastMessage, Converter={StaticResource NullToCollapsed}}" />
-
-      <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
-      <TextBlock TextWrapping="Wrap" Opacity="0.8"
-                 Text="Raven answers with Claude Code, which works only through the Yard's tools. A faster model answers sooner; a change starts a new conversation." />
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Model" VerticalAlignment="Center" Width="140" />
-        <ComboBox IsEditable="True" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Raven model"
-                  ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
-                  Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
-                  ToolTip="A full model id. Pick one or type another." />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Voice engine" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice engine"
-                  ItemsSource="{Binding EngineChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Engine"
-                  SelectedValue="{Binding RavenVoiceEngine}"
-                  ToolTip="Kokoro is about 450 MB and runs on the CPU; Qwen3-TTS is about 5 GB and needs an NVIDIA graphics card. Another engine is installed the next time Raven speaks, or now from Voice setup." />
-        <voice:ModelLampView DataContext="{Binding Voice.Speech}" Margin="12,0,0,0" AutomationProperties.ItemType="Raven's voice" />
-        <Button Content="Voice setup…" Command="{Binding OpenVoiceSetupCommand}" Margin="12,0,0,0" HorizontalAlignment="Left"
-                ToolTip="Pick an engine and a voice, hear them, and install the engine now." />
-      </DockPanel>
-      <!-- One Voice box per engine, each with its own list: the one of the engine picked shows. -->
-      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsKokoro, Converter={StaticResource BoolVisible}}">
-        <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
-                  ItemsSource="{Binding KokoroVoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenKokoroVoice}"
-                  ItemTemplate="{StaticResource VoiceChoice}" />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsQwen, Converter={StaticResource BoolVisible}}">
-        <TextBlock Text="Voice" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice"
-                  ItemsSource="{Binding QwenVoiceChoices, Mode=OneTime}" SelectedValuePath="Id" SelectedValue="{Binding RavenQwenVoice}"
-                  ItemTemplate="{StaticResource VoiceChoice}" />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0" Visibility="{Binding IsQwen, Converter={StaticResource BoolVisible}}">
-        <TextBlock Text="Voice model" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Raven voice model"
-                  ItemsSource="{Binding VoiceModelChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Model"
-                  SelectedValue="{Binding RavenVoiceModel}"
-                  ToolTip="Qwen3-TTS's model. The 1.7B one is downloaded the first time Raven speaks with it (3.5 GB)." />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Speech to text" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="360" HorizontalAlignment="Left" AutomationProperties.Name="Speech-to-text model"
-                  ItemsSource="{Binding WhisperChoices, Mode=OneTime}" DisplayMemberPath="Label" SelectedValuePath="Model"
-                  SelectedValue="{Binding RavenWhisperModel}"
-                  ToolTip="The Whisper model that writes down what you say. The English-only ones are smaller and faster; Large v3 Turbo also hears German. A model not on this PC is downloaded with your next dictation, or now." />
-        <voice:ModelLampView DataContext="{Binding Voice.Listening}" Margin="12,0,0,0" AutomationProperties.ItemType="Speech to text" />
-        <Button Content="Download" Command="{Binding DownloadWhisperCommand}" Margin="12,0,0,0" HorizontalAlignment="Left"
-                Visibility="{Binding WhisperMissing, Converter={StaticResource BoolVisible}}" />
-      </DockPanel>
-      <CheckBox Margin="140,10,0,0" IsChecked="{Binding RavenSpeakNews}" AutomationProperties.Name="Speak chat news"
-                Content="Speak chat news"
-                ToolTip="When chats finish, fail or need you, Raven tells you in one remark once nobody is talking. Off, the news is only written in Raven's log." />
-      <CheckBox Margin="140,6,0,0" IsChecked="{Binding RavenBargeIn}" AutomationProperties.Name="Stop Raven when I talk over it"
-                Content="Stop Raven when I talk over it"
-                ToolTip="In Open mic, talking while Raven speaks stops it. Turn this off if Raven hears its own voice through your speakers: Open mic then ignores what it hears while Raven speaks." />
-
-      <TextBlock Text="Chats Raven starts" FontSize="13" FontWeight="SemiBold" Margin="0,16,0,4" />
-      <TextBlock TextWrapping="Wrap" Opacity="0.8"
-                 Text="They run in auto mode with this model and effort, unless you name others for one chat. &quot;From now on Opus&quot; changes them by voice; default leaves it to Claude Code." />
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Model" VerticalAlignment="Center" Width="140" />
-        <ComboBox IsEditable="True" Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Chat model"
-                  ItemsSource="{Binding ChatModelChoices}"
-                  Text="{Binding RavenChatModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
-                  ToolTip="An alias from the table below, a full model id, or default." />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Effort" VerticalAlignment="Center" Width="140" />
-        <ComboBox Width="260" HorizontalAlignment="Left" AutomationProperties.Name="Chat effort"
-                  ItemsSource="{Binding EffortChoices, Mode=OneTime}" SelectedItem="{Binding RavenChatEffort}" />
-      </DockPanel>
-      <DockPanel Margin="0,8,0,0">
-        <TextBlock Text="Model names" VerticalAlignment="Top" Width="140" Margin="0,4,0,0" />
-        <TextBox Text="{Binding RavenModelAliases, UpdateSourceTrigger=LostFocus}" AcceptsReturn="True" MinLines="4" Width="360"
-                 HorizontalAlignment="Left" FontFamily="Cascadia Mono, Consolas" AutomationProperties.Name="Model names"
-                 ToolTip="One per line: the name you say = the full model id it starts. Edit a line when a new model comes out." />
-      </DockPanel>
-
-      <TextBlock Text="Telemetry" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
-      <DockPanel>
-        <TextBlock Text="5-hour soft budget (tokens)" VerticalAlignment="Center" Width="200" />
-        <TextBox Text="{Binding FiveHourBudgetTokens, UpdateSourceTrigger=LostFocus, TargetNullValue=''}" Width="160" HorizontalAlignment="Left"
-                 ToolTip="Leave empty for no budget. CodeSwitchX cannot read your real plan limit; this is a reminder line, not a hard limit." />
-      </DockPanel>
-
-      <TextBlock Text="Privacy" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
-      <CheckBox Content="Store raw hook payloads in the database (contains prompts and file paths)" IsChecked="{Binding StorePayloads}" />
-
-      <TextBlock Text="Data" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,6" />
-      <TextBlock><Run Text="Folder: " /><Run Text="{Binding DataFolder, Mode=OneWay}" /></TextBlock>
-      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-        <Button Content="Open data folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" />
-        <Button Content="Open logs" Command="{Binding OpenLogsFolderCommand}" />
-      </StackPanel>
-    </StackPanel>
-  </ScrollViewer>
+    </ScrollViewer>
+  </Grid>
 </UserControl>

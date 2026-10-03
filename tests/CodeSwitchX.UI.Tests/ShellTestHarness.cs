@@ -50,6 +50,7 @@ public sealed class ShellTestHarness
     internal Voice.FakeEngineVoice Qwen { get; } = new(SpeechEngine.Qwen);
     public SpeechEngines Engines { get; }
     public VoiceStatusViewModel VoiceStatus { get; }
+    internal Settings.FakeVoiceSamples Samples { get; } = new();
     public WorkspaceResolver Resolver { get; } = new();
     public SessionEngine Engine { get; }
     public HostManager Host { get; }
@@ -83,7 +84,7 @@ public sealed class ShellTestHarness
         Engines = new SpeechEngines(Speech, [Kokoro, Qwen]);
         VoiceStatus = new VoiceStatusViewModel(Engines, Speech, Dictation, dispatcher);
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
-            Speech, Engines, Models, VoiceStatus, paths, claude, NullLogger<SettingsViewModel>.Instance);
+            Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,

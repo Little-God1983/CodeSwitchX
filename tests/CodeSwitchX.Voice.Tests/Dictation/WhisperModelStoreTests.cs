@@ -125,6 +125,22 @@ public sealed class WhisperModelStoreTests : IDisposable
         new FileInfo(store.ModelPath).Length.ShouldBe(1000);
     }
 
+    [Fact]
+    public async Task A_model_not_in_use_downloads_to_its_own_file_and_tells_of_it()
+    {
+        var store = Downloading(WhisperModel.LargeV3Turbo, new ShortSeekableStream(length: 1000, delivers: 1000));
+        var told = 0;
+        store.DownloadChanged += (_, _) => told++;
+        store.IsPresentOf(WhisperModel.TinyEnglish).ShouldBeFalse();
+
+        await store.DownloadAsync(WhisperModel.TinyEnglish, null, CancellationToken.None);
+
+        store.IsPresentOf(WhisperModel.TinyEnglish).ShouldBeTrue();
+        (store.Model, store.IsPresent).ShouldBe((WhisperModel.LargeV3Turbo, false), "the model in use stays the one picked");
+        told.ShouldBeGreaterThanOrEqualTo(2, "as it starts and as it ends");
+        store.Downloads.ShouldBeEmpty();
+    }
+
     private WhisperModelStore Downloading(WhisperModel model, Stream source) =>
         new(Options.Create(new DictationOptions { ModelFolder = _folder, Model = model }))
         {
