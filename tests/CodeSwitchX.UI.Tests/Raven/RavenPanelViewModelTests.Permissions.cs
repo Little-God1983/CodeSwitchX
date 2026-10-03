@@ -95,7 +95,7 @@ public sealed partial class RavenPanelViewModelTests
         var cards = PermissionCards(vm);
         cards.Count.ShouldBe(2);
         vm.OpenQuestions.ShouldBe(2);
-        cards[1].Wants.ShouldBe("'s Explore sub-agent wants to run a command");
+        (cards[1].Wants, cards[1].WantsLine).ShouldBe(("'s Explore sub-agent wants to run a command", "Its Explore sub-agent wants to run a command"));
 
         vm.DenyCommand.Execute(cards[1]);
 

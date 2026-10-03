@@ -377,10 +377,10 @@
         <StackPanel DataContext="{Binding Ask}">
           <StackPanel Orientation="Horizontal">
             <TextBlock FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#F59E0B" Text="&#xE83D;" VerticalAlignment="Center" Margin="0,1,7,0" />
-            <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250">
-              <Run Text="{Binding Chat, Mode=OneWay}" /><Run Text="{Binding Wants, Mode=OneWay}" />
-            </TextBlock>
+            <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250"
+                       Text="{Binding Chat}" />
           </StackPanel>
+          <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding WantsLine}" Margin="0,6,0,0" />
           <Border Background="#111827" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,6,0,0">
             <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#E5E7EB" TextWrapping="Wrap"
                        Text="{Binding Permission.Subject, Mode=OneWay}" AutomationProperties.Name="{Binding Permission.Subject, Mode=OneWay}" />
