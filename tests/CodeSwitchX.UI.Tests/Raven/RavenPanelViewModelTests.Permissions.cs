@@ -196,6 +196,36 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.Count.ShouldBe(1, "the second card was answered before it was read out");
     }
 
+    [Fact]
+    public void A_PowerShell_command_s_quotes_and_escapes_are_read_as_PowerShell_s()
+    {
+        PermissionLine.CommandSaid("Write-Host \"a`\"|b\" | Out-Null", ShellDialect.PowerShell).ShouldBe("Write-Host \"a`\"|b\" piped to Out-Null");
+    }
+
+    [Fact]
+    public async Task A_long_command_s_card_answered_while_news_is_told_rests_the_teller_it_warmed_up()
+    {
+        _teller.Gate = new TaskCompletionSource();
+        _teller.Answer = _ => [new BrainText("Release notes is done.")];
+        _yard.Show("b", "CodeSwitchX", "Release notes");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Explains);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        var (vm, _) = await QuestionsVmAsyncWith(asks, news);
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(RavenPanelViewModel.NewsGrace);
+        await Until(() => _teller.Asked.Count == 1);
+
+        _ = asks.HoldAsync(Permitting(subject: LongCommand), CancellationToken.None);
+        vm.DenyCommand.Execute(PermissionCards(vm).Single());
+        var rests = _teller.Rests;
+        _teller.Gate.SetResult();
+
+        await Until(() => _teller.Rests == rests + 1);
+        _teller.Asked.Count.ShouldBe(1, "the card was answered before it was read out");
+    }
+
     [Theory]
     [InlineData("npm ci && npm test", "npm ci, then npm test")]
     [InlineData("cd src; make || echo failed", "cd src, then make, or else echo failed")]
@@ -203,6 +233,9 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("git commit -m \"fix; tidy\"", "git commit -m \"fix; tidy\"")]
     [InlineData("grep -E 'foo|bar' log.txt | wc -l", "grep -E 'foo|bar' log.txt piped to wc -l")]
     [InlineData("echo it's done; ls", "echo it's done, then ls")]
+    [InlineData("echo it's done; echo that's it", "echo it's done, then echo that's it")]
+    [InlineData("echo \"a \\\"x|y\\\" b\" | wc", "echo \"a \\\"x|y\\\" b\" piped to wc")]
+    [InlineData("find . -exec rm {} \\; | wc", "find . -exec rm {} \\; piped to wc")]
     public void A_command_s_separators_are_said_as_words_but_not_inside_quotes(string command, string said)
     {
         PermissionLine.CommandSaid(command).ShouldBe(said);
@@ -266,6 +299,9 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("a script that `builds` the **installer**\n\nand tests it", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer and tests it.")]
     [InlineData("run a script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
     [InlineData("The chat wants to run the build. Then it tests v1.2 too.", "CodeSwitchX, chat \"Fix\" wants to run the build.")]
+    [InlineData("A script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
+    [InlineData("3 scripts that build the installer", "CodeSwitchX, chat \"Fix\" wants to run 3 scripts that build the installer.")]
+    [InlineData("Sure.", null)]
     [InlineData("This command cleans the build output and re-runs the tests. It is safe.",
         "CodeSwitchX, chat \"Fix\" wants to run a long command. This command cleans the build output and re-runs the tests.")]
     public void The_teller_s_words_are_said_after_who_asks_as_a_few_plain_words_or_not_at_all(string words, string? said)

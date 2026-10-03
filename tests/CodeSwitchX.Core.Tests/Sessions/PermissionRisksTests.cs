@@ -83,6 +83,105 @@ public class PermissionRisksTests
         PermissionRisks.OfCommand(command, Folder, dialect: ShellDialect.PowerShell).ShouldBe([PermissionRisk.DeletesFiles]);
     }
 
+    [Theory]
+    [InlineData("powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item -Recurse src\"")]
+    [InlineData("powershell -ep Bypass -WindowStyle Hidden \"Remove-Item x\"")]
+    [InlineData("pwsh -NoLogo -ExecutionPolicy RemoteSigned -c \"Remove-Item x\"")]
+    public void Windows_PowerShell_s_options_and_their_values_are_no_command(string command)
+    {
+        Of(command).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Fact]
+    public void A_script_run_with_File_is_not_read_as_a_command()
+    {
+        Of("powershell -ExecutionPolicy Bypass -File build.ps1 -Clean").ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("bash <<'EOF'\nrm -rf /srv/app\ngit push --force\nEOF", new[] { PermissionRisk.DeletesFiles, PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("sudo bash <<EOF\nrm -rf /srv/app\nEOF", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("ssh host <<EOF\nrm -rf /srv/app\nEOF", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo \"git reset --hard\" | bash", new[] { PermissionRisk.DiscardsChanges })]
+    [InlineData("printf 'rm -rf x' | sh -s", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("git commit -m \"Read <<EOF blocks right\"\ngit push --force", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("x=$((1<<SHIFT))\nrm -rf build", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("cat <<<'here string'\nrm x", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo rm -rf x | grep rm", new PermissionRisk[0])]
+    [InlineData("echo 'rm -rf x' | bash script.sh", new PermissionRisk[0])]
+    public void What_a_shell_is_fed_is_read_as_commands_and_a_lone_here_document_start_hides_nothing(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Fact]
+    public void A_PowerShell_here_string_piped_to_iex_is_read()
+    {
+        PermissionRisks.OfCommand("@'\nRemove-Item -Recurse x\n'@ | iex", Folder, dialect: ShellDialect.PowerShell).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Fact]
+    public void An_encoded_command_given_with_ec_is_read()
+    {
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes("git push --force"));
+
+        Of($"pwsh -NoProfile -ec {encoded}").ShouldBe([PermissionRisk.Pushes, PermissionRisk.RewritesHistory]);
+        Of($"powershell -e {encoded}").ShouldBe([PermissionRisk.Pushes, PermissionRisk.RewritesHistory]);
+    }
+
+    [Theory]
+    [InlineData("git checkout src/App.cs", true)]
+    [InlineData("git checkout HEAD~1 src/App.cs", true)]
+    [InlineData("git checkout README.md", true)]
+    [InlineData("git checkout main", false)]
+    [InlineData("git checkout feature/x", false)]
+    [InlineData("git checkout -b feature/x origin/feature/x", false)]
+    [InlineData("git checkout --track origin/x", false)]
+    [InlineData("git checkout v1.2", false)]
+    public void A_checkout_of_paths_throws_away_their_changes(string command, bool discards)
+    {
+        Of(command).ShouldBe(discards ? [PermissionRisk.DiscardsChanges] : []);
+    }
+
+    [Fact]
+    public void A_checkout_of_a_folder_that_is_there_throws_away_its_changes()
+    {
+        var folder = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(folder, "docs"));
+
+            PermissionRisks.OfCommand("git checkout docs", folder).ShouldBe([PermissionRisk.DiscardsChanges]);
+            PermissionRisks.OfCommand("git checkout main", folder).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("echo x > ${HOME}/../other/out.txt", true)]
+    [InlineData("cp build.zip ${TEMP}", true)]
+    [InlineData("cd ${NO_SUCH_VARIABLE_107} && echo x > f.txt", false)]
+    [InlineData("echo x > ${NO_SUCH_VARIABLE_107}/f.txt", false)]
+    public void A_braced_variable_is_one_word(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Theory]
+    [InlineData("(cd /tmp && tar xzf a.tgz) && echo done > build.log", false)]
+    [InlineData("bash -c \"cd /tmp && make\"; echo x > out.log", false)]
+    [InlineData("pushd ../lib && make && popd && echo x > log.txt", false)]
+    [InlineData(@"Push-Location C:\Temp; Pop-Location; Set-Content log.txt x", false)]
+    [InlineData(@"pushd C:\Temp && echo x > log.txt", true)]
+    [InlineData("echo $(cd /tmp) > log.txt", false)]
+    public void A_cd_in_a_subshell_or_until_popd_moves_only_that_far(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
     [Fact]
     public void A_PowerShell_path_ending_in_a_backslash_hides_no_command_after_it()
     {

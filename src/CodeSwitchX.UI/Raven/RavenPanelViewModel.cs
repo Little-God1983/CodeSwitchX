@@ -2084,9 +2084,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            if (!asked)
+            // Warmed up for news that came to nothing, or by a long command's card that came while the news was told.
+            if (!asked || _tellerWarm)
             {
-                RestTellerIfIdle(); // warmed up for news that came to nothing
+                RestTellerIfIdle();
             }
 
             spoken?.Complete();

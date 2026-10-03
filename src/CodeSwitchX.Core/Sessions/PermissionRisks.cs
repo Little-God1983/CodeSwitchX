@@ -75,6 +75,22 @@ public static class PermissionRisks
 
     private static readonly HashSet<string> PosixShells = new(StringComparer.OrdinalIgnoreCase) { "bash", "sh", "zsh", "dash", "ksh" };
 
+    /// <summary>pwsh's and Windows PowerShell's options that take a value, by name and alias.</summary>
+    private static readonly (string Name, string[] Aliases)[] PowerShellValued =
+    [
+        ("-executionpolicy", ["-ep", "-ex"]),
+        ("-windowstyle", ["-w"]),
+        ("-workingdirectory", ["-wd"]),
+        ("-configurationname", ["-config"]),
+        ("-configurationfile", []),
+        ("-inputformat", ["-inp", "-if"]),
+        ("-outputformat", ["-o", "-of"]),
+        ("-psconsolefile", []),
+        ("-version", ["-v"]),
+        ("-settingsfile", ["-settings"]),
+        ("-custompipename", []),
+    ];
+
     /// <summary>PowerShell's writers, and <c>tee</c>: each writes to its path.</summary>
     private static readonly HashSet<string> Writers = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -87,7 +103,7 @@ public static class PermissionRisks
         "cp", "mv", "copy", "move", "copy-item", "move-item", "cpi", "mi",
     };
 
-    private static readonly HashSet<string> Movers = new(StringComparer.OrdinalIgnoreCase) { "cd", "chdir", "pushd", "set-location", "sl" };
+    private static readonly HashSet<string> Movers = new(StringComparer.OrdinalIgnoreCase) { "cd", "chdir", "set-location", "sl" };
 
     /// <summary>Where a redirect writes to no file.</summary>
     private static readonly HashSet<string> Nowhere = new(StringComparer.OrdinalIgnoreCase)
@@ -95,8 +111,11 @@ public static class PermissionRisks
         "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "nul", "nul:", "$null", "con",
     };
 
+    /// <summary>A file's extension at the end of a word: ".cs", ".json"; not "v1.2".</summary>
+    private static readonly Regex FileExtension = new(@"\.[A-Za-z][A-Za-z0-9]{0,5}$", RegexOptions.CultureInvariant);
+
     /// <summary>A here-document's start: <c>&lt;&lt;EOF</c>, <c>&lt;&lt;-'END'</c>; not a here-string (<c>&lt;&lt;&lt;</c>).</summary>
-    private static readonly Regex HereDocument = new(@"(?<!<)<<(?!<)(?<dash>-)?\s*(?<quote>['""]?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>", RegexOptions.CultureInvariant);
+    private static readonly Regex HereDocument = new(@"\G<<(?!<)(?<dash>-)?\s*(?<quote>['""]?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>", RegexOptions.CultureInvariant);
 
     /// <summary>What is risky in a shell command, in the enum's order.</summary>
     /// <param name="folder">The chat's project folder; null when it is not known, and then nothing is named as outside it.</param>
@@ -194,8 +213,11 @@ public static class PermissionRisks
         }
     }
 
+    /// <summary>The path with its home and variables put in, a Git Bash path as Windows has it; null where a variable is not set.</summary>
+    private static string? Expanded(string path) => Variables(path) is { } expanded ? GitBash(expanded) : null;
+
     /// <summary>The path with its home and variables put in; null where one of them is not set.</summary>
-    private static string? Expanded(string path)
+    private static string? Variables(string path)
     {
         if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal))
         {
@@ -215,6 +237,7 @@ public static class PermissionRisks
             var start = braced ? 2 : 1;
             var end = braced ? path.IndexOf('}', start) : path.IndexOfAny(['/', '\\'], start);
             var name = end < 0 ? path[start..] : path[start..end];
+            name = braced && name.StartsWith("env:", StringComparison.OrdinalIgnoreCase) ? name[4..] : name; // PowerShell's ${env:TEMP}
             var rest = end < 0 ? "" : path[(braced ? end + 1 : end)..];
             var value = name == "HOME" ? Environment.GetEnvironmentVariable("HOME") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
                 : Environment.GetEnvironmentVariable(name);
@@ -227,14 +250,14 @@ public static class PermissionRisks
             return expanded.Contains('%') ? null : expanded;
         }
 
-        // Git Bash: /c/Users/… is C:\Users\…
-        if (OperatingSystem.IsWindows() && path.Length >= 3 && path[0] == '/' && char.IsAsciiLetter(path[1]) && path[2] == '/')
-        {
-            return $"{char.ToUpperInvariant(path[1])}:\\{path[3..]}";
-        }
-
         return path;
     }
+
+    /// <summary>Git Bash's /c/Users/… is C:\Users\…; on Windows only.</summary>
+    private static string GitBash(string path) =>
+        OperatingSystem.IsWindows() && path.Length >= 3 && path[0] == '/' && char.IsAsciiLetter(path[1]) && path[2] == '/'
+            ? $"{char.ToUpperInvariant(path[1])}:\\{path[3..]}"
+            : path;
 
     /// <summary>A command read part by part, with where it is (a <c>cd</c> moves it) and the risks found so far.</summary>
     private sealed class Scanner(string? folder, string? here)
@@ -243,6 +266,9 @@ public static class PermissionRisks
 
         /// <summary>Where the command is now; null after a <c>cd</c> to where it cannot be told.</summary>
         private string? _here = here;
+
+        /// <summary>Where each <c>pushd</c> was, for its <c>popd</c>.</summary>
+        private readonly Stack<string?> _pushed = new();
 
         public void WritesTo(string path)
         {
@@ -263,6 +289,8 @@ public static class PermissionRisks
 
             var (tokens, inner) = Tokens(dialect == ShellDialect.Posix ? WithoutHereDocuments(command) : command, dialect);
             var part = new List<string>();
+            List<string>? piped = null; // the part before a "|": what it writes, the next part may run
+            var subshells = new Stack<string?>();
             for (var i = 0; i < tokens.Count; i++)
             {
                 var token = tokens[i];
@@ -278,23 +306,55 @@ public static class PermissionRisks
 
                 if (token.Kind == TokenKind.Separator)
                 {
-                    Simple(part, dialect, depth);
+                    Simple(part, dialect, depth, piped);
+                    piped = token.Text == "|" ? [.. part] : null;
                     part.Clear();
+                    // A cd in ( … ) or $( … ) is the subshell's own; in PowerShell and cmd brackets only group.
+                    if (dialect == ShellDialect.Posix && token.Text == "(")
+                    {
+                        subshells.Push(_here);
+                    }
+                    else if (dialect == ShellDialect.Posix && token.Text == ")" && subshells.Count > 0)
+                    {
+                        _here = subshells.Pop();
+                    }
+
                     continue;
                 }
 
                 part.Add(token.Text);
             }
 
-            Simple(part, dialect, depth);
+            Simple(part, dialect, depth, piped);
             foreach (var run in inner)
             {
                 Command(run, dialect, depth + 1); // what $( ) or backticks run inside a quoted word
             }
         }
 
-        /// <summary>One simple command: its name and its words.</summary>
-        private void Simple(List<string> words, ShellDialect dialect, int depth)
+        /// <summary>
+        /// One simple command: its name and its words. <paramref name="piped"/> is the part whose output it reads, run as
+        /// commands by a shell that reads them (<c>echo "git reset --hard" | bash</c>, <c>@' … '@ | iex</c>).
+        /// </summary>
+        private void Simple(List<string> words, ShellDialect dialect, int depth, List<string>? piped = null)
+        {
+            if (Named(words) is not { } named)
+            {
+                return;
+            }
+
+            var (name, args) = named;
+
+            if (piped is { Count: > 0 } && RunsItsInput(name, args) is { } runs && Written(piped) is { } written)
+            {
+                Child(written, runs, depth);
+            }
+
+            Simple(name, args, dialect, depth);
+        }
+
+        /// <summary>The command's name and its words, past assignments, runners and their options; null when there is none.</summary>
+        private static (string Name, List<string> Args)? Named(List<string> words)
         {
             var at = 0;
             // PowerShell's "$out = git push": the command is what is assigned.
@@ -340,13 +400,51 @@ public static class PermissionRisks
                 }
             }
 
-            if (at >= words.Count)
+            return at >= words.Count ? null : (Name(words[at]), words.Skip(at + 1).ToList());
+        }
+
+        /// <summary>The dialect a command reads its input in when it runs it as commands; null when it does not.</summary>
+        private static ShellDialect? RunsItsInput(string name, List<string> args)
+        {
+            if (PosixShells.Contains(name))
             {
-                return;
+                // bash, sh -s, bash -x: commands from what comes in; bash script.sh or bash -c "…" runs something else.
+                var runsOther = args.Any(IsRunFlag) || (args.Any(a => !a.StartsWith('-')) && !args.Contains("-s"));
+                return runsOther ? null : ShellDialect.Posix;
             }
 
-            var name = Name(words[at]);
-            var args = words.Skip(at + 1).ToList();
+            return (name.Equals("iex", StringComparison.OrdinalIgnoreCase) || name.Equals("invoke-expression", StringComparison.OrdinalIgnoreCase))
+                && args.Count == 0
+                ? ShellDialect.PowerShell
+                : null;
+        }
+
+        /// <summary>What a part writes out, to be read as commands: echo's or Write-Output's words, or a lone string.</summary>
+        private static string? Written(List<string> part)
+        {
+            if (part.Count == 1)
+            {
+                return part[0];
+            }
+
+            return Named(part) is { } named && named.Name.ToLowerInvariant() is "echo" or "printf" or "write-output" or "write" or "write-host"
+                ? string.Join(' ', named.Args.Where(a => !a.StartsWith('-')))
+                : null;
+        }
+
+        /// <summary>bash's -c, and -lc, -ec, -xc: the next word is what it runs.</summary>
+        private static bool IsRunFlag(string arg) => arg.Length > 1 && arg[0] == '-' && arg[1] != '-' && arg.Contains('c');
+
+        /// <summary>A command another shell runs: a cd in it is that shell's own.</summary>
+        private void Child(string command, ShellDialect dialect, int depth)
+        {
+            var here = _here;
+            Command(command, dialect, depth + 1);
+            _here = here;
+        }
+
+        private void Simple(string name, List<string> args, ShellDialect dialect, int depth)
+        {
             if (Deleters.Contains(name))
             {
                 Risks.Add(PermissionRisk.DeletesFiles);
@@ -354,10 +452,10 @@ public static class PermissionRisks
             else if (PosixShells.Contains(name))
             {
                 // bash -c "…", bash -lc "…": what it runs is a command of its own.
-                var run = args.FindIndex(a => a.Length > 1 && a[0] == '-' && a[1] != '-' && a.Contains('c'));
+                var run = args.FindIndex(IsRunFlag);
                 if (run >= 0 && run + 1 < args.Count)
                 {
-                    Command(args[run + 1], ShellDialect.Posix, depth + 1);
+                    Child(args[run + 1], ShellDialect.Posix, depth);
                 }
             }
             else if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
@@ -369,7 +467,7 @@ public static class PermissionRisks
                 var run = args.FindIndex(a => a.Equals("/c", StringComparison.OrdinalIgnoreCase) || a.Equals("/k", StringComparison.OrdinalIgnoreCase));
                 if (run >= 0 && run + 1 < args.Count)
                 {
-                    Command(string.Join(' ', args.Skip(run + 1)), ShellDialect.Cmd, depth + 1);
+                    Child(string.Join(' ', args.Skip(run + 1)), ShellDialect.Cmd, depth);
                 }
             }
             else if (name.Equals("eval", StringComparison.OrdinalIgnoreCase))
@@ -392,7 +490,7 @@ public static class PermissionRisks
                 }
 
                 var exec = args.FindIndex(a => a is "-exec" or "-execdir" or "-ok" or "-okdir");
-                if (exec >= 0)
+                if (exec >= 0 && depth < 4)
                 {
                     Simple(args.Skip(exec + 1).ToList(), dialect, depth + 1);
                 }
@@ -416,26 +514,37 @@ public static class PermissionRisks
             {
                 Move(args, dialect);
             }
+            else if (name.Equals("pushd", StringComparison.OrdinalIgnoreCase) || name.Equals("push-location", StringComparison.OrdinalIgnoreCase))
+            {
+                _pushed.Push(_here);
+                Move(args, dialect);
+            }
+            else if (name.Equals("popd", StringComparison.OrdinalIgnoreCase) || name.Equals("pop-location", StringComparison.OrdinalIgnoreCase))
+            {
+                _here = _pushed.Count > 0 ? _pushed.Pop() : null;
+            }
         }
 
-        /// <summary>pwsh -Command …, -EncodedCommand …; Windows PowerShell also runs its first plain word as a command.</summary>
+        /// <summary>
+        /// pwsh -Command …, -EncodedCommand … (-e, -ec); Windows PowerShell also runs its first plain word as a command.
+        /// An option's value (-ExecutionPolicy Bypass) is no command, and -File runs a script, not a command.
+        /// </summary>
         private void PowerShell(string name, List<string> args, int depth)
         {
             for (var i = 0; i < args.Count; i++)
             {
                 var arg = args[i];
-                if (arg.Length >= 2 && arg[0] == '-' && "-command".StartsWith(arg, StringComparison.OrdinalIgnoreCase)
-                    || arg.Equals("-CommandWithArgs", StringComparison.OrdinalIgnoreCase) || arg.Equals("-cwa", StringComparison.OrdinalIgnoreCase))
+                if (IsPowerShellOption(arg, "-command", "-c") || IsPowerShellOption(arg, "-commandwithargs", "-cwa"))
                 {
-                    Command(string.Join(' ', args.Skip(i + 1)), ShellDialect.PowerShell, depth + 1);
+                    Child(string.Join(' ', args.Skip(i + 1)), ShellDialect.PowerShell, depth);
                     return;
                 }
 
-                if (arg.Length >= 2 && arg[0] == '-' && "-encodedcommand".StartsWith(arg, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Count)
+                if (IsPowerShellOption(arg, "-encodedcommand", "-e", "-ec"))
                 {
                     try
                     {
-                        Command(Encoding.Unicode.GetString(Convert.FromBase64String(args[i + 1])), ShellDialect.PowerShell, depth + 1);
+                        Child(i + 1 < args.Count ? Encoding.Unicode.GetString(Convert.FromBase64String(args[i + 1])) : "", ShellDialect.PowerShell, depth);
                     }
                     catch (FormatException)
                     {
@@ -445,9 +554,20 @@ public static class PermissionRisks
                     return;
                 }
 
+                if (IsPowerShellOption(arg, "-file", "-f"))
+                {
+                    return;
+                }
+
+                if (PowerShellValued.Any(o => IsPowerShellOption(arg, o.Name, o.Aliases)))
+                {
+                    i++; // its value
+                    continue;
+                }
+
                 if (!arg.StartsWith('-') && name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
                 {
-                    Command(string.Join(' ', args.Skip(i)), ShellDialect.PowerShell, depth + 1);
+                    Child(string.Join(' ', args.Skip(i)), ShellDialect.PowerShell, depth);
                     return;
                 }
             }
@@ -469,6 +589,22 @@ public static class PermissionRisks
             }
 
             _here = to == "-" ? null : Full(to, _here);
+        }
+
+        /// <summary>
+        /// "git checkout src/App.cs", "git checkout HEAD~1 src/App.cs": a checkout of paths, which throws away their changes.
+        /// One word is a path when it has a file's extension or is a file or folder here; a branch is made with -b, -B or --orphan.
+        /// </summary>
+        private bool ChecksOutPaths(List<string> rest)
+        {
+            if (rest.Any(a => a is "-b" or "-B" or "--orphan"))
+            {
+                return false;
+            }
+
+            var plain = rest.Where(a => !a.StartsWith('-')).ToList();
+            return plain.Count >= 2 || (plain.Count == 1 && (FileExtension.IsMatch(plain[0])
+                || (Full(plain[0], _here) is { } full && (File.Exists(full) || Directory.Exists(full)))));
         }
 
         private void Git(List<string> args)
@@ -502,7 +638,7 @@ public static class PermissionRisks
                 case "reset" when Has("--hard"):
                 case "switch" when Has("--force", "--discard-changes") || HasShort('f'):
                 // checkout with paths: "git checkout -- src/App.cs", "git checkout .", "git checkout HEAD -- ."
-                case "checkout" when Has("--force", "--discard-changes", "--", ".", "--patch") || HasShort('f') || HasShort('p'):
+                case "checkout" when Has("--force", "--discard-changes", "--", ".", "--patch") || HasShort('f') || HasShort('p') || ChecksOutPaths(rest):
                 case "restore" when !Has("--staged") || Has("--worktree"):
                 case "stash" when rest.FirstOrDefault() is "drop" or "clear":
                     Risks.Add(PermissionRisk.DiscardsChanges);
@@ -519,7 +655,11 @@ public static class PermissionRisks
         }
     }
 
-    /// <summary>The command with its here-documents' bodies taken out: they are text, not commands.</summary>
+    /// <summary>
+    /// The command with its here-documents' bodies taken out where they are text (<c>cat &gt; notes.md &lt;&lt;EOF</c>); a
+    /// body fed to a shell (<c>bash &lt;&lt;EOF</c>, <c>ssh host &lt;&lt;EOF</c>) is kept, to be read as commands. A
+    /// <c>&lt;&lt;</c> inside quotes or <c>$(( ))</c> starts none.
+    /// </summary>
     private static string WithoutHereDocuments(string command)
     {
         if (!command.Contains("<<", StringComparison.Ordinal))
@@ -528,29 +668,90 @@ public static class PermissionRisks
         }
 
         var kept = new List<string>();
-        var ends = new Queue<(string Word, bool Tabs)>();
+        var ends = new Queue<(string Word, bool Tabs, bool Runs)>();
+        char? quote = null;
         foreach (var line in command.Split('\n'))
         {
             if (ends.Count > 0)
             {
-                var (word, tabs) = ends.Peek();
+                var (word, tabs, runs) = ends.Peek();
                 if ((tabs ? line.TrimStart('\t') : line).TrimEnd('\r') == word)
                 {
                     ends.Dequeue();
+                }
+                else if (runs)
+                {
+                    kept.Add(line);
                 }
 
                 continue;
             }
 
             kept.Add(line);
-            foreach (Match start in HereDocument.Matches(line))
+            foreach (var start in HereDocumentStarts(line, ref quote))
             {
-                ends.Enqueue((start.Groups["word"].Value, start.Groups["dash"].Success));
+                ends.Enqueue(start);
             }
         }
 
         return string.Join('\n', kept);
     }
+
+    /// <summary>The here-documents a line starts, outside quotes (which can span lines) and arithmetic.</summary>
+    private static List<(string Word, bool Tabs, bool Runs)> HereDocumentStarts(string line, ref char? quote)
+    {
+        var starts = new List<(string, bool, bool)>();
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (quote is { } open)
+            {
+                if (open == '"' && c == '\\')
+                {
+                    i++;
+                }
+                else if (c == open)
+                {
+                    quote = null;
+                }
+
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+            }
+            else if (c == '$' && string.CompareOrdinal(line, i, "$((", 0, 3) == 0)
+            {
+                var end = line.IndexOf("))", i + 3, StringComparison.Ordinal);
+                i = end < 0 ? line.Length : end + 1;
+            }
+            else if (c == '<' && (i == 0 || line[i - 1] != '<') && HereDocument.Match(line, i) is { Success: true } start)
+            {
+                starts.Add((start.Groups["word"].Value, start.Groups["dash"].Success, FeedsAShell(line[..i])));
+                i += start.Length - 1;
+            }
+        }
+
+        return starts;
+    }
+
+    /// <summary>The command a here-document is fed to is a shell, here or on another machine: "bash", "sudo bash", "ssh host".</summary>
+    private static bool FeedsAShell(string before)
+    {
+        var command = before[(before.LastIndexOfAny([';', '|', '&', '(']) + 1)..];
+        return command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Any(w => PosixShells.Contains(Name(w)) || Name(w).Equals("ssh", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The PowerShell option <paramref name="name"/> given as <paramref name="arg"/>: one of its aliases, or a start of its
+    /// name at least three characters long (PowerShell takes any start that is not ambiguous).
+    /// </summary>
+    private static bool IsPowerShellOption(string arg, string name, params string[] aliases) =>
+        aliases.Contains(arg, StringComparer.OrdinalIgnoreCase)
+        || (arg.Length >= 3 && arg[0] == '-' && name.StartsWith(arg, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>The paths a writer writes: its -Path, -FilePath or -LiteralPath, or its first word that is no option (every one for tee).</summary>
     private static IEnumerable<string> Paths(List<string> args, bool all)
@@ -707,6 +908,15 @@ public static class PermissionRisks
                 }
             }
 
+            // ${HOME}, ${env:TEMP}: a variable, not a block.
+            if (c == '$' && i + 1 < command.Length && command[i + 1] == '{' && command.IndexOf('}', i + 2) is var brace and > 0)
+            {
+                word.Append(command, i, brace - i + 1);
+                inWord = true;
+                i = brace;
+                continue;
+            }
+
             if (c == '>' && !(inWord && word.Length > 0 && word[^1] is '=' or '-') && !(i + 1 < command.Length && command[i + 1] == '='))
             {
                 if (inWord && word.ToString() is var fd && fd.All(ch => char.IsAsciiDigit(ch) || ch == '*'))
@@ -757,8 +967,8 @@ public static class PermissionRisks
         return (tokens, inner);
     }
 
-    /// <summary>Where the quote that opens at <paramref name="open"/> closes; -1 when it never does.</summary>
-    private static int Closing(string command, int open, ShellDialect dialect)
+    /// <summary>Where the quote that opens at <paramref name="open"/> closes, past the dialect's escapes; -1 when it never does.</summary>
+    public static int Closing(string command, int open, ShellDialect dialect)
     {
         var quote = command[open];
         for (var i = open + 1; i < command.Length; i++)

@@ -71,12 +71,19 @@ internal static class PermissionLine
             text = text[4..];
         }
 
-        if (text.Length == 0 || text.Split(' ').Length > MaxTellerWords)
+        // One word ("Sure", "Okay") says nothing of the command; too many are no few words.
+        if (text.Split(' ') is { Length: < 2 } or { Length: > MaxTellerWords })
         {
             return null;
         }
 
-        var line = char.IsLower(text[0])
+        // Models write "A script that …" even when asked for lower case: it still finishes the sentence.
+        if (text.Split(' ')[0] is "A" or "An" or "The")
+        {
+            text = char.ToLowerInvariant(text[0]) + text[1..];
+        }
+
+        var line = char.IsLower(text[0]) || char.IsDigit(text[0])
             ? $"{card.Asker} wants to run {text}."
             : $"{card.Asker} wants to run a long command. {text}.";
         return line + Afterwards(card.Permission!, onTheCard: true);
@@ -111,7 +118,8 @@ internal static class PermissionLine
         var subject = permission.Subject;
         return permission.ToolName switch
         {
-            "Bash" or "PowerShell" => "run " + CommandSaid(subject),
+            "Bash" => "run " + CommandSaid(subject),
+            "PowerShell" => "run " + CommandSaid(subject, ShellDialect.PowerShell),
             "Edit" or "MultiEdit" => "edit " + FileName(subject),
             "Write" => "write " + FileName(subject),
             "NotebookEdit" => "edit the notebook " + FileName(subject),
@@ -126,30 +134,27 @@ internal static class PermissionLine
 
     /// <summary>
     /// A command as it is said: "npm ci, then npm test" of "npm ci &amp;&amp; npm test"; "||" is "or else", "|" is "piped to".
-    /// Inside quotes nothing is changed: <c>grep -E "a|b"</c> is no pipeline.
+    /// Inside quotes nothing is changed: <c>grep -E "a|b"</c> is no pipeline. Quotes and escapes are read as
+    /// <see cref="PermissionRisks"/> reads them, but an apostrophe in a word ("it's") is no quote: the line is for an ear.
     /// </summary>
-    internal static string CommandSaid(string command)
+    internal static string CommandSaid(string command, ShellDialect dialect = ShellDialect.Posix)
     {
+        var escape = dialect == ShellDialect.PowerShell ? '`' : '\\';
         var said = new StringBuilder();
-        char? quote = null;
         for (var i = 0; i < command.Length; i++)
         {
             var c = command[i];
-            if (quote is { } open)
+            if (c == escape && dialect != ShellDialect.Cmd && i + 1 < command.Length)
             {
-                said.Append(c);
-                if (c == open)
-                {
-                    quote = null;
-                }
-
+                said.Append(c).Append(command[++i]); // "\;" is no separator
                 continue;
             }
 
-            if (c is '"' or '\'' && command.IndexOf(c, i + 1) > 0)
+            var apostrophe = c == '\'' && i > 0 && char.IsLetter(command[i - 1]) && i + 1 < command.Length && char.IsLetter(command[i + 1]);
+            if (c is '"' or '\'' && !apostrophe && PermissionRisks.Closing(command, i, dialect) is var close and > 0)
             {
-                quote = c;
-                said.Append(c);
+                said.Append(command, i, close - i + 1);
+                i = close;
                 continue;
             }
 
