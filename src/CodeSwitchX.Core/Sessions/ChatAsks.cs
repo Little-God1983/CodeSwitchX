@@ -178,6 +178,9 @@ public sealed class ChatAsks : IDisposable
     /// <summary>The allow proposed last and not ended; one at a time, the newest.</summary>
     private ChatAllowProposal? _proposed;
 
+    /// <summary>The proposal that lapsed last, until another is made or its prompt ends: a yes said in time may come after.</summary>
+    private ChatAllowProposal? _lapsed;
+
     /// <summary>
     /// The tool uses begun lately, by their id (their PreToolUse), until they end: a permission prompt names no tool use, and
     /// is matched to its own by the tool and its input. The oldest go past <see cref="BegunKept"/>.
@@ -436,7 +439,8 @@ public sealed class ChatAsks : IDisposable
     /// Raven's brain proposes to allow a held permission prompt, on the user's word. Nothing runs: the prompt is allowed
     /// only by <see cref="Confirm"/>, when the app finds a yes in the user's next words, which no brain tool can give. Any
     /// other words (<see cref="Cancel"/>), none within <see cref="ProposalLifetime"/>, the prompt ending, or another
-    /// proposal end it, and the card stays open for a click.
+    /// proposal end it, and the card stays open for a click. The app, not the brain, reads the prompt back and asks for
+    /// the yes (on <see cref="ProposedAllow"/>), so the yes answers what the app said.
     /// </summary>
     /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
     public ChatAllowProposal Propose(string askId)
@@ -453,6 +457,7 @@ public sealed class ChatAsks : IDisposable
             }
 
             replaced = _proposed;
+            _lapsed = null;
             proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
             _proposalExpiry.Change(ProposalLifetime, Timeout.InfiniteTimeSpan);
         }
@@ -467,39 +472,92 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>
-    /// The user said yes to the proposed allow: the prompt is allowed, and the chat carries on. False when nothing was
-    /// proposed, or the prompt ended meanwhile.
+    /// The proposal words the user finished speaking at <paramref name="said"/> answer: the one standing, if they were said
+    /// after it was proposed; or the one that lapsed last, if they were said within its <see cref="ProposalLifetime"/>
+    /// and only transcribed after it (its prompt still held). Null when they answer none: words said before the proposal
+    /// are about something else.
     /// </summary>
-    public bool Confirm()
+    public ChatAllowProposal? ProposalFor(DateTimeOffset said)
     {
-        if (TakeProposal() is not { } proposal)
+        lock (_lock)
+        {
+            if (_proposed is { } standing)
+            {
+                return said >= standing.At ? standing : null;
+            }
+
+            return _lapsed is { } lapsed && said >= lapsed.At && said - lapsed.At <= ProposalLifetime && _held.ContainsKey(lapsed.Ask.Id)
+                ? lapsed : null;
+        }
+    }
+
+    /// <summary>
+    /// The user said yes to <paramref name="proposal"/> (from <see cref="ProposalFor"/>): the prompt is allowed, and the chat
+    /// carries on. False when it no longer stands, or the prompt ended meanwhile.
+    /// </summary>
+    public bool Confirm(ChatAllowProposal proposal)
+    {
+        if (!Take(proposal, out _))
         {
             return false;
         }
 
+        // A lapsed one too: the yes was said in time, and transcribed after.
         var allowed = Permit(proposal.Ask.Id, allow: true);
         ProposalEnded?.Invoke(proposal, allowed ? ChatProposalEnd.Confirmed : ChatProposalEnd.Closed);
         return allowed;
     }
 
-    /// <summary>The user said something else: the proposed allow is dropped, and nothing runs. False when nothing was proposed.</summary>
-    public bool Cancel()
+    /// <summary>The user said something else to <paramref name="proposal"/>: it is dropped, and nothing runs. False when it no longer stands.</summary>
+    public bool Cancel(ChatAllowProposal proposal)
     {
-        if (TakeProposal() is not { } proposal)
+        if (!Take(proposal, out var standing))
         {
             return false;
         }
 
-        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
+        if (standing)
+        {
+            ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
+        }
+
         return true;
     }
 
-    /// <summary>The proposal, taken so nothing else ends it too; null when none stands.</summary>
-    private ChatAllowProposal? TakeProposal(string? askId = null)
+    /// <summary>Takes <paramref name="proposal"/>, standing or lapsed, so nothing else ends it too; false when it is neither.</summary>
+    private bool Take(ChatAllowProposal proposal, out bool standing)
     {
         lock (_lock)
         {
-            if (_proposed is null || (askId is not null && _proposed.Ask.Id != askId))
+            standing = ReferenceEquals(_proposed, proposal);
+            if (standing)
+            {
+                _proposed = null;
+                _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                return true;
+            }
+
+            if (ReferenceEquals(_lapsed, proposal))
+            {
+                _lapsed = null;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>The proposal for <paramref name="askId"/>, standing or lapsed, taken as its prompt ends; null when there is none.</summary>
+    private ChatAllowProposal? TakeProposal(string askId)
+    {
+        lock (_lock)
+        {
+            if (_lapsed?.Ask.Id == askId)
+            {
+                _lapsed = null;
+            }
+
+            if (_proposed?.Ask.Id != askId)
             {
                 return null;
             }
@@ -516,13 +574,22 @@ public sealed class ChatAsks : IDisposable
         ChatAllowProposal? proposal;
         lock (_lock)
         {
-            if (_proposed is null || _time.GetUtcNow() - _proposed.At < ProposalLifetime)
+            if (_proposed is null)
             {
+                return;
+            }
+
+            // A timer can fire a little early (its tick is about 15 ms), or the clock can move: wait out the rest.
+            var left = ProposalLifetime - (_time.GetUtcNow() - _proposed.At);
+            if (left > TimeSpan.Zero)
+            {
+                _proposalExpiry.Change(left, Timeout.InfiniteTimeSpan);
                 return;
             }
 
             proposal = _proposed;
             _proposed = null;
+            _lapsed = proposal; // a yes said in time and transcribed after this still answers it (ProposalFor)
         }
 
         ProposalEnded?.Invoke(proposal, ChatProposalEnd.Expired);
