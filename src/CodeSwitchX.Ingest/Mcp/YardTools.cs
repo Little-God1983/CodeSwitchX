@@ -46,8 +46,9 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
         + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me. send_to is the name "
         + "SendMessage takes to tell the chat something; a chat without one is not open in a VS Code tab (closed, or run in a "
         + "terminal) and cannot be told anything from here. asks is the question the chat waits on in Raven's panel, with its "
-        + "options: answer_question answers it; or the permission it asks there (\"permission to run a command: …\"), which only "
-        + "the user allows or denies, on its card.")]
+        + "options: answer_question answers it; or the permission it asks there (\"permission to run a command: …\", with its ask "
+        + "id): answer_permission denies it on the user's word, or proposes an allow that only the user's next yes, checked by the "
+        + "app, makes real.")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
@@ -106,10 +107,12 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
 
     /// <summary>
     /// What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there. Two held asks (agents
-    /// asking side by side) read apart from one ask of two questions, whose questions "; " joins.
+    /// asking side by side) read apart from one ask of two questions, whose questions "; " joins. A permission prompt
+    /// carries its ask id, which answer_permission names it by.
     /// </summary>
     private static string? AsksOf(ILookup<string, ChatAsk>? asked, string chatId) =>
-        asked?[chatId].Select(a => a.Describe()).ToList() is { Count: > 0 } said ? string.Join(AlsoAsks, said) : null;
+        asked?[chatId].Select(a => a.Kind == ChatAskKind.Permission ? $"{a.Describe()} (ask id {a.Id})" : a.Describe()).ToList() is { Count: > 0 } said
+            ? string.Join(AlsoAsks, said) : null;
 
     /// <summary>Between two asks of one chat.</summary>
     internal const string AlsoAsks = " | Separately, it also asks: ";

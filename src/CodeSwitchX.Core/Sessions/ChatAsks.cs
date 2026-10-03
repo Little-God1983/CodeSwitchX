@@ -103,6 +103,31 @@ public enum ChatAskOutcome
 public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnlyList<string>? Answers, ChatPermit? Permit = null);
 
 /// <summary>
+/// An allow Raven's brain proposed for a held permission prompt (<see cref="ChatAsks.Propose"/>). Nothing runs on it: the
+/// prompt is allowed only when the app finds a yes in the user's next words (<see cref="ChatAsks.Confirm"/>).
+/// </summary>
+public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At);
+
+/// <summary>How a proposed allow ended.</summary>
+public enum ChatProposalEnd
+{
+    /// <summary>The user said yes: the prompt is allowed.</summary>
+    Confirmed,
+
+    /// <summary>The user said something else: nothing ran, and the card stays open.</summary>
+    Cancelled,
+
+    /// <summary>The user said nothing within <see cref="ChatAsks.ProposalLifetime"/>: nothing ran, and the card stays open.</summary>
+    Expired,
+
+    /// <summary>The prompt ended meanwhile: answered on its card or in VS Code, or its turn ended.</summary>
+    Closed,
+
+    /// <summary>Another prompt's allow was proposed: only the newest proposal stands.</summary>
+    Replaced,
+}
+
+/// <summary>
 /// What chats ask the user, held while the user answers in CodeSwitchX. A chat's hook relay hands the ask over and waits
 /// (<see cref="HoldAsync"/>): the answers given here (<see cref="Answer"/>) go back to Claude Code as the tool's input, and
 /// an ask let go (<see cref="ToVsCode"/>, or after <see cref="Lifetime"/>) leaves the chat's tab to ask it as it always
@@ -120,13 +145,20 @@ public sealed class ChatAsks : IDisposable
     /// <summary>What a chat denied here is told, unless the user said more.</summary>
     public const string DeniedMessage = "The user denied this in the Raven panel.";
 
+    /// <summary>A proposed allow not confirmed within this lapses: nothing runs, and the card stays open for a click.</summary>
+    public static readonly TimeSpan ProposalLifetime = TimeSpan.FromSeconds(30);
+
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
     private readonly IDisposable _subscription;
     private readonly IDisposable _steps;
     private readonly ITimer _sweep;
+    private readonly ITimer _proposalExpiry;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
+
+    /// <summary>The allow proposed last and not ended; one at a time, the newest.</summary>
+    private ChatAllowProposal? _proposed;
 
     /// <summary>
     /// The tool uses begun lately, by their id (their PreToolUse), until they end: a permission prompt names no tool use, and
@@ -167,6 +199,7 @@ public sealed class ChatAsks : IDisposable
         _steps = bus.Subscribe<HookEventReceived>(received => Moves(received.Event));
         // Runs only while a permission prompt is held (Watch); it stops itself once none is.
         _sweep = time.CreateTimer(_ => Sweep(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _proposalExpiry = time.CreateTimer(_ => ExpireProposal(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>Whether CodeSwitchX takes this ask, or leaves it to VS Code at once. Takes none until the app says otherwise.</summary>
@@ -190,6 +223,24 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>A held ask ended, however it did. Raised on the thread that ended it.</summary>
     public event Action<ChatAskClosed>? Closed;
+
+    /// <summary>An allow was proposed (<see cref="Propose"/>): the user's next words decide. Raised on the proposer's thread.</summary>
+    public event Action<ChatAllowProposal>? ProposedAllow;
+
+    /// <summary>A proposed allow ended, however it did. Raised on the thread that ended it.</summary>
+    public event Action<ChatAllowProposal, ChatProposalEnd>? ProposalEnded;
+
+    /// <summary>The allow proposed and still open for the user's yes; null when none is.</summary>
+    public ChatAllowProposal? Proposed
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _proposed;
+            }
+        }
+    }
 
     /// <summary>
     /// Holds the ask until it ends: how it ended, with the answers (one per question in their order) when it was answered
@@ -352,6 +403,102 @@ public sealed class ChatAsks : IDisposable
 
         var said = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
         return Close(askId, ChatAskOutcome.Answered, null, new ChatPermit(allow, allow ? said : said ?? DeniedMessage));
+    }
+
+    /// <summary>
+    /// Raven's brain proposes to allow a held permission prompt, on the user's word. Nothing runs: the prompt is allowed
+    /// only by <see cref="Confirm"/>, when the app finds a yes in the user's next words, which no brain tool can give. Any
+    /// other words (<see cref="Cancel"/>), none within <see cref="ProposalLifetime"/>, the prompt ending, or another
+    /// proposal end it, and the card stays open for a click.
+    /// </summary>
+    /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
+    public ChatAllowProposal Propose(string askId)
+    {
+        ChatAllowProposal proposal;
+        ChatAllowProposal? replaced;
+        lock (_lock)
+        {
+            var ask = _held.GetValueOrDefault(askId)?.Ask
+                ?? throw new ArgumentException("The chat no longer waits for that: it was answered, left to VS Code, or its turn ended.", nameof(askId));
+            if (ask.Kind != ChatAskKind.Permission)
+            {
+                throw new ArgumentException("The chat asks a question, not for permission: it needs answers.", nameof(askId));
+            }
+
+            replaced = _proposed;
+            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
+            _proposalExpiry.Change(ProposalLifetime, Timeout.InfiniteTimeSpan);
+        }
+
+        if (replaced is not null)
+        {
+            ProposalEnded?.Invoke(replaced, ChatProposalEnd.Replaced);
+        }
+
+        ProposedAllow?.Invoke(proposal);
+        return proposal;
+    }
+
+    /// <summary>
+    /// The user said yes to the proposed allow: the prompt is allowed, and the chat carries on. False when nothing was
+    /// proposed, or the prompt ended meanwhile.
+    /// </summary>
+    public bool Confirm()
+    {
+        if (TakeProposal() is not { } proposal)
+        {
+            return false;
+        }
+
+        var allowed = Permit(proposal.Ask.Id, allow: true);
+        ProposalEnded?.Invoke(proposal, allowed ? ChatProposalEnd.Confirmed : ChatProposalEnd.Closed);
+        return allowed;
+    }
+
+    /// <summary>The user said something else: the proposed allow is dropped, and nothing runs. False when nothing was proposed.</summary>
+    public bool Cancel()
+    {
+        if (TakeProposal() is not { } proposal)
+        {
+            return false;
+        }
+
+        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
+        return true;
+    }
+
+    /// <summary>The proposal, taken so nothing else ends it too; null when none stands.</summary>
+    private ChatAllowProposal? TakeProposal(string? askId = null)
+    {
+        lock (_lock)
+        {
+            if (_proposed is null || (askId is not null && _proposed.Ask.Id != askId))
+            {
+                return null;
+            }
+
+            var proposal = _proposed;
+            _proposed = null;
+            _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return proposal;
+        }
+    }
+
+    private void ExpireProposal()
+    {
+        ChatAllowProposal? proposal;
+        lock (_lock)
+        {
+            if (_proposed is null || _time.GetUtcNow() - _proposed.At < ProposalLifetime)
+            {
+                return;
+            }
+
+            proposal = _proposed;
+            _proposed = null;
+        }
+
+        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Expired);
     }
 
     /// <summary>Lets a held ask go to VS Code, which asks it in the chat's tab. False when it is not held any more.</summary>
@@ -640,6 +787,11 @@ public sealed class ChatAsks : IDisposable
         var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
         held.Done.TrySetResult(closed);
         Closed?.Invoke(closed);
+        // An allow proposed for it waits for no yes any more (a Confirm took its proposal before it got here).
+        if (TakeProposal(held.Ask.Id) is { } proposal)
+        {
+            ProposalEnded?.Invoke(proposal, ChatProposalEnd.Closed);
+        }
     }
 
     public void Dispose()
@@ -647,6 +799,7 @@ public sealed class ChatAsks : IDisposable
         _subscription.Dispose();
         _steps.Dispose();
         _sweep.Dispose();
+        _proposalExpiry.Dispose();
     }
 
     private sealed record Held(ChatAsk Ask, TaskCompletionSource<ChatAskClosed> Done);

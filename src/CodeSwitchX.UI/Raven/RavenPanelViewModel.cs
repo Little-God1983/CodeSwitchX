@@ -271,6 +271,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             asks.Opened += ask => _dispatcher.Post(() => OnAsked(ask));
             asks.Closed += closed => _dispatcher.Post(() => OnAskClosed(closed));
+            asks.ProposedAllow += proposal => _dispatcher.Post(() => OnProposed(proposal));
+            asks.ProposalEnded += (proposal, end) => _dispatcher.Post(() => OnProposalEnded(proposal, end));
         }
     }
 
@@ -1488,6 +1490,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </remarks>
     private void Ask(string text, DateTimeOffset ended)
     {
+        // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
+        // goes no further; anything else drops the proposal and is the next question.
+        if (_asks?.Proposed is { } proposal)
+        {
+            if (SpokenYes.IsYes(text))
+            {
+                ConfirmProposal(proposal);
+                return;
+            }
+
+            _asks.Cancel();
+            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
+        }
+
         if (_lastQuestion is { Sent: false, Ended: false } waiting)
         {
             waiting.Merged = true;
@@ -1763,8 +1779,57 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _toldNews.RemoveAll(t => t.Fact == fact);
         OpenQuestions = _askCards.Count;
         card.IsOpen = false;
+        card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
     }
+
+    /// <summary>The brain proposed to allow a prompt: its card says the user's yes decides.</summary>
+    private void OnProposed(ChatAllowProposal proposal)
+    {
+        if (_askCards.TryGetValue(proposal.Ask.Id, out var card))
+        {
+            card.AwaitsYes = true;
+        }
+    }
+
+    /// <summary>
+    /// A proposed allow ended. Nothing said for a yes (<see cref="ConfirmProposal"/> says it), other words (they are the
+    /// next question, and the brain is told) or the prompt ending (its card says how); silence is noted, so the user
+    /// knows nothing ran and the card still takes a click.
+    /// </summary>
+    private void OnProposalEnded(ChatAllowProposal proposal, ChatProposalEnd end)
+    {
+        if (_askCards.TryGetValue(proposal.Ask.Id, out var card))
+        {
+            card.AwaitsYes = false;
+        }
+
+        if (end == ChatProposalEnd.Expired)
+        {
+            AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.");
+        }
+    }
+
+    /// <summary>
+    /// The user said yes to the proposed allow: the app allows the prompt, says so, and tells the brain with the next
+    /// question. The yes goes to no brain. Takes the floor, as any words of the user do.
+    /// </summary>
+    private void ConfirmProposal(ChatAllowProposal proposal)
+    {
+        TakeFloor();
+        var who = WhoAsked(proposal.Ask); // before the confirm closes its card
+        var allowed = _asks!.Confirm();
+        var said = allowed ? "Allowed. The chat carries on." : "The chat no longer waits for that: it was answered elsewhere, or its turn ended.";
+        _toldNews.Add((_time.GetUtcNow(), $"{who}: the user said yes to the allow you proposed, and {(allowed ? "it was allowed" : "it was gone already")}"));
+        AddEntry(RavenLogKind.Raven, said);
+        var spoken = _voice.Begin(silent: _openSpeech);
+        spoken.Add(said);
+        spoken.Complete();
+    }
+
+    /// <summary>The chat an ask is of, as the brain is told it: "ContentAutomatorX, chat "Fix" (chat id a)".</summary>
+    private string WhoAsked(ChatAsk ask) =>
+        $"{(_askCards.TryGetValue(ask.Id, out var card) ? card.Said : "A chat")} (chat id {ask.SessionId})";
 
     /// <summary>How a card says its ask ended: "Answered: Banana", "Allowed", "Left to VS Code: …".</summary>
     internal static string OutcomeOf(ChatAskClosed closed) => (closed.Ask.Kind, closed.Outcome) switch
@@ -2025,8 +2090,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The question as the brain that acts is told it: the chat, its id, each question and its options.</summary>
     internal static string QuestionFact(ChatAskCard card) => card.Permission is not null
-        ? $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. Only the user "
-            + "allows or denies it, on its card or in VS Code; no tool of yours can"
+        ? $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()} (ask id {card.Ask.Id}). "
+            + "answer_permission denies it on the user's word, or proposes an allow that only the user's next yes, checked by the app, makes real"
         : $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. answer_question answers it";
 
     /// <summary>

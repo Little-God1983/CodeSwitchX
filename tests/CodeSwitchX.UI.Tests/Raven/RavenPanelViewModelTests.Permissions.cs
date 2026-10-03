@@ -124,8 +124,95 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks, and waits for the "
-            + "answer here: permission to run a command: npm test. Only the user allows or denies it, on its card or in VS Code; no tool of "
-            + "yours can.]\nallow it");
+            + "answer here: permission to run a command: npm test (ask id p1). answer_permission denies it on the user's word, or proposes an allow "
+            + "that only the user's next yes, checked by the app, makes real.]\nallow it");
+    }
+
+    [Fact]
+    public async Task A_yes_after_a_proposed_allow_is_the_app_s_to_find_it_allows_and_goes_to_no_brain()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+
+        asks.Propose("p1"); // as answer_permission does on "allow it"
+        card.AwaitsYes.ShouldBeTrue();
+        held.IsCompleted.ShouldBeFalse();
+        Type(vm, "Yes, run it.");
+
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        (card.IsOpen, card.Outcome, card.AwaitsYes).ShouldBe((false, "Allowed.", false));
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Allowed. The chat carries on."));
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Allowed. The chat carries on.", StringComparison.Ordinal));
+        _brain.Asked.ShouldBeEmpty("the yes is the app's, not a question");
+
+        Type(vm, "what's next");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the user said yes to the "
+            + "allow you proposed, and it was allowed.]\nwhat's next");
+    }
+
+    [Fact]
+    public async Task Other_words_after_a_proposed_allow_run_nothing_and_go_to_the_brain_which_is_told()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        asks.Propose("p1");
+
+        Type(vm, "what time is it");
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse();
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        asks.Proposed.ShouldBeNull();
+        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
+            + "not confirmed by a yes, so nothing ran, and its card stays open.]\nwhat time is it");
+
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse("a yes after the proposal lapsed is only words to the brain");
+        _brain.Asked.Last().ShouldBe("yes");
+    }
+
+    [Fact]
+    public async Task Silence_after_a_proposed_allow_lapses_it_and_the_card_stays_open_for_a_click()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        asks.Propose("p1");
+
+        _time.Advance(ChatAsks.ProposalLifetime);
+
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        Lines(vm).ShouldContain((RavenLogKind.Note, "No yes within 30 seconds: nothing ran. The card stays open for a click."));
+        held.IsCompleted.ShouldBeFalse();
+        vm.AllowCommand.Execute(card);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_prompt_answered_on_its_card_while_an_allow_is_proposed_takes_the_proposal_with_it()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        asks.Propose("p1");
+
+        vm.DenyCommand.Execute(card);
+        await WithinAsync(held);
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
+        card.AwaitsYes.ShouldBeFalse();
+        _brain.Asked.ShouldBe(["yes"], "with nothing proposed, a yes is only words to the brain");
     }
 
     [Fact]

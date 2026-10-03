@@ -235,6 +235,99 @@ public sealed class ChatAsksTests : IDisposable
         }));
 
     [Fact]
+    public async Task A_proposed_allow_runs_nothing_until_the_user_s_yes_confirms_it()
+    {
+        var ends = new List<(string Id, ChatProposalEnd End)>();
+        _asks.ProposalEnded += (p, end) => ends.Add((p.Ask.Id, end));
+        ChatAllowProposal? proposed = null;
+        _asks.ProposedAllow += p => proposed = p;
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+
+        var proposal = _asks.Propose("p1");
+
+        proposed.ShouldBe(proposal);
+        (proposal.Ask.Id, proposal.At).ShouldBe(("p1", _time.GetUtcNow()));
+        _asks.Proposed.ShouldBe(proposal);
+        held.IsCompleted.ShouldBeFalse("a proposal allows nothing");
+        _asks.Open().ShouldHaveSingleItem();
+
+        _asks.Confirm().ShouldBeTrue();
+
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        _asks.Proposed.ShouldBeNull();
+        ends.ShouldBe([("p1", ChatProposalEnd.Confirmed)]);
+        _asks.Confirm().ShouldBeFalse("nothing is proposed any more");
+    }
+
+    [Fact]
+    public async Task Other_words_cancel_the_proposal_and_the_prompt_stays_held()
+    {
+        var ends = new List<ChatProposalEnd>();
+        _asks.ProposalEnded += (_, end) => ends.Add(end);
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.Propose("p1");
+
+        _asks.Cancel().ShouldBeTrue();
+
+        _asks.Proposed.ShouldBeNull();
+        held.IsCompleted.ShouldBeFalse();
+        ends.ShouldBe([ChatProposalEnd.Cancelled]);
+        _asks.Cancel().ShouldBeFalse();
+        _asks.Confirm().ShouldBeFalse("a yes after the cancel allows nothing");
+        held.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_proposal_without_a_yes_lapses_and_the_prompt_stays_held()
+    {
+        var ends = new List<ChatProposalEnd>();
+        _asks.ProposalEnded += (_, end) => ends.Add(end);
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.Propose("p1");
+
+        _time.Advance(ChatAsks.ProposalLifetime - TimeSpan.FromSeconds(1));
+        _asks.Proposed.ShouldNotBeNull();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        _asks.Proposed.ShouldBeNull();
+        ends.ShouldBe([ChatProposalEnd.Expired]);
+        held.IsCompleted.ShouldBeFalse();
+        _asks.Confirm().ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_prompt_that_ends_takes_its_proposal_with_it_and_a_newer_proposal_replaces_the_older()
+    {
+        var ends = new List<(string Id, ChatProposalEnd End)>();
+        _asks.ProposalEnded += (p, end) => ends.Add((p.Ask.Id, end));
+        var first = _asks.HoldAsync(Permission("p1"), CancellationToken.None);
+        var second = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
+
+        _asks.Propose("p1");
+        _asks.Propose("p2");
+        ends.ShouldBe([("p1", ChatProposalEnd.Replaced)]);
+        _asks.Proposed!.Ask.Id.ShouldBe("p2");
+
+        _asks.Permit("p2", allow: false).ShouldBeTrue();
+
+        (await second).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
+        ends.ShouldBe([("p1", ChatProposalEnd.Replaced), ("p2", ChatProposalEnd.Closed)]);
+        _asks.Proposed.ShouldBeNull();
+        _asks.Confirm().ShouldBeFalse("the proposal went with its prompt: a yes now allows nothing");
+        first.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Only_a_held_permission_prompt_can_be_proposed()
+    {
+        _ = _asks.HoldAsync(Ask(), CancellationToken.None);
+
+        Should.Throw<ArgumentException>(() => _asks.Propose("toolu_1")).Message.ShouldContain("asks a question");
+        Should.Throw<ArgumentException>(() => _asks.Propose("p9")).Message.ShouldContain("no longer waits");
+        _asks.Proposed.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_permission_prompt_is_held_without_a_waiting_of_its_own_and_takes_the_users_allow()
     {
         var held = _asks.HoldAsync(Permission(), CancellationToken.None);

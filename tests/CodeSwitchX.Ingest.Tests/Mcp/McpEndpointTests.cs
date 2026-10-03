@@ -181,7 +181,7 @@ public sealed class McpEndpointTests : IAsyncLifetime
             var start = await client.CallToolAsync("start_chat", new Dictionary<string, object?> { ["workspace"] = "CodeSwitchX" },
                 cancellationToken: TestContext.Current.CancellationToken);
 
-            tools.Select(t => t.Name).Order().ShouldBe(["answer_question", "back_to_yard", "close_chat", "find_workspace", "get_chat", "list_chats",
+            tools.Select(t => t.Name).Order().ShouldBe(["answer_permission", "answer_question", "back_to_yard", "close_chat", "find_workspace", "get_chat", "list_chats",
                 "list_workspaces", "open_workspace", "set_defaults", "start_chat", "stop_chat"]);
             tools.Where(t => t.ProtocolTool.Annotations!.DestructiveHint == true).Select(t => t.Name)
                 .ShouldBe(["close_chat"], "closing a chat cuts off what it is doing; nothing else Raven does on the Yard destroys anything");
