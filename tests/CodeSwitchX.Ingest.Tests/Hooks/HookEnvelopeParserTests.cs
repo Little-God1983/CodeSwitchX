@@ -32,6 +32,18 @@ public class HookEnvelopeParserTests
         e.RelayPid.ShouldBe(4242);
         e.ParentChain.ShouldBe([new ProcessRef(100, "cmd.exe"), new ProcessRef(200, "claude.exe")]);
         e.RawJson.ShouldNotBeNull().ShouldContain("\"tool_name\"");
+        e.ToolInputHash.ShouldBeNull("a relay older than permission prompts sends no fingerprint");
+    }
+
+    [Fact]
+    public void The_relay_s_fingerprint_of_the_tool_input_is_read_from_the_envelope()
+    {
+        var json = """
+            {"event":"PermissionRequest","relayPid":1,"parentChain":[],"toolInputHash":"0123456789abcdef0123456789abcdef",
+             "payload":{"session_id":"abc","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"npm test"}}}
+            """;
+
+        HookEnvelopeParser.Parse(json, Received).ShouldNotBeNull().ToolInputHash.ShouldBe("0123456789abcdef0123456789abcdef");
     }
 
     [Theory]

@@ -299,7 +299,7 @@
          the click; any other is sent with Send. Answer in VS Code leaves it to the chat's tab. Answered or let go, it says how. -->
     <DataTemplate x:Key="QuestionEntry" DataType="{x:Type raven:RavenLogEntry}">
       <Border x:Name="Card" Background="#0F172A" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="6" Padding="10,6,10,8">
-        <StackPanel DataContext="{Binding Question}">
+        <StackPanel DataContext="{Binding Ask}">
           <StackPanel Orientation="Horizontal">
             <TextBlock FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#F59E0B" Text="&#xE897;" VerticalAlignment="Center" Margin="0,1,7,0" />
             <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250">
@@ -363,7 +363,63 @@
         </StackPanel>
       </Border>
       <DataTemplate.Triggers>
-        <DataTrigger Binding="{Binding Question.IsOpen}" Value="False">
+        <DataTrigger Binding="{Binding Ask.IsOpen}" Value="False">
+          <Setter TargetName="Card" Property="BorderBrush" Value="#1F2937" />
+          <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
+          <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+    <!-- A chat's permission prompt: what it wants to do (the command, the file, the URL), with Allow and Deny. VS Code shows its own
+         prompt meanwhile; answered there, or let go, the card says how it ended. -->
+    <DataTemplate x:Key="PermissionEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Border x:Name="Card" Background="#0F172A" BorderBrush="#F59E0B" BorderThickness="1" CornerRadius="6" Padding="10,6,10,8">
+        <StackPanel DataContext="{Binding Ask}">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock FontFamily="{StaticResource Icons}" FontSize="11" Foreground="#F59E0B" Text="&#xE83D;" VerticalAlignment="Center" Margin="0,1,7,0" />
+            <TextBlock FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250"
+                       Text="{Binding Chat}" />
+          </StackPanel>
+          <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding WantsLine}" Margin="0,6,0,0" />
+          <!-- All of it, never cut: Allow allows all of it. A long one scrolls. -->
+          <Border Background="#111827" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,6,0,0">
+            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+              <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="12" Foreground="#E5E7EB" TextWrapping="Wrap"
+                         Text="{Binding Permission.Subject, Mode=OneWay}" AutomationProperties.Name="{Binding Permission.Subject, Mode=OneWay}" />
+            </ScrollViewer>
+          </Border>
+          <!-- An edit's change, a file's content: what the file name alone does not say. -->
+          <Border Background="#0B1220" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,4,0,0">
+            <Border.Style>
+              <Style TargetType="Border">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Permission.Details}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Border.Style>
+            <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+              <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="11" Foreground="#9CA3AF" TextWrapping="Wrap"
+                         Text="{Binding Permission.Details, Mode=OneWay}" AutomationProperties.Name="{Binding Permission.Details, Mode=OneWay}" />
+            </ScrollViewer>
+          </Border>
+          <StackPanel x:Name="Buttons" Orientation="Horizontal" Margin="0,6,0,0">
+            <Button Style="{StaticResource CardButton}" Content="Allow"
+                    Command="{Binding DataContext.AllowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                    ToolTip="Let the chat do this once; it carries on" />
+            <Button Style="{StaticResource CardButton}" Content="Deny"
+                    Command="{Binding DataContext.DenyCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                    ToolTip="Don't let it; the chat is told and carries on without it" />
+            <Button Style="{StaticResource CardButton}" Content="Answer in VS Code"
+                    Command="{Binding DataContext.AnswerInVsCodeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                    ToolTip="Leave it to the prompt in the chat's VS Code tab" />
+          </StackPanel>
+          <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
+        </StackPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Ask.IsOpen}" Value="False">
           <Setter TargetName="Card" Property="BorderBrush" Value="#1F2937" />
           <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
           <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
@@ -498,6 +554,9 @@
                           <DataTrigger Binding="{Binding Kind}" Value="Question">
                             <Setter Property="ContentTemplate" Value="{StaticResource QuestionEntry}" />
                           </DataTrigger>
+                          <DataTrigger Binding="{Binding Kind}" Value="Permission">
+                            <Setter Property="ContentTemplate" Value="{StaticResource PermissionEntry}" />
+                          </DataTrigger>
                         </Style.Triggers>
                       </Style>
                     </ContentControl.Style>
@@ -554,8 +613,8 @@
                 ToolTip="Expand Raven (Ctrl+Alt+J)" AutomationProperties.Name="Expand Raven" HorizontalAlignment="Center" />
         <!-- Chats' questions that still wait for an answer here: a click opens the panel to answer them. -->
         <Button Command="{Binding TogglePanelCommand}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,10,0,0"
-                ToolTip="{Binding OpenQuestions, StringFormat='Questions waiting for you: {0}. Click to answer.'}"
-                AutomationProperties.Name="{Binding OpenQuestions, StringFormat='{}{0} questions waiting'}" FocusVisualStyle="{StaticResource RoundFocusRing}">
+                ToolTip="{Binding OpenQuestions, StringFormat='Questions and permission prompts waiting for you: {0}. Click to answer.'}"
+                AutomationProperties.Name="{Binding OpenQuestions, StringFormat='{}{0} asks waiting'}" FocusVisualStyle="{StaticResource RoundFocusRing}">
           <Button.Style>
             <Style TargetType="Button">
               <Style.Triggers>

@@ -19,6 +19,9 @@ public enum RavenLogKind
 
     /// <summary>A chat's question, with its options to click, held until it is answered here or left to VS Code.</summary>
     Question,
+
+    /// <summary>A chat's permission prompt, with Allow and Deny, held until it is answered here or in VS Code.</summary>
+    Permission,
 }
 
 /// <summary>One line of the panel's log. The text is observable so a progress line can update in place.</summary>
@@ -38,8 +41,8 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
     /// <summary>A digest card's lines; null for every other kind.</summary>
     public IReadOnlyList<ChatNewsLine>? Lines { get; set; }
 
-    /// <summary>A question card's question; null for every other kind.</summary>
-    public ChatQuestionCard? Question { get; set; }
+    /// <summary>A question or permission card's ask; null for every other kind.</summary>
+    public ChatAskCard? Ask { get; set; }
 
     /// <summary>An action card's tool call came back failed.</summary>
     [ObservableProperty]

@@ -30,14 +30,25 @@ public class ClaudeHookInstallerTests : IDisposable
 
     private JsonObject Settings() => JsonNode.Parse(File.ReadAllText(_paths.SettingsFile))!.AsObject();
 
-    /// <summary>The event's groups without a matcher: those of the entries every tool runs, not the one for questions.</summary>
+    /// <summary>
+    /// The event's groups of the entries every event runs: without a matcher and without the held entries (a question's, a
+    /// permission prompt's).
+    /// </summary>
     private List<JsonObject> MainGroups(string eventName) =>
-        Settings()["hooks"]![eventName]!.AsArray().Select(g => g!.AsObject()).Where(g => !g.ContainsKey("matcher")).ToList();
+        Settings()["hooks"]![eventName]!.AsArray().Select(g => g!.AsObject())
+            .Where(g => !g.ContainsKey("matcher") && !g["hooks"]!.AsArray().Any(h => IsHeld(h!.AsObject()))).ToList();
 
-    private (JsonObject Group, JsonObject Hook) AskEntry() =>
-        Settings()["hooks"]!["PreToolUse"]!.AsArray().Select(g => g!.AsObject())
+    private static bool IsHeld(JsonObject hook) =>
+        hook["args"]?.AsArray().Select(a => a!.GetValue<string>()).ToList() is [ClaudeHookInstaller.AskArgument or ClaudeHookInstaller.PermitArgument];
+
+    private (JsonObject Group, JsonObject Hook) AskEntry() => HeldEntry("PreToolUse", ClaudeHookInstaller.AskArgument);
+
+    private (JsonObject Group, JsonObject Hook) PermitEntry() => HeldEntry("PermissionRequest", ClaudeHookInstaller.PermitArgument);
+
+    private (JsonObject Group, JsonObject Hook) HeldEntry(string eventName, string argument) =>
+        Settings()["hooks"]![eventName]!.AsArray().Select(g => g!.AsObject())
             .SelectMany(g => g["hooks"]!.AsArray().Select(h => (Group: g, Hook: h!.AsObject())))
-            .Where(e => e.Hook["args"]?.AsArray().Select(a => a!.GetValue<string>()).SequenceEqual([ClaudeHookInstaller.AskArgument]) == true)
+            .Where(e => e.Hook["args"]?.AsArray().Select(a => a!.GetValue<string>()).SequenceEqual([argument]) == true)
             .ShouldHaveSingleItem();
 
     private void WriteSettings(string json)
@@ -188,8 +199,55 @@ public class ClaudeHookInstallerTests : IDisposable
         // The permission_prompt Notification comes 6 s after the prompt opens (never, when it is answered sooner); PermissionRequest fires at once.
         _installer.Install(Exe);
 
-        var entry = Settings()["hooks"]!["PermissionRequest"].ShouldNotBeNull().AsArray().ShouldHaveSingleItem()!["hooks"]!.AsArray().ShouldHaveSingleItem()!;
+        var entry = MainGroups("PermissionRequest").ShouldHaveSingleItem()["hooks"]!.AsArray().ShouldHaveSingleItem()!;
         entry["args"]!.AsArray().Select(a => a!.GetValue<string>()).ShouldBe(["PermissionRequest"]);
+    }
+
+    [Fact]
+    public void Install_adds_the_entry_that_holds_a_chats_permission_prompt_for_every_tool_with_a_long_timeout()
+    {
+        // It waits while the user allows or denies in Raven's panel: the 5 s of the other entries would cut that off.
+        _installer.Install(Exe);
+
+        var (group, hook) = PermitEntry();
+        group.ContainsKey("matcher").ShouldBeFalse();
+        group["hooks"]!.AsArray().ShouldHaveSingleItem();
+        hook["command"]!.GetValue<string>().ShouldBe(Exe);
+        hook["timeout"]!.GetValue<int>().ShouldBe(ClaudeHookInstaller.AskTimeoutSeconds);
+    }
+
+    [Fact]
+    public void An_install_from_before_permission_prompts_is_Outdated_and_reinstall_adds_the_entry_once()
+    {
+        _installer.Install(Exe);
+        var settings = Settings();
+        var permission = settings["hooks"]!["PermissionRequest"]!.AsArray();
+        permission.Remove(permission.Single(g => g!["hooks"]![0]!["args"]![0]!.GetValue<string>() == ClaudeHookInstaller.PermitArgument));
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+
+        _installer.Install(Exe).Changed.ShouldBeTrue();
+        _installer.Install(Exe).Changed.ShouldBeFalse();
+
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
+        PermitEntry().Group.ContainsKey("matcher").ShouldBeFalse();
+        MainGroups("PermissionRequest").ShouldHaveSingleItem()["hooks"]!.AsArray().ShouldHaveSingleItem()!["args"]![0]!.GetValue<string>().ShouldBe("PermissionRequest");
+    }
+
+    [Fact]
+    public void A_permission_entry_narrowed_to_one_tool_is_put_back_for_every_tool()
+    {
+        _installer.Install(Exe);
+        var settings = Settings();
+        var permission = settings["hooks"]!["PermissionRequest"]!.AsArray();
+        permission.Single(g => g!["hooks"]![0]!["args"]![0]!.GetValue<string>() == ClaudeHookInstaller.PermitArgument)!["matcher"] = "Bash";
+        File.WriteAllText(_paths.SettingsFile, settings.ToJsonString());
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Outdated);
+
+        _installer.Install(Exe);
+
+        PermitEntry().Group.ContainsKey("matcher").ShouldBeFalse();
+        _installer.GetStatus(Exe).State.ShouldBe(HookInstallState.Installed);
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public static class HookEnvelopeParser
             JsonElement payload;
             string? envelopeEvent = null;
             int? relayPid = null;
+            string? toolInputHash = null;
             var chain = new List<ProcessRef>();
 
             if (root.TryGetProperty("payload", out var payloadElement))
@@ -68,6 +69,7 @@ public static class HookEnvelopeParser
                 payload = payloadElement;
                 envelopeEvent = GetString(root, "event");
                 relayPid = GetInt(root, "relayPid");
+                toolInputHash = GetString(root, "toolInputHash");
                 if (root.TryGetProperty("parentChain", out var chainElement) && chainElement.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var item in chainElement.EnumerateArray())
@@ -112,6 +114,7 @@ public static class HookEnvelopeParser
                 TranscriptPath = GetString(payload, "transcript_path"),
                 ToolName = GetString(payload, "tool_name"),
                 ToolUseId = GetString(payload, "tool_use_id"),
+                ToolInputHash = toolInputHash,
                 AgentId = GetString(payload, "agent_id"),
                 NotificationType = notificationType,
                 Message = GetString(payload, "message") ?? GetString(payload, "title"),

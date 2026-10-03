@@ -159,7 +159,7 @@ public sealed class YardToolsTests
     {
         var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),
             TimeProvider.System) { Takes = _ => true };
-        _ = asks.HoldAsync(new ChatAsk("toolu_1", ChatAskKind.Question,
+        _ = asks.HoldAsync(new ChatAsk("toolu_1",
             new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow },
             [new ChatQuestion("Which fruit?", null, [new ChatQuestionOption("Apple", null), new ChatQuestionOption("Banana", null)], false)]),
             CancellationToken.None);
@@ -181,7 +181,7 @@ public sealed class YardToolsTests
         var at = DateTimeOffset.UtcNow;
         foreach (var (id, text) in new[] { ("toolu_1", "Which fruit?"), ("toolu_2", "Which colour?") })
         {
-            _ = asks.HoldAsync(new ChatAsk(id, ChatAskKind.Question, new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = at = at.AddSeconds(1) },
+            _ = asks.HoldAsync(new ChatAsk(id, new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = at = at.AddSeconds(1) },
                 [new ChatQuestion(text, null, [], false)]), CancellationToken.None);
         }
 

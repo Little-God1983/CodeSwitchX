@@ -100,6 +100,78 @@ public class RelayEndToEndTests : IAsyncLifetime
         (_received[1].At - _received[0].At).ShouldBeGreaterThan(TimeSpan.FromMilliseconds(150), "the turn ends when it is stopped, not when it asked");
     }
 
+    /// <summary>A permission prompt as Claude Code hands it to the hook (extension 2.1.287): no tool_use_id.</summary>
+    private const string Prompt = """
+        {"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","permission_mode":"default",
+         "tool_input":{"command":"npm test","description":"Run the tests"},
+         "permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]}
+        """;
+
+    [Fact]
+    public async Task A_permission_prompt_allowed_in_the_panel_is_allowed_in_Claude_Code()
+    {
+        _asks.Takes = _ => true;
+        ChatAsk? held = null;
+        _asks.Opened += ask =>
+        {
+            held = ask;
+            _asks.Permit(ask.Id, allow: true);
+        };
+
+        var code = await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        _stdout.ToString().ShouldBe("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}""");
+        held.ShouldNotBeNull().Permission.ShouldBe(new ChatPermission("Bash", "run a command", "npm test", null));
+        _received.ShouldBeEmpty("its own PermissionRequest reaches the Yard through the hook for every event");
+    }
+
+    [Fact]
+    public async Task A_permission_prompt_denied_in_the_panel_tells_the_chat_and_lets_it_carry_on()
+    {
+        _asks.Takes = _ => true;
+        _asks.Opened += ask => _asks.Permit(ask.Id, allow: false);
+
+        await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        answer.RootElement.TryGetProperty("continue", out _).ShouldBeFalse();
+        var decision = answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+        decision.GetProperty("behavior").GetString().ShouldBe("deny");
+        decision.GetProperty("message").GetString().ShouldBe(ChatAsks.DeniedMessage);
+        decision.TryGetProperty("interrupt", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_permission_prompt_left_to_VS_Code_or_not_taken_says_nothing_to_Claude_Code()
+    {
+        _asks.Takes = _ => false;
+        await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+        _stdout.ToString().ShouldBeEmpty("VS Code's own prompt takes the answer");
+
+        _asks.Takes = _ => true;
+        _asks.Opened += ask => _asks.ToVsCode(ask.Id);
+        await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+        _stdout.ToString().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_stop_asked_while_the_panel_holds_a_permission_prompt_denies_it_and_ends_the_turn()
+    {
+        _asks.Takes = _ => true;
+        Task<TurnStopOutcome>? stopped = null;
+        _asks.Opened += _ => stopped = Task.Delay(200).ContinueWith(_ => _stops.Request("s1")).Unwrap();
+
+        await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+
+        (await stopped.ShouldNotBeNull()).ShouldBe(TurnStopOutcome.Stopped);
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        answer.RootElement.GetProperty("continue").GetBoolean().ShouldBeFalse();
+        var decision = answer.RootElement.GetProperty("hookSpecificOutput").GetProperty("decision");
+        (decision.GetProperty("behavior").GetString(), decision.GetProperty("interrupt").GetBoolean()).ShouldBe(("deny", true));
+        _received.Select(e => e.EventName).ShouldBe(["Stop"], "the turn ends without a Stop hook of Claude Code's own");
+    }
+
     private static Stream Stdin(string text) => new MemoryStream(Encoding.UTF8.GetBytes(text));
 
     [Fact]

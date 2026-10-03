@@ -106,6 +106,8 @@ public partial class App : Application
             var asks = _host.Services.GetRequiredService<ChatAsks>();
             asks.Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
             asks.Keeps = ask => shell.KeepsAsks(engine.Get(ask.SessionId)?.WorkspaceId);
+            // A permission prompt held here closes once the chat's tab shows none: answered there (#102).
+            asks.ShowsPrompt = _host.Services.GetRequiredService<ClaudeLiveSessions>().ShowsPrompt;
             shell.AskRulesChanged += (_, _) => asks.Recheck();
             // The dots: the engines and the speech-to-text model say whether they are on disk (after Settings picked the engine).
             _host.Services.GetRequiredService<VoiceStatusViewModel>().Start();
@@ -249,7 +251,7 @@ public partial class App : Application
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
             sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,
-            sp.GetRequiredService<ChatAsks>().Holds));
+            sp.GetRequiredService<ChatAsks>().Explains));
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();

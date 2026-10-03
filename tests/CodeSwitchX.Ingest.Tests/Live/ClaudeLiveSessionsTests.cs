@@ -251,9 +251,33 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.NameOf(Issues).ShouldBeNull("the names' own read still serves");
     }
 
-    private void Record(int pid, string sessionId, string name, long updatedAt = 1_000, string entrypoint = "claude-vscode", string kind = "interactive") =>
+    private void Record(int pid, string sessionId, string name, long updatedAt = 1_000, string entrypoint = "claude-vscode", string kind = "interactive",
+        string status = "\"status\":\"idle\"") =>
         File.WriteAllText(Path.Combine(_sessions, $"{pid}.json"),
-            $$"""{"pid":{{pid}},"sessionId":"{{sessionId}}","cwd":"e:\\Repos\\CodeSwitchX","procStart":"{{FakeProcesses.StartOfEach}}","kind":"{{kind}}","entrypoint":"{{entrypoint}}","name":"{{name}}","updatedAt":{{updatedAt}},"status":"idle"}""");
+            $$"""{"pid":{{pid}},"sessionId":"{{sessionId}}","cwd":"e:\\Repos\\CodeSwitchX","procStart":"{{FakeProcesses.StartOfEach}}","kind":"{{kind}}","entrypoint":"{{entrypoint}}","name":"{{name}}","updatedAt":{{updatedAt}},{{status}}}""");
+
+    [Theory]
+    [InlineData("\"status\":\"waiting\",\"waitingFor\":\"permission prompt\"", true)]
+    [InlineData("\"status\":\"busy\"", false)]
+    [InlineData("\"status\":\"idle\"", false)]
+    [InlineData("\"other\":1", null)]
+    public void A_chat_s_tab_shows_a_prompt_while_its_record_waits_on_the_user(string status, bool? shows)
+    {
+        // As seen with 2.1.287: a permission prompt open in the tab, held by a hook or not, makes the record wait.
+        Record(21688, Issues, "codeswitchx-ea", status: status);
+
+        _live.ShowsPrompt(Issues).ShouldBe(shows);
+    }
+
+    [Fact]
+    public void A_chat_not_open_in_a_tab_tells_nothing_of_its_prompts()
+    {
+        Record(21688, Issues, "codeswitchx-ea", status: "\"status\":\"waiting\"");
+        _processes.Gone.Add(21688);
+
+        _live.ShowsPrompt(Issues).ShouldBeNull();
+        _live.ShowsPrompt("not-a-chat").ShouldBeNull();
+    }
 
     /// <summary>Every process started at <see cref="StartOfEach"/>, as its record says, unless set otherwise.</summary>
     private sealed class FakeProcesses
