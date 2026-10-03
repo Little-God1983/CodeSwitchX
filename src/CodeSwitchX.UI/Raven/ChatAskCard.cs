@@ -55,6 +55,9 @@ public sealed partial class ChatAskCard : ObservableObject
     /// <summary>The workspace whose tile shows the chat; null until named, or when it is on none.</summary>
     public Guid? WorkspaceId { get; set; }
 
+    /// <summary>The workspace's name, "ContentAutomatorX"; null until named.</summary>
+    public string? Workspace { get; set; }
+
     /// <summary>The chat as Raven says it: "ContentAutomatorX, chat "Fix the upload retry"".</summary>
     public string Said { get; set; } = "A chat";
 

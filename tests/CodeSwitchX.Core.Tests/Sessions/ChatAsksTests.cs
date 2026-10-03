@@ -251,12 +251,73 @@ public sealed class ChatAsksTests : IDisposable
         held.IsCompleted.ShouldBeFalse("a proposal allows nothing");
         _asks.Open().ShouldHaveSingleItem();
 
-        _asks.Confirm().ShouldBeTrue();
+        _asks.ProposalFor(_time.GetUtcNow()).ShouldBe(proposal);
+        _asks.Confirm(proposal).ShouldBeTrue();
 
         (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
         _asks.Proposed.ShouldBeNull();
         ends.ShouldBe([("p1", ChatProposalEnd.Confirmed)]);
-        _asks.Confirm().ShouldBeFalse("nothing is proposed any more");
+        _asks.Confirm(proposal).ShouldBeFalse("nothing is proposed any more");
+    }
+
+    [Fact]
+    public void Words_said_before_the_proposal_answer_something_else()
+    {
+        _ = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var before = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromSeconds(2));
+        var proposal = _asks.Propose("p1");
+
+        _asks.ProposalFor(before).ShouldBeNull("an earlier \"okay\", still being transcribed, was said to something else");
+        _asks.ProposalFor(proposal.At).ShouldBe(proposal);
+    }
+
+    [Fact]
+    public async Task A_yes_said_in_time_and_transcribed_after_the_proposal_lapsed_still_allows()
+    {
+        var ends = new List<ChatProposalEnd>();
+        _asks.ProposalEnded += (_, end) => ends.Add(end);
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var proposal = _asks.Propose("p1");
+        _time.Advance(ChatAsks.ProposalLifetime - TimeSpan.FromSeconds(1));
+        var said = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromSeconds(2)); // transcribed after the lapse
+
+        _asks.Proposed.ShouldBeNull();
+        _asks.ProposalFor(said).ShouldBe(proposal);
+        _asks.ProposalFor(_time.GetUtcNow()).ShouldBeNull("words said after the lapse answer nothing");
+        _asks.Confirm(proposal).ShouldBeTrue();
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        ends.ShouldBe([ChatProposalEnd.Expired, ChatProposalEnd.Confirmed]);
+    }
+
+    [Fact]
+    public void A_proposal_whose_timer_fires_early_still_lapses_once_its_time_is_up()
+    {
+        // The tick-count timer can fire a few milliseconds before the clock says the lifetime is over.
+        var time = new LateClock();
+        using var asks = new ChatAsks(_bus, time) { Takes = _ => true };
+        var ends = new List<ChatProposalEnd>();
+        asks.ProposalEnded += (_, end) => ends.Add(end);
+        _ = asks.HoldAsync(Permission(), CancellationToken.None);
+        asks.Propose("p1");
+
+        time.Lag = TimeSpan.FromMilliseconds(15);
+        time.Advance(ChatAsks.ProposalLifetime);
+        asks.Proposed.ShouldNotBeNull("its timer fired, the clock is 15 ms short");
+        time.Advance(TimeSpan.FromMilliseconds(15));
+
+        asks.Proposed.ShouldBeNull();
+        ends.ShouldBe([ChatProposalEnd.Expired]);
+    }
+
+    /// <summary>A clock that reads <see cref="Lag"/> behind the time its timers run on.</summary>
+    private sealed class LateClock : FakeTimeProvider
+    {
+        public TimeSpan Lag { get; set; }
+
+        public override DateTimeOffset GetUtcNow() => base.GetUtcNow() - Lag;
     }
 
     [Fact]
@@ -265,15 +326,16 @@ public sealed class ChatAsksTests : IDisposable
         var ends = new List<ChatProposalEnd>();
         _asks.ProposalEnded += (_, end) => ends.Add(end);
         var held = _asks.HoldAsync(Permission(), CancellationToken.None);
-        _asks.Propose("p1");
+        var proposal = _asks.Propose("p1");
 
-        _asks.Cancel().ShouldBeTrue();
+        _asks.Cancel(proposal).ShouldBeTrue();
 
         _asks.Proposed.ShouldBeNull();
         held.IsCompleted.ShouldBeFalse();
         ends.ShouldBe([ChatProposalEnd.Cancelled]);
-        _asks.Cancel().ShouldBeFalse();
-        _asks.Confirm().ShouldBeFalse("a yes after the cancel allows nothing");
+        _asks.Cancel(proposal).ShouldBeFalse();
+        _asks.Confirm(proposal).ShouldBeFalse("a yes after the cancel allows nothing");
+        _asks.ProposalFor(_time.GetUtcNow()).ShouldBeNull();
         held.IsCompleted.ShouldBeFalse();
     }
 
@@ -292,7 +354,7 @@ public sealed class ChatAsksTests : IDisposable
         _asks.Proposed.ShouldBeNull();
         ends.ShouldBe([ChatProposalEnd.Expired]);
         held.IsCompleted.ShouldBeFalse();
-        _asks.Confirm().ShouldBeFalse();
+        _asks.ProposalFor(_time.GetUtcNow() + TimeSpan.FromSeconds(1)).ShouldBeNull();
     }
 
     [Fact]
@@ -303,17 +365,18 @@ public sealed class ChatAsksTests : IDisposable
         var first = _asks.HoldAsync(Permission("p1"), CancellationToken.None);
         var second = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
 
-        _asks.Propose("p1");
-        _asks.Propose("p2");
+        var older = _asks.Propose("p1");
+        var newer = _asks.Propose("p2");
         ends.ShouldBe([("p1", ChatProposalEnd.Replaced)]);
         _asks.Proposed!.Ask.Id.ShouldBe("p2");
+        _asks.Confirm(older).ShouldBeFalse("only the newest proposal stands");
 
         _asks.Permit("p2", allow: false).ShouldBeTrue();
 
         (await second).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
         ends.ShouldBe([("p1", ChatProposalEnd.Replaced), ("p2", ChatProposalEnd.Closed)]);
         _asks.Proposed.ShouldBeNull();
-        _asks.Confirm().ShouldBeFalse("the proposal went with its prompt: a yes now allows nothing");
+        _asks.Confirm(newer).ShouldBeFalse("the proposal went with its prompt: a yes now allows nothing");
         first.IsCompleted.ShouldBeFalse();
     }
 

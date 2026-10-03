@@ -2,6 +2,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -139,6 +140,9 @@ public sealed partial class RavenPanelViewModelTests
         asks.Propose("p1"); // as answer_permission does on "allow it"
         card.AwaitsYes.ShouldBeTrue();
         held.IsCompleted.ShouldBeFalse();
+        // The app, not the brain, reads it back and asks for the yes (review of #112).
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Run npm test in ContentAutomatorX? Say yes."));
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Say yes.", StringComparison.Ordinal));
         Type(vm, "Yes, run it.");
 
         await WithinAsync(held);
@@ -195,6 +199,74 @@ public sealed partial class RavenPanelViewModelTests
         held.IsCompleted.ShouldBeFalse();
         vm.AllowCommand.Execute(card);
         (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_lapsed_proposal_is_told_to_the_brain_with_the_next_question()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        asks.Propose("p1");
+        _time.Advance(ChatAsks.ProposalLifetime);
+        _time.Advance(ChatAsks.ProposalLifetime); // words said after the lapse answer nothing
+
+        Type(vm, "what now");
+        await WithinAsync(vm.PendingAnswers);
+
+        // The card was read out meanwhile too: that fact goes along, before this one.
+        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed got no "
+            + "yes within 30 seconds, so nothing ran, and its card stays open.]\nwhat now");
+    }
+
+    [Fact]
+    public async Task Words_said_before_the_proposal_and_transcribed_after_it_answer_something_else()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var transcribed = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcribed.Task);
+
+        // "Okay." is said to something else, and still being transcribed when the brain proposes the allow.
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        var released = vm.ReleaseMicAsync(TalkInput.MicButton);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        var proposal = asks.Propose("p1");
+        transcribed.SetResult(new DictationResult("Okay.", TimeSpan.FromSeconds(2)));
+        await WithinAsync(released);
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse("the okay was said before Raven asked for a yes");
+        asks.Proposed.ShouldBe(proposal, "and it does not cancel the proposal either");
+        _brain.Asked.ShouldBe(["Okay."]);
+    }
+
+    [Fact]
+    public async Task A_yes_with_a_question_still_waiting_for_the_brain_allows_and_the_question_is_still_asked()
+    {
+        _brain.BeforeSent = new TaskCompletionSource(); // the brain has not taken the question in yet
+        _brain.Answer = _ => [new BrainText("Two.")];
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        asks.Propose("p1");
+        Type(vm, "how many chats work?");
+        await Until(() => _brain.Asked.Count == 1);
+        asks.Propose("p1"); // proposed again: the question cancelled the first one
+
+        Type(vm, "yes");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(held);
+        await WithinAsync(vm.PendingAnswers);
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        var asked = _brain.Asked.Last();
+        asked.ShouldEndWith("\nhow many chats work?", Case.Sensitive, "the waiting question is not lost with the floor the yes took");
+        asked.ShouldContain("the user said yes to the allow you proposed, and it was allowed");
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Two."));
     }
 
     [Fact]

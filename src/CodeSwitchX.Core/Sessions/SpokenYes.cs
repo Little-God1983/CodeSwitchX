@@ -2,50 +2,66 @@ namespace CodeSwitchX.Core.Sessions;
 
 /// <summary>
 /// Whether what the user said is a yes: the app's own check of the user's next words after Raven's brain proposed an allow
-/// (<see cref="ChatAsks.Propose"/>), so that no model and nothing a chat wrote can allow a command. A yes starts with a
-/// plain yes ("yes", "yeah", "ja", "do it", "go ahead"), alone or with words after it that do not contradict it ("yes,
-/// run it"; not "yes but wait"). Anything else is no yes: a question, a request, "okay, what's next".
+/// (<see cref="ChatAsks.Propose"/>), so that no model and nothing a chat wrote can allow a command. A yes runs a command,
+/// so the check is strict: a plain yes ("yes", "yeah", "ja", "do it", "go ahead"), or "okay"/"sure" on their own, with
+/// at most a few words after it that only add to it ("yes, run it now"). A question, words that point elsewhere ("allow
+/// the other one", "do it after the build"), a call to Raven ("hey Raven") or anything longer is no yes.
 /// </summary>
 public static class SpokenYes
 {
-    /// <summary>A yes on its own, or at the start of the words: the later words may add to it.</summary>
+    /// <summary>A yes, at the start of the words.</summary>
     private static readonly string[] Strong =
     [
-        "yes", "yeah", "yep", "yup", "yes please", "ja", "jawohl", "ja bitte", "do it", "go ahead", "go for it", "allow it", "allow",
-        "allowed", "run it", "confirm", "confirmed", "approved", "affirmative", "proceed", "please do", "mach es", "mach das", "mach schon",
+        "yes", "yeah", "yep", "yup", "ja", "jawohl", "do it", "go ahead", "go for it", "allow it", "allow", "allowed", "run it",
+        "confirm", "confirmed", "approved", "affirmative", "proceed", "please do", "mach es", "mach das", "mach schon",
     ];
 
-    /// <summary>A yes only on its own, or before a strong one ("okay", "okay do it"): "okay, what's next" is something else.</summary>
-    private static readonly string[] Weak = ["ok", "okay", "sure", "alright", "fine", "right", "gut", "klar", "please", "bitte", "raven", "hey"];
+    /// <summary>A yes of their own, alone or before a strong one: "okay", "okay, do it".</summary>
+    private static readonly HashSet<string> Weak = new(StringComparer.Ordinal) { "ok", "okay", "sure", "alright", "klar" };
 
-    /// <summary>A word that turns a yes into something else: "yes, but not now", "yeah no", "ja, aber warte".</summary>
-    private static readonly HashSet<string> Contradicting = new(StringComparer.Ordinal)
+    /// <summary>Words that may come before a yes, but are none: "Raven, yes", "please, do it". On their own they are no yes.</summary>
+    private static readonly HashSet<string> Before = new(StringComparer.Ordinal) { "raven", "hey", "please", "bitte", "well", "so", "na" };
+
+    /// <summary>The only words that may follow a yes, and only <see cref="MaxAfter"/> of them: "yes, run it now", "ja bitte".</summary>
+    private static readonly HashSet<string> After = new(StringComparer.Ordinal)
     {
-        "no", "nope", "nah", "not", "dont", "don't", "never", "but", "wait", "stop", "cancel", "deny", "instead", "rather", "hold", "halt", "unless",
-        "nein", "nicht", "kein", "keine", "aber", "warte", "abbrechen", "lieber", "stattdessen", "doch",
+        "it", "that", "please", "now", "thanks", "thank", "you", "raven", "go", "ahead", "do", "run", "allow", "yes", "ja", "bitte", "jetzt",
+        "es", "das", "mach", "danke", "ok", "okay", "sure",
     };
+
+    private const int MaxAfter = 4;
 
     public static bool IsYes(string text)
     {
-        var words = Words(text);
-        if (words.Count == 0 || words.Any(Contradicting.Contains))
+        if (text.Contains('?'))
         {
-            return false;
+            return false; // "yeah, what does it want to run?" asks; it does not answer
         }
 
+        var words = Words(text);
         var at = 0;
-        while (at < words.Count && Weak.Contains(words[at], StringComparer.Ordinal))
+        var weak = false;
+        while (at < words.Count && (Before.Contains(words[at]) || Weak.Contains(words[at])))
         {
+            weak |= Weak.Contains(words[at]);
             at++;
         }
 
         if (at == words.Count)
         {
-            return true; // "okay", "sure": a yes on its own
+            return weak; // "okay", "sure": a yes on its own; "hey Raven", "please" are none
         }
 
-        var rest = string.Join(' ', words.Skip(at));
-        return Strong.Any(yes => rest == yes || rest.StartsWith(yes + " ", StringComparison.Ordinal));
+        var rest = words.Skip(at).ToList();
+        var yes = Strong.Select(s => s.Split(' ')).Where(s => rest.Count >= s.Length && rest.Take(s.Length).SequenceEqual(s))
+            .OrderByDescending(s => s.Length).FirstOrDefault();
+        if (yes is null)
+        {
+            return false;
+        }
+
+        var tail = rest.Skip(yes.Length).ToList();
+        return tail.Count <= MaxAfter && tail.All(After.Contains);
     }
 
     /// <summary>The words, lower case, without punctuation; an apostrophe inside a word stays ("don't").</summary>
