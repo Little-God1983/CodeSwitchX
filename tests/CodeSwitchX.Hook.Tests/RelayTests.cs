@@ -180,6 +180,42 @@ public class RelayTests : IDisposable
         Relay.BuildEnvelope("PreToolUse", payload, DateTimeOffset.UtcNow, 1, [], maxNestedBytes: 256 * 1024).ShouldContain("Option 200");
     }
 
+    private static string? HashIn(string envelope)
+    {
+        using var doc = JsonDocument.Parse(envelope);
+        return doc.RootElement.TryGetProperty("toolInputHash", out var hash) ? hash.GetString() : null;
+    }
+
+    [Fact]
+    public void A_tool_use_and_the_permission_prompt_it_raises_carry_the_same_fingerprint_of_its_input()
+    {
+        // The prompt names no tool use: the fingerprint is how CodeSwitchX tells which one a held prompt is.
+        var pre = Relay.BuildEnvelope("PreToolUse",
+            """{"session_id":"s1","tool_name":"WebFetch","tool_use_id":"toolu_1","tool_input":{"url":"https://a.example","prompt":"read it"}}""", DateTimeOffset.UtcNow, 1, []);
+        var prompt = Relay.BuildEnvelope("PermissionRequest",
+            """{"session_id":"s1","tool_name":"WebFetch", "tool_input": { "prompt": "read it", "url": "https://a.example" }}""", DateTimeOffset.UtcNow, 2, [], maxNestedBytes: 256 * 1024);
+        var other = Relay.BuildEnvelope("PreToolUse",
+            """{"session_id":"s1","tool_name":"WebFetch","tool_use_id":"toolu_2","tool_input":{"url":"https://b.example","prompt":"read it"}}""", DateTimeOffset.UtcNow, 1, []);
+
+        HashIn(pre).ShouldNotBeNull().Length.ShouldBe(32);
+        HashIn(prompt).ShouldBe(HashIn(pre), "key order and white space are not part of the input");
+        HashIn(other).ShouldNotBe(HashIn(pre));
+        HashIn(Relay.BuildEnvelope("Stop", """{"session_id":"s1"}""", DateTimeOffset.UtcNow, 1, [])).ShouldBeNull();
+    }
+
+    [Fact]
+    public void The_fingerprint_is_of_the_whole_input_even_where_the_envelope_drops_it()
+    {
+        var content = new string('x', 50_000);
+        var json = Relay.BuildEnvelope("PreToolUse", $$$"""{"session_id":"s1","tool_name":"Write","tool_input":{"file_path":"a.txt","content":"{{{content}}}"}}""",
+            DateTimeOffset.UtcNow, 1, []);
+        var changed = Relay.BuildEnvelope("PreToolUse", $$$"""{"session_id":"s1","tool_name":"Write","tool_input":{"file_path":"a.txt","content":"{{{content}}}y"}}""",
+            DateTimeOffset.UtcNow, 1, []);
+
+        json.ShouldNotContain(content);
+        HashIn(json).ShouldNotBeNull().ShouldNotBe(HashIn(changed));
+    }
+
     [Fact]
     public void Envelope_trims_oversized_fields_so_the_event_still_fits_the_api_body_limit()
     {

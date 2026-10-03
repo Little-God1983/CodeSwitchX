@@ -219,14 +219,19 @@ public sealed class ChatAsksTests : IDisposable
         (await second).ShouldNotBeNull().Answers.ShouldBe(["Apple"]);
     }
 
-    private ChatAsk Permission(string id = "p1", string session = "s1", string? agent = null) => new(id, ChatAskKind.Permission,
-        new HookEvent { SessionId = session, EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", AgentId = agent },
-        [], new ChatPermission("Bash", "run a command", "npm test", agent is null ? null : "general-purpose"));
+    /// <summary>A prompt for running <paramref name="input"/> (its fingerprint); no fingerprint, as from an older relay, for null.</summary>
+    private ChatAsk Permission(string id = "p1", string session = "s1", string? agent = null, string? input = "npm test", string tool = "Bash") =>
+        new(id, ChatAskKind.Permission,
+            new HookEvent { SessionId = session, EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = tool, AgentId = agent, ToolInputHash = input },
+            [], new ChatPermission(tool, "run a command", input ?? "npm test", agent is null ? null : "general-purpose"));
 
-    private void Step(string eventName, string session = "s1", string? agent = null, TimeSpan? ago = null) =>
+    /// <summary>A step of a tool use: its PreToolUse or PostToolUse, with the fingerprint of its input.</summary>
+    private void Step(string eventName, string? toolUse = null, string session = "s1", string? agent = null, string? input = null, string tool = "Bash",
+        TimeSpan? ago = null) =>
         _bus.Publish(new HookEventReceived(new HookEvent
         {
-            SessionId = session, EventName = eventName, At = _time.GetUtcNow() - (ago ?? TimeSpan.Zero), ToolName = "Bash", AgentId = agent,
+            SessionId = session, EventName = eventName, At = _time.GetUtcNow() - (ago ?? TimeSpan.Zero), ToolName = tool, AgentId = agent,
+            ToolUseId = toolUse, ToolInputHash = input,
         }));
 
     [Fact]
@@ -270,23 +275,85 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
-    public async Task The_next_step_of_the_agent_that_asked_means_it_was_answered_in_VS_Code()
+    public async Task The_end_of_the_prompt_s_own_tool_use_means_it_was_allowed_in_VS_Code()
     {
-        // Claude Code does not let the hook go when the prompt is answered in the chat's tab: the tool runs, or the turn goes on.
-        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
-        _time.Advance(TimeSpan.FromSeconds(5));
+        // Claude Code does not let the hook go when the prompt is answered in the chat's tab: the tool simply runs.
+        Step("PreToolUse", "toolu_1", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        var held = _asks.HoldAsync(Permission(input: "npm test"), CancellationToken.None);
 
-        Step("PreToolUse", ago: TimeSpan.FromSeconds(10)); // the step that asks, landing late
         Step("PermissionRequest");
         Step("Notification");
-        Step("PostToolUse", agent: "a1");
-        Step("PostToolUse", session: "s2");
         held.IsCompleted.ShouldBeFalse();
 
-        Step("PostToolUse");
+        Step("PostToolUse", "toolu_1", input: "npm test");
 
         (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
         _asks.Holds("s1").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Tools_running_side_by_side_take_their_steps_while_a_prompt_is_held()
+    {
+        // Grep and WebFetch in one batch: only WebFetch asks, and Grep runs meanwhile. Nobody answered the prompt.
+        Step("PreToolUse", "toolu_g", input: "grep TODO", tool: "Grep", ago: TimeSpan.FromSeconds(1));
+        Step("PreToolUse", "toolu_w", input: "fetch github.com", tool: "WebFetch", ago: TimeSpan.FromSeconds(1));
+        var held = _asks.HoldAsync(Permission(input: "fetch github.com", tool: "WebFetch"), CancellationToken.None);
+
+        Step("PostToolUse", "toolu_g", input: "grep TODO", tool: "Grep");
+        Step("PreToolUse", "toolu_r", input: "read App.cs", tool: "Read");
+        Step("PostToolUse", "toolu_r", input: "read App.cs", tool: "Read");
+
+        held.IsCompleted.ShouldBeFalse();
+        _asks.Permit("p1", allow: true).ShouldBeTrue();
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Two_prompts_of_one_agent_at_once_are_each_held_and_closed_apart()
+    {
+        // Two WebFetch calls side by side ask at the same moment: neither pushes the other out.
+        Step("PreToolUse", "toolu_1", input: "fetch a", tool: "WebFetch", ago: TimeSpan.FromSeconds(1));
+        Step("PreToolUse", "toolu_2", input: "fetch b", tool: "WebFetch", ago: TimeSpan.FromSeconds(1));
+        var first = _asks.HoldAsync(Permission("p1", input: "fetch a", tool: "WebFetch"), CancellationToken.None);
+        var second = _asks.HoldAsync(Permission("p2", input: "fetch b", tool: "WebFetch"), CancellationToken.None);
+        _asks.Open().Select(a => a.Id).ShouldBe(["p1", "p2"], ignoreOrder: true);
+
+        Step("PostToolUse", "toolu_2", input: "fetch b", tool: "WebFetch");
+
+        (await second).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
+        first.IsCompleted.ShouldBeFalse();
+        _asks.Permit("p1", allow: false).ShouldBeTrue();
+        (await first).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Another_agent_s_or_chat_s_tool_use_of_the_same_input_is_not_the_prompt_s()
+    {
+        Step("PreToolUse", "toolu_a", agent: "a1", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        Step("PreToolUse", "toolu_s", session: "s2", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        var held = _asks.HoldAsync(Permission(input: "npm test"), CancellationToken.None);
+
+        Step("PostToolUse", "toolu_a", agent: "a1", input: "npm test");
+        Step("PostToolUse", "toolu_s", session: "s2", input: "npm test");
+
+        held.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_end_of_the_agent_s_turn_ends_its_prompts()
+    {
+        // Denied in VS Code with words for the chat, the turn carries on to its end; a prompt from an older relay, which has
+        // no fingerprint to match its tool use, ends there too.
+        var main = _asks.HoldAsync(Permission("p1", input: null), CancellationToken.None);
+        var sub = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
+        _time.Advance(TimeSpan.FromSeconds(2));
+
+        Step("SubagentStop", agent: "a1");
+        (await sub).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Gone);
+        main.IsCompleted.ShouldBeFalse();
+
+        Step("Stop");
+        (await main).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.Gone);
     }
 
     [Fact]
@@ -296,23 +363,12 @@ public sealed class ChatAsksTests : IDisposable
         var sub = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
         _asks.Open().Select(a => a.Id).ShouldBe(["p1", "p2"], ignoreOrder: true);
 
-        Step("SubagentStop", agent: "a1");
+        _asks.Permit("p2", allow: false).ShouldBeTrue();
 
-        (await sub).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
+        (await sub).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
         main.IsCompleted.ShouldBeFalse();
         _asks.Permit("p1", allow: true).ShouldBeTrue();
         (await main).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
-    }
-
-    [Fact]
-    public async Task An_agent_asking_again_was_answered_in_VS_Code_the_time_before()
-    {
-        // One agent asks one permission at a time: a new prompt means the last one was answered in its tab.
-        var first = _asks.HoldAsync(Permission("p1"), CancellationToken.None);
-        var second = _asks.HoldAsync(Permission("p2"), CancellationToken.None);
-
-        (await first).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
-        second.IsCompleted.ShouldBeFalse();
     }
 
     [Fact]

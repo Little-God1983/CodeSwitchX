@@ -18,6 +18,12 @@ public sealed record HookEvent
     public string? ToolName { get; init; }
     public string? ToolUseId { get; init; }
 
+    /// <summary>
+    /// A fingerprint of the tool's input, the relay's: the same in a tool use's PreToolUse and in the PermissionRequest it
+    /// raises, which names no tool use of its own. Null without a tool input, and from a relay older than permission prompts.
+    /// </summary>
+    public string? ToolInputHash { get; init; }
+
     /// <summary>The sub-agent the event comes from; null for the chat's main agent. Sub-agents send hooks with the parent's session id.</summary>
     public string? AgentId { get; init; }
     public string? NotificationType { get; init; }

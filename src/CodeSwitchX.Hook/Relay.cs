@@ -230,16 +230,24 @@ internal static class Relay
             }
 
             writer.WriteEndArray();
-            writer.WritePropertyName("payload");
             if (TryParseJson(payload, out var document))
             {
                 using (document)
                 {
+                    // Taken before anything is cut or left out: a big tool input still has its fingerprint.
+                    if (document.RootElement.ValueKind == JsonValueKind.Object
+                        && document.RootElement.TryGetProperty("tool_input", out var input) && input.ValueKind == JsonValueKind.Object)
+                    {
+                        writer.WriteString("toolInputHash", ToolInputHash(input));
+                    }
+
+                    writer.WritePropertyName("payload");
                     WriteValue(writer, document.RootElement, top: true, maxNestedBytes);
                 }
             }
             else
             {
+                writer.WritePropertyName("payload");
                 writer.WriteStringValue(Truncate(payload));
             }
 
@@ -247,6 +255,68 @@ internal static class Relay
         }
 
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
+    }
+
+    /// <summary>
+    /// A fingerprint of a tool's input: the same in a tool use's PreToolUse and in the PermissionRequest it raises, which
+    /// names no tool use of its own, so CodeSwitchX can tell which tool use a held prompt is. Hashed in a canonical form
+    /// (keys sorted, no white space), whole: the forwarded payload cuts and drops parts of it.
+    /// </summary>
+    internal static string ToolInputHash(JsonElement input)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            WriteCanonical(writer, input);
+        }
+
+        var hash = System.Security.Cryptography.SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length));
+        return Convert.ToHexStringLower(hash.AsSpan(0, 16));
+    }
+
+    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                var properties = new List<(string Name, JsonElement Value)>();
+                foreach (var property in element.EnumerateObject())
+                {
+                    try
+                    {
+                        properties.Add((property.Name, property.Value));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // a key with half an emoji: left out on both sides alike
+                    }
+                }
+
+                foreach (var (name, value) in properties.OrderBy(p => p.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(name);
+                    WriteCanonical(writer, value);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteCanonical(writer, item);
+                }
+
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(StringOf(element));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     /// <summary>

@@ -12,7 +12,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     private ChatAsk Permitting(string id = "p1", string? agent = null) => new(id, ChatAskKind.Permission,
-        new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", AgentId = agent },
+        new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", AgentId = agent, ToolInputHash = "npm test" },
         [], new ChatPermission("Bash", "run a command", "npm test", agent is null ? null : "Explore"));
 
     private static List<ChatAskCard> PermissionCards(RavenPanelViewModel vm) =>
@@ -59,11 +59,13 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_prompt_answered_in_VS_Code_closes_its_card()
     {
         var (vm, asks) = await QuestionsVmAsync();
+        HookEvent Step(string name) => new() { SessionId = "a", EventName = name, At = _time.GetUtcNow(), ToolName = "Bash", ToolUseId = "toolu_1", ToolInputHash = "npm test" };
+        _bus.Publish(new HookEventReceived(Step("PreToolUse")));
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
 
         _time.Advance(TimeSpan.FromSeconds(3));
-        _bus.Publish(new HookEventReceived(new HookEvent { SessionId = "a", EventName = "PostToolUse", At = _time.GetUtcNow(), ToolName = "Bash" }));
+        _bus.Publish(new HookEventReceived(Step("PostToolUse")));
 
         await WithinAsync(held);
         card.IsOpen.ShouldBeFalse();

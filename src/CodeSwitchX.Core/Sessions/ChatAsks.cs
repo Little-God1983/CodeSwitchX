@@ -87,8 +87,8 @@ public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnl
 /// does. Whether an ask is taken at all is <see cref="Takes"/>'s to say; one not taken goes to VS Code at once. While an
 /// ask is held, the chat shows as waiting for the user, as it would with VS Code's own form open. A permission prompt
 /// differs: VS Code shows its own prompt all the while, an answer there counts first, and Claude Code does not let the hook
-/// go then; the agent's next step tells it (<see cref="Moves"/>). Thread-safe: hooks, the bus and the window come on any
-/// thread.
+/// go then; the end of the prompt's own tool use, or of the agent's turn, tells it (<see cref="Moves"/>). Thread-safe:
+/// hooks, the bus and the window come on any thread.
 /// </summary>
 public sealed class ChatAsks : IDisposable
 {
@@ -104,6 +104,15 @@ public sealed class ChatAsks : IDisposable
     private readonly IDisposable _steps;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The tool uses begun lately, by their id (their PreToolUse), until they end: a permission prompt names no tool use, and
+    /// is matched to its own by the tool and its input. The oldest go past <see cref="BegunKept"/>.
+    /// </summary>
+    private readonly Dictionary<string, HookEvent> _begun = new(StringComparer.Ordinal);
+    private readonly Queue<string> _begunOrder = new();
+
+    internal const int BegunKept = 512;
 
     public ChatAsks(IEventBus bus, TimeProvider time)
     {
@@ -152,22 +161,16 @@ public sealed class ChatAsks : IDisposable
         }
 
         var held = new Held(ask, new TaskCompletionSource<ChatAskClosed>(TaskCreationOptions.RunContinuationsAsynchronously));
-        List<Held> replaced;
+        Held? replaced;
         lock (_lock)
         {
-            // An agent asks one permission at a time: one it asks now means the one before was answered in its tab.
-            replaced = _held.Values.Where(h => h.Ask.Id == ask.Id || (ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, ask.Step))).ToList();
-            foreach (var old in replaced)
-            {
-                _held.Remove(old.Ask.Id);
-            }
-
+            _held.Remove(ask.Id, out replaced);
             _held[ask.Id] = held;
         }
 
-        foreach (var old in replaced)
+        if (replaced is not null)
         {
-            Finish(old, old.Ask.Id == ask.Id ? ChatAskOutcome.Gone : ChatAskOutcome.AnsweredInVsCode, null);
+            Finish(replaced, ChatAskOutcome.Gone, null);
         }
 
         // The window may have changed since Takes said yes, in a Recheck that could not see this ask yet.
@@ -374,26 +377,77 @@ public sealed class ChatAsks : IDisposable
         }
 
         CloseWhere(h => h.Ask.SessionId == change.Current.SessionId, ChatAskOutcome.Gone);
+        lock (_lock)
+        {
+            foreach (var id in _begun.Where(b => b.Value.SessionId == change.Current.SessionId).Select(b => b.Key).ToList())
+            {
+                _begun.Remove(id);
+            }
+        }
     }
 
-    /// <summary>The steps after which an agent waits on no permission prompt any more: it took one, or its turn ended.</summary>
-    private static bool IsStep(string eventName) =>
-        eventName is "PreToolUse" or "PostToolUse" or "PostToolUseFailure" or "Stop" or "SubagentStop";
-
     /// <summary>
-    /// The agent that asks for permission took a step since: the prompt was answered in its VS Code tab (Claude Code does not
-    /// let the hook go then), and nothing here is waited for. A No there ends the turn with no hook at all; the turn's end
-    /// closes the prompt then (<see cref="Changed"/>).
+    /// Where the chats' tool uses are, for the permission prompts held. Claude Code does not let a prompt's hook go when the
+    /// prompt is answered in the VS Code tab, so:
+    /// <list type="bullet">
+    /// <item>The end of the prompt's own tool use (its PostToolUse) means it was allowed there. Only its own: tools that run
+    /// side by side (Grep, WebFetch, read-only MCP tools) take steps while a prompt is held, and may ask at the same time.</item>
+    /// <item>The end of the agent's turn (Stop, SubagentStop) means it waits on no prompt any more: denied there with words
+    /// for the chat, say. A plain No there ends the turn with no hook at all; the turn's end closes the prompt then
+    /// (<see cref="Changed"/>).</item>
+    /// </list>
     /// </summary>
     private void Moves(HookEvent step)
     {
-        if (!IsStep(step.EventName))
+        switch (step.EventName)
         {
-            return;
-        }
+            case "PreToolUse" when step.ToolUseId is { } id:
+                lock (_lock)
+                {
+                    if (_begun.TryAdd(id, step))
+                    {
+                        _begunOrder.Enqueue(id);
+                        while (_begunOrder.Count > BegunKept)
+                        {
+                            _begun.Remove(_begunOrder.Dequeue());
+                        }
+                    }
+                }
 
-        CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.AnsweredInVsCode);
+                break;
+            case "PostToolUse" or "PostToolUseFailure" when step.ToolUseId is { } id:
+                HookEvent? begun;
+                Held? asked;
+                lock (_lock)
+                {
+                    _begun.Remove(id, out begun);
+                    asked = begun is null ? null : _held.Values.Where(h => IsPromptOf(h.Ask, begun)).OrderBy(h => h.Ask.At).FirstOrDefault();
+                }
+
+                if (asked is not null)
+                {
+                    Close(asked.Ask.Id, ChatAskOutcome.AnsweredInVsCode, null);
+                }
+
+                break;
+            case "SubagentStop":
+                CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                break;
+            case "Stop":
+                CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.SessionId == step.SessionId && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                break;
+        }
     }
+
+    /// <summary>
+    /// Whether the held ask is the permission prompt the tool use <paramref name="begun"/> raised: the same agent, tool and
+    /// input, asked after it began. A prompt from a relay without the input's fingerprint is no tool use's: its turn's end
+    /// closes it.
+    /// </summary>
+    private static bool IsPromptOf(ChatAsk ask, HookEvent begun) =>
+        ask.Kind == ChatAskKind.Permission && SameAgent(ask, begun) && ask.At >= begun.At
+        && string.Equals(ask.Step.ToolName, begun.ToolName, StringComparison.Ordinal)
+        && ask.Step.ToolInputHash is { } fingerprint && string.Equals(fingerprint, begun.ToolInputHash, StringComparison.Ordinal);
 
     private static bool SameAgent(ChatAsk ask, HookEvent step) =>
         ask.SessionId == step.SessionId && string.Equals(ask.Step.AgentId, step.AgentId, StringComparison.Ordinal);
