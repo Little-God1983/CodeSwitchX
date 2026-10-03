@@ -13,7 +13,9 @@ namespace CodeSwitchX.Hook;
 /// turn, and on PreToolUse not to take the step it was about to. Run as <see cref="AskArgument"/> (the PreToolUse hook of
 /// a chat's question), it hands the question to CodeSwitchX and waits: answered there, it gives Claude Code the answers as
 /// the tool's input; stopped there, it ends the turn as above; otherwise it says nothing, and VS Code asks the question
-/// in the chat's tab.
+/// in the chat's tab. Run as <see cref="PermitArgument"/> (the PermissionRequest hook), it hands the permission prompt over
+/// the same way: answered there, it allows or denies; otherwise it says nothing, and the prompt VS Code shows meanwhile
+/// takes the answer.
 /// Only the small fields the engine needs travel: long strings are cut and large nested values (tool inputs and
 /// responses) are dropped, so a PostToolUse for a big file read still fits the API's body limit.
 /// </summary>
@@ -51,7 +53,10 @@ internal static class Relay
     /// <summary>The argument of the hook that asks a chat's question (<c>PreToolUse</c>, matcher <c>AskUserQuestion</c>).</summary>
     internal const string AskArgument = "Ask";
 
-    /// <summary>How long a question waits for its answer: past CodeSwitchX's own limit, below the hook's timeout.</summary>
+    /// <summary>The argument of the hook that asks a chat's permission prompt (<c>PermissionRequest</c>).</summary>
+    internal const string PermitArgument = "Permit";
+
+    /// <summary>How long a question or a permission prompt waits for its answer: past CodeSwitchX's own limit, below the hook's timeout.</summary>
     internal const int AskWaitMs = 650_000;
 
     /// <summary>A question's options and an answer in the user's own words are bigger than a stop.</summary>
@@ -66,6 +71,8 @@ internal static class Relay
         {
             var eventName = args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) ? args[0] : "Unknown";
             var asks = eventName == AskArgument;
+            var permits = eventName == PermitArgument;
+            var held = asks || permits;
             var endpoint = ReadEndpoint(Path.Combine(dataDirectory, "endpoint.json"));
             if (endpoint is null || !OwnerIsAlive(endpoint))
             {
@@ -80,15 +87,18 @@ internal static class Relay
             }
 
             var payload = await ReadPayloadAsync(stdin).ConfigureAwait(false);
-            var envelope = BuildEnvelope(asks ? "PreToolUse" : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
-                asks ? MaxAskBytes : MaxNestedBytes);
+            var heldEvent = asks ? "PreToolUse" : "PermissionRequest";
+            var envelope = BuildEnvelope(held ? heldEvent : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
+                held ? MaxAskBytes : MaxNestedBytes);
 
-            if (asks)
+            if (held)
             {
                 using var asking = new CancellationTokenSource(AskWaitMs);
                 var answered = await PostAsync(endpoint, token, envelope, new Route("asks", AskWaitMs, MaxAskBytes), asking.Token).ConfigureAwait(false);
-                // The user stopped the chat while its question was held: the stop ends the turn here.
-                if ((StopIn(answered) is { } stopped ? StopAnswer("PreToolUse", stopped) : AnswerOutput(payload, AnswersIn(answered))) is { } output)
+                // The user stopped the chat while it was held: the stop ends the turn here.
+                if ((StopIn(answered) is { } stopped ? StopAnswer(heldEvent, stopped)
+                        : asks ? AnswerOutput(payload, AnswersIn(answered))
+                        : PermitOutput(PermitIn(answered))) is { } output)
                 {
                     await stdout.WriteAsync(output).ConfigureAwait(false);
                     await stdout.FlushAsync().ConfigureAwait(false);
@@ -416,7 +426,8 @@ internal static class Relay
 
     /// <summary>
     /// What tells Claude Code to end the turn: <c>continue: false</c> with the reason, which the chat reads; on PreToolUse
-    /// also a deny, so the step it was about to take is not taken but shown as stopped.
+    /// also a deny, so the step it was about to take is not taken but shown as stopped, and on PermissionRequest a deny
+    /// that interrupts, as VS Code's own No does.
     /// </summary>
     internal static string StopAnswer(string eventName, string reason)
     {
@@ -434,7 +445,77 @@ internal static class Relay
                 writer.WriteString("permissionDecisionReason", reason);
                 writer.WriteEndObject();
             }
+            else if (eventName == "PermissionRequest")
+            {
+                writer.WriteStartObject("hookSpecificOutput");
+                writer.WriteString("hookEventName", "PermissionRequest");
+                writer.WriteStartObject("decision");
+                writer.WriteString("behavior", "deny");
+                writer.WriteString("message", reason);
+                writer.WriteBoolean("interrupt", true);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
 
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
+    }
+
+    /// <summary>
+    /// The user's answer in CodeSwitchX's answer to a permission prompt (<c>{"permit": {"allow": true, "message": "…"}}</c>);
+    /// null for none or anything else.
+    /// </summary>
+    internal static (bool Allow, string? Message)? PermitIn(string? answer)
+    {
+        if (string.IsNullOrEmpty(answer) || !TryParseJson(answer, out var document))
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("permit", out var permit) || permit.ValueKind != JsonValueKind.Object
+                || !permit.TryGetProperty("allow", out var allow) || allow.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return null;
+            }
+
+            var message = permit.TryGetProperty("message", out var said) && said.ValueKind == JsonValueKind.String && StringOf(said) is { Length: > 0 } text
+                ? Truncate(text)
+                : null;
+            return (allow.ValueKind == JsonValueKind.True, message);
+        }
+    }
+
+    /// <summary>
+    /// What gives Claude Code the user's answer to a permission prompt: allowed, or denied with what the chat is told, and
+    /// the chat carries on. Null for no answer: the prompt VS Code shows takes it then.
+    /// </summary>
+    internal static string? PermitOutput((bool Allow, string? Message)? permit)
+    {
+        if (permit is not { } given)
+        {
+            return null;
+        }
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartObject("hookSpecificOutput");
+            writer.WriteString("hookEventName", "PermissionRequest");
+            writer.WriteStartObject("decision");
+            writer.WriteString("behavior", given.Allow ? "allow" : "deny");
+            if (!given.Allow && given.Message is { } message)
+            {
+                writer.WriteString("message", message);
+            }
+
+            writer.WriteEndObject();
+            writer.WriteEndObject();
             writer.WriteEndObject();
         }
 

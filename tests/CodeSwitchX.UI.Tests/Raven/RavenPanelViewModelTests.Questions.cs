@@ -29,7 +29,7 @@ public sealed partial class RavenPanelViewModelTests
 
     private static readonly ChatQuestion Colours = new("Which colours?", null, [new ChatQuestionOption("Red", null), new ChatQuestionOption("Blue", null)], true);
 
-    private static ChatQuestionCard Card(RavenPanelViewModel vm) => vm.Log.Single(e => e.Kind == RavenLogKind.Question).Question!;
+    private static ChatAskCard Card(RavenPanelViewModel vm) => vm.Log.Single(e => e.Kind == RavenLogKind.Question).Ask!;
 
     [Fact]
     public async Task A_chat_s_question_is_shown_read_out_and_answered_by_a_click_on_its_option()
@@ -225,7 +225,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public void What_Raven_says_of_several_questions_names_each_and_its_options()
     {
-        var card = new ChatQuestionCard(Asking(Fruit, Colours)) { Said = "CodeSwitchX, chat \"Release notes\"" };
+        var card = new ChatAskCard(Asking(Fruit, Colours)) { Said = "CodeSwitchX, chat \"Release notes\"" };
 
         RavenPanelViewModel.QuestionSentence([card]).ShouldBe(
             "CodeSwitchX, chat \"Release notes\" asks 2 questions. Which fruit? Apple or Banana. Which colours? Any of Red or Blue.");

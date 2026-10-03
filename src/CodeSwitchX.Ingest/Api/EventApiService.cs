@@ -166,8 +166,9 @@ public sealed class EventApiService : IHostedService
             return Results.Ok(new { stop = reason });
         });
 
-        // A chat's question, from its relay's Ask hook, which waits for the answer: 200 with one answer per question, 200 with
-        // a stop when the user stopped the chat meanwhile, or 204 for VS Code to ask it in the chat's tab.
+        // A chat's question, from its relay's Ask hook, or its permission prompt, from its Permit hook; either waits for the
+        // answer: 200 with one answer per question or with the permit, 200 with a stop when the user stopped the chat
+        // meanwhile, or 204 for VS Code to ask it in the chat's tab.
         app.MapPost("/asks", async (HttpContext context) =>
         {
             if (!IsAuthorized(context, token))
@@ -188,8 +189,15 @@ public sealed class EventApiService : IHostedService
                 return Results.Ok(new { answers });
             }
 
-            // Only a relay with the Ask hook asks here, and every one of those hands a stop on.
-            if (closed is { Outcome: ChatAskOutcome.Stopped } && _stops?.Take(ask.Step, relayHandsItOn: true) is { } reason)
+            if (closed is { Outcome: ChatAskOutcome.Answered, Permit: { } permit })
+            {
+                return Results.Ok(new { permit = new { allow = permit.Allow, message = permit.Message } });
+            }
+
+            // Only a relay with the Ask or Permit hook asks here, and every one of those hands a stop on. The step a permission
+            // prompt holds is the tool use it asks for, which the stop keeps from running as on its PreToolUse.
+            var step = ask.Kind == ChatAskKind.Permission ? ask.Step with { EventName = "PreToolUse" } : ask.Step;
+            if (closed is { Outcome: ChatAskOutcome.Stopped } && _stops?.Take(step, relayHandsItOn: true) is { } reason)
             {
                 // Ended now, not when it asked: the Yard counts the chat idle from here.
                 _bus.Publish(new HookEventReceived(TurnStops.EndOf(ask.Step with { At = _time.GetUtcNow() })));

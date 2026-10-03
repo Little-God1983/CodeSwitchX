@@ -96,6 +96,22 @@ public sealed class ChatNewsTests : IDisposable
     }
 
     [Fact]
+    public async Task A_permission_prompt_held_after_its_news_came_is_not_told_twice()
+    {
+        // The prompt's own PermissionRequest reaches the Yard through the hook for every event, and can land before the hook
+        // that holds it: the news came first, but by the time it is told the card tells it.
+        var held = false;
+        using var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: id => id == "b" && held);
+        _news.Dispose();
+
+        Change("b", SessionState.Working, SessionState.Waiting, "Claude needs your permission to use Bash");
+        Change("c", SessionState.Working, SessionState.Waiting, "Claude needs your permission to use Bash");
+        held = true;
+
+        (await news.TakeAsync(TestContext.Current.CancellationToken)).Select(l => l.SessionId).ShouldBe(["c"]);
+    }
+
+    [Fact]
     public async Task After_a_stop_the_end_of_the_turn_the_user_had_it_continue_is_news_again()
     {
         using var stops = new TurnStops(_bus, _time);

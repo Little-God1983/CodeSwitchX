@@ -2,12 +2,28 @@ using CodeSwitchX.Core.Messaging;
 
 namespace CodeSwitchX.Core.Sessions;
 
-/// <summary>What a chat can ask the user that CodeSwitchX can answer. Permission prompts are to follow (#102).</summary>
+/// <summary>What a chat can ask the user that CodeSwitchX can answer.</summary>
 public enum ChatAskKind
 {
     /// <summary>Claude's <c>AskUserQuestion</c>: one to four questions, each with options or an answer of the user's own.</summary>
     Question,
+
+    /// <summary>
+    /// A permission prompt (<c>PermissionRequest</c>): a tool the chat wants to use, allowed or denied. VS Code shows its own
+    /// prompt for it all the while, and an answer there counts first.
+    /// </summary>
+    Permission,
 }
+
+/// <summary>
+/// What a chat asks permission for, as the card shows it: what it wants ("run a command"), what exactly (the command, the
+/// file, the URL, or the tool and a piece of its input), and the sub-agent that asks, if one does.
+/// </summary>
+/// <param name="Agent">The sub-agent's type ("general-purpose"); null when the chat's main agent asks.</param>
+public sealed record ChatPermission(string ToolName, string Wants, string Subject, string? Agent);
+
+/// <summary>The user's answer to a permission prompt: allowed, or denied with what the chat is told.</summary>
+public sealed record ChatPermit(bool Allow, string? Message);
 
 /// <summary>One option of a question, as the chat wrote it.</summary>
 public sealed record ChatQuestionOption(string Label, string? Description);
@@ -16,18 +32,24 @@ public sealed record ChatQuestionOption(string Label, string? Description);
 public sealed record ChatQuestion(string Text, string? Header, IReadOnlyList<ChatQuestionOption> Options, bool MultiSelect);
 
 /// <summary>
-/// What a chat asks, held by its hook while the user answers in CodeSwitchX. <see cref="Step"/> is the hook event of the
-/// tool use that asks (its <c>PreToolUse</c>): the chat, its agent and the tool use's id.
+/// What a chat asks, held by its hook while the user answers in CodeSwitchX. <see cref="Step"/> is the hook event that
+/// asks: a question's <c>PreToolUse</c>, a permission prompt's <c>PermissionRequest</c>; the chat and its agent. A question
+/// has its <see cref="Questions"/>, a permission prompt its <see cref="Permission"/> and no questions.
 /// </summary>
-public sealed record ChatAsk(string Id, ChatAskKind Kind, HookEvent Step, IReadOnlyList<ChatQuestion> Questions)
+public sealed record ChatAsk(string Id, ChatAskKind Kind, HookEvent Step, IReadOnlyList<ChatQuestion> Questions, ChatPermission? Permission = null)
 {
     public string SessionId => Step.SessionId;
 
     public DateTimeOffset At => Step.At;
 
-    /// <summary>The questions as Raven's brain reads them: "\"Which fruit?\" (one of: Apple, Banana, Cherry)", joined by "; ".</summary>
-    public string Describe() => string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
-        + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
+    /// <summary>
+    /// What it asks as Raven's brain reads it: the questions, "\"Which fruit?\" (one of: Apple, Banana, Cherry)" joined by
+    /// "; ", or the permission, "permission to run a command: npm test".
+    /// </summary>
+    public string Describe() => Permission is { } permission
+        ? $"permission to {permission.Wants}: {permission.Subject}" + (permission.Agent is { } agent ? $" (its {agent} sub-agent asks)" : "")
+        : string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
+            + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 }
 
 /// <summary>How a held ask ended.</summary>
@@ -47,27 +69,39 @@ public enum ChatAskOutcome
 
     /// <summary>The user asked Raven to stop the chat (<see cref="ChatAsks.Stop"/>): the stop goes back in the ask's answer.</summary>
     Stopped,
+
+    /// <summary>A permission prompt was answered in the chat's VS Code tab: the agent that asked has moved on.</summary>
+    AnsweredInVsCode,
 }
 
-/// <summary>A held ask that ended, with the answers given, one per question, when it was <see cref="ChatAskOutcome.Answered"/>.</summary>
-public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnlyList<string>? Answers);
+/// <summary>
+/// A held ask that ended. Answered here, it has the answers given (one per question) for a question, or the
+/// <see cref="Permit"/> for a permission prompt.
+/// </summary>
+public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnlyList<string>? Answers, ChatPermit? Permit = null);
 
 /// <summary>
 /// What chats ask the user, held while the user answers in CodeSwitchX. A chat's hook relay hands the ask over and waits
 /// (<see cref="HoldAsync"/>): the answers given here (<see cref="Answer"/>) go back to Claude Code as the tool's input, and
 /// an ask let go (<see cref="ToVsCode"/>, or after <see cref="Lifetime"/>) leaves the chat's tab to ask it as it always
 /// does. Whether an ask is taken at all is <see cref="Takes"/>'s to say; one not taken goes to VS Code at once. While an
-/// ask is held, the chat shows as waiting for the user, as it would with VS Code's own form open. Thread-safe: hooks, the
-/// bus and the window come on any thread.
+/// ask is held, the chat shows as waiting for the user, as it would with VS Code's own form open. A permission prompt
+/// differs: VS Code shows its own prompt all the while, an answer there counts first, and Claude Code does not let the hook
+/// go then; the agent's next step tells it (<see cref="Moves"/>). Thread-safe: hooks, the bus and the window come on any
+/// thread.
 /// </summary>
 public sealed class ChatAsks : IDisposable
 {
     /// <summary>An ask held this long goes to VS Code: the user is not answering it here. Below the hook's own timeout.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(10);
 
+    /// <summary>What a chat denied here is told, unless the user said more.</summary>
+    public const string DeniedMessage = "The user denied this in the Raven panel.";
+
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
     private readonly IDisposable _subscription;
+    private readonly IDisposable _steps;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
 
@@ -76,6 +110,7 @@ public sealed class ChatAsks : IDisposable
         _bus = bus;
         _time = time;
         _subscription = bus.Subscribe<SessionChanged>(Changed);
+        _steps = bus.Subscribe<HookEventReceived>(received => Moves(received.Event));
     }
 
     /// <summary>Whether CodeSwitchX takes this ask, or leaves it to VS Code at once. Takes none until the app says otherwise.</summary>
@@ -104,7 +139,7 @@ public sealed class ChatAsks : IDisposable
         bool takes;
         try
         {
-            takes = ask.Questions.Count > 0 && Takes(ask);
+            takes = (ask.Kind == ChatAskKind.Permission ? ask.Permission is not null : ask.Questions.Count > 0) && Takes(ask);
         }
         catch (Exception)
         {
@@ -117,16 +152,22 @@ public sealed class ChatAsks : IDisposable
         }
 
         var held = new Held(ask, new TaskCompletionSource<ChatAskClosed>(TaskCreationOptions.RunContinuationsAsynchronously));
-        Held? replaced;
+        List<Held> replaced;
         lock (_lock)
         {
-            _held.Remove(ask.Id, out replaced);
+            // An agent asks one permission at a time: one it asks now means the one before was answered in its tab.
+            replaced = _held.Values.Where(h => h.Ask.Id == ask.Id || (ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, ask.Step))).ToList();
+            foreach (var old in replaced)
+            {
+                _held.Remove(old.Ask.Id);
+            }
+
             _held[ask.Id] = held;
         }
 
-        if (replaced is not null)
+        foreach (var old in replaced)
         {
-            Finish(replaced, ChatAskOutcome.Gone, null);
+            Finish(old, old.Ask.Id == ask.Id ? ChatAskOutcome.Gone : ChatAskOutcome.AnsweredInVsCode, null);
         }
 
         // The window may have changed since Takes said yes, in a Recheck that could not see this ask yet.
@@ -136,8 +177,13 @@ public sealed class ChatAsks : IDisposable
             return await held.Done.Task.ConfigureAwait(false);
         }
 
-        // The chat waits for the user from now on, as it does with VS Code's own form open.
-        _bus.Publish(new HookEventReceived(Asking(ask)));
+        // The chat waits for the user from now on, as it does with VS Code's own form open. A permission prompt's own
+        // PermissionRequest tells that through the hooks for every event.
+        if (ask.Kind == ChatAskKind.Question)
+        {
+            _bus.Publish(new HookEventReceived(Asking(ask)));
+        }
+
         Opened?.Invoke(ask);
         try
         {
@@ -151,8 +197,9 @@ public sealed class ChatAsks : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Claude Code let the hook go (the turn was stopped in its tab): nobody waits for the answer any more.
-            if (Close(ask.Id, ChatAskOutcome.Gone, null))
+            // Claude Code let the hook go (the turn was stopped in its tab): nobody waits for the answer any more. After a
+            // permission prompt the chat's own steps tell where it is.
+            if (Close(ask.Id, ChatAskOutcome.Gone, null) && ask.Kind == ChatAskKind.Question)
             {
                 _bus.Publish(new HookEventReceived(LetGo(ask, _time.GetUtcNow())));
             }
@@ -180,6 +227,11 @@ public sealed class ChatAsks : IDisposable
             return false;
         }
 
+        if (ask.Kind != ChatAskKind.Question)
+        {
+            throw new ArgumentException("The chat asks for permission, not a question: it is allowed or denied.", nameof(askId));
+        }
+
         if (answers.Count != ask.Questions.Count)
         {
             throw new ArgumentException($"The chat asks {ask.Questions.Count} question{(ask.Questions.Count == 1 ? "" : "s")}; {answers.Count} answer{(answers.Count == 1 ? " was" : "s were")} given.", nameof(answers));
@@ -191,6 +243,33 @@ public sealed class ChatAsks : IDisposable
         }
 
         return Close(askId, ChatAskOutcome.Answered, answers.Select(a => a.Trim()).ToList());
+    }
+
+    /// <summary>
+    /// Allows or denies a held permission prompt; a deny tells the chat <paramref name="message"/>, or
+    /// <see cref="DeniedMessage"/>, and the chat carries on. False when it is not held any more.
+    /// </summary>
+    /// <exception cref="ArgumentException">The ask is a question.</exception>
+    public bool Permit(string askId, bool allow, string? message = null)
+    {
+        ChatAsk? ask;
+        lock (_lock)
+        {
+            ask = _held.GetValueOrDefault(askId)?.Ask;
+        }
+
+        if (ask is null)
+        {
+            return false;
+        }
+
+        if (ask.Kind != ChatAskKind.Permission)
+        {
+            throw new ArgumentException("The chat asks a question, not for permission: it needs answers.", nameof(askId));
+        }
+
+        var said = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+        return Close(askId, ChatAskOutcome.Answered, null, new ChatPermit(allow, allow ? said : said ?? DeniedMessage));
     }
 
     /// <summary>Lets a held ask go to VS Code, which asks it in the chat's tab. False when it is not held any more.</summary>
@@ -297,6 +376,28 @@ public sealed class ChatAsks : IDisposable
         CloseWhere(h => h.Ask.SessionId == change.Current.SessionId, ChatAskOutcome.Gone);
     }
 
+    /// <summary>The steps after which an agent waits on no permission prompt any more: it took one, or its turn ended.</summary>
+    private static bool IsStep(string eventName) =>
+        eventName is "PreToolUse" or "PostToolUse" or "PostToolUseFailure" or "Stop" or "SubagentStop";
+
+    /// <summary>
+    /// The agent that asks for permission took a step since: the prompt was answered in its VS Code tab (Claude Code does not
+    /// let the hook go then), and nothing here is waited for. A No there ends the turn with no hook at all; the turn's end
+    /// closes the prompt then (<see cref="Changed"/>).
+    /// </summary>
+    private void Moves(HookEvent step)
+    {
+        if (!IsStep(step.EventName))
+        {
+            return;
+        }
+
+        CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.AnsweredInVsCode);
+    }
+
+    private static bool SameAgent(ChatAsk ask, HookEvent step) =>
+        ask.SessionId == step.SessionId && string.Equals(ask.Step.AgentId, step.AgentId, StringComparison.Ordinal);
+
     /// <summary>Ends the held asks that <paramref name="ends"/> picks; it is asked outside the lock.</summary>
     private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome)
     {
@@ -312,7 +413,7 @@ public sealed class ChatAsks : IDisposable
         }
     }
 
-    private bool Close(string askId, ChatAskOutcome outcome, IReadOnlyList<string>? answers)
+    private bool Close(string askId, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)
     {
         Held? held;
         lock (_lock)
@@ -323,18 +424,22 @@ public sealed class ChatAsks : IDisposable
             }
         }
 
-        Finish(held, outcome, answers);
+        Finish(held, outcome, answers, permit);
         return true;
     }
 
-    private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers)
+    private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)
     {
-        var closed = new ChatAskClosed(held.Ask, outcome, answers);
+        var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
         held.Done.TrySetResult(closed);
         Closed?.Invoke(closed);
     }
 
-    public void Dispose() => _subscription.Dispose();
+    public void Dispose()
+    {
+        _subscription.Dispose();
+        _steps.Dispose();
+    }
 
     private sealed record Held(ChatAsk Ask, TaskCompletionSource<ChatAskClosed> Done);
 }

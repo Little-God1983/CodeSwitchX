@@ -57,4 +57,69 @@ public sealed class ChatAskParserTests
         ChatAskParser.Parse(Envelope("""{"questions":[{"question":"Which name?"}]}"""), At).ShouldNotBeNull()
             .Questions.ShouldHaveSingleItem().Options.ShouldBeEmpty();
     }
+
+    /// <summary>A PermissionRequest as the lab saw it (extension 2.1.287): no tool_use_id; agent_id and agent_type for a sub-agent.</summary>
+    private static string Permission(string tool, string toolInput, string agent = "") => $$$"""
+        {"event":"PermissionRequest","relayPid":7,"parentChain":[],
+         "payload":{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"{{{tool}}}","cwd":"E:\\Repo",{{{agent}}}
+                    "tool_input":{{{toolInput}}},
+                    "permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]}}
+        """;
+
+    [Theory]
+    [InlineData("Bash", """{"command":"npm test","description":"Run the tests"}""", "run a command", "npm test")]
+    [InlineData("PowerShell", """{"command":"Remove-Item build -Recurse"}""", "run a command", "Remove-Item build -Recurse")]
+    [InlineData("Edit", """{"file_path":"E:\\Repo\\App.cs","old_string":"a","new_string":"b"}""", "edit a file", @"E:\Repo\App.cs")]
+    [InlineData("Write", """{"file_path":"E:\\Repo\\new.txt","content":"x"}""", "write a file", @"E:\Repo\new.txt")]
+    [InlineData("NotebookEdit", """{"notebook_path":"E:\\Repo\\a.ipynb"}""", "edit a notebook", @"E:\Repo\a.ipynb")]
+    [InlineData("WebFetch", """{"url":"https://github.com/x","prompt":"read it"}""", "fetch a web page", "https://github.com/x")]
+    [InlineData("mcp__github__create_issue", """{"title":"Bug"}""", "use mcp__github__create_issue", """{"title":"Bug"}""")]
+    [InlineData("Bash", """{"description":"no command"}""", "use Bash", """{"description":"no command"}""")]
+    public void A_permission_prompt_is_read_as_what_the_tool_wants_and_on_what(string tool, string toolInput, string wants, string subject)
+    {
+        var ask = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull();
+
+        ask.Kind.ShouldBe(ChatAskKind.Permission);
+        ask.Questions.ShouldBeEmpty();
+        (ask.SessionId, ask.Step.EventName, ask.Step.AgentId, ask.At).ShouldBe(("s1", "PermissionRequest", null, At));
+        ask.Permission.ShouldBe(new ChatPermission(tool, wants, subject, null));
+    }
+
+    [Fact]
+    public void A_sub_agent_s_permission_prompt_names_it()
+    {
+        var ask = ChatAskParser.Parse(Permission("Bash", """{"command":"npm test"}""", """ "agent_id":"a1","agent_type":"Explore", """), At).ShouldNotBeNull();
+
+        ask.Step.AgentId.ShouldBe("a1");
+        ask.Permission.ShouldNotBeNull().Agent.ShouldBe("Explore");
+    }
+
+    [Fact]
+    public void Each_permission_prompt_gets_an_id_of_its_own()
+    {
+        // There is no tool_use_id to take it from.
+        var first = ChatAskParser.Parse(Permission("Bash", """{"command":"ls"}"""), At).ShouldNotBeNull();
+        var second = ChatAskParser.Parse(Permission("Bash", """{"command":"ls"}"""), At).ShouldNotBeNull();
+
+        first.Id.ShouldNotBe(second.Id);
+    }
+
+    [Fact]
+    public void A_long_command_is_cut_on_the_card()
+    {
+        var command = new string('x', 2000);
+
+        var subject = ChatAskParser.Parse(Permission("Bash", $$"""{"command":"{{command}}"}"""), At).ShouldNotBeNull().Permission!.Subject;
+
+        subject.Length.ShouldBe(ChatAskParser.MaxSubjectChars);
+        subject.ShouldEndWith("…");
+    }
+
+    [Theory]
+    [InlineData("AskUserQuestion")]
+    [InlineData("ExitPlanMode")]
+    public void A_question_and_a_plan_to_approve_are_left_to_VS_Code(string tool)
+    {
+        ChatAskParser.Parse(Permission(tool, """{"plan":"…"}"""), At).ShouldBeNull();
+    }
 }

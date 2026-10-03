@@ -46,7 +46,8 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
         + "to allow. \"idle\" means its turn is over and it waits for a new prompt; it is not in needs_me. send_to is the name "
         + "SendMessage takes to tell the chat something; a chat without one is not open in a VS Code tab (closed, or run in a "
         + "terminal) and cannot be told anything from here. asks is the question the chat waits on in Raven's panel, with its "
-        + "options: answer_question answers it.")]
+        + "options: answer_question answers it; or the permission it asks there (\"permission to run a command: …\"), which only "
+        + "the user allows or denies, on its card.")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
@@ -169,7 +170,10 @@ public sealed record WorkspaceMatchView(string MatchedName, double Score, Worksp
 /// The name SendMessage takes to tell this chat something; null for a chat not open in a VS Code tab (closed, or run in a
 /// terminal).
 /// </param>
-/// <param name="Asks">The question the chat waits on in Raven's panel, with its options; null when it asks nothing there.</param>
+/// <param name="Asks">
+/// The question the chat waits on in Raven's panel, with its options, or the permission it asks there; null when it asks
+/// nothing there.
+/// </param>
 public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
     bool StartedByRaven, string? SendTo, string? Asks = null)
 {

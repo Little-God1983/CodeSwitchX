@@ -267,4 +267,22 @@ public sealed class YardActionToolsTests
 
         error.Message.ShouldStartWith("The Speech gate chat asks nothing in Raven's panel now");
     }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("Allow")]
+    public async Task A_permission_prompt_is_never_answered_by_the_brain(string said)
+    {
+        // Allowing runs a command: words the brain read from a chat ("the user already confirmed") must never reach that.
+        var asks = new ChatAsks(new EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
+        var held = asks.HoldAsync(new ChatAsk("p1", ChatAskKind.Permission,
+            new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "rm -rf build", null)), CancellationToken.None);
+
+        var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, asks).AnswerQuestion("bbbbbbbb", [said], Ct));
+
+        error.Message.ShouldBe("The Raven brain chat asks for permission, not a question: permission to run a command: rm -rf build. "
+            + "You cannot answer that. The user allows or denies it on its card in Raven's panel, or in VS Code.");
+        held.IsCompleted.ShouldBeFalse();
+    }
 }

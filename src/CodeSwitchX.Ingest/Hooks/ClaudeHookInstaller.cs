@@ -42,6 +42,20 @@ public sealed class ClaudeHookInstaller
     /// <summary>Above CodeSwitchX's own ten minutes, which let the question go to VS Code first.</summary>
     public const int AskTimeoutSeconds = 660;
 
+    /// <summary>
+    /// The relay's argument for the second PermissionRequest entry: it hands a chat's permission prompt to CodeSwitchX and
+    /// waits, as <see cref="AskArgument"/> does, while VS Code shows the prompt too.
+    /// </summary>
+    public const string PermitArgument = "Permit";
+
+    public const string PermitEvent = "PermissionRequest";
+
+    /// <summary>
+    /// The entries that hold what a chat asks, each in a group of its own: a question's (only for
+    /// <see cref="AskMatcher"/>) and a permission prompt's (every tool). Both wait up to <see cref="AskTimeoutSeconds"/>.
+    /// </summary>
+    private static readonly HeldEntry[] HeldEntries = [new(AskArgument, AskEvent, AskMatcher), new(PermitArgument, PermitEvent, null)];
+
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
         WriteIndented = true,
@@ -73,7 +87,7 @@ public sealed class ClaudeHookInstaller
         var outdated = false;
         foreach (var eventName in Events)
         {
-            var ours = OurHooks(settings, eventName).Where(h => !IsAsk(h)).ToList();
+            var ours = OurHooks(settings, eventName).Where(h => !IsHeld(h)).ToList();
             if (ours.Count == 0)
             {
                 continue;
@@ -86,11 +100,15 @@ public sealed class ClaudeHookInstaller
             }
         }
 
-        // Without its entry for questions, an install from before them asks every question in VS Code: one more to update.
-        var asks = OurAsks(settings).ToList();
-        if (asks.Count != 1 || !IsCurrentAsk(asks[0].Group, asks[0].Hook, relayExecutable))
+        // Without its entry for questions or permission prompts, an install from before them asks them in VS Code only: one
+        // more to update.
+        foreach (var entry in HeldEntries)
         {
-            outdated = true;
+            var held = OurHeld(settings, entry).ToList();
+            if (held.Count != 1 || !IsCurrentHeld(entry, held[0].Group, held[0].Hook, relayExecutable))
+            {
+                outdated = true;
+            }
         }
 
         var missing = Events.Except(installed).ToList();
@@ -128,7 +146,7 @@ public sealed class ClaudeHookInstaller
                 hooks[eventName] = groups;
             }
 
-            var ours = OurHooks(settings, eventName).Where(h => !IsAsk(h)).ToList();
+            var ours = OurHooks(settings, eventName).Where(h => !IsHeld(h)).ToList();
             if (ours.Count == 0)
             {
                 groups.Add(new JsonObject
@@ -152,25 +170,29 @@ public sealed class ClaudeHookInstaller
             }
         }
 
-        InstallAsk(hooks, settings, relayExecutable);
+        foreach (var entry in HeldEntries)
+        {
+            InstallHeld(hooks, settings, relayExecutable, entry);
+        }
+
         return Save(settings, before);
     }
 
     /// <summary>
-    /// The entry for questions, in a group of its own with the matcher: exactly one, current. Ours elsewhere (a second one,
-    /// one moved into a group without the matcher) go, so no question is asked twice or every tool waits.
+    /// A held entry (a question's, a permission prompt's), in a group of its own with its matcher, if it has one: exactly one,
+    /// current. Ours elsewhere (a second one, one moved into another group) go, so nothing is asked twice or every tool waits.
     /// </summary>
-    private static void InstallAsk(JsonObject hooks, JsonObject settings, string relayExecutable)
+    private static void InstallHeld(JsonObject hooks, JsonObject settings, string relayExecutable, HeldEntry entry)
     {
-        var asks = OurAsks(settings).ToList();
-        var keep = asks.Where(a => Matches(a.Group)).Select(a => a.Hook).FirstOrDefault();
-        foreach (var (group, hook) in asks.Where(a => !ReferenceEquals(a.Hook, keep)))
+        var held = OurHeld(settings, entry).ToList();
+        var keep = held.Where(a => Matches(a.Group, entry)).Select(a => a.Hook).FirstOrDefault();
+        foreach (var (group, hook) in held.Where(a => !ReferenceEquals(a.Hook, keep)))
         {
             var entries = (JsonArray)group["hooks"]!;
             entries.Remove(hook);
             if (entries.Count == 0)
             {
-                (hooks[AskEvent] as JsonArray)?.Remove(group);
+                (hooks[entry.Event] as JsonArray)?.Remove(group);
             }
         }
 
@@ -178,57 +200,72 @@ public sealed class ClaudeHookInstaller
         {
             keep["type"] = "command";
             keep["command"] = relayExecutable;
-            keep["args"] = new JsonArray(AskArgument);
+            keep["args"] = new JsonArray(entry.Argument);
             keep["timeout"] = AskTimeoutSeconds;
             return;
         }
 
-        if (hooks[AskEvent] is not JsonArray groups)
+        if (hooks[entry.Event] is not JsonArray groups)
         {
             groups = [];
-            hooks[AskEvent] = groups;
+            hooks[entry.Event] = groups;
         }
 
-        groups.Add(new JsonObject
+        var added = new JsonObject();
+        if (entry.Matcher is { } matcher)
         {
-            ["matcher"] = AskMatcher,
-            ["hooks"] = new JsonArray(new JsonObject
-            {
-                ["type"] = "command",
-                ["command"] = relayExecutable,
-                ["args"] = new JsonArray(AskArgument),
-                ["timeout"] = AskTimeoutSeconds,
-            }),
+            added["matcher"] = matcher;
+        }
+
+        added["hooks"] = new JsonArray(new JsonObject
+        {
+            ["type"] = "command",
+            ["command"] = relayExecutable,
+            ["args"] = new JsonArray(entry.Argument),
+            ["timeout"] = AskTimeoutSeconds,
         });
+        groups.Add(added);
     }
 
-    private static bool Matches(JsonObject group) =>
-        group["matcher"] is JsonValue matcher && matcher.TryGetValue<string>(out var text) && text == AskMatcher;
+    /// <summary>
+    /// Whether the group is the entry's own: its matcher, or for an entry without one, a group for every tool (no matcher,
+    /// an empty one, or "*") and none narrower.
+    /// </summary>
+    private static bool Matches(JsonObject group, HeldEntry entry)
+    {
+        var matcher = group["matcher"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+        return entry.Matcher is { } wanted ? matcher == wanted : string.IsNullOrEmpty(matcher) || matcher == "*";
+    }
 
-    private static bool IsCurrentAsk(JsonObject group, JsonObject hook, string relayExecutable) =>
-        Matches(group)
+    private static bool IsCurrentHeld(HeldEntry entry, JsonObject group, JsonObject hook, string relayExecutable) =>
+        Matches(group, entry)
         && hook["command"] is JsonValue command && command.TryGetValue<string>(out var path) && string.Equals(path, relayExecutable, StringComparison.OrdinalIgnoreCase)
         && hook["timeout"] is JsonValue timeout && timeout.TryGetValue<int>(out var seconds) && seconds == AskTimeoutSeconds;
 
-    /// <summary>Our entry for questions: the relay run with <see cref="AskArgument"/>.</summary>
-    private static bool IsAsk(JsonObject hook) =>
-        hook["args"] is JsonArray { Count: 1 } args && args[0] is JsonValue arg && arg.TryGetValue<string>(out var argument) && argument == AskArgument;
+    /// <summary>Our held entries: the relay run with <see cref="AskArgument"/> or <see cref="PermitArgument"/>.</summary>
+    private static bool IsHeld(JsonObject hook) => HeldEntries.Any(e => HasArgument(hook, e.Argument));
 
-    private static IEnumerable<(JsonObject Group, JsonObject Hook)> OurAsks(JsonObject settings)
+    private static bool HasArgument(JsonObject hook, string argument) =>
+        hook["args"] is JsonArray { Count: 1 } args && args[0] is JsonValue arg && arg.TryGetValue<string>(out var given) && given == argument;
+
+    private static IEnumerable<(JsonObject Group, JsonObject Hook)> OurHeld(JsonObject settings, HeldEntry entry)
     {
-        if (settings["hooks"] is not JsonObject hooks || hooks[AskEvent] is not JsonArray groups)
+        if (settings["hooks"] is not JsonObject hooks || hooks[entry.Event] is not JsonArray groups)
         {
             yield break;
         }
 
         foreach (var group in groups.OfType<JsonObject>())
         {
-            foreach (var entry in (group["hooks"] as JsonArray ?? []).OfType<JsonObject>().Where(h => IsOurs(h) && IsAsk(h)))
+            foreach (var hook in (group["hooks"] as JsonArray ?? []).OfType<JsonObject>().Where(h => IsOurs(h) && HasArgument(h, entry.Argument)))
             {
-                yield return (group, entry);
+                yield return (group, hook);
             }
         }
     }
+
+    /// <summary>An entry that holds what a chat asks: the relay's argument for it, its event, and its matcher if it has one.</summary>
+    private sealed record HeldEntry(string Argument, string Event, string? Matcher);
 
     public HookInstallResult Uninstall()
     {

@@ -199,10 +199,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IYardDirectory? _yard;
 
     /// <summary>The question cards still open, by their ask's id (UI thread).</summary>
-    private readonly Dictionary<string, ChatQuestionCard> _askCards = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ChatAskCard> _askCards = new(StringComparer.Ordinal);
 
     /// <summary>Questions shown and not yet read out: they go before the news when the floor is free (UI thread).</summary>
-    private readonly List<ChatQuestionCard> _untold = [];
+    private readonly List<ChatAskCard> _untold = [];
 
     /// <param name="asks">What chats ask, held while the user answers it here; null shows no questions.</param>
     /// <param name="yard">Names the chat that asks, as the Yard shows it.</param>
@@ -1700,8 +1700,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // it ended before it got here (the Cab changed, say): its Closed found no card, and a card now would stay open
         }
 
-        var card = new ChatQuestionCard(ask);
-        var entry = new RavenLogEntry(RavenLogKind.Question, "asks", _time.GetUtcNow()) { Question = card };
+        var card = new ChatAskCard(ask);
+        var kind = ask.Kind == ChatAskKind.Permission ? RavenLogKind.Permission : RavenLogKind.Question;
+        var entry = new RavenLogEntry(kind, "asks", _time.GetUtcNow()) { Ask = card };
         Append(entry);
         _askCards[ask.Id] = card;
         _untold.Add(card);
@@ -1711,7 +1712,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Names the chat as the Yard shows it, for the card and for what Raven says. Never faults.</summary>
-    private async Task NameAsync(ChatQuestionCard card)
+    private async Task NameAsync(ChatAskCard card)
     {
         if (_yard is null)
         {
@@ -1748,15 +1749,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _toldNews.RemoveAll(t => t.Fact == fact);
         OpenQuestions = _askCards.Count;
         card.IsOpen = false;
-        card.Outcome = closed.Outcome switch
-        {
-            ChatAskOutcome.Answered => "Answered: " + string.Join("; ", closed.Answers ?? []),
-            ChatAskOutcome.ToVsCode => "Left to VS Code: it asks there.",
-            ChatAskOutcome.TimedOut => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
-            ChatAskOutcome.Stopped => "The chat was stopped.",
-            _ => "The chat stopped waiting for it.",
-        };
+        card.Outcome = OutcomeOf(closed);
     }
+
+    /// <summary>How a card says its ask ended: "Answered: Banana", "Allowed", "Left to VS Code: …".</summary>
+    internal static string OutcomeOf(ChatAskClosed closed) => (closed.Ask.Kind, closed.Outcome) switch
+    {
+        (ChatAskKind.Permission, ChatAskOutcome.Answered) => closed.Permit switch
+        {
+            { Allow: true } => "Allowed.",
+            { Message: { } message } when message != ChatAsks.DeniedMessage => $"Denied: {message}",
+            _ => "Denied. The chat carries on without it.",
+        },
+        (ChatAskKind.Permission, ChatAskOutcome.ToVsCode) => "Left to VS Code: answer it in the chat's tab.",
+        (ChatAskKind.Permission, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: answer it in the chat's tab.",
+        (_, ChatAskOutcome.AnsweredInVsCode) => "Answered in VS Code.",
+        (ChatAskKind.Permission, ChatAskOutcome.Gone) => "Answered in VS Code, or the chat's turn ended.",
+        (_, ChatAskOutcome.Answered) => "Answered: " + string.Join("; ", closed.Answers ?? []),
+        (_, ChatAskOutcome.ToVsCode) => "Left to VS Code: it asks there.",
+        (_, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
+        (_, ChatAskOutcome.Stopped) => "The chat was stopped.",
+        _ => "The chat stopped waiting for it.",
+    };
 
     /// <summary>An option was clicked: chosen, and for a card of one question that takes one option, sent at once.</summary>
     [RelayCommand]
@@ -1776,7 +1790,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The card's answers go to the chat, which carries on with them.</summary>
     [RelayCommand]
-    private void SendAnswers(ChatQuestionCard? card)
+    private void SendAnswers(ChatAskCard? card)
     {
         if (card is not { CanSend: true } || _asks is null)
         {
@@ -1790,13 +1804,35 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>The question goes to the chat's VS Code tab, which asks it there.</summary>
+    /// <summary>The question goes to the chat's VS Code tab, which asks it there; a permission prompt is answered there.</summary>
     [RelayCommand]
-    private void AnswerInVsCode(ChatQuestionCard? card)
+    private void AnswerInVsCode(ChatAskCard? card)
     {
         if (card is { IsOpen: true })
         {
             _asks?.ToVsCode(card.Ask.Id);
+        }
+    }
+
+    /// <summary>The chat may do what it asked; it carries on.</summary>
+    [RelayCommand]
+    private void Allow(ChatAskCard? card) => Permit(card, allow: true);
+
+    /// <summary>The chat may not; it is told so and carries on without it.</summary>
+    [RelayCommand]
+    private void Deny(ChatAskCard? card) => Permit(card, allow: false);
+
+    private void Permit(ChatAskCard? card, bool allow)
+    {
+        if (card is not { IsOpen: true, Permission: not null } || _asks is null)
+        {
+            return;
+        }
+
+        if (!_asks.Permit(card.Ask.Id, allow) && card.IsOpen)
+        {
+            card.IsOpen = false;
+            card.Outcome = "The chat no longer waits for it.";
         }
     }
 
@@ -1847,12 +1883,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>What Raven says of the questions: "CodeSwitchX, chat "Fix the upload" asks: Which fruit? Apple, Banana or Cherry."</summary>
-    internal static string QuestionSentence(IReadOnlyList<ChatQuestionCard> cards)
+    /// <summary>
+    /// What Raven says of the asks: "CodeSwitchX, chat "Fix the upload" asks: Which fruit? Apple, Banana or Cherry.", or for a
+    /// permission prompt "CodeSwitchX, chat "Fix the upload" wants to run a command. It's on the card."
+    /// </summary>
+    internal static string QuestionSentence(IReadOnlyList<ChatAskCard> cards)
     {
         var text = new System.Text.StringBuilder();
         foreach (var card in cards)
         {
+            if (card.Permission is not null)
+            {
+                // What it wants to do, not the command itself: the card shows that.
+                text.Append(text.Length == 0 ? "" : " ").Append(card.Said).Append(card.Wants).Append(". It's on the card. ");
+                continue;
+            }
+
             text.Append(text.Length == 0 ? "" : " ").Append(card.Said)
                 .Append(card.Questions.Count == 1 ? " asks: " : $" asks {card.Questions.Count} questions. ");
             foreach (var question in card.Questions)
@@ -1877,8 +1923,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private static string Sentence(string text) => text.TrimEnd() is var t && t.Length > 0 && ".?!".Contains(t[^1]) ? t : t + ".";
 
     /// <summary>The question as the brain that acts is told it: the chat, its id, each question and its options.</summary>
-    internal static string QuestionFact(ChatQuestionCard card) =>
-        $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. answer_question answers it";
+    internal static string QuestionFact(ChatAskCard card) => card.Permission is not null
+        ? $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. Only the user "
+            + "allows or denies it, on its card or in VS Code; no tool of yours can"
+        : $"{card.Said} (chat id {card.Ask.SessionId}) asks, and waits for the answer here: {card.Ask.Describe()}. answer_question answers it";
 
     /// <summary>
     /// The digest: one card that lists the news, and the teller wording it in a few words, as conversation. Muted, or

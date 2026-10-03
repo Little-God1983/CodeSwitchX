@@ -60,7 +60,10 @@ public sealed class ChatNews : IDisposable
 
     /// <param name="lastSaid">The end of a chat's last reply from its transcript path (<c>TranscriptLastReply.Read</c>); called off the UI thread.</param>
     /// <param name="stoppedOnPurpose">Whether the chat's turn was just stopped by Raven (<c>TurnStops.StoppedLately</c>): Raven said so already.</param>
-    /// <param name="askedHere">Whether the chat's question waits in Raven's panel (<c>ChatAsks.Holds</c>): its card tells that it needs the user.</param>
+    /// <param name="askedHere">
+    /// Whether the chat's question or permission prompt waits in Raven's panel (<c>ChatAsks.Holds</c>): its card tells that it
+    /// needs the user. Asked when the news comes and again when it is told.
+    /// </param>
     public ChatNews(IEventBus bus, IYardDirectory yard, TimeProvider time, Func<string?, string?> lastSaid, Func<string, bool>? stoppedOnPurpose = null,
         Func<string, bool>? askedHere = null)
     {
@@ -155,8 +158,11 @@ public sealed class ChatNews : IDisposable
 
         var chats = (await _yard.ChatsAsync(ct).ConfigureAwait(false)).ToDictionary(c => c.Id, StringComparer.Ordinal);
         var now = _time.GetUtcNow();
+        // A permission prompt's own PermissionRequest can land before its hook holds it here: held by now, it is told on its
+        // card, not twice.
         var still = taken.OrderBy(t => t.Value.At)
-            .Where(t => chats.TryGetValue(t.Key, out var chat) && StillHolds(t.Value.Kind, chat))
+            .Where(t => chats.TryGetValue(t.Key, out var chat) && StillHolds(t.Value.Kind, chat)
+                && !(t.Value.Kind == ChatNewsKind.NeedsYou && _askedHere(t.Key)))
             .Select(t => (Id: t.Key, Slot: t.Value, Chat: chats[t.Key]))
             .ToList();
         var lastSaid = await Task.WhenAll(still.Select(t => t.Slot.Kind == ChatNewsKind.NeedsYou

@@ -4,13 +4,15 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
-/// A chat's question on the panel (<see cref="RavenLogKind.Question"/>): each question with its options to click, open until
-/// it is answered here, left to VS Code, or the chat stops waiting for it. A card with one question that takes one option
-/// is answered by the click; any other is sent once every question has an option (<see cref="NeedsSend"/>).
+/// What a chat asks, on the panel, open until it is answered here, left to VS Code, or the chat stops waiting for it.
+/// A question (<see cref="RavenLogKind.Question"/>) has each question with its options to click: a card with one question
+/// that takes one option is answered by the click; any other is sent once every question has an option
+/// (<see cref="NeedsSend"/>). A permission prompt (<see cref="RavenLogKind.Permission"/>) has what the chat wants to do,
+/// allowed or denied with a click.
 /// </summary>
-public sealed partial class ChatQuestionCard : ObservableObject
+public sealed partial class ChatAskCard : ObservableObject
 {
-    public ChatQuestionCard(ChatAsk ask)
+    public ChatAskCard(ChatAsk ask)
     {
         Ask = ask;
         Questions = ask.Questions.Select(q => new ChatQuestionView(this, q)).ToList();
@@ -20,6 +22,14 @@ public sealed partial class ChatQuestionCard : ObservableObject
     public ChatAsk Ask { get; }
 
     public IReadOnlyList<ChatQuestionView> Questions { get; }
+
+    /// <summary>What the chat asks permission for; null for a question.</summary>
+    public ChatPermission? Permission => Ask.Permission;
+
+    /// <summary>"wants to run a command", or "'s Explore sub-agent wants to edit a file", after the chat's name.</summary>
+    public string Wants => Permission is { } permission
+        ? (permission.Agent is { } agent ? $"'s {agent} sub-agent wants to " : " wants to ") + permission.Wants
+        : " asks";
 
     /// <summary>The card has a Send button: more than one question, or one that takes several options.</summary>
     public bool NeedsSend { get; }
@@ -58,7 +68,7 @@ public sealed partial class ChatQuestionCard : ObservableObject
 /// <summary>One question of a card, with its options.</summary>
 public sealed class ChatQuestionView
 {
-    internal ChatQuestionView(ChatQuestionCard card, ChatQuestion question)
+    internal ChatQuestionView(ChatAskCard card, ChatQuestion question)
     {
         Card = card;
         Text = question.Text;
@@ -67,7 +77,7 @@ public sealed class ChatQuestionView
         Options = question.Options.Select(o => new ChatOptionView(this, o)).ToList();
     }
 
-    public ChatQuestionCard Card { get; }
+    public ChatAskCard Card { get; }
 
     public string Text { get; }
 

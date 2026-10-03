@@ -149,10 +149,14 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
-        var open = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
+        var held = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
+        var open = held.Where(a => a.Kind == ChatAskKind.Question).ToList();
         var ask = open switch
         {
             [var only] => only,
+            // Allowing a tool is the user's alone, by a click: words the brain read from a chat must never run a command.
+            [] when held.Count > 0 => throw new McpException($"The {one.Title} chat asks for permission, not a question: "
+                + $"{held[0].Describe()}. You cannot answer that. The user allows or denies it on its card in Raven's panel, or in VS Code."),
             [] => throw new McpException($"The {one.Title} chat asks nothing in Raven's panel now: it was answered, left to VS Code, or never asked here."),
             // Its agents ask side by side: an answer meant for one must not land on the other.
             _ => throw new McpException($"The {one.Title} chat waits on {open.Count} questions at once, from agents working side by side. Nothing was "
