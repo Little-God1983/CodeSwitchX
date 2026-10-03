@@ -8,8 +8,8 @@ namespace CodeSwitchX.Voice.Dictation;
 /// ".partial" file and is renamed only when complete, so a half file is never mistaken for a
 /// model: IsPresent looks at the final name only. "Complete" is checked, not assumed: a proxy or
 /// CDN closing a length-less response early ends the stream without an error. One download per
-/// model at a time, whichever model is in use: the Raven panel and Settings asking for the same one share it,
-/// and a model picked again while its download still runs joins that download.</summary>
+/// model at a time, in use or not: the Raven panel and Settings asking for the same one share it, a model
+/// picked again while its download still runs joins that download, and Settings downloads any model from its row.</summary>
 public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhisperModelStore
 {
     private readonly Lock _lock = new();
@@ -49,6 +49,8 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
 
     public bool IsPresent => File.Exists(ModelPath);
 
+    public bool IsPresentOf(WhisperModel model) => File.Exists(PathOf(model));
+
     public ModelDownload? Download
     {
         get
@@ -56,6 +58,17 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
             lock (_lock)
             {
                 return _downloads.TryGetValue(_model, out var d) ? new ModelDownload(d.Model, d.Bytes) : null;
+            }
+        }
+    }
+
+    public IReadOnlyList<ModelDownload> Downloads
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return [.. _downloads.Values.Select(d => new ModelDownload(d.Model, d.Bytes))];
             }
         }
     }
@@ -100,16 +113,19 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
 
     /// <summary>Downloads the model in use now; joins its download if one runs. <paramref name="ct"/> stops the wait,
     /// not the download: another caller may be waiting for it too.</summary>
-    public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct)
+    public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => DownloadAsync(Model, progress, ct);
+
+    /// <summary>Downloads <paramref name="model"/>, in use or not; joins its download if one runs.</summary>
+    public Task DownloadAsync(WhisperModel model, IProgress<double>? progress, CancellationToken ct)
     {
         Downloading download;
         lock (_lock)
         {
-            if (!_downloads.TryGetValue(_model, out var running))
+            if (!_downloads.TryGetValue(model, out var running))
             {
-                running = new Downloading(_model, new ByteProgress(0, ApproximateBytes(_model)));
+                running = new Downloading(model, new ByteProgress(0, ApproximateBytes(model)));
                 running.Task = Task.Run(() => DownloadOnPoolAsync(running));
-                _downloads[_model] = running;
+                _downloads[model] = running;
             }
 
             download = running;
@@ -148,8 +164,9 @@ public sealed class WhisperModelStore(IOptions<DictationOptions> options) : IWhi
         {
             listeners = [.. download.Listeners];
             var bytes = new ByteProgress((long)(fraction * download.Bytes.Total), download.Bytes.Total);
-            // Once a megabyte, and only of the model in use: 1.6 GB read 80 KB at a time would tell twenty thousand times.
-            changed = bytes.Done / 1_000_000 != download.Bytes.Done / 1_000_000 && download.Model == _model;
+            // Once a megabyte: 1.6 GB read 80 KB at a time would tell twenty thousand times. Of any model: Settings shows
+            // each model's download on its own row.
+            changed = bytes.Done / 1_000_000 != download.Bytes.Done / 1_000_000;
             download.Bytes = bytes;
         }
 

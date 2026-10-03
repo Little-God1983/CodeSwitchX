@@ -3,7 +3,7 @@ using NAudio.Wave;
 namespace CodeSwitchX.Voice.Speech;
 
 /// <summary>
-/// The short clips the voice setup plays, one per voice: recorded once with each engine and carried in this assembly, so
+/// The short clips the Voice page plays, one per voice: recorded once with each engine and carried in this assembly, so
 /// a voice can be heard before its engine is installed.
 /// </summary>
 public interface IVoiceSamples

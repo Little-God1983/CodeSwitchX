@@ -13,6 +13,9 @@ public interface IWhisperModelStore
 
     bool IsPresent { get; }
 
+    /// <summary>Whether <paramref name="model"/> is on disk, in use or not: Settings lists every model with its own state.</summary>
+    bool IsPresentOf(WhisperModel model);
+
     /// <summary>Name of the native backend that actually loaded ("Vulkan", "Cuda12", "Cpu"), or
     /// null while no model has been loaded yet, because the choice is made when the first one is.
     /// Lets a host show whether the GPU is in use without guessing.</summary>
@@ -23,8 +26,14 @@ public interface IWhisperModelStore
     /// waits for that same download; <paramref name="ct"/> stops the wait, not the download.</summary>
     Task DownloadAsync(IProgress<double>? progress, CancellationToken ct);
 
+    /// <summary>As <see cref="DownloadAsync(IProgress{double}?, CancellationToken)"/>, of <paramref name="model"/>, in use or not.</summary>
+    Task DownloadAsync(WhisperModel model, IProgress<double>? progress, CancellationToken ct);
+
     /// <summary>The download going on, if any.</summary>
     ModelDownload? Download { get; }
+
+    /// <summary>The downloads going on, of any model.</summary>
+    IReadOnlyList<ModelDownload> Downloads { get; }
 
     /// <summary>Raised as a download starts, about once a megabyte while it runs, and as it ends; on any thread.</summary>
     event EventHandler? DownloadChanged;

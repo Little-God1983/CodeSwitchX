@@ -114,4 +114,33 @@ public sealed class ChatModelsTests
     {
         ChatModels.DisplayName(id).ShouldBe(shown);
     }
+
+    [Fact]
+    public void Each_row_the_parser_leaves_out_says_why_and_the_others_are_what_it_reads()
+    {
+        ModelAlias[] rows =
+        [
+            new("Fable", "claude-fable-5-1"),
+            new("", ""),
+            new("Opus", ""),
+            new("Op:us", "claude-opus-5-5"),
+            new("Sonnet", "claude sonnet"),
+            new("fable", "claude-old"),
+            new(" Haiku ", " claude-haiku-4-5-20251001 "),
+        ];
+
+        ChatModels.RowProblems(rows).ShouldBe(
+        [
+            null,
+            null,
+            "Not used: fill in both the name and the model id.",
+            "Not used: a name can't contain = or :.",
+            "Not used: a model id has no spaces.",
+            "Not used: fable is in the table already, and the first one counts.",
+            null,
+        ]);
+        var counted = rows.Where((r, i) => ChatModels.RowProblems(rows)[i] is null && r.Name.Trim().Length > 0)
+            .Select(r => new ModelAlias(r.Name.Trim(), r.Id.Trim()));
+        ChatModels.ParseAliases(string.Join('\n', rows.Select(r => $"{r.Name} = {r.Id}"))).ShouldBe(counted);
+    }
 }

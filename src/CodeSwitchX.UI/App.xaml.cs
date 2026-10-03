@@ -246,8 +246,6 @@ public partial class App : Application
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
-        services.AddTransient<VoiceSetupViewModel>();
-        services.AddSingleton<Func<VoiceSetupViewModel>>(sp => () => sp.GetRequiredService<VoiceSetupViewModel>());
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
             sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,

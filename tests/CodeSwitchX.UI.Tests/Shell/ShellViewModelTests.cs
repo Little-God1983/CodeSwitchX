@@ -802,38 +802,62 @@ public class ShellViewModelTests
     }
 
     [Fact]
-    public async Task The_voice_setup_opens_by_itself_once_when_the_Raven_panel_is_first_used_with_no_engine()
+    public async Task Settings_Voice_opens_by_itself_once_with_a_welcome_when_the_Raven_panel_is_first_used_with_no_engine()
     {
         _h.Settings.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
         await _h.Shell.InitializeAsync(CancellationToken.None);
-        var opened = 0;
-        _h.Shell.VoiceSetupRequested += () => opened++;
 
         _h.Shell.OfferVoiceSetup(); // the window shows, the panel folded
-        opened.ShouldBe(0);
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
 
         _h.Shell.Raven.IsOpen = true;
-        opened.ShouldBe(1);
+        (_h.Shell.Mode, _h.Shell.Settings.Page, _h.Shell.Settings.VoicePage.ShowWelcome).ShouldBe((ShellMode.Settings, SettingsPage.Voice, true));
         _h.Shell.Settings.RavenVoiceSetupShown.ShouldBeTrue();
 
+        _h.Shell.CloseSettings();
+        _h.Shell.Settings.VoicePage.ShowWelcome.ShouldBeFalse();
         _h.Shell.Raven.IsOpen = false;
         _h.Shell.Raven.IsOpen = true;
         _h.Shell.OfferVoiceSetup();
-        opened.ShouldBe(1, "skipped once, it opens from Settings only");
-
-        _h.Shell.Settings.OpenVoiceSetupCommand.Execute(null);
-        opened.ShouldBe(2);
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard, "skipped once, it opens from Settings only");
     }
 
     [Fact]
-    public async Task With_an_engine_picked_the_voice_setup_does_not_open_by_itself()
+    public async Task With_an_engine_picked_Settings_does_not_open_by_itself()
     {
         _h.Qwen.IsInstalled = true;
         await _h.Shell.InitializeAsync(CancellationToken.None);
-        var opened = 0;
-        _h.Shell.VoiceSetupRequested += () => opened++;
 
         _h.Shell.OfferVoiceSetup();
 
-        opened.ShouldBe(0);
-    }}
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+    }
+
+    [Fact]
+    public async Task Leaving_Settings_for_the_Cab_closes_it_as_Back_to_Yard_does()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.OpenSettingsAt(SettingsPage.Voice);
+        _h.Shell.Settings.VoicePage.ShowWelcome = true;
+
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id); // Raven opens a workspace, or a jump hotkey
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.Settings.VoicePage.ShowWelcome.ShouldBeFalse("the first-run line has had its turn");
+    }
+
+    [Fact]
+    public async Task A_dot_on_the_bottom_bar_or_the_chips_open_their_page_of_Settings()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.OpenSettingsAtCommand.Execute(SettingsPage.Listening);
+        (_h.Shell.Mode, _h.Shell.Settings.Page).ShouldBe((ShellMode.Settings, SettingsPage.Listening));
+
+        _h.Shell.OpenSettingsAtCommand.Execute(SettingsPage.Brain);
+        _h.Shell.Settings.Page.ShouldBe(SettingsPage.Brain);
+        _h.Shell.Settings.VoicePage.ShowWelcome.ShouldBeFalse("only the first run says welcome");
+    }
+}

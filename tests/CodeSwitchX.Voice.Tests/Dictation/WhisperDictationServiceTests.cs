@@ -18,6 +18,9 @@ public sealed class WhisperDictationServiceTests
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public Task DownloadAsync(WhisperModel model, IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public IReadOnlyList<ModelDownload> Downloads => [];
+        public bool IsPresentOf(WhisperModel model) => IsPresent;
     }
 
     private sealed class PresentStore(string path) : IWhisperModelStore
@@ -30,6 +33,9 @@ public sealed class WhisperDictationServiceTests
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public Task DownloadAsync(WhisperModel model, IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public IReadOnlyList<ModelDownload> Downloads => [];
+        public bool IsPresentOf(WhisperModel model) => IsPresent;
     }
 
     /// <summary>A damaged model whose path is read only once the test lets it: the load, and with it the gate, is held
@@ -63,6 +69,9 @@ public sealed class WhisperDictationServiceTests
         public event EventHandler? ModelChanged { add { } remove { } }
         public event EventHandler? DownloadChanged { add { } remove { } }
         public Task DownloadAsync(IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public Task DownloadAsync(WhisperModel model, IProgress<double>? progress, CancellationToken ct) => throw new NotSupportedException();
+        public IReadOnlyList<ModelDownload> Downloads => [];
+        public bool IsPresentOf(WhisperModel model) => IsPresent;
 
         public void Dispose()
         {

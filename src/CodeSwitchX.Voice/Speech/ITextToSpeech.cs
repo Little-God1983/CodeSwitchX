@@ -43,10 +43,10 @@ public enum TextToSpeechState
     /// <summary>Not started, and on disk; it starts when asked to get ready or to speak.</summary>
     Off,
 
-    /// <summary>Not on disk (not installed, or its model not downloaded); it is installed when Raven first speaks, or from the voice setup.</summary>
+    /// <summary>Not on disk (not installed, or its model not downloaded); it is installed when Raven first speaks, or from Settings → Voice.</summary>
     NotInstalled,
 
-    /// <summary>No engine is picked: Raven answers in text only, until one is picked in the voice setup or Settings.</summary>
+    /// <summary>No engine is picked: Raven answers in text only, until one is picked in Settings → Voice.</summary>
     NoEngine,
 
     /// <summary>Downloading and installing the engine (a first run).</summary>

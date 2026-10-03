@@ -5,6 +5,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:raven="clr-namespace:CodeSwitchX.UI.Raven"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
+             xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance raven:RavenPanelViewModel}"
              d:DesignWidth="320" d:DesignHeight="800">
@@ -429,7 +430,7 @@
                 <!-- Push to talk or Open mic: two radio buttons styled as one switch. They show the mode in effect, and
                      every click is the user's choice, one on the half already checked too (after a fallback), and so is a half
                      checked any other way. UI Automation's Select clicks the half (MicModeRadioButton). -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <StackPanel Orientation="Horizontal">
                   <raven:MicModeRadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
                                IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}"
                                Tag="{x:Static raven:MicMode.PushToTalk}" Checked="OnModeChecked" Click="OnModeClick" />
@@ -437,42 +438,34 @@
                                IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}"
                                Tag="{x:Static raven:MicMode.OpenMic}" Checked="OnModeChecked" Click="OnModeClick" />
                 </StackPanel>
-                <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,0,0,4" />
-                <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"
-                          FontSize="13" HorizontalAlignment="Stretch" AutomationProperties.Name="Microphone"
-                          ToolTip="{Binding SelectedMicrophone.Name}" />
-                <Border Height="4" CornerRadius="2" Background="#1F2937" Margin="0,8,0,0" ClipToBounds="True"
-                        ToolTip="Mic level">
-                  <!-- The level is Raven's voice while it speaks: not the mic's. -->
-                  <Border Background="#62D0E8" CornerRadius="2" RenderTransformOrigin="0,0.5">
-                    <Border.Style>
-                      <Style TargetType="Border">
-                        <Style.Triggers>
-                          <DataTrigger Binding="{Binding State}" Value="Speaking">
-                            <Setter Property="Visibility" Value="Hidden" />
-                          </DataTrigger>
-                        </Style.Triggers>
-                      </Style>
-                    </Border.Style>
-                    <Border.RenderTransform>
-                      <ScaleTransform ScaleX="{Binding Level}" />
-                    </Border.RenderTransform>
-                  </Border>
-                </Border>
               </StackPanel>
             </Grid>
 
-            <!-- What a chat Raven starts runs with: set by voice ("from now on Opus") or in Settings. -->
-            <StackPanel Orientation="Horizontal" Margin="6,12,0,0"
-                        ToolTip="New chats Raven starts run with these. Say &quot;from now on …&quot; to change them, or change them in Settings.">
-              <TextBlock Text="New chats" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,8,0" />
-              <Border Style="{StaticResource Chip}">
-                <TextBlock Text="{Binding ChatModelChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat model" />
-              </Border>
-              <Border Style="{StaticResource Chip}">
-                <TextBlock Text="{Binding ChatEffortChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat effort" />
-              </Border>
-            </StackPanel>
+            <!-- What a chat Raven starts runs with: set by voice ("from now on Opus") or in Settings → Brain & chats, which a click opens. -->
+            <Button Margin="6,12,0,0" HorizontalAlignment="Left" Cursor="Hand" FocusVisualStyle="{StaticResource FocusRing}"
+                    Command="{Binding DataContext.OpenSettingsAtCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                    CommandParameter="{x:Static settings:SettingsPage.Brain}" AutomationProperties.Name="New chats: open Brain and chats settings"
+                    ToolTip="New chats Raven starts run with these. Say &quot;from now on …&quot; to change them, or click to change them in Settings.">
+              <Button.Template>
+                <ControlTemplate TargetType="Button">
+                  <StackPanel Orientation="Horizontal" Background="Transparent">
+                    <TextBlock Text="New chats" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Border x:Name="ModelChip" Style="{StaticResource Chip}">
+                      <TextBlock Text="{Binding ChatModelChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat model" />
+                    </Border>
+                    <Border x:Name="EffortChip" Style="{StaticResource Chip}">
+                      <TextBlock Text="{Binding ChatEffortChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat effort" />
+                    </Border>
+                  </StackPanel>
+                  <ControlTemplate.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                      <Setter TargetName="ModelChip" Property="BorderBrush" Value="#62D0E8" />
+                      <Setter TargetName="EffortChip" Property="BorderBrush" Value="#62D0E8" />
+                    </Trigger>
+                  </ControlTemplate.Triggers>
+                </ControlTemplate>
+              </Button.Template>
+            </Button>
           </StackPanel>
         </Border>
 

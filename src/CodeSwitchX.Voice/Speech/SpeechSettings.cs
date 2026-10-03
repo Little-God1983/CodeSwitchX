@@ -24,7 +24,7 @@ public enum SpeechModel
 /// <param name="Id">The name the engine knows it by.</param>
 public sealed record SpeechVoice(string Id, string Name, string Description);
 
-/// <summary>How Raven speaks; the voice setup and Settings change it while the app runs. Read at every sentence.</summary>
+/// <summary>How Raven speaks; Settings changes it while the app runs. Read at every sentence.</summary>
 public sealed class SpeechSettings
 {
     public const string DefaultQwenVoice = "ryan";

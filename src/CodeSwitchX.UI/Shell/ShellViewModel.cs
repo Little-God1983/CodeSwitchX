@@ -77,12 +77,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Raven opens a workspace: the window comes forward, from behind other windows or minimised.</summary>
     public event Action? ForwardRequested;
 
-    /// <summary>The voice setup is to open: from Settings, or by itself the first time the Raven panel is used.</summary>
-    public event Action? VoiceSetupRequested;
-
     /// <summary>
-    /// Opens the voice setup if the Raven panel is open, no engine is picked, and it never opened by itself: the first use
-    /// of the panel. The window calls this once it shows, and the panel's unfolding does.
+    /// Opens Settings → Voice with its welcome line if the Raven panel is open, no engine is picked, and it never opened
+    /// by itself: the first use of the panel. The window calls this once it shows, and the panel's unfolding does.
     /// </summary>
     public void OfferVoiceSetup()
     {
@@ -92,7 +89,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
 
         Settings.RavenVoiceSetupShown = true;
-        VoiceSetupRequested?.Invoke();
+        Settings.VoicePage.ShowWelcome = true;
+        OpenSettingsAt(SettingsPage.Voice);
     }
 
     public async Task InitializeAsync(CancellationToken ct)
@@ -102,7 +100,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         await Settings.LoadAsync(ct);
         Settings.BudgetChanged += PerformanceBar.SetBudget;
         Settings.CloseRequested += CloseSettings;
-        Settings.VoiceSetupRequested += () => VoiceSetupRequested?.Invoke();
         // The Yard's "Hooks not installed" banner follows the installer, so it goes when Install hooks is clicked.
         Yard.HooksInstalled = HooksReachUs(Settings.HookState);
         Settings.PropertyChanged += (_, e) =>
@@ -349,6 +346,18 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     partial void OnModeChanged(ShellMode value) => TellHostWhereTheCabWaits();
 
+    /// <summary>
+    /// Settings left any way (Back to Yard, a workspace opened by Raven or a jump hotkey): a sample playing stops, and the
+    /// first-run welcome line has had its turn.
+    /// </summary>
+    partial void OnModeChanged(ShellMode oldValue, ShellMode newValue)
+    {
+        if (oldValue == ShellMode.Settings && newValue != ShellMode.Settings)
+        {
+            Settings.Closed();
+        }
+    }
+
     partial void OnActiveWorkspaceIdChanged(Guid? value) => TellHostWhereTheCabWaits();
 
     /// <summary>
@@ -434,6 +443,14 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         _host.HideAll();
         Settings.Refresh();
         Mode = ShellMode.Settings;
+    }
+
+    /// <summary>Opens Settings on <paramref name="page"/>: a model's dot on the bottom bar, the New chats chips on Raven's panel.</summary>
+    [RelayCommand]
+    public void OpenSettingsAt(SettingsPage page)
+    {
+        Settings.OpenPage(page);
+        OpenSettings();
     }
 
     [RelayCommand]

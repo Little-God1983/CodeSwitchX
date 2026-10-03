@@ -6,7 +6,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace CodeSwitchX.UI.Voice;
 
 /// <summary>
-/// Where Raven's models stand, for the dots: the voice picked and each engine (the bottom bar, the voice setup, Settings),
+/// Where Raven's models stand, for the dots: the voice picked and each engine (the bottom bar, Settings → Voice),
 /// and the speech-to-text model. Told by the engines and the dictation service on any thread; changes here on the UI thread.
 /// </summary>
 public sealed partial class VoiceStatusViewModel : ObservableObject

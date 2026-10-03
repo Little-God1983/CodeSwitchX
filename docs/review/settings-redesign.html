@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings Redesign</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0B1220;--side:#0E1627;--card:#121A2B;--hover:#172238;--line:#26324A;--soft:#1E2940;--text:#E5ECF6;--muted:#9AA8BD;--faint:#7D8BA1;--sub:#C7D2E2;--accent:#4CC9E8;--pick:#0F2A36;--chip:#1C2740;
+--ready:#34D399;--busy:#FBBF24;--missing:#F87171;--asleep:#64748B}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:'Geist','Segoe UI Variable Text',system-ui,sans-serif;font-size:15px}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;transition:filter .12s,background-color .12s}
+button:hover{filter:brightness(1.15)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tabs{display:flex;gap:4px;padding:12px 16px;background:#080E1A;border-bottom:1px solid var(--soft);flex-wrap:wrap}
+.tabs button{border:0;background:transparent;color:var(--muted);padding:8px 14px;border-radius:8px;font-size:14px;font-weight:500}
+.tabs button[aria-selected=true]{background:var(--hover);color:#fff}
+.app{display:flex;flex-wrap:wrap;min-height:calc(100vh - 57px)}
+nav{flex:1 1 240px;max-width:100%;padding:22px 14px;background:var(--side);border-right:1px solid var(--soft);display:flex;flex-direction:column;gap:18px}
+.back{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 10px;color:var(--muted);text-decoration:none;font-size:13px}
+nav h1{margin:0 10px;font-size:24px;font-weight:600;letter-spacing:-.01em}
+.search{position:relative;margin:0 2px}
+.search svg{position:absolute;left:12px;top:12px}
+.search input{width:100%;height:40px;padding:0 12px 0 36px;background:var(--card);border:1px solid var(--line);border-radius:10px;font-size:14px}
+input::placeholder{color:var(--faint)}
+.group-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:4px 12px 6px}
+.navitem{display:flex;align-items:center;gap:12px;width:100%;min-height:42px;padding:0 12px;border:0;border-radius:10px;background:transparent;color:#B4C3D6;font-size:14px;font-weight:500;text-align:left}
+.navitem svg{color:var(--faint);flex:none}
+.navitem[aria-current=page]{background:var(--hover);color:#fff;font-weight:600}
+.navitem[aria-current=page] svg{color:var(--accent)}
+.saved{margin-top:auto;display:flex;align-items:center;gap:8px;padding:10px 12px;font-size:12.5px;color:var(--faint)}
+main{flex:999 1 560px;min-width:0;padding:34px clamp(16px,4vw,56px) 64px}
+.col{max-width:820px;display:flex;flex-direction:column;gap:18px}
+.crumb{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h2.title{margin:6px 0;font-size:30px;font-weight:600;letter-spacing:-.015em}
+.lede{margin:0 0 6px;color:var(--muted);line-height:1.5}
+section.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 24px;display:flex;flex-direction:column;gap:14px}
+section.card h3{margin:0;font-size:16px;font-weight:600}
+.help{margin:4px 0 0;color:var(--muted);font-size:14px;line-height:1.5}
+.welcome{display:flex;gap:14px;padding:16px 18px;border-radius:14px;background:var(--pick);border:1px solid #1F5566}
+.engines{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.engine{border:1.5px solid var(--line);background:var(--card);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.engine.on{border-color:var(--accent);background:var(--pick)}
+.plain{display:flex;flex-direction:column;align-items:stretch;gap:8px;background:none;border:0;padding:0;text-align:left}
+.radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--asleep);display:grid;place-items:center;flex:none}
+.on>.plain .radio,.on .radio,.row.on .radio{border-color:var(--accent)}
+.on .radio::after,.row.on .radio::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.ename{font-size:17px;font-weight:600;flex:1}
+.rec{font-size:12px;color:var(--accent);font-weight:500}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;padding:3px 9px;border-radius:999px;background:var(--chip);color:var(--sub)}
+.status{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--sub)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.ready{background:var(--ready);box-shadow:0 0 0 3px rgba(52,211,153,.18)}
+.dot.busy{background:var(--busy);box-shadow:0 0 0 3px rgba(251,191,36,.2)}
+.dot.missing{background:var(--missing);box-shadow:0 0 0 3px rgba(248,113,113,.2)}
+.dot.asleep{background:var(--asleep);box-shadow:0 0 0 3px rgba(100,116,139,.25)}
+.seg{display:flex;flex-wrap:wrap;gap:3px;padding:3px;background:var(--bg);border:1px solid var(--line);border-radius:10px}
+.seg button{flex:1;min-height:36px;padding:0 14px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:13px;font-weight:500}
+.seg button[aria-checked=true]{background:#1F3B4A;color:#fff}
+.primary{min-height:40px;padding:0 18px;border:0;border-radius:10px;background:var(--accent);color:#0B1220;font-size:14px;font-weight:600}
+.secondary{min-height:40px;padding:0 16px;border:1px solid #33415C;border-radius:10px;background:var(--hover);font-size:14px;font-weight:500}
+.small{min-height:34px;padding:0 14px;font-size:13px;border-radius:8px}
+.danger{min-height:40px;padding:0 16px;border:1px solid #5B2A33;border-radius:10px;background:transparent;color:#FCA5A5;font-size:14px;font-weight:500}
+.ghost{min-height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--accent);font-size:14px;font-weight:500;display:flex;align-items:center;gap:8px}
+.bar{height:6px;border-radius:3px;background:var(--chip);overflow:hidden}
+.bar>div{height:100%;background:var(--accent);border-radius:3px;transition:width .15s}
+.prog{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.voices{display:flex;flex-direction:column;gap:4px}
+.row{display:flex;align-items:center;gap:8px;border-radius:10px;padding:3px 6px 3px 2px}
+.row.on{background:#133847}
+.rowpick{flex:1;min-width:0;display:flex;align-items:center;gap:14px;min-height:44px;padding:0 10px;border:0;background:none;text-align:left}
+.vname{font-weight:600;width:110px;flex:none}
+.vdesc{color:var(--muted);font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.play{width:40px;height:40px;flex:none;border-radius:50%;border:1.5px solid #3B4A66;background:transparent;display:grid;place-items:center;padding:0}
+.play.playing{border-color:var(--accent);color:var(--accent)}
+.toggle{display:flex;align-items:center;justify-content:space-between;gap:20px}
+.tname{font-weight:500}
+.tdesc{color:var(--muted);font-size:13.5px;margin-top:3px;line-height:1.45}
+.switch{flex:none;width:46px;height:26px;border-radius:13px;border:0;padding:3px;background:#33415C;display:flex}
+.switch span{width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch[aria-checked=true]{background:var(--accent)}
+.switch[aria-checked=true] span{transform:translateX(20px)}
+.field{display:flex;flex-direction:column;gap:6px;max-width:440px}
+.field label,.lbl{font-size:13px;color:var(--sub)}
+.select{position:relative}
+.select select{appearance:none;width:100%;height:44px;padding:0 40px 0 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:14px}
+.select svg{position:absolute;right:14px;top:14px;pointer-events:none}
+option{background:var(--card)}
+.mono{font-family:'Geist Mono',ui-monospace,monospace}
+.whisper{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:4px 10px 4px 2px;border-radius:12px;border:1.5px solid var(--line)}
+.whisper.on{border-color:var(--accent);background:var(--pick)}
+.wright{display:flex;align-items:center;gap:12px;margin-left:auto}
+.table{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.trow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr) 44px;gap:10px;padding:6px 12px;border-top:1px solid var(--soft);align-items:center}
+.thead{border-top:0;background:var(--side);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:8px 12px}
+.trow input{height:38px;min-width:0;padding:0 10px;background:transparent;border:1px solid transparent;border-radius:8px}
+.trow input:hover{border-color:var(--line)}
+.x{width:36px;height:36px;border:0;border-radius:8px;background:transparent;color:var(--faint);display:grid;place-items:center;padding:0}
+.hookhead{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.hooktile{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;flex:none}
+code.path{display:block;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:13px;color:var(--sub);overflow-wrap:anywhere}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.map{padding:40px clamp(16px,4vw,52px);max-width:1120px;display:flex;flex-direction:column;gap:24px}
+.maptable{border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--card)}
+.mrow{display:grid;grid-template-columns:220px minmax(0,1fr) minmax(0,1.15fr);gap:20px;padding:13px 20px;border-top:1px solid var(--soft);align-items:center}
+.mrow.head{border-top:0;background:var(--side);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:12px 20px}
+.dup{font-size:12px;font-weight:600;color:var(--busy)}
+.pill{flex:none;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:#133847;color:#8FE0F2}
+.pill.gone{background:#3A1A20;color:#FCA5A5}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+@media (max-width:720px){.mrow{grid-template-columns:1fr;gap:8px}.mrow.head{display:none}}
+</style>
+</head>
+<body>
+<div class="tabs" role="tablist" aria-label="Views">
+  <button role="tab" id="tab-app" aria-selected="true">Settings window</button>
+  <button role="tab" id="tab-map" aria-selected="false">Where every control goes</button>
+</div>
+<div id="view"></div>
+
+<script>
+const PAGES=[
+ {g:'Raven',id:'voice',label:'Voice',sub:'How Raven speaks. Pick an engine, hear its voices and install it right here.',icon:'M11 5L6 9H3v6h3l5 4V5z M15.5 8.5a5 5 0 0 1 0 7 M18.5 5.5a9 9 0 0 1 0 13'},
+ {g:'Raven',id:'listening',label:'Listening',sub:'The mic Raven hears, and the model that writes down what you say.',icon:'M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M19 11a7 7 0 0 1-14 0 M12 18v3'},
+ {g:'Raven',id:'brain',label:'Brain & chats',sub:'The model Raven thinks with, and what the chats it starts run with.',icon:'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z'},
+ {g:'CodeSwitchX',id:'claude',label:'Claude Code',sub:'The hooks that let every chat report its state to the Yard.',icon:'M9 7V3 M15 7V3 M7 7h10v4a5 5 0 0 1-10 0V7z M12 16v5'},
+ {g:'CodeSwitchX',id:'usage',label:'Usage',sub:'A reminder for how many tokens you use.',icon:'M4 18a9 9 0 1 1 16 0 M12 14l4-4'},
+ {g:'CodeSwitchX',id:'privacy',label:'Privacy & data',sub:'What CodeSwitchX keeps, and where.',icon:'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z'}];
+const ENGINES=[
+ {id:'none',name:'None',pitch:'Raven answers in text only. Nothing to download.',tags:['Text only']},
+ {id:'kokoro',name:'Kokoro',pitch:'Small and quick. Runs on any PC, no graphics card needed.',tags:['~450 MB','CPU','English'],rec:true},
+ {id:'qwen',name:'Qwen3-TTS',pitch:'More natural and expressive. Needs an NVIDIA graphics card.',tags:['~5 GB','GPU','0.6B / 1.7B']}];
+const VOICES={
+ kokoro:[['af_heart','Heart','American English, female, warm'],['am_michael','Michael','American English, male, calm'],['bf_emma','Emma','British English, female, clear'],['bm_george','George','British English, male, deep'],['af_bella','Bella','American English, female, bright']],
+ qwen:[['ryan','Ryan','English, male, dynamic'],['aiden','Aiden','English, male, sunny American'],['vivian','Vivian','Chinese, female, bright'],['serena','Serena','Chinese, female, warm'],['uncle_fu','Uncle Fu','Chinese, male, low and mellow'],['dylan','Dylan','Beijing, male, clear'],['eric','Eric','Sichuan, male, slightly husky'],['ono_anna','Ono Anna','Japanese, female, playful'],['sohee','Sohee','Korean, female, warm']]};
+const WHISPERS=[['tiny','Tiny','English only, fastest','78 MB'],['base','Base','English only','148 MB'],['small','Small','English only, more accurate','488 MB'],['turbo','Large v3 Turbo','Any language, hears German too','1.6 GB']];
+const MAP=[
+ ['Voice engine',['Settings box','Voice setup cards'],'Voice','Engine cards, each with its status and install'],
+ ['Voice',['Settings box per engine','Voice setup list'],'Voice','Voice list with a sample to play on each row'],
+ ['Qwen3-TTS model',['Settings box, Qwen only'],'Voice','Inside the Qwen3-TTS card, shown when it is picked'],
+ ['Install and progress',['Voice setup footer'],'Voice','On the engine card itself, with Cancel'],
+ ['Model status dots',['Bottom bar','Settings','Voice setup cards'],'Voice · Listening','Once, beside each model; the bottom bar links here'],
+ ['Voice setup window',['Own window, opens once'],'Removed','The first run opens Voice with a welcome line'],
+ ['Speak chat news',['Settings, Raven'],'Voice','While you work'],
+ ['Microphone',['Raven panel'],'Listening','Device list with a level meter'],
+ ['Speech-to-text model',['Settings box and Download'],'Listening','Model list: size, status and Download per row'],
+ ['Talking over Raven',['Settings, Raven'],'Listening','Talking over Raven'],
+ ['Raven model',['Settings, Raven'],'Brain & chats',"Raven's brain"],
+ ['New chats: model, effort',['Settings','Panel chips'],'Brain & chats','Effort as one row of buttons; the chips only read out'],
+ ['Model names',['Plain text box'],'Brain & chats','A table: the name you say and its model id'],
+ ['Hooks and relay path',['Settings, top'],'Claude Code','Status card; the relay path under Advanced'],
+ ['5-hour budget',['Settings, Telemetry'],'Usage','Soft budget in tokens'],
+ ['Payloads, data, logs',['Settings, Privacy and Data'],'Privacy & data','One page for what is kept and where']];
+
+const S={view:'app',page:'voice',engine:'kokoro',voice:{kokoro:'af_heart',qwen:'ryan'},qm:'small',playing:null,whisper:'turbo',
+ news:true,barge:true,payloads:false,effort:'default',adv:false,hooks:true,jobs:{},done:{w_turbo:true,kokoro:true,qwen:true},
+ aliases:[['Fable','claude-fable-5-1'],['Opus','claude-opus-5-5'],['Sonnet','claude-sonnet-5-5'],['Haiku','claude-haiku-4-5-20251001']]};
+const Q=new URLSearchParams(location.search);
+if(Q.get('view')==='map')S.view='map';
+if(PAGES.some(p=>p.id===Q.get('page')))S.page=Q.get('page');
+if(Q.get('engine'))S.engine=Q.get('engine');
+if(Q.has('installing'))S.done.kokoro=false;
+const timers={};let playTimer;
+const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const icon=(d,w=18,extra='')=>`<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}><path d="${d}"/></svg>`;
+const chev=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA8BD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+const pct=p=>Math.round((p||0)*100)+'%';
+const sw=(k,id)=>`<button class="switch" role="switch" aria-checked="${S[k]}" aria-labelledby="${id}" data-act="toggle" data-k="${k}"><span></span></button>`;
+const select=(id,label,opts,mono)=>`<div class="field"><label for="${id}">${label}</label><div class="select"><select id="${id}" class="${mono?'mono':''}">${opts.map(o=>`<option>${esc(o)}</option>`).join('')}</select>${chev}</div></div>`;
+
+function start(key,step){if(timers[key])return;S.jobs[key]=0;render();
+ timers[key]=setInterval(()=>{S.jobs[key]+=step;if(S.jobs[key]>=1){delete S.jobs[key];S.done[key]=true;clearInterval(timers[key]);timers[key]=null}render()},160)}
+function cancel(key){clearInterval(timers[key]);timers[key]=null;delete S.jobs[key];render()}
+
+function engineStatus(e){
+ const picked=S.engine===e.id;
+ if(e.id==='none')return null;
+ if(e.id==='kokoro'){const j=S.jobs.kokoro;
+  if(j!==undefined)return['busy',(j<.15?'Setting up':'Downloading the model')+` · ${Math.round(j*325)} of 325 MB`];
+  if(!S.done.kokoro)return['missing','Not installed'];}
+ if(e.id==='qwen'){const j=S.jobs.qwenLarge;
+  if(j!==undefined)return['busy',`Downloading 1.7B · ${(j*3.5).toFixed(1)} of 3.5 GB`];
+  if(picked&&S.qm==='large'&&!S.done.qwenLarge)return['missing','1.7B not downloaded'];}
+ return picked?['ready','Ready']:['asleep','Asleep · installed'];}
+
+function voicePage(){
+ const welcome=new URLSearchParams(location.search).has('firstrun')?`<div class="welcome">${icon(PAGES[0].icon,22,'style="color:#4CC9E8;flex:none"')}<div><div style="font-weight:600">Welcome. Choose how Raven speaks.</div><div class="help" style="color:#B4C3D6">Pick an engine and a voice and install it now, rather than the first time Raven answers. You can come back here any time.</div></div></div>`:'';
+ const cards=ENGINES.map(e=>{const on=S.engine===e.id,st=engineStatus(e);
+  const key=e.id==='kokoro'?'kokoro':'qwenLarge',job=S.jobs[key];const running=e.id!=='none'&&job!==undefined;
+  const canInstall=on&&!running&&((e.id==='kokoro'&&!S.done.kokoro)||(e.id==='qwen'&&S.qm==='large'&&!S.done.qwenLarge));
+  return `<div class="engine ${on?'on':''}">
+   <button class="plain" role="radio" aria-checked="${on}" data-act="engine" data-id="${e.id}">
+    <span style="display:flex;align-items:center;gap:10px"><span class="radio"></span><span class="ename">${e.name}</span>${e.rec?'<span class="rec">Recommended</span>':''}</span>
+    <span style="font-size:13.5px;color:var(--muted);line-height:1.45">${e.pitch}</span>
+    <span class="chips">${e.tags.map(t=>`<span class="chip">${t}</span>`).join('')}</span></button>
+   ${st?`<div class="status"><span class="dot ${st[0]}"></span>${st[1]}</div>`:''}
+   ${e.id==='qwen'&&on?`<div><div class="lbl" style="margin-bottom:6px;color:var(--muted);font-size:12px">Model</div><div class="seg" role="radiogroup" aria-label="Qwen3-TTS model">
+     <button role="radio" aria-checked="${S.qm==='small'}" data-act="qm" data-id="small">0.6B · faster</button><button role="radio" aria-checked="${S.qm==='large'}" data-act="qm" data-id="large">1.7B · richer</button></div>
+     <div style="font-size:12px;color:var(--muted);margin-top:6px">${S.qm==='large'?(S.done.qwenLarge?'Sounds better, a little slower. On this PC.':'Sounds better, a little slower. 3.5 GB to download.'):'Quick replies. On this PC.'}</div></div>`:''}
+   ${canInstall?`<button class="primary" data-act="start" data-k="${key}">${e.id==='kokoro'?'Install Kokoro':'Download 1.7B'}</button>`:''}
+   ${running?`<div style="display:flex;flex-direction:column;gap:8px"><div class="bar"><div style="width:${pct(job)}"></div></div><div class="prog"><span>${e.id==='kokoro'?'Installing Kokoro':'Downloading Qwen3-TTS 1.7B'}</span><button class="secondary small" data-act="cancel" data-k="${key}">Cancel</button></div></div>`:''}
+  </div>`}).join('');
+ const list=VOICES[S.engine]||[];
+ const voices=list.length?`<section class="card"><div><h3>${S.engine==='kokoro'?'Kokoro voices':'Qwen3-TTS voices'}</h3><p class="help">Press play to hear one. The voice you pick is the one Raven speaks with.</p></div>
+  <div class="voices" role="radiogroup" aria-label="Voice">${list.map(([id,n,d])=>{const on=S.voice[S.engine]===id,pl=S.playing===id;
+   return `<div class="row ${on?'on':''}"><button class="rowpick" role="radio" aria-checked="${on}" data-act="voice" data-id="${id}"><span class="radio"></span><span class="vname">${n}</span><span class="vdesc">${d}</span></button>
+   <button class="play ${pl?'playing':''}" data-act="play" data-id="${id}" aria-label="${pl?'Stop':'Play'} ${n}">${pl?'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>':'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>'}</button></div>`}).join('')}</div></section>`
+  :`<section class="card" style="border-style:dashed;color:var(--muted);font-size:14px">Raven answers in text only. Pick Kokoro or Qwen3-TTS above to hear it speak.</section>`;
+ return `${welcome}<section class="card"><div><h3>Engine</h3><p class="help">Each engine shows where its model stands. Picking another one stops the old engine and frees its memory.</p></div><div class="engines" role="radiogroup" aria-label="Voice engine">${cards}</div></section>${voices}
+ <section class="card"><h3>While you work</h3><div class="toggle"><div><div class="tname" id="l-news">Speak chat news</div><div class="tdesc">When chats finish, fail or need you, Raven says so in one remark once nobody is talking. Off, the news is only written in Raven's log.</div></div>${sw('news','l-news')}</div></section>`;}
+
+function listeningPage(){
+ const rows=WHISPERS.map(([id,n,d,size])=>{const key='w_'+id,on=S.whisper===id,disk=!!S.done[key],job=S.jobs[key];
+  const st=job!==undefined?['busy','Downloading '+pct(job)]:!disk?['missing','Not downloaded']:on?['ready','Ready']:['asleep','Asleep'];
+  return `<div class="whisper ${on?'on':''}"><button class="rowpick" style="flex:1 1 260px;min-height:52px" role="radio" aria-checked="${on}" data-act="whisper" data-id="${id}"><span class="radio"></span><span style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:600">${n}</span><span style="font-size:13px;color:var(--muted)">${d}</span></span></button>
+  <div class="wright"><span class="mono" style="font-size:12.5px;color:var(--muted)">${size}</span><span class="status" style="min-width:118px"><span class="dot ${st[0]}"></span>${st[1]}</span>
+  ${!disk&&job===undefined?`<button class="secondary small" data-act="start" data-k="${key}">Download</button>`:''}${job!==undefined?`<div class="bar" style="width:90px"><div style="width:${pct(job)};background:var(--busy)"></div></div>`:''}</div></div>`}).join('');
+ return `<section class="card"><div><h3>Microphone</h3><p class="help">The mic Raven hears. Speak to check the level.</p></div>
+  <div class="select" style="max-width:460px"><label class="sr" for="mic">Microphone</label><select id="mic"><option>RØDE Connect Virtual Input</option><option>Headset Microphone</option><option>Windows default device</option></select>${chev}</div>
+  <div style="display:flex;align-items:center;gap:12px;max-width:460px"><span style="font-size:12px;color:var(--muted);width:40px">Level</span><div class="bar" style="flex:1"><div id="level" style="width:38%"></div></div></div>
+  <p style="margin:0;font-size:13px;color:var(--faint)">Push to talk or Open mic is switched on Raven's panel, where you talk.</p></section>
+ <section class="card"><div><h3>Speech to text</h3><p class="help">The Whisper model that writes down what you say. The English-only ones are smaller and faster.</p></div><div role="radiogroup" aria-label="Speech-to-text model" style="display:flex;flex-direction:column;gap:6px">${rows}</div></section>
+ <section class="card"><h3>Talking over Raven</h3><div class="toggle"><div><div class="tname" id="l-barge">Stop Raven when I talk over it</div><div class="tdesc">In Open mic, talking while Raven speaks stops it. Turn this off if Raven hears its own voice through your speakers.</div></div>${sw('barge','l-barge')}</div></section>`;}
+
+function brainPage(){
+ return `<section class="card"><div><h3>Raven's brain</h3><p class="help">The model Raven answers with. A faster model answers sooner. A change starts a new conversation.</p></div>
+  ${select('brain','Model',['claude-haiku-4-5-20251001','claude-sonnet-5-5','claude-opus-5-5','Another model id…'],true)}</section>
+ <section class="card" style="gap:18px"><div><h3>New chats Raven starts</h3><p class="help">They run in auto mode with these unless you name others for one chat. Saying “from now on Opus” changes them here too.</p></div>
+  ${select('chatmodel','Model',["Claude Code's default",...S.aliases.map(a=>a[0]).filter(Boolean)])}
+  <div style="display:flex;flex-direction:column;gap:6px"><div class="lbl" id="l-effort">Effort</div><div class="seg" role="radiogroup" aria-labelledby="l-effort" style="align-self:flex-start">${['default','low','medium','high','xhigh','max'].map(f=>`<button role="radio" aria-checked="${S.effort===f}" data-act="effort" data-id="${f}">${f}</button>`).join('')}</div></div>
+  <div style="display:flex;flex-direction:column;gap:8px"><div><div class="lbl">Model names</div><div style="font-size:13px;color:var(--muted);margin-top:2px">The name you say, and the model it starts. Edit a row when a new model comes out.</div></div>
+   <div class="table"><div class="trow thead"><span>You say</span><span>Model id</span><span></span></div>
+   ${S.aliases.map(([n,id],i)=>`<div class="trow"><input value="${esc(n)}" data-alias="${i}" data-col="0" aria-label="Name ${i+1}" placeholder="Name" style="font-weight:500"><input class="mono" value="${esc(id)}" data-alias="${i}" data-col="1" aria-label="Model id ${i+1}" placeholder="claude-…" style="font-size:13px;color:var(--sub)"><button class="x" data-act="rmalias" data-id="${i}" aria-label="Remove ${esc(n||'row '+(i+1))}">${icon('M6 6l12 12M18 6L6 18',16)}</button></div>`).join('')}</div>
+   <button class="ghost" data-act="addalias" style="align-self:flex-start">${icon('M12 5v14M5 12h14',16)}Add a name</button></div></section>`;}
+
+function claudePage(){
+ const on=S.hooks;
+ return `<section class="card" style="gap:16px"><div class="hookhead"><span class="hooktile" style="background:${on?'#0F2E25':'#3A1A20'};color:${on?'#34D399':'#F87171'}">${icon(on?'M20 6L9 17l-5-5':'M12 8v5 M12 16.5v.5 M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18',22)}</span>
+  <div style="flex:1 1 260px"><div style="font-size:17px;font-weight:600">${on?'Hooks installed':'Hooks not installed'}</div><div style="color:var(--muted);font-size:14px;margin-top:3px">${on?'All 10 events report to CodeSwitchX.':'Tiles fall back to reading the chat transcripts.'}</div></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">${on?`<button class="secondary" data-act="hooks" data-id="1">Reinstall</button><button class="danger" data-act="hooks" data-id="0">Remove</button>`:`<button class="primary" data-act="hooks" data-id="1">Install hooks</button>`}</div></div>
+  <p class="help" style="margin:0">CodeSwitchX adds csx-hook.exe to Claude Code's user settings, so every chat reports its state to the Yard. Your own hooks stay, and a backup is written first.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px"><span style="color:var(--faint)">Settings file</span><code class="mono" style="color:var(--sub)">%USERPROFILE%\\.claude\\settings.json</code></div>
+  <div style="border-top:1px solid var(--soft);padding-top:12px;display:flex;flex-direction:column;gap:12px">
+   <button class="ghost" style="color:var(--sub);align-self:flex-start" data-act="adv" aria-expanded="${S.adv}">${icon('M9 6l6 6-6 6',14,`style="transform:${S.adv?'rotate(90deg)':'none'};transition:transform .15s"`)}Advanced</button>
+   ${S.adv?`<div class="field" style="max-width:none"><label for="relay">Relay executable</label><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="relay" class="mono" value="…\\CodeSwitchX\\relay\\csx-hook.exe" style="flex:1 1 320px;min-width:0;height:40px;padding:0 12px;background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:13px"><button class="secondary">Reset</button></div><div style="font-size:12.5px;color:var(--faint)">Change this only when the relay lives somewhere else.</div></div>`:''}
+  </div></section>`;}
+
+const usagePage=()=>`<section class="card"><div><h3>5-hour budget</h3><p class="help">Draws a reminder line on the bottom bar. CodeSwitchX can't read your real plan limit, so this is not a hard limit. Leave it empty for no line.</p></div>
+ <div class="field" style="max-width:280px"><label for="budget">Soft budget</label><div style="display:flex;height:44px;background:var(--bg);border:1px solid var(--line);border-radius:10px;overflow:hidden"><input id="budget" class="mono" inputmode="numeric" placeholder="No budget" value="2,000,000" style="flex:1;min-width:0;padding:0 12px;background:transparent;border:0"><span style="padding:0 14px;color:var(--faint);font-size:13px;border-left:1px solid var(--line);display:grid;place-items:center">tokens</span></div></div></section>`;
+const privacyPage=()=>`<section class="card"><h3>Hook payloads</h3><div class="toggle"><div><div class="tname" id="l-pay">Keep raw hook payloads</div><div class="tdesc">Stores each hook's full payload in the database. It contains your prompts and file paths.</div></div>${sw('payloads','l-pay')}</div></section>
+ <section class="card"><div><h3>Data folder</h3><p class="help">The database, the voice engines, the models and the logs.</p></div><code class="path mono">%LOCALAPPDATA%\\CodeSwitchX</code><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary">Open folder</button><button class="secondary">Open logs</button></div></section>`;
+
+function appView(){
+ const p=PAGES.find(x=>x.id===S.page);
+ const body={voice:voicePage,listening:listeningPage,brain:brainPage,claude:claudePage,usage:usagePage,privacy:privacyPage}[S.page]();
+ return `<div class="app"><nav aria-label="Settings sections">
+  <a class="back" href="#">${icon('M15 18l-6-6 6-6',16)}Back to Yard</a><h1>Settings</h1>
+  <div class="search"><label class="sr" for="find">Search settings</label><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7D8BA1" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="find" type="search" placeholder="Search settings"></div>
+  ${['Raven','CodeSwitchX'].map(g=>`<div style="display:flex;flex-direction:column;gap:2px"><div class="group-title">${g}</div>${PAGES.filter(x=>x.g===g).map(x=>`<button class="navitem" data-act="page" data-id="${x.id}" aria-current="${x.id===S.page?'page':'false'}">${icon(x.icon)}${x.label}</button>`).join('')}</div>`).join('')}
+  <div class="saved">${icon('M20 6L9 17l-5-5',14)}Changes save as you make them.</div></nav>
+  <main><div class="col"><header><div class="crumb">${p.g}</div><h2 class="title">${p.label}</h2><p class="lede">${p.sub}</p></header>${body}</div></main></div>`;}
+
+function mapView(){
+ return `<div class="map"><header><div class="crumb">One place per setting</div><h2 class="title" style="font-size:34px">Where every control goes</h2>
+  <p class="lede" style="max-width:820px">The rule: the Settings window holds every choice you make once. The live controls you use while you work stay where you work, and appear nowhere else. Each model's status dot shows once, next to the place you choose that model.</p></header>
+  <div class="maptable"><div class="mrow head"><span>Setting</span><span>Today</span><span>New home</span></div>
+  ${MAP.map(([n,today,page,where])=>`<div class="mrow"><span style="font-weight:600;font-size:14.5px">${n}</span><span class="chips" style="align-items:center">${today.map(t=>`<span class="chip">${t}</span>`).join('')}${today.length>1?`<span class="dup">in ${today.length} places</span>`:''}</span><span style="display:flex;align-items:center;gap:10px"><span class="pill ${page==='Removed'?'gone':''}">${esc(page)}</span><span style="font-size:13.5px;color:#B4C3D6">${esc(where)}</span></span></div>`).join('')}</div>
+  <div class="two"><section class="card"><h3>Stays on Raven's panel</h3><p class="help" style="margin:0">What you touch while talking: the mic button, Push to talk or Open mic, and Mute. The New chats chips stay as a read-out and open Brain &amp; chats.</p></section>
+  <section class="card"><h3>Stays on the Yard</h3><p class="help" style="margin:0">View controls: tile size, Needs me first and Add workspace. The bottom bar keeps one status dot per model, and a click opens the page where that model is chosen.</p></section></div></div>`;}
+
+function render(){
+ const focus=document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.alias!==undefined?[document.activeElement.dataset.alias,document.activeElement.dataset.col,document.activeElement.selectionStart]:null;
+ document.getElementById('view').innerHTML=S.view==='app'?appView():mapView();
+ document.getElementById('tab-app').setAttribute('aria-selected',S.view==='app');
+ document.getElementById('tab-map').setAttribute('aria-selected',S.view==='map');
+ if(focus){const el=document.querySelector(`[data-alias="${focus[0]}"][data-col="${focus[1]}"]`);if(el){el.focus();el.setSelectionRange(focus[2],focus[2])}}}
+
+document.getElementById('tab-app').onclick=()=>{S.view='app';render()};
+document.getElementById('tab-map').onclick=()=>{S.view='map';render()};
+document.addEventListener('click',ev=>{const b=ev.target.closest('[data-act]');if(!b)return;const {act,id,k}=b.dataset;
+ if(act==='page')S.page=id;else if(act==='engine')S.engine=id;else if(act==='qm')S.qm=id;
+ else if(act==='voice')S.voice[S.engine]=id;else if(act==='whisper')S.whisper=id;else if(act==='effort')S.effort=id;
+ else if(act==='toggle')S[k]=!S[k];else if(act==='adv')S.adv=!S.adv;else if(act==='hooks')S.hooks=id==='1';
+ else if(act==='start')return start(k,k==='kokoro'?.045:k==='qwenLarge'?.03:.07);else if(act==='cancel')return cancel(k);
+ else if(act==='rmalias')S.aliases.splice(+id,1);else if(act==='addalias')S.aliases.push(['','']);
+ else if(act==='play'){clearTimeout(playTimer);S.playing=S.playing===id?null:id;if(S.playing)playTimer=setTimeout(()=>{S.playing=null;render()},2800)}
+ if(act==='page')ev.preventDefault();render()});
+document.addEventListener('input',ev=>{const el=ev.target;if(el.dataset.alias===undefined)return;S.aliases[+el.dataset.alias][+el.dataset.col]=el.value;if(el.dataset.col==='0'&&S.page==='brain'){const sel=document.getElementById('chatmodel');if(sel)sel.innerHTML=["Claude Code's default",...S.aliases.map(a=>a[0]).filter(Boolean)].map(o=>`<option>${esc(o)}</option>`).join('')}});
+setInterval(()=>{const l=document.getElementById('level');if(l)l.style.width=(18+Math.random()*45)+'%'},180);
+render();
+</script>
+</body>
+</html>

@@ -145,6 +145,50 @@ public static class ChatModels
         _ => null,
     };
 
+    /// <summary>
+    /// Why each row of the table, as Settings shows it, is left out by <see cref="ParseAliases"/>, or null for a row that
+    /// counts and for a row not filled in at all (one just added). The rules are the parser's: name and id both given,
+    /// no <c>=</c> or <c>:</c> in the name, no space in the id, and of two rows with the same name the first counts.
+    /// </summary>
+    public static IReadOnlyList<string?> RowProblems(IReadOnlyList<ModelAlias> rows)
+    {
+        var problems = new List<string?>();
+        var counted = new List<string>();
+        foreach (var row in rows)
+        {
+            var name = row.Name.Trim();
+            var id = row.Id.Trim();
+            string? problem = null;
+            if (name.Length == 0 && id.Length == 0)
+            {
+            }
+            else if (name.Length == 0 || id.Length == 0)
+            {
+                problem = "Not used: fill in both the name and the model id.";
+            }
+            else if (name.IndexOfAny(['=', ':']) >= 0)
+            {
+                problem = "Not used: a name can't contain = or :.";
+            }
+            else if (id.Any(char.IsWhiteSpace))
+            {
+                problem = "Not used: a model id has no spaces.";
+            }
+            else if (counted.Any(c => Same(c, name)))
+            {
+                problem = $"Not used: {name} is in the table already, and the first one counts.";
+            }
+            else
+            {
+                counted.Add(name);
+            }
+
+            problems.Add(problem);
+        }
+
+        return problems;
+    }
+
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase)
         || string.Equals(WorkspaceMatcher.Squash(a), WorkspaceMatcher.Squash(b), StringComparison.Ordinal);
 }
