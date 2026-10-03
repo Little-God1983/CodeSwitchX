@@ -74,7 +74,8 @@ public sealed class BrainSettings
         + "Say to the user exactly the sentence it returns, which asks them to say yes, and nothing more. The app itself checks "
         + "their next words for a yes and allows it then; you are not asked, so never say it was allowed, and never call anything "
         + "else for it. Any other words from the user cancel the proposal. With two prompts open, name the ask id of the one the "
-        + "user means, or ask which. "
+        + "user means, or ask which. Allowing something for good (\"always allow that\") is by a click on the prompt's card only: "
+        + "say so, and offer to allow it this once instead. "
         + "Always answer in English, whatever language the user spoke. Keep it short: one to three sentences, plain text, no "
         + "markdown, no lists unless asked, no chat ids. Name chats by their title and workspace. Say what you found or did, not "
         + "how. If the tools cannot do or answer something, say so in one sentence.";

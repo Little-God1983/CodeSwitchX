@@ -317,6 +317,47 @@ public sealed class ChatAsksTests : IDisposable
         first.IsCompleted.ShouldBeFalse();
     }
 
+    private static readonly ChatPermissionSuggestion AlwaysNpmTest = new(
+        """{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
+        "Always allow npm test", "in this folder, just you");
+
+    [Fact]
+    public async Task An_allow_for_good_takes_one_of_the_prompt_s_own_suggestions()
+    {
+        var held = _asks.HoldAsync(Permission() with { Suggestions = [AlwaysNpmTest] }, CancellationToken.None);
+
+        _asks.Permit("p1", allow: true, always: AlwaysNpmTest).ShouldBeTrue();
+
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null, AlwaysNpmTest));
+        AlwaysNpmTest.Said.ShouldBe("Always allow npm test in this folder, just you");
+    }
+
+    [Fact]
+    public void A_rule_the_prompt_did_not_suggest_or_one_with_a_deny_is_refused_and_nothing_is_answered()
+    {
+        var held = _asks.HoldAsync(Permission() with { Suggestions = [AlwaysNpmTest] }, CancellationToken.None);
+        var other = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
+        var foreign = AlwaysNpmTest with { Json = """{"type":"setMode","mode":"bypassPermissions","destination":"session"}""" };
+
+        Should.Throw<ArgumentException>(() => _asks.Permit("p1", allow: true, always: foreign));
+        Should.Throw<ArgumentException>(() => _asks.Permit("p1", allow: false, always: AlwaysNpmTest));
+        Should.Throw<ArgumentException>(() => _asks.Permit("p2", allow: true, always: AlwaysNpmTest), "that prompt suggested nothing");
+
+        held.IsCompleted.ShouldBeFalse();
+        other.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_yes_by_voice_allows_once_never_for_good()
+    {
+        var held = _asks.HoldAsync(Permission() with { Suggestions = [AlwaysNpmTest] }, CancellationToken.None);
+        _asks.Propose("p1");
+
+        _asks.Confirm().ShouldBeTrue();
+
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null), "a standing rule is the click's alone");
+    }
+
     [Fact]
     public void Only_a_held_permission_prompt_can_be_proposed()
     {

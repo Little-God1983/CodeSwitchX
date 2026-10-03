@@ -17,7 +17,14 @@ public sealed partial class ChatAskCard : ObservableObject
         Ask = ask;
         Questions = ask.Questions.Select(q => new ChatQuestionView(this, q)).ToList();
         NeedsSend = Questions.Count > 1 || Questions.Any(q => q.MultiSelect);
+        Suggestions = (ask.Suggestions ?? []).Select(s => new ChatSuggestionView(this, s)).ToList();
     }
+
+    /// <summary>
+    /// The standing rules Claude Code suggests with the prompt, one button each ("Always allow npm test in this folder,
+    /// just you"); none when it suggests none. Chosen by a click only, never by voice.
+    /// </summary>
+    public IReadOnlyList<ChatSuggestionView> Suggestions { get; }
 
     public ChatAsk Ask { get; }
 
@@ -84,6 +91,42 @@ public sealed partial class ChatAskCard : ObservableObject
     public IReadOnlyList<string> Answers() => Questions.Select(q => q.Answer).ToList();
 
     internal void ChoiceChanged() => OnPropertyChanged(nameof(CanSend));
+}
+
+/// <summary>One "always allow" button of a permission card: a rule Claude Code suggested with the prompt.</summary>
+public sealed class ChatSuggestionView
+{
+    /// <summary>How much of a long rule the button shows; its tooltip shows all of it.</summary>
+    public const int MaxButtonChars = 60;
+
+    internal ChatSuggestionView(ChatAskCard card, ChatPermissionSuggestion suggestion)
+    {
+        Card = card;
+        Suggestion = suggestion;
+    }
+
+    public ChatAskCard Card { get; }
+
+    public ChatPermissionSuggestion Suggestion { get; }
+
+    /// <summary>The button: "Always allow npm test in this folder, just you"; a long rule is cut, where it is kept is not.</summary>
+    public string Text
+    {
+        get
+        {
+            var label = Suggestion.Label.ReplaceLineEndings(" ");
+            if (label.Length > MaxButtonChars)
+            {
+                var length = char.IsHighSurrogate(label[MaxButtonChars - 2]) ? MaxButtonChars - 2 : MaxButtonChars - 1; // never half an emoji
+                label = label[..length].TrimEnd() + "…";
+            }
+
+            return Suggestion.Where.Length == 0 ? label : $"{label} {Suggestion.Where}";
+        }
+    }
+
+    /// <summary>All of the rule, and what the click does.</summary>
+    public string ToolTip => $"{Suggestion.Said}. The chat carries on, and Claude Code keeps the rule: it does not ask for this again.";
 }
 
 /// <summary>One question of a card, with its options.</summary>

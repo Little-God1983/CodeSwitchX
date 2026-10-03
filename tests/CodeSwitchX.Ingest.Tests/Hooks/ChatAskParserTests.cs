@@ -82,6 +82,55 @@ public sealed class ChatAskParserTests
         ask.Permission.ShouldBe(new ChatPermission(tool, wants, subject, null));
     }
 
+    [Fact]
+    public void What_Claude_Code_suggests_to_allow_for_good_is_kept_as_it_came_and_worded_for_its_button()
+    {
+        var suggestion = ChatAskParser.Parse(Permission("Bash", """{"command":"npm test"}"""), At).ShouldNotBeNull().Suggestions.ShouldNotBeNull().ShouldHaveSingleItem();
+
+        suggestion.ShouldBe(new ChatPermissionSuggestion(
+            """{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
+            "Always allow npm test", "in this folder, just you"));
+    }
+
+    /// <summary>A PermissionRequest with the given suggestions, or none.</summary>
+    private static string Suggesting(string? suggestions) => $$$"""
+        {"event":"PermissionRequest","relayPid":7,"parentChain":[],
+         "payload":{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","cwd":"E:\\Repo",
+                    "tool_input":{"command":"npm test"}{{{(suggestions is null ? "" : ",\"permission_suggestions\":" + suggestions)}}}}}
+        """;
+
+    [Theory]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm run build:*"}],"behavior":"allow","destination":"projectSettings"}""",
+        "Always allow npm run build:* in this folder, for everyone on the project")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Edit","ruleContent":"src/**"},{"toolName":"WebSearch"}],"behavior":"allow","destination":"userSettings"}""",
+        "Always allow Edit of src/**, every use of WebSearch in every folder")]
+    [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "Allow all edits for this session")]
+    [InlineData("""{"type":"setMode","mode":"plan","destination":"session"}""", "Switch the chat to plan mode for this session")]
+    [InlineData("""{"type":"addDirectories","directories":["E:\\Data"],"destination":"localSettings"}""", @"Always allow access to E:\Data in this folder, just you")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"git status"}],"behavior":"allow"}""", "Always allow git status")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls"}],"behavior":"allow","destination":"cliArg"}""", "Always allow ls (cliArg)")]
+    public void Each_kind_of_suggestion_says_what_it_allows_and_where_it_is_kept(string suggestion, string said)
+    {
+        var parsed = ChatAskParser.Parse(Suggesting($"[{suggestion}]"), At).ShouldNotBeNull().Suggestions.ShouldNotBeNull().ShouldHaveSingleItem();
+
+        parsed.Said.ShouldBe(said);
+        JsonDocument.Parse(parsed.Json).RootElement.GetRawText().ShouldBe(suggestion, "it goes back to Claude Code as it came");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("[]")]
+    [InlineData("\"none\"")]
+    [InlineData("""[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"rm -rf /"}],"behavior":"deny","destination":"localSettings"}]""")]
+    [InlineData("""[{"type":"removeRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]""")]
+    [InlineData("""[{"type":"addRules","rules":[{"ruleContent":"npm test"}],"behavior":"allow"}]""")]
+    [InlineData("""[{"type":"addRules","rules":[],"behavior":"allow"}]""")]
+    [InlineData("""["addRules"]""")]
+    public void A_prompt_without_suggestions_or_with_ones_that_cannot_be_worded_truthfully_offers_none(string? suggestions)
+    {
+        ChatAskParser.Parse(Suggesting(suggestions), At).ShouldNotBeNull().Suggestions.ShouldBeNull();
+    }
+
     [Theory]
     [InlineData("Edit", """{"file_path":"E:\\Repo\\App.cs","old_string":"a","new_string":"rm -rf /"}""", "edit a file", @"E:\Repo\App.cs")]
     [InlineData("Write", """{"file_path":"E:\\Repo\\new.txt","content":"x"}""", "write a file", @"E:\Repo\new.txt")]

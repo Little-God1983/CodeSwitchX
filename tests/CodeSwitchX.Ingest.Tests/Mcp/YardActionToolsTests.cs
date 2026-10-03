@@ -397,6 +397,15 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public void No_voice_tool_can_allow_for_good()
+    {
+        // A standing rule outlives the one command and is easy to mishear: it is a click on the card, and the brain's tool
+        // has no way to name one (#109).
+        typeof(YardActionTools).GetMethod(nameof(YardActionTools.AnswerPermission))!.GetParameters().Select(p => p.Name)
+            .ShouldBe(["chat", "decision", "ask", "message", "cancellationToken"]);
+    }
+
+    [Fact]
     public async Task A_question_is_not_a_permission_prompt()
     {
         var (asks, held) = Asking();

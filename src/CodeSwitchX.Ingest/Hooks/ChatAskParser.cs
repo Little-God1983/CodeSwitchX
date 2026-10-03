@@ -124,8 +124,70 @@ public static class ChatAskParser
         };
 
         var agent = step.AgentId is null ? null : String(payload, "agent_type") is { Length: > 0 } type ? type : "sub-agent";
-        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details, risks.Count > 0 ? risks : null));
+        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details, risks.Count > 0 ? risks : null),
+            Suggestions(payload));
     }
+
+    /// <summary>
+    /// The standing rules Claude Code suggests with the prompt (<c>permission_suggestions</c>), each kept as it came and
+    /// worded for its button. One whose effect cannot be worded truthfully (a kind not known here, a rule that denies) is
+    /// not offered. Null when none is.
+    /// </summary>
+    private static IReadOnlyList<ChatPermissionSuggestion>? Suggestions(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("permission_suggestions", out var list) || list.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var suggestions = list.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.Object)
+            .Select(item => SuggestionLabel(item) is { } label ? new ChatPermissionSuggestion(item.GetRawText(), label, SavedWhere(String(item, "destination"))) : null)
+            .OfType<ChatPermissionSuggestion>()
+            .ToList();
+        return suggestions.Count > 0 ? suggestions : null;
+    }
+
+    /// <summary>"Always allow npm test", "Allow all edits", "Always allow access to E:\Data"; null for what is not offered.</summary>
+    private static string? SuggestionLabel(JsonElement item)
+    {
+        switch (String(item, "type"))
+        {
+            case "addRules" when String(item, "behavior") == "allow" && item.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Array:
+                var said = rules.EnumerateArray().Select(RuleSaid).ToList();
+                return said.Count == 0 || said.Contains(null) ? null : "Always allow " + string.Join(", ", said);
+            case "setMode" when String(item, "mode") is { Length: > 0 } mode:
+                return mode == "acceptEdits" ? "Allow all edits" : $"Switch the chat to {mode} mode";
+            case "addDirectories" when item.TryGetProperty("directories", out var directories) && directories.ValueKind == JsonValueKind.Array:
+                var folders = directories.EnumerateArray().Select(JsonStrings.TryRead).ToList();
+                return folders.Count == 0 || folders.Any(string.IsNullOrWhiteSpace) ? null : "Always allow access to " + string.Join(", ", folders);
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>A rule as its button says it: a command for Bash and PowerShell, "Edit of src/**" for another tool, or the tool alone.</summary>
+    private static string? RuleSaid(JsonElement rule)
+    {
+        if (String(rule, "toolName") is not { Length: > 0 } tool)
+        {
+            return null;
+        }
+
+        var content = String(rule, "ruleContent");
+        return content is not { Length: > 0 } ? $"every use of {tool}" : tool is "Bash" or "PowerShell" ? content : $"{tool} of {content}";
+    }
+
+    /// <summary>Where Claude Code keeps the rule, as said after the label.</summary>
+    private static string SavedWhere(string? destination) => destination switch
+    {
+        "localSettings" => "in this folder, just you",
+        "projectSettings" => "in this folder, for everyone on the project",
+        "userSettings" => "in every folder",
+        "session" => "for this session",
+        { Length: > 0 } other => $"({other})",
+        _ => "",
+    };
 
     /// <summary>A Write of nothing (or only blanks) over a file that is there.</summary>
     private static bool Empties(JsonElement input, string path) =>
