@@ -231,6 +231,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Set while the table writes <see cref="RavenModelAliases"/>: the table is not built again from it.</summary>
     private bool _writingAliases;
 
+    /// <summary>No row of the table counts: the default names apply, and a line under the table says so.</summary>
+    [ObservableProperty] private bool _aliasesFallBack;
+
+    /// <summary>The line under a table with no name that counts.</summary>
+    public static string AliasesFallBackText { get; } =
+        $"No name in the table counts, so the default names apply: {string.Join(", ", ChatModels.DefaultAliases.Select(a => a.Name))}.";
+
     private void ShowAliases()
     {
         Aliases.Clear();
@@ -238,6 +245,29 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             Aliases.Add(NewAliasRow(alias.Name, alias.Id));
         }
+
+        ShowAliasProblems();
+    }
+
+    /// <summary>
+    /// Each row the parser leaves out says why, and a table with none that counts says the default names apply: the
+    /// table shows what Raven goes by, not only what was typed.
+    /// </summary>
+    private IReadOnlyList<ModelAlias> ShowAliasProblems()
+    {
+        var problems = ChatModels.RowProblems([.. Aliases.Select(a => new ModelAlias(a.Name, a.Id))]);
+        var counted = new List<ModelAlias>();
+        for (var i = 0; i < Aliases.Count; i++)
+        {
+            Aliases[i].Problem = problems[i];
+            if (problems[i] is null && !string.IsNullOrWhiteSpace(Aliases[i].Name))
+            {
+                counted.Add(new ModelAlias(Aliases[i].Name.Trim(), Aliases[i].Id.Trim()));
+            }
+        }
+
+        AliasesFallBack = counted.Count == 0;
+        return counted;
     }
 
     private AliasRow NewAliasRow(string name, string id) => new(name, id, _ => WriteAliases(), row =>
@@ -251,9 +281,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         _writingAliases = true;
         try
         {
-            RavenModelAliases = ChatModels.FormatAliases(Aliases
-                .Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.Id))
-                .Select(a => new ModelAlias(a.Name.Trim(), a.Id.Trim())));
+            RavenModelAliases = ChatModels.FormatAliases(ShowAliasProblems());
         }
         finally
         {

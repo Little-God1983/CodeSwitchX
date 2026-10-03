@@ -624,6 +624,27 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_row_not_used_says_why_and_a_table_with_none_says_the_default_names_apply()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.AliasesFallBack.ShouldBeFalse();
+
+        _vm.Aliases.Single(a => a.Name == "Sonnet").Name = "opus";
+
+        _vm.Aliases.Single(a => a.Name == "opus").Problem.ShouldBe("Not used: opus is in the table already, and the first one counts.");
+        _chats.Aliases.Select(a => a.Name).ShouldBe(["Fable", "Opus", "Haiku"]);
+
+        foreach (var row in _vm.Aliases.ToList())
+        {
+            row.RemoveCommand.Execute(null);
+        }
+
+        (_vm.Aliases.Count, _vm.AliasesFallBack).ShouldBe((0, true), "the default names apply, and the table says so");
+        _chats.Aliases.ShouldBe(ChatModels.DefaultAliases);
+        SettingsViewModel.AliasesFallBackText.ShouldBe("No name in the table counts, so the default names apply: Fable, Opus, Sonnet, Haiku.");
+    }
+
+    [Fact]
     public async Task The_hooks_card_offers_install_or_reinstall_and_remove()
     {
         await _vm.LoadAsync(CancellationToken.None);

@@ -71,5 +71,8 @@ public sealed partial class AliasRow : ObservableObject
     [ObservableProperty] private string _name;
     [ObservableProperty] private string _id;
 
+    /// <summary>Why the row is not used (a name twice, a space in the id), or null when it counts.</summary>
+    [ObservableProperty] private string? _problem;
+
     public IRelayCommand RemoveCommand { get; }
 }

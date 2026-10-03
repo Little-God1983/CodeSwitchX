@@ -567,7 +567,17 @@
               <DockPanel Width="460" HorizontalAlignment="Left" Margin="0,12,0,0">
                 <TextBlock Text="Level" FontSize="12" Foreground="{StaticResource Muted}" Width="44" VerticalAlignment="Center" />
                 <Border Height="6" CornerRadius="3" Background="{StaticResource Line}" ClipToBounds="True" VerticalAlignment="Center" ToolTip="Mic level">
+                  <!-- Raven's level carries its own voice while it speaks, not the mic's: hidden then, as on the panel. -->
                   <Border Background="{StaticResource Accent}" CornerRadius="3" RenderTransformOrigin="0,0.5">
+                    <Border.Style>
+                      <Style TargetType="Border">
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding DataContext.Raven.State, RelativeSource={RelativeSource AncestorType=Window}}" Value="Speaking">
+                            <Setter Property="Visibility" Value="Hidden" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </Border.Style>
                     <Border.RenderTransform>
                       <ScaleTransform ScaleX="{Binding DataContext.Raven.Level, RelativeSource={RelativeSource AncestorType=Window}, FallbackValue=0}" />
                     </Border.RenderTransform>
@@ -677,6 +687,10 @@
                       <DataTemplate DataType="settings:AliasRow">
                         <Border BorderBrush="{StaticResource RowLine}" BorderThickness="0,1,0,0" Padding="6,5">
                           <Grid>
+                            <Grid.RowDefinitions>
+                              <RowDefinition Height="Auto" />
+                              <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                               <ColumnDefinition Width="164" />
                               <ColumnDefinition Width="*" />
@@ -688,6 +702,8 @@
                                     HorizontalAlignment="Center" AutomationProperties.Name="{Binding Name, StringFormat='Remove {0}'}" ToolTip="Remove">
                               <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE711;" FontSize="12" />
                             </Button>
+                            <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding Problem}" FontSize="12.5" Foreground="#FBBF24" TextWrapping="Wrap" Margin="2,5,0,1"
+                                       Visibility="{Binding Problem, Converter={StaticResource NullToCollapsed}}" AutomationProperties.LiveSetting="Polite" />
                           </Grid>
                         </Border>
                       </DataTemplate>
@@ -695,6 +711,8 @@
                   </ItemsControl>
                 </StackPanel>
               </Border>
+              <TextBlock Text="{Binding AliasesFallBackText, Mode=OneTime}" FontSize="12.5" Foreground="#FBBF24" TextWrapping="Wrap" Margin="2,8,0,0"
+                         Visibility="{Binding AliasesFallBack, Converter={StaticResource BoolVisible}}" AutomationProperties.LiveSetting="Polite" />
               <Button Style="{StaticResource Ghost}" Command="{Binding AddAliasCommand}" Margin="0,8,0,0" AutomationProperties.Name="Add a name">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE710;" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
