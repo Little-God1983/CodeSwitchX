@@ -191,7 +191,10 @@ public sealed class EventApiService : IHostedService
 
             if (closed is { Outcome: ChatAskOutcome.Answered, Permit: { } permit })
             {
-                return Results.Ok(new { permit = new { allow = permit.Allow, message = permit.Message } });
+                // Allowed for good (#109): the suggestion the user clicked goes back as Claude Code sent it, and Claude Code
+                // writes the rule itself.
+                var updated = permit.Always is { } always ? new[] { System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(always.Json) } : null;
+                return Results.Ok(new { permit = new { allow = permit.Allow, message = permit.Message, updatedPermissions = updated } });
             }
 
             // Only a relay with the Ask or Permit hook asks here, and every one of those hands a stop on. The step a permission

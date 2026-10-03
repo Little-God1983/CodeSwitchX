@@ -30,6 +30,12 @@ public sealed record HookEvent
     /// </summary>
     public string? ProjectDir { get; init; }
 
+    /// <summary>
+    /// The relay that sent a permission prompt hands a rule allowed for good back to Claude Code (#109). False from an
+    /// older relay, which would allow once and keep nothing: no "Always allow" is offered then.
+    /// </summary>
+    public bool RelayKeepsRules { get; init; }
+
     /// <summary>The sub-agent the event comes from; null for the chat's main agent. Sub-agents send hooks with the parent's session id.</summary>
     public string? AgentId { get; init; }
     public string? NotificationType { get; init; }

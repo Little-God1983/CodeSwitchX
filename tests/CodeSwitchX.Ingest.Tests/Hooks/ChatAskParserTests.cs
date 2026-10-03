@@ -61,7 +61,7 @@ public sealed class ChatAskParserTests
 
     /// <summary>A PermissionRequest as the lab saw it (extension 2.1.287): no tool_use_id; agent_id and agent_type for a sub-agent.</summary>
     private static string Permission(string tool, string toolInput, string agent = "") => $$$"""
-        {"event":"PermissionRequest","relayPid":7,"parentChain":[],
+        {"event":"PermissionRequest","relayPid":7,"parentChain":[],"keepsRules":true,
          "payload":{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"{{{tool}}}","cwd":"E:\\Repo",{{{agent}}}
                     "tool_input":{{{toolInput}}},
                     "permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]}}
@@ -80,6 +80,80 @@ public sealed class ChatAskParserTests
         ask.Questions.ShouldBeEmpty();
         (ask.SessionId, ask.Step.EventName, ask.Step.AgentId, ask.At).ShouldBe(("s1", "PermissionRequest", null, At));
         ask.Permission.ShouldBe(new ChatPermission(tool, wants, subject, null));
+    }
+
+    [Fact]
+    public void What_Claude_Code_suggests_to_allow_for_good_is_kept_as_it_came_and_worded_for_its_button()
+    {
+        var suggestion = ChatAskParser.Parse(Permission("Bash", """{"command":"npm test"}"""), At).ShouldNotBeNull().Suggestions.ShouldNotBeNull().ShouldHaveSingleItem();
+
+        suggestion.ShouldBe(new ChatPermissionSuggestion(
+            """{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
+            "Always allow npm test", "in this folder, just you", "Claude Code keeps the rule and does not ask for this again."));
+    }
+
+    [Fact]
+    public void A_relay_older_than_always_allow_is_offered_none_it_would_allow_once_and_keep_nothing()
+    {
+        // Review of #113: an old relay ignores updatedPermissions, so the card would say "kept as a rule" for nothing.
+        ChatAskParser.Parse(Suggesting("""[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]""",
+            keepsRules: false), At).ShouldNotBeNull().Suggestions.ShouldBeNull();
+    }
+
+    /// <summary>A PermissionRequest with the given suggestions, or none.</summary>
+    private static string Suggesting(string? suggestions, bool keepsRules = true) => $$$"""
+        {"event":"PermissionRequest","relayPid":7,"parentChain":[]{{{(keepsRules ? ",\"keepsRules\":true" : "")}}},
+         "payload":{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","cwd":"E:\\Repo",
+                    "tool_input":{"command":"npm test"}{{{(suggestions is null ? "" : ",\"permission_suggestions\":" + suggestions)}}}}}
+        """;
+
+    [Theory]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm run build:*"}],"behavior":"allow","destination":"projectSettings"}""",
+        "Always allow npm run build:* in this folder, for everyone on the project")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Edit","ruleContent":"src/**"},{"toolName":"WebSearch"}],"behavior":"allow","destination":"userSettings"}""",
+        "Always allow Edit of src/**, every use of WebSearch in every folder")]
+    [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "Allow all edits for this session")]
+    [InlineData("""{"type":"addDirectories","directories":["E:\\Data"],"destination":"localSettings"}""", @"Let the chat work in E:\Data in this folder, just you")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"git status"}],"behavior":"allow"}""", "Always allow git status")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"ls"}],"behavior":"allow","destination":"cliArg"}""", "Always allow ls (cliArg)")]
+    public void Each_kind_of_suggestion_says_what_it_allows_and_where_it_is_kept(string suggestion, string said)
+    {
+        var parsed = ChatAskParser.Parse(Suggesting($"[{suggestion}]"), At).ShouldNotBeNull().Suggestions.ShouldNotBeNull().ShouldHaveSingleItem();
+
+        parsed.Said.ShouldBe(said);
+        JsonDocument.Parse(parsed.Json).RootElement.GetRawText().ShouldBe(suggestion, "it goes back to Claude Code as it came");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("[]")]
+    [InlineData("\"none\"")]
+    [InlineData("""[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"rm -rf /"}],"behavior":"deny","destination":"localSettings"}]""")]
+    [InlineData("""[{"type":"removeRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]""")]
+    [InlineData("""[{"type":"addRules","rules":[{"ruleContent":"npm test"}],"behavior":"allow"}]""")]
+    [InlineData("""[{"type":"addRules","rules":[],"behavior":"allow"}]""")]
+    [InlineData("""["addRules"]""")]
+    // Review of #113: a mode that ends every prompt after one click, or one that changes how the chat works, is not offered.
+    [InlineData("""[{"type":"setMode","mode":"bypassPermissions","destination":"session"}]""")]
+    [InlineData("""[{"type":"setMode","mode":"plan","destination":"session"}]""")]
+    [InlineData("""[{"type":"setMode","mode":"dontAsk","destination":"localSettings"}]""")]
+    public void A_prompt_without_suggestions_or_with_ones_that_cannot_be_worded_truthfully_offers_none(string? suggestions)
+    {
+        ChatAskParser.Parse(Suggesting(suggestions), At).ShouldNotBeNull().Suggestions.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
+        "Claude Code keeps the rule and does not ask for this again.")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"session"}""",
+        "Claude Code keeps the rule until this session ends, and asks again after that.")]
+    [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "The chat edits files without asking until this session ends; commands still ask.")]
+    [InlineData("""{"type":"addDirectories","directories":["E:\\Data"],"destination":"session"}""",
+        "The chat may read and edit files there until this session ends. A command can still ask.")]
+    public void Each_kind_says_what_its_click_does_from_now_on(string suggestion, string effect)
+    {
+        // Review of #113: "it does not ask for this again" was said of every kind, and is true only of a rule kept for good.
+        ChatAskParser.Parse(Suggesting($"[{suggestion}]"), At).ShouldNotBeNull().Suggestions.ShouldNotBeNull().ShouldHaveSingleItem().Effect.ShouldBe(effect);
     }
 
     [Theory]

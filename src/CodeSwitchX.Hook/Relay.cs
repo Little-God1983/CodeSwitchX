@@ -92,7 +92,7 @@ internal static class Relay
             // the fingerprint it is matched by.
             var envelope = BuildEnvelope(held ? heldEvent : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
                 held ? MaxAskBytes : MaxNestedBytes, keepStrings: permits, fingerprint: permits || eventName == "PreToolUse",
-                projectDir: permits ? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") : null);
+                projectDir: permits ? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") : null, keepsRules: permits);
 
             if (held)
             {
@@ -216,8 +216,12 @@ internal static class Relay
     /// <param name="keepStrings">Strings are not cut: a permission prompt's card shows all it allows.</param>
     /// <param name="fingerprint">The tool input's fingerprint goes along (<see cref="ToolInputHash"/>).</param>
     /// <param name="projectDir">The chat's project folder (Claude Code's <c>CLAUDE_PROJECT_DIR</c>), for a permission prompt's risks; left out when null.</param>
+    /// <param name="keepsRules">
+    /// This relay hands a rule the user allowed for good back to Claude Code (<c>updatedPermissions</c>, #109): the app
+    /// offers "Always allow" only to a relay that says so, as an older one would allow once and keep nothing.
+    /// </param>
     internal static string BuildEnvelope(string eventName, string payload, DateTimeOffset now, int relayPid, IReadOnlyList<ProcessInfo> chain,
-        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false, string? projectDir = null)
+        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false, string? projectDir = null, bool keepsRules = false)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -239,6 +243,11 @@ internal static class Relay
             if (projectDir is { Length: > 0 })
             {
                 writer.WriteString("projectDir", projectDir);
+            }
+
+            if (keepsRules)
+            {
+                writer.WriteBoolean("keepsRules", true);
             }
 
             if (TryParseJson(payload, out var document))
@@ -547,9 +556,10 @@ internal static class Relay
 
     /// <summary>
     /// The user's answer in CodeSwitchX's answer to a permission prompt (<c>{"permit": {"allow": true, "message": "…"}}</c>);
-    /// null for none or anything else.
+    /// null for none or anything else. An allow for good carries <c>updatedPermissions</c>, the rule Claude Code suggested,
+    /// kept as it is.
     /// </summary>
-    internal static (bool Allow, string? Message)? PermitIn(string? answer)
+    internal static (bool Allow, string? Message, string? UpdatedPermissions)? PermitIn(string? answer)
     {
         if (string.IsNullOrEmpty(answer) || !TryParseJson(answer, out var document))
         {
@@ -568,15 +578,19 @@ internal static class Relay
             var message = permit.TryGetProperty("message", out var said) && said.ValueKind == JsonValueKind.String && StringOf(said) is { Length: > 0 } text
                 ? Truncate(text)
                 : null;
-            return (allow.ValueKind == JsonValueKind.True, message);
+            var updated = permit.TryGetProperty("updatedPermissions", out var rules) && rules.ValueKind == JsonValueKind.Array && rules.GetArrayLength() > 0
+                ? rules.GetRawText()
+                : null;
+            return (allow.ValueKind == JsonValueKind.True, message, updated);
         }
     }
 
     /// <summary>
     /// What gives Claude Code the user's answer to a permission prompt: allowed, or denied with what the chat is told, and
-    /// the chat carries on. Null for no answer: the prompt VS Code shows takes it then.
+    /// the chat carries on. An allow for good hands back the suggested rule as <c>updatedPermissions</c>, which Claude Code
+    /// writes itself. Null for no answer: the prompt VS Code shows takes it then.
     /// </summary>
-    internal static string? PermitOutput((bool Allow, string? Message)? permit)
+    internal static string? PermitOutput((bool Allow, string? Message, string? UpdatedPermissions)? permit)
     {
         if (permit is not { } given)
         {
@@ -594,6 +608,11 @@ internal static class Relay
             if (!given.Allow && given.Message is { } message)
             {
                 writer.WriteString("message", message);
+            }
+            else if (given.Allow && given.UpdatedPermissions is { } updated)
+            {
+                writer.WritePropertyName("updatedPermissions");
+                writer.WriteRawValue(updated);
             }
 
             writer.WriteEndObject();

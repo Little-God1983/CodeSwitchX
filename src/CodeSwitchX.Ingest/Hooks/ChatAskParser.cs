@@ -124,8 +124,82 @@ public static class ChatAskParser
         };
 
         var agent = step.AgentId is null ? null : String(payload, "agent_type") is { Length: > 0 } type ? type : "sub-agent";
-        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details, risks.Count > 0 ? risks : null));
+        // Only a relay that hands the rule back to Claude Code gets "Always allow": an older one would allow once, keep nothing.
+        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details, risks.Count > 0 ? risks : null),
+            step.RelayKeepsRules ? Suggestions(payload) : null);
     }
+
+    /// <summary>
+    /// The standing rules Claude Code suggests with the prompt (<c>permission_suggestions</c>), each kept as it came and
+    /// worded for its button and its tooltip. One whose effect cannot be worded truthfully (a kind not known here, a rule
+    /// that denies, a mode other than accepting edits, such as bypassing every prompt) is not offered. Null when none is.
+    /// </summary>
+    private static IReadOnlyList<ChatPermissionSuggestion>? Suggestions(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("permission_suggestions", out var list) || list.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var suggestions = list.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.Object)
+            .Select(item => Worded(item) is { } worded
+                ? new ChatPermissionSuggestion(item.GetRawText(), worded.Label, SavedWhere(String(item, "destination")), worded.Effect)
+                : null)
+            .OfType<ChatPermissionSuggestion>()
+            .ToList();
+        return suggestions.Count > 0 ? suggestions : null;
+    }
+
+    /// <summary>
+    /// The button's words and the tooltip's: "Always allow npm test", "Allow all edits", "Let the chat work in E:\Data"; null
+    /// for what is not offered.
+    /// </summary>
+    private static (string Label, string Effect)? Worded(JsonElement item)
+    {
+        var session = String(item, "destination") == "session";
+        switch (String(item, "type"))
+        {
+            case "addRules" when String(item, "behavior") == "allow" && item.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Array:
+                var said = rules.EnumerateArray().Select(RuleSaid).ToList();
+                return said.Count == 0 || said.Contains(null) ? null
+                    : ("Always allow " + string.Join(", ", said), session
+                        ? "Claude Code keeps the rule until this session ends, and asks again after that."
+                        : "Claude Code keeps the rule and does not ask for this again.");
+            case "setMode" when String(item, "mode") == "acceptEdits":
+                return ("Allow all edits", "The chat edits files without asking " + (session ? "until this session ends" : "from now on") + "; commands still ask.");
+            case "addDirectories" when item.TryGetProperty("directories", out var directories) && directories.ValueKind == JsonValueKind.Array:
+                var folders = directories.EnumerateArray().Select(JsonStrings.TryRead).ToList();
+                return folders.Count == 0 || folders.Any(string.IsNullOrWhiteSpace) ? null
+                    : ("Let the chat work in " + string.Join(", ", folders),
+                        "The chat may read and edit files there " + (session ? "until this session ends" : "from now on") + ". A command can still ask.");
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>A rule as its button says it: a command for Bash and PowerShell, "Edit of src/**" for another tool, or the tool alone.</summary>
+    private static string? RuleSaid(JsonElement rule)
+    {
+        if (String(rule, "toolName") is not { Length: > 0 } tool)
+        {
+            return null;
+        }
+
+        var content = String(rule, "ruleContent");
+        return content is not { Length: > 0 } ? $"every use of {tool}" : tool is "Bash" or "PowerShell" ? content : $"{tool} of {content}";
+    }
+
+    /// <summary>Where Claude Code keeps the rule, as said after the label.</summary>
+    private static string SavedWhere(string? destination) => destination switch
+    {
+        "localSettings" => "in this folder, just you",
+        "projectSettings" => "in this folder, for everyone on the project",
+        "userSettings" => "in every folder",
+        "session" => "for this session",
+        { Length: > 0 } other => $"({other})",
+        _ => "",
+    };
 
     /// <summary>A Write of nothing (or only blanks) over a file that is there.</summary>
     private static bool Empties(JsonElement input, string path) =>

@@ -191,6 +191,18 @@ public class RelayTests : IDisposable
         without.RootElement.TryGetProperty("projectDir", out _).ShouldBeFalse();
     }
 
+    [Fact]
+    public void A_permission_prompt_s_envelope_says_this_relay_hands_a_kept_rule_back()
+    {
+        // Review of #113: the app offers "Always allow" only to a relay that passes updatedPermissions on.
+        const string payload = """{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}""";
+        using var permit = JsonDocument.Parse(Relay.BuildEnvelope("PermissionRequest", payload, DateTimeOffset.UtcNow, 1, [], keepsRules: true));
+        using var other = JsonDocument.Parse(Relay.BuildEnvelope("PreToolUse", payload, DateTimeOffset.UtcNow, 1, []));
+
+        permit.RootElement.GetProperty("keepsRules").GetBoolean().ShouldBeTrue();
+        other.RootElement.TryGetProperty("keepsRules", out _).ShouldBeFalse();
+    }
+
     private static string? HashIn(string envelope)
     {
         using var doc = JsonDocument.Parse(envelope);
