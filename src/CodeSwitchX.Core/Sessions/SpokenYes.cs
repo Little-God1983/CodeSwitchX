@@ -19,13 +19,19 @@ public static class SpokenYes
     /// <summary>A yes of their own, alone or before a strong one: "okay", "okay, do it".</summary>
     private static readonly HashSet<string> Weak = new(StringComparer.Ordinal) { "ok", "okay", "sure", "alright", "klar" };
 
-    /// <summary>Words that may come before a yes, but are none: "Raven, yes", "please, do it". On their own they are no yes.</summary>
-    private static readonly HashSet<string> Before = new(StringComparer.Ordinal) { "raven", "hey", "please", "bitte", "well", "so", "na" };
+    /// <summary>
+    /// Words that may come before a yes, but are none: "Raven, yes", "please, do it". On their own, or after "okay"
+    /// ("Okay Raven", as one calls an assistant), they are no yes. Not "na": "na ja" is a German "well…".
+    /// </summary>
+    private static readonly HashSet<string> Before = new(StringComparer.Ordinal) { "raven", "hey", "please", "bitte", "well", "so" };
 
-    /// <summary>The only words that may follow a yes, and only <see cref="MaxAfter"/> of them: "yes, run it now", "ja bitte".</summary>
+    /// <summary>
+    /// The only words that may follow a yes, and only <see cref="MaxAfter"/> of them: "yes, run it now", "ja bitte". Not
+    /// the yes again: "ja ja" is a dismissive "yeah yeah".
+    /// </summary>
     private static readonly HashSet<string> After = new(StringComparer.Ordinal)
     {
-        "it", "that", "please", "now", "thanks", "thank", "you", "raven", "go", "ahead", "do", "run", "allow", "yes", "ja", "bitte", "jetzt",
+        "it", "that", "please", "now", "thanks", "thank", "you", "raven", "go", "ahead", "do", "run", "allow", "bitte", "jetzt",
         "es", "das", "mach", "danke", "ok", "okay", "sure",
     };
 
@@ -41,15 +47,17 @@ public static class SpokenYes
         var words = Words(text);
         var at = 0;
         var weak = false;
+        var calls = false; // a word of address after "okay": "Okay Raven" calls Raven, it does not answer
         while (at < words.Count && (Before.Contains(words[at]) || Weak.Contains(words[at])))
         {
+            calls |= weak && Before.Contains(words[at]);
             weak |= Weak.Contains(words[at]);
             at++;
         }
 
         if (at == words.Count)
         {
-            return weak; // "okay", "sure": a yes on its own; "hey Raven", "please" are none
+            return weak && !calls; // "okay", "sure", "Raven, okay": a yes on its own; "hey Raven", "please", "Okay Raven" are none
         }
 
         var rest = words.Skip(at).ToList();
@@ -61,7 +69,7 @@ public static class SpokenYes
         }
 
         var tail = rest.Skip(yes.Length).ToList();
-        return tail.Count <= MaxAfter && tail.All(After.Contains);
+        return tail.Count <= MaxAfter && tail.All(After.Contains) && !tail.Intersect(yes).Any();
     }
 
     /// <summary>The words, lower case, without punctuation; an apostrophe inside a word stays ("don't").</summary>

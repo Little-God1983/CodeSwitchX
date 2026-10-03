@@ -1492,8 +1492,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
         // goes no further; anything else drops the proposal and is the next question. Words are judged by when they were
-        // said, not when they were transcribed: said before the proposal, they answer something else; a yes said in time
-        // still counts when its transcript comes after the proposal lapsed.
+        // said, not when they were transcribed: said before the read-back was heard to its end, they answer something
+        // else; a yes said in time still counts when its transcript comes after the proposal lapsed.
         if (_asks?.ProposalFor(ended) is { } proposal)
         {
             if (SpokenYes.IsYes(text))
@@ -1502,11 +1502,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            var standing = ReferenceEquals(_asks.Proposed, proposal);
-            if (_asks.Cancel(proposal) && standing)
-            {
-                _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
-            }
+            _asks.Cancel(proposal); // the brain is told (OnProposalEnded)
+        }
+        else if (_asks?.Proposed is { } unheard && !_asks.IsHeard(unheard))
+        {
+            // Its read-back was not heard to its end, and these words take the floor from it: no yes could answer it now.
+            _asks.Cancel(unheard);
         }
 
         AskBrain(text, ended);
@@ -1608,6 +1609,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         RavenLogEntry? reply = null;
         var said = false;
+        var began = _time.GetUtcNow();
+        var hushed = false; // an allow was proposed in this turn: the rest of it is only written
+        bool Speaks() => !(hushed |= _asks?.Proposed is { } proposed && proposed.At >= began);
         try
         {
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
@@ -1628,13 +1632,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         {
                             reply = AddEntry(RavenLogKind.Raven, start);
                             said = true;
-                            spoken.Add(start);
+                            if (Speaks())
+                            {
+                                spoken.Add(start);
+                            }
                         }
 
                         break;
                     case BrainText { Delta: var piece }:
                         reply!.Text += piece;
-                        spoken.Add(piece);
+                        // After the app's read-back, a brain steered by a chat's words could ask "Say yes." to something
+                        // else: what it says after proposing is written, never spoken.
+                        if (Speaks())
+                        {
+                            spoken.Add(piece);
+                        }
+
                         break;
                     case BrainToolCall call:
                         spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
@@ -1809,9 +1822,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
         AddEntry(RavenLogKind.Raven, line);
-        var spoken = _voice.Begin(silent: _openSpeech);
+        if (IsMuted || _tts.Status.State != TextToSpeechState.Ready)
+        {
+            _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
+            return;
+        }
+
+        // Spoken whole, risks and all: only a yes said after its last word answers it. While the user talks in Open mic it
+        // is only written, and their words take the floor from it.
+        var spoken = _voice.Begin(silent: _openSpeech, whole: true);
         spoken.Add(line);
         spoken.Complete();
+        _ = HeardAsync(proposal, spoken.Played);
+    }
+
+    /// <summary>Marks the proposal's read-back heard once it has played to its end; one hushed or dropped midway is not.</summary>
+    private async Task HeardAsync(ChatAllowProposal proposal, Task<bool> played)
+    {
+        if (await played.ConfigureAwait(false))
+        {
+            _asks?.MarkHeard(proposal, _time.GetUtcNow());
+        }
     }
 
     /// <summary>
@@ -1824,6 +1855,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_askCards.TryGetValue(proposal.Ask.Id, out var card))
         {
             card.AwaitsYes = false;
+        }
+
+        if (end == ChatProposalEnd.Cancelled)
+        {
+            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
         }
 
         if (end == ChatProposalEnd.Expired)

@@ -251,6 +251,10 @@ public sealed class ChatAsksTests : IDisposable
         held.IsCompleted.ShouldBeFalse("a proposal allows nothing");
         _asks.Open().ShouldHaveSingleItem();
 
+        _asks.ProposalFor(_time.GetUtcNow()).ShouldBeNull("nothing answers it before its read-back was heard");
+        _asks.IsHeard(proposal).ShouldBeFalse();
+        _asks.MarkHeard(proposal, _time.GetUtcNow()).ShouldBeTrue();
+        _asks.IsHeard(proposal).ShouldBeTrue();
         _asks.ProposalFor(_time.GetUtcNow()).ShouldBe(proposal);
         _asks.Confirm(proposal).ShouldBeTrue();
 
@@ -267,9 +271,14 @@ public sealed class ChatAsksTests : IDisposable
         var before = _time.GetUtcNow();
         _time.Advance(TimeSpan.FromSeconds(2));
         var proposal = _asks.Propose("p1");
+        var speaking = proposal.At + TimeSpan.FromSeconds(1);
+        _time.Advance(TimeSpan.FromSeconds(3)); // the read-back plays
+        var heard = _time.GetUtcNow();
+        _asks.MarkHeard(proposal, heard);
 
         _asks.ProposalFor(before).ShouldBeNull("an earlier \"okay\", still being transcribed, was said to something else");
-        _asks.ProposalFor(proposal.At).ShouldBe(proposal);
+        _asks.ProposalFor(speaking).ShouldBeNull("a yes said while the read-back still played was said before the app asked for it (round 2)");
+        _asks.ProposalFor(heard).ShouldBe(proposal);
     }
 
     [Fact]
@@ -279,6 +288,7 @@ public sealed class ChatAsksTests : IDisposable
         _asks.ProposalEnded += (_, end) => ends.Add(end);
         var held = _asks.HoldAsync(Permission(), CancellationToken.None);
         var proposal = _asks.Propose("p1");
+        _asks.MarkHeard(proposal, proposal.At);
         _time.Advance(ChatAsks.ProposalLifetime - TimeSpan.FromSeconds(1));
         var said = _time.GetUtcNow();
         _time.Advance(TimeSpan.FromSeconds(2)); // transcribed after the lapse
@@ -345,7 +355,8 @@ public sealed class ChatAsksTests : IDisposable
         var ends = new List<ChatProposalEnd>();
         _asks.ProposalEnded += (_, end) => ends.Add(end);
         var held = _asks.HoldAsync(Permission(), CancellationToken.None);
-        _asks.Propose("p1");
+        var proposal = _asks.Propose("p1");
+        _asks.MarkHeard(proposal, proposal.At);
 
         _time.Advance(ChatAsks.ProposalLifetime - TimeSpan.FromSeconds(1));
         _asks.Proposed.ShouldNotBeNull();
@@ -355,6 +366,8 @@ public sealed class ChatAsksTests : IDisposable
         ends.ShouldBe([ChatProposalEnd.Expired]);
         held.IsCompleted.ShouldBeFalse();
         _asks.ProposalFor(_time.GetUtcNow() + TimeSpan.FromSeconds(1)).ShouldBeNull();
+        _asks.Cancel(proposal).ShouldBeFalse("it lapsed: Cancel only forgets it");
+        ends.ShouldBe([ChatProposalEnd.Expired], "a lapsed proposal is not told as cancelled too (round 2)");
     }
 
     [Fact]

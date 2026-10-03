@@ -33,16 +33,16 @@ public sealed class PermissionReadBackTests
 
         var said = PermissionReadBack.Of(Prompt("Bash", "run a command", command, null, PermissionRisk.DeletesFiles), "CodeSwitchX");
 
-        said.ShouldBe("Run " + command[..PermissionReadBack.MaxSaid].TrimEnd() + "… (the rest is on the card) in CodeSwitchX? It deletes files. Say yes.");
+        said.ShouldBe("Run " + command[..(PermissionReadBack.MaxSaid - 1)].TrimEnd() + "… (the rest is on the card) in CodeSwitchX? It deletes files. Say yes.");
     }
 
     [Fact]
     public void A_cut_never_splits_an_emoji_and_an_unknown_workspace_is_left_out()
     {
-        var command = new string('x', PermissionReadBack.MaxSaid - 1) + "😀 tail";
+        var command = new string('x', PermissionReadBack.MaxSaid - 2) + "😀 tail";
 
         var said = PermissionReadBack.Of(Prompt("Bash", "run a command", command), null);
 
-        said.ShouldBe("Run " + new string('x', PermissionReadBack.MaxSaid - 1) + "… (the rest is on the card)? Say yes.");
+        said.ShouldBe("Run " + new string('x', PermissionReadBack.MaxSaid - 2) + "… (the rest is on the card)? Say yes.");
     }
 }

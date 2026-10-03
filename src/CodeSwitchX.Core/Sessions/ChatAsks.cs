@@ -61,17 +61,7 @@ public sealed record ChatAsk(string Id, HookEvent Step, IReadOnlyList<ChatQuesti
         : string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
             + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 
-    private static string Shortened(string text)
-    {
-        var line = text.ReplaceLineEndings(" ");
-        if (line.Length <= MaxDescribedChars)
-        {
-            return line;
-        }
-
-        var length = char.IsHighSurrogate(line[MaxDescribedChars - 2]) ? MaxDescribedChars - 2 : MaxDescribedChars - 1; // never half an emoji
-        return line[..length].TrimEnd() + "… (the card shows all of it)";
-    }
+    private static string Shortened(string text) => TextCut.Cut(text.ReplaceLineEndings(" "), MaxDescribedChars, "… (the card shows all of it)");
 }
 
 /// <summary>How a held ask ended.</summary>
@@ -162,6 +152,13 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>The proposal that lapsed last, until another is made or its prompt ends: a yes said in time may come after.</summary>
     private ChatAllowProposal? _lapsed;
+
+    /// <summary>
+    /// When the user had heard (or been shown) the read-back of the standing proposal, and of the lapsed one: only words
+    /// said after that answer it (<see cref="MarkHeard"/>). Null until then.
+    /// </summary>
+    private DateTimeOffset? _proposedHeard;
+    private DateTimeOffset? _lapsedHeard;
 
     /// <summary>
     /// The tool uses begun lately, by their id (their PreToolUse), until they end: a permission prompt names no tool use, and
@@ -431,6 +428,7 @@ public sealed class ChatAsks : IDisposable
 
             replaced = _proposed;
             _lapsed = null;
+            (_proposedHeard, _lapsedHeard) = (null, null);
             proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
             _proposalExpiry.Change(ProposalLifetime, Timeout.InfiniteTimeSpan);
         }
@@ -445,10 +443,38 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>
+    /// The user has heard the read-back of <paramref name="proposal"/> to its end, or been shown it where Raven does not
+    /// speak, at <paramref name="at"/>: only words said after that answer it. A yes said before the app asked for it, or
+    /// to a read-back cut off midway, allows nothing. False when it no longer stands.
+    /// </summary>
+    public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at)
+    {
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_proposed, proposal))
+            {
+                return false;
+            }
+
+            _proposedHeard ??= at;
+            return true;
+        }
+    }
+
+    /// <summary>Whether the user has heard the read-back of <paramref name="proposal"/> (<see cref="MarkHeard"/>).</summary>
+    public bool IsHeard(ChatAllowProposal proposal)
+    {
+        lock (_lock)
+        {
+            return (ReferenceEquals(_proposed, proposal) && _proposedHeard is not null) || (ReferenceEquals(_lapsed, proposal) && _lapsedHeard is not null);
+        }
+    }
+
+    /// <summary>
     /// The proposal words the user finished speaking at <paramref name="said"/> answer: the one standing, if they were said
-    /// after it was proposed; or the one that lapsed last, if they were said within its <see cref="ProposalLifetime"/>
-    /// and only transcribed after it (its prompt still held). Null when they answer none: words said before the proposal
-    /// are about something else.
+    /// after its read-back was heard (<see cref="MarkHeard"/>); or the one that lapsed last, if they were said after that
+    /// and within its <see cref="ProposalLifetime"/>, and only transcribed after it (its prompt still held). Null when they
+    /// answer none: words said before the read-back ended are about something else.
     /// </summary>
     public ChatAllowProposal? ProposalFor(DateTimeOffset said)
     {
@@ -456,11 +482,11 @@ public sealed class ChatAsks : IDisposable
         {
             if (_proposed is { } standing)
             {
-                return said >= standing.At ? standing : null;
+                return _proposedHeard is { } heard && said >= heard ? standing : null;
             }
 
-            return _lapsed is { } lapsed && said >= lapsed.At && said - lapsed.At <= ProposalLifetime && _held.ContainsKey(lapsed.Ask.Id)
-                ? lapsed : null;
+            return _lapsed is { } lapsed && _lapsedHeard is { } lapsedHeard && said >= lapsedHeard && said - lapsed.At <= ProposalLifetime
+                && _held.ContainsKey(lapsed.Ask.Id) ? lapsed : null;
         }
     }
 
@@ -481,19 +507,19 @@ public sealed class ChatAsks : IDisposable
         return allowed;
     }
 
-    /// <summary>The user said something else to <paramref name="proposal"/>: it is dropped, and nothing runs. False when it no longer stands.</summary>
+    /// <summary>
+    /// The user said something else to <paramref name="proposal"/>: it is dropped, and nothing runs. True only when it was
+    /// still standing, and then <see cref="ProposalEnded"/> tells it as <see cref="ChatProposalEnd.Cancelled"/>; a lapsed
+    /// one is only forgotten, as its lapse was told already.
+    /// </summary>
     public bool Cancel(ChatAllowProposal proposal)
     {
-        if (!Take(proposal, out var standing))
+        if (!Take(proposal, out var standing) || !standing)
         {
             return false;
         }
 
-        if (standing)
-        {
-            ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
-        }
-
+        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
         return true;
     }
 
@@ -506,6 +532,7 @@ public sealed class ChatAsks : IDisposable
             if (standing)
             {
                 _proposed = null;
+                _proposedHeard = null;
                 _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 return true;
             }
@@ -513,6 +540,7 @@ public sealed class ChatAsks : IDisposable
             if (ReferenceEquals(_lapsed, proposal))
             {
                 _lapsed = null;
+                _lapsedHeard = null;
                 return true;
             }
 
@@ -528,6 +556,7 @@ public sealed class ChatAsks : IDisposable
             if (_lapsed?.Ask.Id == askId)
             {
                 _lapsed = null;
+                _lapsedHeard = null;
             }
 
             if (_proposed?.Ask.Id != askId)
@@ -537,6 +566,7 @@ public sealed class ChatAsks : IDisposable
 
             var proposal = _proposed;
             _proposed = null;
+            _proposedHeard = null;
             _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             return proposal;
         }
@@ -563,6 +593,7 @@ public sealed class ChatAsks : IDisposable
             proposal = _proposed;
             _proposed = null;
             _lapsed = proposal; // a yes said in time and transcribed after this still answers it (ProposalFor)
+            (_lapsedHeard, _proposedHeard) = (_proposedHeard, null);
         }
 
         ProposalEnded?.Invoke(proposal, ChatProposalEnd.Expired);

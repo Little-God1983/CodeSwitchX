@@ -33,6 +33,8 @@ public sealed class SpokenYesTests
     [InlineData("okay, yes")]
     [InlineData("Okay, do it.")]
     [InlineData("Raven, yes.")]
+    [InlineData("Raven, okay.")]
+    [InlineData("Okay Raven, do it.")]
     [InlineData("Hey Raven, do it.")]
     [InlineData("Please, go ahead.")]
     [InlineData("confirmed")]
@@ -81,6 +83,12 @@ public sealed class SpokenYesTests
     [InlineData("yes and then tell it to add tests")]
     [InlineData("yes, first show me the diff")]
     [InlineData("okay so what is it doing")]
+    // Round 2: a call to Raven after "okay", a German "well…", a dismissive "yeah yeah".
+    [InlineData("Okay Raven.")]
+    [InlineData("OK Raven")]
+    [InlineData("Na ja.")]
+    [InlineData("Ja ja.")]
+    [InlineData("yes yes")]
     public void Anything_else_is_no_yes(string said)
     {
         SpokenYes.IsYes(said).ShouldBeFalse();
