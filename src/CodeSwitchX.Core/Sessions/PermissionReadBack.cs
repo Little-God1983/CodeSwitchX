@@ -18,12 +18,7 @@ public static class PermissionReadBack
     public static string Of(ChatAsk ask, string? where)
     {
         var permission = ask.Permission ?? throw new ArgumentException("A question has nothing to allow.", nameof(ask));
-        var subject = permission.Subject.ReplaceLineEndings(" ").Trim();
-        if (subject.Length > MaxSaid)
-        {
-            var length = char.IsHighSurrogate(subject[MaxSaid - 1]) ? MaxSaid - 1 : MaxSaid; // never half an emoji
-            subject = subject[..length].TrimEnd() + "… (the rest is on the card)";
-        }
+        var subject = TextCut.Cut(permission.Subject.ReplaceLineEndings(" ").Trim(), MaxSaid, "… (the rest is on the card)");
 
         var verb = permission.Wants switch
         {

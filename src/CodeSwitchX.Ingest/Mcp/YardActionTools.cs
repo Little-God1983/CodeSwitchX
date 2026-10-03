@@ -226,9 +226,10 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         if (!allow)
         {
             var said = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+            // A prompt gone meanwhile is an error for deny as for allow: nothing was answered.
             return asks!.Permit(prompt.Id, allow: false, said)
                 ? $"Denied. The {one.Title} chat was told \"{said ?? ChatAsks.DeniedMessage}\" and carries on without it."
-                : NoLonger(one);
+                : throw new McpException(NoLonger(one));
         }
 
         try

@@ -46,6 +46,63 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reply_spoken_whole_says_every_sentence_and_tells_it_was_played_to_its_end()
+    {
+        // The app's read-back of a permission prompt (#108): "Say yes." must not be the fourth sentence that is dropped.
+        var reply = _voice.Begin(whole: true);
+        reply.Add("Run echo a. b in X? It deletes files. It pushes to a remote. Say yes.");
+        reply.Complete();
+
+        (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+        _tts.Spoken.ShouldBe(["Run echo a.", "b in X?", "It deletes files.", "It pushes to a remote.", "Say yes."]);
+    }
+
+    [Fact]
+    public async Task A_reply_hushed_midway_was_not_played_to_its_end()
+    {
+        _tts.Gate = new TaskCompletionSource();
+        var reply = _voice.Begin(whole: true);
+        reply.Add("First. Second.");
+        reply.Complete();
+        await Until(() => _tts.Spoken.Count == 1);
+
+        _voice.Hush();
+        _tts.Gate.TrySetResult();
+
+        (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_silent_muted_or_dropped_reply_was_not_played()
+    {
+        var silent = _voice.Begin(silent: true);
+        silent.Add("Not said.");
+        silent.Complete();
+        (await silent.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeFalse();
+
+        _tts.NotReady = new TextToSpeechStatus(TextToSpeechState.Loading);
+        var dropped = _voice.Begin();
+        dropped.Add("Not ready.");
+        dropped.Complete();
+        (await dropped.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_reply_waits_until_what_plays_has_played_out()
+    {
+        _player.Remaining = TimeSpan.FromMilliseconds(200);
+        var reply = _voice.Begin();
+        reply.Add("Hello there.");
+        reply.Complete();
+        await Until(() => _voice.IsSpeaking);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        reply.Played.IsCompleted.ShouldBeFalse("it still plays");
+        _player.Remaining = TimeSpan.Zero;
+        (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task What_is_spoken_is_cleaned_and_a_sentence_without_words_is_left_out()
     {
         var reply = _voice.Begin();

@@ -153,10 +153,65 @@ public sealed class ReplyVoice : IDisposable
     /// <summary>Begins a reply; feed it the text as it streams in, then complete it.</summary>
     /// <param name="onFirstAudio">Called once, when the reply's first audio is queued to play; on any thread.</param>
     /// <param name="silent">The reply is only written: nothing of it is spoken, as while muted, and nothing else is hushed.</param>
-    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null, bool silent = false)
+    /// <param name="whole">Every sentence of it is spoken, past <see cref="MaximumSentences"/>: what the user must hear in full.</param>
+    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null, bool silent = false, bool whole = false)
     {
         Interlocked.Increment(ref _open);
-        return new(this, Interlocked.Increment(ref _replies), _muted || silent, onFirstAudio);
+        var reply = new SpokenReply(this, Interlocked.Increment(ref _replies), _muted || silent, onFirstAudio, whole);
+        lock (_lock)
+        {
+            _playing.Add(reply);
+        }
+
+        return reply;
+    }
+
+    /// <summary>Settles one reply that will not be spoken at all.</summary>
+    private void Forget(SpokenReply reply, bool heard)
+    {
+        lock (_lock)
+        {
+            _playing.Remove(reply);
+        }
+
+        reply.SetPlayed(heard);
+    }
+
+    /// <summary>Replies whose <see cref="SpokenReply.Played"/> is not settled yet (under <see cref="_lock"/>).</summary>
+    private readonly List<SpokenReply> _playing = [];
+
+    /// <summary>
+    /// Settles <see cref="SpokenReply.Played"/>: true for the replies complete and spoken to their end, once what plays has
+    /// played out (<paramref name="playedOut"/>); false for those hushed or dropped.
+    /// </summary>
+    private void Settle(bool playedOut)
+    {
+        List<(SpokenReply Reply, bool Heard)> settled = [];
+        lock (_lock)
+        {
+            foreach (var reply in _playing.ToList())
+            {
+                if (reply.Dropped || IsHushed(reply.Number))
+                {
+                    settled.Add((reply, false));
+                }
+                else if (playedOut && reply.IsSpokenOut)
+                {
+                    settled.Add((reply, true));
+                }
+                else
+                {
+                    continue;
+                }
+
+                _playing.Remove(reply);
+            }
+        }
+
+        foreach (var (reply, heard) in settled)
+        {
+            reply.SetPlayed(heard);
+        }
     }
 
     /// <summary>
@@ -177,6 +232,7 @@ public sealed class ReplyVoice : IDisposable
         _ = Task.Run(StopAsAskedAsync);
         hushed.Cancel(); // outside the lock: the cancelled request's callbacks run here. Not disposed: a sentence may still hold its token.
         SetSpeaking(false);
+        Settle(playedOut: false); // what was begun before the hush is not heard to its end
     }
 
     private bool IsHushed(long reply) => reply <= Interlocked.Read(ref _hushedThrough);
@@ -285,6 +341,8 @@ public sealed class ReplyVoice : IDisposable
                 SetSpeaking(true, reply.Number);
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }
+
+            reply.SpokenOne(); // all of this sentence is queued to play
         }
         catch (OperationCanceledException) when (hush.IsCancellationRequested)
         {
@@ -328,6 +386,8 @@ public sealed class ReplyVoice : IDisposable
         {
             Unspoken?.Invoke(this, why);
         }
+
+        Settle(playedOut: false);
     }
 
     /// <summary>Null when the status speaks for itself: a failure was reported as it happened, and with no engine picked Raven only writes.</summary>
@@ -404,6 +464,7 @@ public sealed class ReplyVoice : IDisposable
         }
 
         SetSpeaking(false);
+        Settle(playedOut: true);
     }
 
     /// <summary>
@@ -479,25 +540,42 @@ public sealed class ReplyVoice : IDisposable
         private readonly bool _muted;
         private readonly Action<DateTimeOffset>? _onFirstAudio;
         private readonly SentenceChunker _chunker = new();
+        private readonly int _maximum;
+        private readonly TaskCompletionSource<bool> _played = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _queued;
+        private int _spoken;
         private int _dropped;
         private int _heard;
         private int _completed;
 
-        internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio)
+        internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio, bool whole = false)
         {
             _voice = voice;
             Number = number;
             _muted = muted;
             _onFirstAudio = onFirstAudio;
+            _maximum = whole ? int.MaxValue : MaximumSentences;
         }
 
         internal long Number { get; }
 
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
+        /// <summary>
+        /// Whether all of it was heard: true once it is complete and every sentence of it has been spoken and played out;
+        /// false when it was muted or silent, had nothing to say, or was hushed or dropped before its end.
+        /// </summary>
+        public Task<bool> Played => _played.Task;
+
+        /// <summary>Complete, and every sentence it queued has been spoken (under the voice's lock).</summary>
+        internal bool IsSpokenOut => Volatile.Read(ref _completed) == 1 && Volatile.Read(ref _spoken) >= _queued && _queued > 0;
+
+        internal void SpokenOne() => Interlocked.Increment(ref _spoken);
+
+        internal void SetPlayed(bool heard) => _played.TrySetResult(heard);
+
         /// <summary>Nothing more of it is spoken: muted, dropped, hushed, or its sentences are all queued.</summary>
-        private bool Done => _muted || Dropped || _queued >= MaximumSentences || _voice.IsHushed(Number);
+        private bool Done => _muted || Dropped || _queued >= _maximum || _voice.IsHushed(Number);
 
         /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken.</summary>
         public void Add(string piece)
@@ -522,13 +600,21 @@ public sealed class ReplyVoice : IDisposable
             }
 
             Interlocked.Decrement(ref _voice._open);
+            if (_muted || _queued == 0)
+            {
+                _voice.Forget(this, heard: false); // nothing of it is spoken
+            }
+            else if (!_voice.IsSpeaking && Volatile.Read(ref _voice._pending) == 0 && Volatile.Read(ref _spoken) >= _queued)
+            {
+                _voice.Settle(playedOut: true); // it played out before it was complete
+            }
         }
 
         private void Queue(IReadOnlyList<string> sentences)
         {
             foreach (var sentence in sentences)
             {
-                if (_queued >= MaximumSentences)
+                if (_queued >= _maximum)
                 {
                     return;
                 }
