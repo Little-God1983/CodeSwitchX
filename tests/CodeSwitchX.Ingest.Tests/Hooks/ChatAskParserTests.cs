@@ -109,7 +109,10 @@ public sealed class ChatAskParserTests
 
     [Theory]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm run build:*"}],"behavior":"allow","destination":"projectSettings"}""",
-        "Always allow npm run build:* in this folder, for everyone on the project")]
+        "Always allow npm run build and anything after it in this folder, for everyone on the project")]
+    // Round 2: a session rule is no "always".
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}""",
+        "Allow npm test and anything after it for this session")]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Edit","ruleContent":"src/**"},{"toolName":"WebSearch"}],"behavior":"allow","destination":"userSettings"}""",
         "Always allow Edit of src/**, every use of WebSearch in every folder")]
     [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "Allow all edits for this session")]
@@ -147,9 +150,10 @@ public sealed class ChatAskParserTests
         "Claude Code keeps the rule and does not ask for this again.")]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"session"}""",
         "Claude Code keeps the rule until this session ends, and asks again after that.")]
-    [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "The chat edits files without asking until this session ends; commands still ask.")]
+    [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""",
+        "The chat edits files in its folders without asking until this session ends; edits elsewhere and commands still ask.")]
     [InlineData("""{"type":"addDirectories","directories":["E:\\Data"],"destination":"session"}""",
-        "The chat may read and edit files there until this session ends. A command can still ask.")]
+        "The chat may read files there without asking until this session ends; edits and commands can still ask.")]
     public void Each_kind_says_what_its_click_does_from_now_on(string suggestion, string effect)
     {
         // Review of #113: "it does not ask for this again" was said of every kind, and is true only of a rule kept for good.

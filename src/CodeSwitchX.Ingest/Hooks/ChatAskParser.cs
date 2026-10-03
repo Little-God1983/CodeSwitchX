@@ -162,17 +162,21 @@ public static class ChatAskParser
         {
             case "addRules" when String(item, "behavior") == "allow" && item.TryGetProperty("rules", out var rules) && rules.ValueKind == JsonValueKind.Array:
                 var said = rules.EnumerateArray().Select(RuleSaid).ToList();
+                // A rule for this session only is no "always": "Allow npm test for this session".
                 return said.Count == 0 || said.Contains(null) ? null
-                    : ("Always allow " + string.Join(", ", said), session
+                    : ((session ? "Allow " : "Always allow ") + string.Join(", ", said), session
                         ? "Claude Code keeps the rule until this session ends, and asks again after that."
                         : "Claude Code keeps the rule and does not ask for this again.");
             case "setMode" when String(item, "mode") == "acceptEdits":
-                return ("Allow all edits", "The chat edits files without asking " + (session ? "until this session ends" : "from now on") + "; commands still ask.");
+                // Accept-edits holds only in the chat's working folders.
+                return ("Allow all edits", "The chat edits files in its folders without asking " + (session ? "until this session ends" : "from now on")
+                    + "; edits elsewhere and commands still ask.");
             case "addDirectories" when item.TryGetProperty("directories", out var directories) && directories.ValueKind == JsonValueKind.Array:
+                // A working folder only stops read prompts: edits there still ask unless accept-edits is on.
                 var folders = directories.EnumerateArray().Select(JsonStrings.TryRead).ToList();
                 return folders.Count == 0 || folders.Any(string.IsNullOrWhiteSpace) ? null
                     : ("Let the chat work in " + string.Join(", ", folders),
-                        "The chat may read and edit files there " + (session ? "until this session ends" : "from now on") + ". A command can still ask.");
+                        "The chat may read files there without asking " + (session ? "until this session ends" : "from now on") + "; edits and commands can still ask.");
             default:
                 return null;
         }
@@ -187,7 +191,14 @@ public static class ChatAskParser
         }
 
         var content = String(rule, "ruleContent");
-        return content is not { Length: > 0 } ? $"every use of {tool}" : tool is "Bash" or "PowerShell" ? content : $"{tool} of {content}";
+        if (content is not { Length: > 0 })
+        {
+            return $"every use of {tool}";
+        }
+
+        // Claude Code's prefix rule "npm test:*" is said as people say it.
+        var said = content.EndsWith(":*", StringComparison.Ordinal) && content.Length > 2 ? $"{content[..^2]} and anything after it" : content;
+        return tool is "Bash" or "PowerShell" ? said : $"{tool} of {said}";
     }
 
     /// <summary>Where Claude Code keeps the rule, as said after the label.</summary>

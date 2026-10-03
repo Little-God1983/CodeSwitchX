@@ -1,3 +1,4 @@
+using CodeSwitchX.Core;
 using CodeSwitchX.Core.Sessions;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -117,13 +118,7 @@ public sealed class ChatSuggestionView
     {
         get
         {
-            var label = Suggestion.Label.ReplaceLineEndings(" ");
-            if (label.Length > MaxButtonChars)
-            {
-                var length = char.IsHighSurrogate(label[MaxButtonChars - 2]) ? MaxButtonChars - 2 : MaxButtonChars - 1; // never half an emoji
-                label = label[..length].TrimEnd() + "…";
-            }
-
+            var label = TextCut.Cut(Suggestion.Label.ReplaceLineEndings(" "), MaxButtonChars);
             return Suggestion.Where.Length == 0 ? label : $"{label} {Suggestion.Where}";
         }
     }
