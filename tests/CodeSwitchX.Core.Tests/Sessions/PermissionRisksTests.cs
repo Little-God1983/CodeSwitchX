@@ -343,6 +343,84 @@ public class PermissionRisksTests
         Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
     }
 
+    [Theory]
+    [InlineData("docker exec -it app bash -lc 'rm -rf /data'")]
+    [InlineData("kubectl exec -it pod -- sh -c 'rm -rf /data'")]
+    [InlineData("kubectl exec pod -- rm -rf /data")]
+    [InlineData("docker compose exec app rm -rf /data")]
+    [InlineData("docker-compose exec -T app sh -c 'rm -rf /data'")]
+    [InlineData("podman exec app rm -rf /data")]
+    [InlineData("docker --context prod exec app rm -rf /data")]
+    public void What_a_container_is_told_to_run_is_read(string command)
+    {
+        Of(command).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Theory]
+    [InlineData("docker compose exec -T app sh <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("docker-compose exec -T app bash <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("echo 'rm -rf /data' | docker compose exec -T app sh")]
+    [InlineData("kubectl -n prod exec -i pod -- bash <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("kubectl exec --context prod -i pod -- bash <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("docker exec --env-file .env -i app sh <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("bash +euo pipefail <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("bash --rcfile x.rc <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("bash --init-file x.rc <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("cat <<'EOF' | grep -v x |& bash\nrm -rf build\nEOF")]
+    public void A_shell_past_compose_a_global_option_or_a_plus_cluster_runs_what_it_is_fed(string command)
+    {
+        Of(command).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Theory]
+    [InlineData("bash <<'EOF'\ncd /tmp\nEOF\necho done > build.log", false)]
+    [InlineData("ssh host <<'EOF'\ncd /srv/app && git pull\nEOF\necho deployed > deploy.log", false)]
+    [InlineData("docker exec -i app sh <<'EOF'\ncd /app\nEOF\necho x > out.log", false)]
+    [InlineData("bash <<'EOF'\ncd /tmp && echo x > out.log\nEOF", true)]
+    [InlineData("ssh host 'echo ok > ../status.txt'", false)]
+    [InlineData("echo 'echo ok > ../status.txt' | ssh host", false)]
+    [InlineData("ssh host <<'EOF'\necho ok > ../status.txt\nEOF", false)]
+    [InlineData("echo 'echo ok > ../status.txt' | docker exec -i app sh", false)]
+    [InlineData("echo 'echo ok > ../status.txt' | bash", true)]
+    public void A_here_document_or_piped_input_runs_as_a_child_where_its_reader_is(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Theory]
+    [InlineData("cat > fix.sh <<'EOF'\nrm -rf build\nEOF\nbash fix.sh", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("cat <<'EOF' > fix.sh\nrm -rf build\nEOF\nchmod +x fix.sh && ./fix.sh", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("cat > scripts/fix.sh <<'EOF'\ngit push --force\nEOF\nsh ./scripts/fix.sh", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("cat > fix.sh <<'EOF'\ngit reset --hard\nEOF\nsource fix.sh", new[] { PermissionRisk.DiscardsChanges })]
+    [InlineData("cat > fix.sh <<'EOF'\ncd /tmp\nEOF\n. fix.sh && echo x > out.log", new[] { PermissionRisk.WritesOutsideItsFolder })]
+    [InlineData("cat > fix.ps1 <<'EOF'\nRemove-Item build -Recurse\nEOF\npwsh -File fix.ps1", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo 'rm -rf build' > fix.sh && bash fix.sh", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("cat > notes.md <<'EOF'\nrm -rf build\nEOF\nbash other.sh", new PermissionRisk[0])]
+    [InlineData("cat > fix.sh <<'EOF'\nrm -rf build\nEOF", new PermissionRisk[0])]
+    public void A_script_the_command_writes_and_then_runs_is_read(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Theory]
+    [InlineData("printf '%s %s\\n' git push | bash", new[] { PermissionRisk.Pushes })]
+    [InlineData("printf '%s %s %s\\n' git push --force | bash", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("printf '%s %s\\n' git push --force | bash", new[] { PermissionRisk.Pushes })]
+    [InlineData("printf '%-5s|%s\\n' rm -rf | sh", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("printf 'echo 100%%\\n' | sh", new PermissionRisk[0])]
+    public void Each_printf_conversion_takes_the_next_argument(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Theory]
+    [InlineData("cat <<'EOF' | grep -v x & bash\nrm -rf build\nEOF")]
+    [InlineData("cat <<'EOF' | grep -v x; bash\nrm -rf build\nEOF")]
+    public void A_pipeline_put_in_the_background_feeds_no_shell_after_it(string command)
+    {
+        Of(command).ShouldBeEmpty();
+    }
+
     [Fact]
     public void A_PowerShell_path_ending_in_a_backslash_hides_no_command_after_it()
     {

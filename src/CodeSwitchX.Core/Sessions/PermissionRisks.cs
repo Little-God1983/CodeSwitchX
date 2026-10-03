@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -275,6 +276,9 @@ public static class PermissionRisks
         /// <summary>Where each <c>pushd</c> was, for its <c>popd</c>.</summary>
         private readonly Stack<string?> _pushed = new();
 
+        /// <summary>What the command wrote to each file so far, read when it then runs the file as a script.</summary>
+        private readonly Dictionary<string, string> _scripts = new(StringComparer.OrdinalIgnoreCase);
+
         public void WritesTo(string path)
         {
             // After a cd to where it cannot be told, a relative path is nowhere known: it is not named.
@@ -292,9 +296,12 @@ public static class PermissionRisks
                 return;
             }
 
-            var tokens = Tokens(dialect == ShellDialect.Posix ? WithoutHereDocuments(command) : command, dialect);
+            var (text, bodies) = dialect == ShellDialect.Posix ? WithoutHereDocuments(command) : (command, []);
+            var tokens = Tokens(text, dialect);
             var part = new List<string>();
-            List<string>? piped = null; // the part before a "|": what it writes, the next part may run
+            var targets = new List<string>(); // where the part's redirects write
+            string? body = null; // the part's here-document: its input
+            string? piped = null; // what the part before a "|" writes: the next part reads it
             var subshells = new Stack<string?>();
             string? lastSeparator = null;
             var inBackticks = false;
@@ -308,6 +315,7 @@ public static class PermissionRisks
                     {
                         RunInner(tokens[++i], dialect, depth);
                         WritesTo(tokens[i].Text);
+                        targets.Add(tokens[i].Text);
                     }
 
                     continue;
@@ -322,9 +330,11 @@ public static class PermissionRisks
                         continue;
                     }
 
-                    Simple(part, dialect, depth, piped);
-                    piped = token.Text == "|" ? [.. part] : null;
+                    var written = Run(part, dialect, depth, body ?? piped, targets);
+                    piped = token.Text == "|" ? written : null;
                     part.Clear();
+                    targets.Clear();
+                    body = null;
                     lastSeparator = token.Text;
                     // A cd in ( … ), $( … ) or backticks is the subshell's own; in PowerShell and cmd brackets only group.
                     if (dialect == ShellDialect.Posix && token.Text == "(")
@@ -352,11 +362,17 @@ public static class PermissionRisks
                     continue;
                 }
 
+                if (token.Text.StartsWith(HereDocumentMark, StringComparison.Ordinal))
+                {
+                    body = bodies[int.Parse(token.Text.AsSpan(HereDocumentMark.Length), CultureInfo.InvariantCulture)];
+                    continue;
+                }
+
                 RunInner(token, dialect, depth);
                 part.Add(token.Text);
             }
 
-            Simple(part, dialect, depth, piped);
+            Run(part, dialect, depth, body ?? piped, targets);
         }
 
         /// <summary>What <c>$( )</c> or backticks inside a quoted word run: a subshell of its own, where the word is.</summary>
@@ -369,40 +385,61 @@ public static class PermissionRisks
         }
 
         /// <summary>
-        /// One simple command: its name and its words. <paramref name="piped"/> is the part whose output it reads, run as
-        /// commands by a shell that reads them (<c>echo "git reset --hard" | bash</c>, <c>@' … '@ | iex</c>).
+        /// One simple command: its name and its words, with <paramref name="fed"/> as its input (a here-document, or what
+        /// the part before a <c>|</c> writes), run as commands by a shell that reads them (<c>bash &lt;&lt;EOF</c>,
+        /// <c>echo "git reset --hard" | bash</c>, <c>@' … '@ | iex</c>), on the other machine when ssh or a container
+        /// does. Returns what the command writes, for the next part of a pipe and for the files its redirects go to.
         /// </summary>
-        private void Simple(List<string> words, ShellDialect dialect, int depth, List<string>? piped = null)
+        private string? Run(List<string> words, ShellDialect dialect, int depth, string? fed = null, List<string>? targets = null)
         {
             if (Named(words) is not { } named)
             {
-                return;
+                return null;
             }
 
-            var (name, args, chdir) = named;
+            var (name, args, chdir, word) = named;
             var here = _here;
             if (chdir is not null)
             {
                 _here = Full(chdir, _here); // env -C, sudo -D: the command runs there
             }
 
-            if (piped is { Count: > 0 } && RunsItsInput(name, args) is { } runs && Written(piped) is { } written)
+            var runs = RunsItsInput(name, args);
+            if (fed is not null && runs is { } input)
             {
-                Child(written, runs, depth);
+                Child(fed, input, depth, elsewhere: RunsElsewhere(name, args));
             }
 
-            Simple(name, args, dialect, depth);
+            Simple(name, args, word, dialect, depth);
             if (chdir is not null)
             {
                 _here = here;
             }
+
+            if (runs is not null || Written(name, args, words, fed) is not { } written)
+            {
+                return null;
+            }
+
+            foreach (var target in targets ?? [])
+            {
+                _scripts[ScriptKey(target)] = written; // cat > fix.sh <<EOF: read when "bash fix.sh" follows
+            }
+
+            return written;
         }
 
+        /// <summary>What the command wrote to <paramref name="path"/> earlier; null when nothing.</summary>
+        private string? Script(string path) => _scripts.TryGetValue(ScriptKey(path), out var body) ? body : null;
+
+        private string ScriptKey(string path) => Full(path, _here) ?? path;
+
         /// <summary>
-        /// The command's name and its words, past assignments, runners and their options; and the folder a runner runs it
-        /// in (<c>env -C</c>, <c>sudo -D</c>), if one does. Null when there is no command.
+        /// The command's name and its words, past assignments, runners and their options; the folder a runner runs it
+        /// in (<c>env -C</c>, <c>sudo -D</c>), if one does; and the word the name came from (<c>./fix.sh</c>). Null when
+        /// there is no command.
         /// </summary>
-        public static (string Name, List<string> Args, string? Chdir)? Named(List<string> words)
+        public static (string Name, List<string> Args, string? Chdir, string Word)? Named(List<string> words)
         {
             var at = 0;
             string? chdir = null;
@@ -459,32 +496,19 @@ public static class PermissionRisks
                 }
             }
 
-            return at >= words.Count ? null : (Name(words[at]), words.Skip(at + 1).ToList(), chdir);
+            return at >= words.Count ? null : (Name(words[at]), words.Skip(at + 1).ToList(), chdir, words[at]);
         }
 
         /// <summary>
         /// The dialect a command reads its input in when it runs it as commands, whether piped in or a here-document;
-        /// null when it does not. <c>bash</c>, <c>sh -s</c>, <c>ssh host</c>, <c>ssh host bash</c> and <c>iex</c> do;
-        /// <c>bash script.sh</c>, <c>bash -c "…"</c> and <c>ssh host make</c> run something else.
+        /// null when it does not. <c>bash</c>, <c>sh -s</c>, <c>ssh host</c>, <c>ssh host bash</c>, <c>docker exec -i app sh</c>
+        /// and <c>iex</c> do; <c>bash script.sh</c>, <c>bash -c "…"</c> and <c>ssh host make</c> run something else.
         /// </summary>
         public static ShellDialect? RunsItsInput(string name, List<string> args)
         {
             if (PosixShells.Contains(name))
             {
-                // bash -o pipefail, bash -euo pipefail: the option's value is no script.
-                var plain = new List<string>();
-                for (var i = 0; i < args.Count; i++)
-                {
-                    if (args[i].StartsWith('-'))
-                    {
-                        i += args[i] is "-o" or "-O" or "+o" || (args[i].Length > 2 && args[i][1] != '-' && args[i][^1] is 'o' or 'O') ? 1 : 0;
-                        continue;
-                    }
-
-                    plain.Add(args[i]);
-                }
-
-                var runsOther = args.Any(IsRunFlag) || (plain.Count > 0 && !args.Contains("-s"));
+                var runsOther = args.Any(IsRunFlag) || (ShellScript(args) is not null && !args.Contains("-s"));
                 return runsOther ? null : ShellDialect.Posix;
             }
 
@@ -497,43 +521,88 @@ public static class PermissionRisks
             }
 
             // docker exec -i app sh, kubectl exec -i pod -- bash: the command run in the container reads what comes in.
-            if (name.ToLowerInvariant() is "docker" or "podman" or "nerdctl" or "kubectl" && args.FirstOrDefault() == "exec")
+            if (ContainerCommand(name, args) is { } inside)
             {
-                return ExecCommand(args.Skip(1).ToList()) is { } command && Named(command) is { } named ? RunsItsInput(named.Name, named.Args) : null;
+                return Named(inside) is { } named ? RunsItsInput(named.Name, named.Args) : null;
             }
 
             return IsInvokeExpression(name) && args.Count == 0 ? ShellDialect.PowerShell : null;
         }
 
-        /// <summary>The command after <c>exec</c>'s options and its container or pod: null when there is none.</summary>
-        private static List<string>? ExecCommand(List<string> args)
+        /// <summary>A command that runs what it is given on another machine, or in a container: nowhere known here.</summary>
+        private static bool RunsElsewhere(string name, List<string> args) =>
+            name.Equals("ssh", StringComparison.OrdinalIgnoreCase) || ContainerCommand(name, args) is not null;
+
+        /// <summary>
+        /// The script a shell runs: its first word that is no option; null when there is none, so it reads its input.
+        /// An option's value (<c>-o pipefail</c>, <c>-euo pipefail</c>, <c>+euo pipefail</c>, <c>--rcfile x.rc</c>) is no script.
+        /// </summary>
+        private static string? ShellScript(List<string> args)
         {
-            var valued = new HashSet<string>(StringComparer.Ordinal) { "-u", "--user", "-w", "--workdir", "-e", "--env", "-c", "--container", "-n", "--namespace" };
-            string? target = null;
             for (var i = 0; i < args.Count; i++)
             {
                 var arg = args[i];
-                if (arg == "--")
+                if (arg.Length > 0 && arg[0] is '-' or '+')
                 {
-                    return target is null ? null : args.Skip(i + 1).ToList();
-                }
-
-                if (arg.StartsWith('-'))
-                {
-                    i += valued.Contains(arg) ? 1 : 0;
+                    i += arg is "-o" or "-O" or "+o" or "+O" or "--rcfile" or "--init-file" || (arg.Length > 2 && arg[1] != '-' && arg[^1] is 'o' or 'O') ? 1 : 0;
                     continue;
                 }
 
-                if (target is null)
-                {
-                    target = arg;
-                    continue;
-                }
-
-                return args.Skip(i).ToList();
+                return arg;
             }
 
             return null;
+        }
+
+        /// <summary>Options of docker, podman, compose and kubectl, and of their <c>exec</c>, that take a value.</summary>
+        private static readonly HashSet<string> ContainerValued = new(StringComparer.Ordinal)
+        {
+            "-H", "--host", "-c", "--context", "-l", "--log-level", "--config", "--tlscacert", "--tlscert", "--tlskey", // docker
+            "-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--progress", "--parallel", // compose
+            "-n", "--namespace", "--kubeconfig", "--cluster", "--user", "-s", "--server", "--token", "--as", "--as-group", "--request-timeout", // kubectl
+            "--cache-dir", "--certificate-authority", "--client-certificate", "--client-key", "--tls-server-name", "-v",
+            "-u", "-w", "--workdir", "-e", "--env", "--detach-keys", "--index", "--container", "--filename", "--pod-running-timeout", // exec
+        };
+
+        /// <summary>
+        /// The command <c>docker exec</c>, <c>docker compose exec</c>, <c>podman exec</c> or <c>kubectl exec</c> runs in its
+        /// container or pod, past their options (<c>kubectl -n prod exec -it pod -- sh</c>); null when <paramref name="name"/>
+        /// is none of them, or runs nothing.
+        /// </summary>
+        private static List<string>? ContainerCommand(string name, List<string> args)
+        {
+            var tool = name.ToLowerInvariant();
+            var compose = tool is "docker-compose" or "podman-compose";
+            if (!compose && tool is not ("docker" or "podman" or "nerdctl" or "kubectl"))
+            {
+                return null;
+            }
+
+            var at = PastOptions(args, 0);
+            if (!compose && at < args.Count && args[at] == "compose")
+            {
+                at = PastOptions(args, at + 1);
+            }
+
+            if (at >= args.Count || args[at] != "exec")
+            {
+                return null;
+            }
+
+            // After "--" the command is sure; otherwise the first word that is no option is the container or pod.
+            var dashes = args.IndexOf("--", at + 1);
+            var command = dashes >= 0 ? dashes + 1 : PastOptions(args, at + 1) + 1;
+            return command < args.Count ? args.Skip(command).ToList() : null;
+
+            static int PastOptions(List<string> args, int at)
+            {
+                while (at < args.Count && args[at].StartsWith('-'))
+                {
+                    at += ContainerValued.Contains(args[at]) ? 2 : 1;
+                }
+
+                return at;
+            }
         }
 
         /// <summary>What ssh runs on the other machine: the words after its options and the host; null when it runs a shell there.</summary>
@@ -559,31 +628,52 @@ public static class PermissionRisks
             name.Equals("iex", StringComparison.OrdinalIgnoreCase) || name.Equals("invoke-expression", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
-        /// What a part writes out, to be read as commands: echo's or Write-Output's words, printf's after its format, or a
-        /// lone string.
+        /// What a part writes out, to be read as commands or written to a file: echo's or Write-Output's words, what
+        /// printf makes of its format, what a filter (<c>cat</c>, <c>grep</c>, <c>sort</c>) was <paramref name="fed"/>,
+        /// near enough, or a lone string (<c>'git reset --hard' | iex</c>).
         /// </summary>
-        private static string? Written(List<string> part)
+        private static string? Written(string name, List<string> args, List<string> words, string? fed)
         {
-            if (part.Count == 1)
+            if (name.ToLowerInvariant() is "echo" or "printf" or "write-output" or "write" or "write-host")
             {
-                return part[0];
+                // Its options come first; "--force" after them is a word it writes.
+                var options = args.TakeWhile(a => a.StartsWith('-')).ToList();
+                var plain = args.Skip(options.Count).ToList();
+                if (name.Equals("printf", StringComparison.OrdinalIgnoreCase))
+                {
+                    return plain.Count == 0 ? null : Printf(Unescaped(plain[0]), plain.Skip(1).ToList());
+                }
+
+                var text = string.Join(' ', plain);
+                return options.Any(a => a.Length > 1 && a.Contains('e') && a[1] != '-') ? Unescaped(text) : text; // echo -e
             }
 
-            if (Named(part) is not { } named || named.Name.ToLowerInvariant() is not ("echo" or "printf" or "write-output" or "write" or "write-host"))
-            {
-                return null;
-            }
+            return fed ?? (words.Count == 1 ? words[0] : null);
+        }
 
-            var words = named.Args.Where(a => !a.StartsWith('-')).ToList();
-            if (named.Name.Equals("printf", StringComparison.OrdinalIgnoreCase) && words.Count > 0)
-            {
-                // The format is repeated for each argument: 'printf "%s\n" a b' writes a and b on lines of their own.
-                var format = Unescaped(words[0]);
-                return words.Count == 1 ? format : string.Concat(words.Skip(1).Select(w => format.Replace("%s", w)));
-            }
+        /// <summary>A conversion in printf's format (<c>%s</c>, <c>%-10s</c>, <c>%d</c>), or <c>%%</c>.</summary>
+        private static readonly Regex Conversion = new(@"%(?:%|[-+ #0]*\d*(?:\.\d+)?[a-zA-Z])", RegexOptions.CultureInvariant);
 
-            var text = string.Join(' ', words);
-            return named.Args.Any(a => a.Length > 1 && a[0] == '-' && a.Contains('e') && a[1] != '-') ? Unescaped(text) : text; // echo -e
+        /// <summary>
+        /// What printf writes: each conversion takes the next argument, and the format is repeated while arguments remain
+        /// (<c>printf '%s\n' a b</c> writes a and b on lines of their own; <c>printf '%s %s\n' git push</c> writes one line).
+        /// </summary>
+        private static string Printf(string format, List<string> args)
+        {
+            var text = new StringBuilder();
+            var next = 0;
+            do
+            {
+                var before = next;
+                text.Append(Conversion.Replace(format, m => m.Value == "%%" ? "%" : next < args.Count ? args[next++] : ""));
+                if (next == before)
+                {
+                    break; // no conversion: the format is written once
+                }
+            }
+            while (next < args.Count);
+
+            return text.ToString();
         }
 
         /// <summary>The text with its <c>\n</c> and <c>\t</c> as a line break and a tab, as printf and echo -e write them.</summary>
@@ -612,19 +702,35 @@ public static class PermissionRisks
             _here = here;
         }
 
-        private void Simple(string name, List<string> args, ShellDialect dialect, int depth)
+        private void Simple(string name, List<string> args, string word, ShellDialect dialect, int depth)
         {
-            if (Deleters.Contains(name))
+            if (Script(word) is { } own)
+            {
+                // ./fix.sh, written by the command before: run as the script it is.
+                Child(own, word.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ? ShellDialect.PowerShell : ShellDialect.Posix, depth);
+            }
+            else if (Deleters.Contains(name))
             {
                 Risks.Add(PermissionRisk.DeletesFiles);
             }
             else if (PosixShells.Contains(name))
             {
-                // bash -c "…", bash -lc "…": what it runs is a command of its own.
+                // bash -c "…", bash -lc "…": what it runs is a command of its own; "bash fix.sh" runs what was written to it.
                 var run = args.FindIndex(IsRunFlag);
                 if (run >= 0 && run + 1 < args.Count)
                 {
                     Child(args[run + 1], ShellDialect.Posix, depth);
+                }
+                else if (run < 0 && !args.Contains("-s") && ShellScript(args) is { } script && Script(script) is { } body)
+                {
+                    Child(body, ShellDialect.Posix, depth);
+                }
+            }
+            else if (name is "source" or ".")
+            {
+                if (args.FirstOrDefault() is { } script && Script(script) is { } body)
+                {
+                    Command(body, ShellDialect.Posix, depth + 1); // in this shell: a cd in it stays
                 }
             }
             else if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
@@ -654,6 +760,17 @@ public static class PermissionRisks
             {
                 Command(Value(args, "-command") ?? string.Join(' ', args), ShellDialect.PowerShell, depth + 1);
             }
+            else if (ContainerCommand(name, args) is { } inside)
+            {
+                // docker exec app rm -rf /data: the command runs in the container, nowhere known here.
+                if (depth < 4)
+                {
+                    var here = _here;
+                    _here = null;
+                    Run(inside, ShellDialect.Posix, depth + 1);
+                    _here = here;
+                }
+            }
             else if (name.Equals("git", StringComparison.OrdinalIgnoreCase))
             {
                 Git(args);
@@ -668,7 +785,7 @@ public static class PermissionRisks
                 var exec = args.FindIndex(a => a is "-exec" or "-execdir" or "-ok" or "-okdir");
                 if (exec >= 0 && depth < 4)
                 {
-                    Simple(args.Skip(exec + 1).ToList(), dialect, depth + 1);
+                    Run(args.Skip(exec + 1).ToList(), dialect, depth + 1);
                 }
             }
             else if (Writers.Contains(name))
@@ -738,6 +855,11 @@ public static class PermissionRisks
 
                 if (IsPowerShellOption(arg, "-file", "-f"))
                 {
+                    if (i + 1 < args.Count && Script(args[i + 1]) is { } script)
+                    {
+                        Child(script, ShellDialect.PowerShell, depth, start); // written by the command before
+                    }
+
                     return;
                 }
 
@@ -910,52 +1032,66 @@ public static class PermissionRisks
         }
     }
 
+    /// <summary>What stands for a here-document in the command once its body is taken out, followed by the body's number.</summary>
+    private const string HereDocumentMark = "<<\u0001";
+
     /// <summary>
-    /// The command with its here-documents' bodies taken out where they are text (<c>cat &gt; notes.md &lt;&lt;EOF</c>); a
-    /// body fed to a shell (<c>bash &lt;&lt;EOF</c>, <c>ssh host &lt;&lt;EOF</c>) is kept, to be read as commands. A
-    /// <c>&lt;&lt;</c> inside quotes or <c>$(( ))</c> starts none.
+    /// The command with its here-documents' bodies taken out, each start replaced by a mark that names its body, so that
+    /// the part it belongs to gets the body as its input: <c>bash &lt;&lt;EOF</c> runs it, <c>cat &gt; fix.sh &lt;&lt;EOF</c>
+    /// writes it, <c>cat &lt;&lt;EOF | bash</c> pipes it on. A <c>&lt;&lt;</c> inside quotes or <c>$(( ))</c> starts none.
     /// </summary>
-    private static string WithoutHereDocuments(string command)
+    private static (string Command, List<string> Bodies) WithoutHereDocuments(string command)
     {
+        var bodies = new List<StringBuilder>();
         if (!command.Contains("<<", StringComparison.Ordinal))
         {
-            return command;
+            return (command, []);
         }
 
         var kept = new List<string>();
-        var ends = new Queue<(string Word, bool Tabs, bool Runs)>();
+        var open = new Queue<(string Word, bool Tabs, StringBuilder Body)>();
         char? quote = null;
         foreach (var line in command.Split('\n'))
         {
-            if (ends.Count > 0)
+            if (open.Count > 0)
             {
-                var (word, tabs, runs) = ends.Peek();
-                if ((tabs ? line.TrimStart('\t') : line).TrimEnd('\r') == word)
+                var (word, tabs, body) = open.Peek();
+                var text = (tabs ? line.TrimStart('\t') : line).TrimEnd('\r');
+                if (text == word)
                 {
-                    ends.Dequeue();
+                    open.Dequeue();
                 }
-                else if (runs)
+                else
                 {
-                    kept.Add(line);
+                    body.Append(body.Length > 0 ? "\n" : "").Append(text);
                 }
 
                 continue;
             }
 
-            kept.Add(line);
-            foreach (var start in HereDocumentStarts(line, ref quote))
+            var starts = HereDocumentStarts(line, ref quote);
+            var marked = line;
+            for (var k = starts.Count - 1; k >= 0; k--)
             {
-                ends.Enqueue(start);
+                marked = $"{marked[..starts[k].Index]} {HereDocumentMark}{bodies.Count + k} {marked[(starts[k].Index + starts[k].Length)..]}";
+            }
+
+            kept.Add(marked);
+            foreach (var (word, tabs, _, _) in starts)
+            {
+                var body = new StringBuilder();
+                bodies.Add(body);
+                open.Enqueue((word, tabs, body));
             }
         }
 
-        return string.Join('\n', kept);
+        return (string.Join('\n', kept), bodies.Select(b => b.ToString()).ToList());
     }
 
-    /// <summary>The here-documents a line starts, outside quotes (which can span lines) and arithmetic.</summary>
-    private static List<(string Word, bool Tabs, bool Runs)> HereDocumentStarts(string line, ref char? quote)
+    /// <summary>The here-documents a line starts, outside quotes (which can span lines) and arithmetic: each with where its start is.</summary>
+    private static List<(string Word, bool Tabs, int Index, int Length)> HereDocumentStarts(string line, ref char? quote)
     {
-        var starts = new List<(string, bool, bool)>();
+        var starts = new List<(string, bool, int, int)>();
         for (var i = 0; i < line.Length; i++)
         {
             var c = line[i];
@@ -989,49 +1125,12 @@ public static class PermissionRisks
             }
             else if (c == '<' && (i == 0 || line[i - 1] != '<') && HereDocument.Match(line, i) is { Success: true } start)
             {
-                starts.Add((start.Groups["word"].Value, start.Groups["dash"].Success, FeedsAShell(line[..i], line[(i + start.Length)..])));
+                starts.Add((start.Groups["word"].Value, start.Groups["dash"].Success, i, start.Length));
                 i += start.Length - 1;
             }
         }
 
         return starts;
-    }
-
-    /// <summary>
-    /// A here-document is run as commands: the command it is fed to reads its input as commands ("bash", "sudo bash",
-    /// "ssh host"), or pipes into one that does ("cat &lt;&lt;EOF | bash"), by the same rule as a pipe
-    /// (<see cref="Scanner.RunsItsInput"/>).
-    /// </summary>
-    private static bool FeedsAShell(string before, string after)
-    {
-        var parts = Parts(Tokens(before, ShellDialect.Posix));
-        if (parts.Count > 0 && RunsInput(parts[^1].Words))
-        {
-            return true;
-        }
-
-        // Its own pipeline only: after "&&" or ";" another command begins, which is not fed.
-        var piped = false;
-        foreach (var part in Parts(Tokens(after, ShellDialect.Posix)).Skip(1))
-        {
-            if (part.After is "|" || (part.After is "&" && piped && part.Words.Count == 0))
-            {
-                piped = part.After is "|";
-            }
-            else if (!(part.After is "&" && piped))
-            {
-                return false; // "|&": the "&" part carries the pipe on
-            }
-
-            if (RunsInput(part.Words))
-            {
-                return true;
-            }
-        }
-
-        return false;
-
-        static bool RunsInput(List<string> words) => Scanner.Named(words) is { } named && Scanner.RunsItsInput(named.Name, named.Args) is not null;
     }
 
     /// <summary>The words of each simple command (a redirect's target is none), with the separator before it ("|" for a pipe).</summary>
