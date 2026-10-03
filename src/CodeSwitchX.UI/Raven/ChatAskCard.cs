@@ -39,6 +39,12 @@ public sealed partial class ChatAskCard : ObservableObject
     private string WhoWants(string ofAgent, string ofChat) =>
         (Permission!.Agent is { } agent ? $"{ofAgent}{agent} sub-agent wants to " : ofChat) + Permission.Wants;
 
+    /// <summary>Who asks, as Raven says it: the chat (<see cref="Said"/>), or "…'s Explore sub-agent".</summary>
+    public string Asker => Permission?.Agent is { } agent ? $"{Said}'s {agent} sub-agent" : Said;
+
+    /// <summary>"Risky: deletes files and pushes to a remote", on the card; null when nothing in it is risky.</summary>
+    public string? RiskLine => Permission?.Risks is { Count: > 0 } risks ? "Risky: " + PermissionRisks.Phrase(risks) : null;
+
     /// <summary>The card has a Send button: more than one question, or one that takes several options.</summary>
     public bool NeedsSend { get; }
 

@@ -21,7 +21,9 @@ public enum ChatAskKind
 /// </summary>
 /// <param name="Agent">The sub-agent's type ("general-purpose"); null when the chat's main agent asks.</param>
 /// <param name="Details">All of the tool's input where <paramref name="Subject"/> does not say it all (an edit's change, a file's content); null otherwise.</param>
-public sealed record ChatPermission(string ToolName, string Wants, string Subject, string? Agent, string? Details = null);
+/// <param name="Risks">What is risky in it (<see cref="PermissionRisks"/>); null or empty when nothing is.</param>
+public sealed record ChatPermission(string ToolName, string Wants, string Subject, string? Agent, string? Details = null,
+    IReadOnlyList<PermissionRisk>? Risks = null);
 
 /// <summary>The user's answer to a permission prompt: allowed, or denied with what the chat is told.</summary>
 public sealed record ChatPermit(bool Allow, string? Message);
@@ -51,10 +53,11 @@ public sealed record ChatAsk(string Id, HookEvent Step, IReadOnlyList<ChatQuesti
 
     /// <summary>
     /// What it asks as Raven's brain reads it: the questions, "\"Which fruit?\" (one of: Apple, Banana, Cherry)" joined by
-    /// "; ", or the permission, "permission to run a command: npm test".
+    /// "; ", or the permission, "permission to run a command: rm -rf dist; it deletes files".
     /// </summary>
     public string Describe() => Permission is { } permission
         ? $"permission to {permission.Wants}: {Shortened(permission.Subject)}" + (permission.Agent is { } agent ? $" (its {agent} sub-agent asks)" : "")
+            + (permission.Risks is { Count: > 0 } risks ? $"; it {PermissionRisks.Phrase(risks)}" : "")
         : string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
             + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 
