@@ -416,6 +416,19 @@
                          Text="{Binding Permission.Details, Mode=OneWay}" AutomationProperties.Name="{Binding Permission.Details, Mode=OneWay}" />
             </ScrollViewer>
           </Border>
+          <!-- An allow proposed by voice: the user's next yes, found by the app, allows it (#108). -->
+          <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#FBBF24" TextWrapping="Wrap" Text="{x:Static raven:ChatAskCard.AwaitsYesLine}" Margin="0,6,0,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding AwaitsYes}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
           <StackPanel x:Name="Buttons" Orientation="Horizontal" Margin="0,6,0,0">
             <Button Style="{StaticResource CardButton}" Content="Allow"
                     Command="{Binding DataContext.AllowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
