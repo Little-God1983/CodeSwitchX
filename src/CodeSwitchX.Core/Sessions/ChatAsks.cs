@@ -32,7 +32,8 @@ public sealed record ChatPermission(string ToolName, string Wants, string Subjec
 /// </summary>
 /// <param name="Label">What it does: "Always allow npm test", "Allow all edits".</param>
 /// <param name="Where">Where the rule is kept, as said after the label: "in this folder, just you"; empty when not told.</param>
-public sealed record ChatPermissionSuggestion(string Json, string Label, string Where)
+/// <param name="Effect">What the click does from now on, for its tooltip: "Claude Code keeps the rule and does not ask for this again."</param>
+public sealed record ChatPermissionSuggestion(string Json, string Label, string Where, string Effect = "")
 {
     /// <summary>"Always allow npm test in this folder, just you".</summary>
     public string Said => Where.Length == 0 ? Label : $"{Label} {Where}";

@@ -129,7 +129,7 @@ public sealed class ChatSuggestionView
     }
 
     /// <summary>All of the rule, and what the click does.</summary>
-    public string ToolTip => $"{Suggestion.Said}. The chat carries on, and Claude Code keeps the rule: it does not ask for this again.";
+    public string ToolTip => $"{Suggestion.Said}. The chat carries on." + (Suggestion.Effect.Length > 0 ? " " + Suggestion.Effect : "");
 }
 
 /// <summary>One question of a card, with its options.</summary>

@@ -131,7 +131,7 @@ public sealed partial class RavenPanelViewModelTests
 
     private static readonly ChatPermissionSuggestion AlwaysNpmTest = new(
         """{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
-        "Always allow npm test", "in this folder, just you");
+        "Always allow npm test", "in this folder, just you", "Claude Code keeps the rule and does not ask for this again.");
 
     [Fact]
     public async Task A_prompt_with_a_suggestion_has_an_always_allow_button_and_its_click_allows_for_good()
@@ -142,7 +142,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var button = card.Suggestions.ShouldHaveSingleItem();
         button.Text.ShouldBe("Always allow npm test in this folder, just you");
-        button.ToolTip.ShouldBe("Always allow npm test in this folder, just you. The chat carries on, and Claude Code keeps the rule: it does not ask for this again.");
+        button.ToolTip.ShouldBe("Always allow npm test in this folder, just you. The chat carries on. Claude Code keeps the rule and does not ask for this again.");
         vm.AlwaysAllowCommand.Execute(button);
 
         await WithinAsync(held);

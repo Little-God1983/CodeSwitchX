@@ -92,7 +92,7 @@ internal static class Relay
             // the fingerprint it is matched by.
             var envelope = BuildEnvelope(held ? heldEvent : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
                 held ? MaxAskBytes : MaxNestedBytes, keepStrings: permits, fingerprint: permits || eventName == "PreToolUse",
-                projectDir: permits ? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") : null);
+                projectDir: permits ? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") : null, keepsRules: permits);
 
             if (held)
             {
@@ -216,8 +216,12 @@ internal static class Relay
     /// <param name="keepStrings">Strings are not cut: a permission prompt's card shows all it allows.</param>
     /// <param name="fingerprint">The tool input's fingerprint goes along (<see cref="ToolInputHash"/>).</param>
     /// <param name="projectDir">The chat's project folder (Claude Code's <c>CLAUDE_PROJECT_DIR</c>), for a permission prompt's risks; left out when null.</param>
+    /// <param name="keepsRules">
+    /// This relay hands a rule the user allowed for good back to Claude Code (<c>updatedPermissions</c>, #109): the app
+    /// offers "Always allow" only to a relay that says so, as an older one would allow once and keep nothing.
+    /// </param>
     internal static string BuildEnvelope(string eventName, string payload, DateTimeOffset now, int relayPid, IReadOnlyList<ProcessInfo> chain,
-        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false, string? projectDir = null)
+        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false, string? projectDir = null, bool keepsRules = false)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -239,6 +243,11 @@ internal static class Relay
             if (projectDir is { Length: > 0 })
             {
                 writer.WriteString("projectDir", projectDir);
+            }
+
+            if (keepsRules)
+            {
+                writer.WriteBoolean("keepsRules", true);
             }
 
             if (TryParseJson(payload, out var document))
