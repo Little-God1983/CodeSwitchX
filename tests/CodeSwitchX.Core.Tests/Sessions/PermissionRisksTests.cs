@@ -130,7 +130,6 @@ public class PermissionRisksTests
     }
 
     [Theory]
-    [InlineData("git checkout src/App.cs", true)]
     [InlineData("git checkout HEAD~1 src/App.cs", true)]
     [InlineData("git checkout README.md", true)]
     [InlineData("git checkout main", false)]
@@ -153,6 +152,9 @@ public class PermissionRisksTests
 
             PermissionRisks.OfCommand("git checkout docs", folder).ShouldBe([PermissionRisk.DiscardsChanges]);
             PermissionRisks.OfCommand("git checkout main", folder).ShouldBeEmpty();
+            Directory.CreateDirectory(Path.Combine(folder, "src"));
+            File.WriteAllText(Path.Combine(folder, "src", "App.cs"), "x");
+            PermissionRisks.OfCommand("git checkout src/App.cs", folder).ShouldBe([PermissionRisk.DiscardsChanges], "a path with a folder in it is one that is there");
         }
         finally
         {
@@ -180,6 +182,91 @@ public class PermissionRisksTests
     public void A_cd_in_a_subshell_or_until_popd_moves_only_that_far(string command, bool outside)
     {
         Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Theory]
+    [InlineData("# Don't touch the config\ngit push --force\n# That's it", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("# Don't forget to rebuild\ngit push --force origin main\ngit commit -m 'done'", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("# write it with cat <<EOF later\ngit push --force", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("npm test # don't push yet\nrm -rf dist", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("# rm -rf / is what we avoid\nnpm test", new PermissionRisk[0])]
+    [InlineData("echo a#b; echo ${#list}", new PermissionRisk[0])]
+    public void A_comment_is_skipped_and_hides_nothing_after_it(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Fact]
+    public void A_PowerShell_comment_is_skipped()
+    {
+        PermissionRisks.OfCommand("# Don't touch it\n<# it's a block #>\nRemove-Item x", Folder, dialect: ShellDialect.PowerShell).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Theory]
+    [InlineData("cat <<'EOF' | bash\nrm -rf /srv/app\nEOF", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("cat <<EOF | sudo sh\ngit reset --hard\nEOF", new[] { PermissionRisk.DiscardsChanges })]
+    [InlineData("cat <<EOF | ssh host\nrm -rf x\nEOF", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("ssh host bash <<EOF\nrm -rf x\nEOF", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("bash script.sh <<EOF\nrm -rf x\nEOF", new PermissionRisk[0])]
+    [InlineData("(( mask = 1<<BIT ))\nrm -rf build", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo 'rm -rf /srv/app' | ssh host", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("ssh -p 2222 host 'rm -rf /srv/app'", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("ssh host make", new PermissionRisk[0])]
+    [InlineData("printf '%s\\n' 'rm -rf build' | bash", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo \"rm -rf x\" |& bash", new[] { PermissionRisk.DeletesFiles })]
+    public void A_shell_fed_through_a_pipe_or_over_ssh_runs_what_it_is_fed(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Theory]
+    [InlineData("git checkout release-2.x")]
+    [InlineData("git checkout bump/Newtonsoft.Json")]
+    [InlineData("git checkout v1.2")]
+    public void A_branch_with_a_dot_in_its_name_is_a_branch(string command)
+    {
+        Of(command).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_checkout_with_git_C_looks_for_its_paths_in_that_repository()
+    {
+        var root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var project = Directory.CreateDirectory(Path.Combine(root, "project")).FullName;
+            var other = Directory.CreateDirectory(Path.Combine(root, "other")).FullName;
+            File.WriteAllText(Path.Combine(other, "README"), "x");
+
+            PermissionRisks.OfCommand("git -C ../other checkout README", project).ShouldBe([PermissionRisk.DiscardsChanges]);
+            PermissionRisks.OfCommand("git checkout README", project).ShouldBeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"pwsh -wd C:\Windows -c ""Set-Content hosts.bak x""", true)]
+    [InlineData(@"pwsh -WorkingDirectory src -c ""Set-Content out.txt x""", false)]
+    [InlineData("sudo --chdir=/etc tee hosts.bak", true)]
+    [InlineData("sudo -D /etc tee hosts.bak", true)]
+    [InlineData("env -C src sh -c 'echo x > out.txt'", false)]
+    [InlineData("env -C /etc sh -c 'echo x > out.txt'", true)]
+    [InlineData("env -C /etc true; echo x > out.txt", false)]
+    public void A_command_run_in_another_folder_writes_there(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Theory]
+    [InlineData("echo `cd /tmp` && echo x > out.log")]
+    [InlineData("echo \"$(cd /tmp)\" \"$(echo x > out.log)\"")]
+    [InlineData("pushd /tmp && pushd && echo x > out.log")]
+    public void A_cd_in_backticks_or_a_quoted_subshell_or_a_bare_pushd_swap_moves_no_further(string command)
+    {
+        Of(command).ShouldBeEmpty();
     }
 
     [Fact]

@@ -80,7 +80,6 @@ public static class PermissionRisks
     [
         ("-executionpolicy", ["-ep", "-ex"]),
         ("-windowstyle", ["-w"]),
-        ("-workingdirectory", ["-wd"]),
         ("-configurationname", ["-config"]),
         ("-configurationfile", []),
         ("-inputformat", ["-inp", "-if"]),
@@ -111,8 +110,14 @@ public static class PermissionRisks
         "/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "nul", "nul:", "$null", "con",
     };
 
-    /// <summary>A file's extension at the end of a word: ".cs", ".json"; not "v1.2".</summary>
-    private static readonly Regex FileExtension = new(@"\.[A-Za-z][A-Za-z0-9]{0,5}$", RegexOptions.CultureInvariant);
+    /// <summary>Extensions of files a checkout of one word is taken to be of: "git checkout README.md".</summary>
+    private static readonly HashSet<string> FileExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".csproj", ".sln", ".slnx", ".props", ".targets", ".xaml", ".resx", ".json", ".md", ".txt", ".js", ".mjs", ".cjs", ".ts",
+        ".tsx", ".jsx", ".py", ".rb", ".go", ".rs", ".java", ".kt", ".c", ".h", ".cpp", ".hpp", ".cc", ".yml", ".yaml", ".xml", ".html",
+        ".htm", ".css", ".scss", ".less", ".ps1", ".psm1", ".sh", ".bat", ".cmd", ".toml", ".ini", ".cfg", ".config", ".lock", ".sql",
+        ".vue", ".svelte", ".php", ".swift", ".gradle", ".png", ".svg", ".editorconfig", ".gitignore",
+    };
 
     /// <summary>A here-document's start: <c>&lt;&lt;EOF</c>, <c>&lt;&lt;-'END'</c>; not a here-string (<c>&lt;&lt;&lt;</c>).</summary>
     private static readonly Regex HereDocument = new(@"\G<<(?!<)(?<dash>-)?\s*(?<quote>['""]?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>", RegexOptions.CultureInvariant);
@@ -291,6 +296,9 @@ public static class PermissionRisks
             var part = new List<string>();
             List<string>? piped = null; // the part before a "|": what it writes, the next part may run
             var subshells = new Stack<string?>();
+            string? lastSeparator = null;
+            var inBackticks = false;
+            string? beforeBackticks = null;
             for (var i = 0; i < tokens.Count; i++)
             {
                 var token = tokens[i];
@@ -306,10 +314,18 @@ public static class PermissionRisks
 
                 if (token.Kind == TokenKind.Separator)
                 {
+                    // "|&" pipes standard error too: the pipe goes on.
+                    if (token.Text == "&" && lastSeparator == "|" && part.Count == 0)
+                    {
+                        lastSeparator = "|&";
+                        continue;
+                    }
+
                     Simple(part, dialect, depth, piped);
                     piped = token.Text == "|" ? [.. part] : null;
                     part.Clear();
-                    // A cd in ( … ) or $( … ) is the subshell's own; in PowerShell and cmd brackets only group.
+                    lastSeparator = token.Text;
+                    // A cd in ( … ), $( … ) or backticks is the subshell's own; in PowerShell and cmd brackets only group.
                     if (dialect == ShellDialect.Posix && token.Text == "(")
                     {
                         subshells.Push(_here);
@@ -317,6 +333,19 @@ public static class PermissionRisks
                     else if (dialect == ShellDialect.Posix && token.Text == ")" && subshells.Count > 0)
                     {
                         _here = subshells.Pop();
+                    }
+                    else if (dialect == ShellDialect.Posix && token.Text == "`")
+                    {
+                        if (inBackticks)
+                        {
+                            _here = beforeBackticks;
+                        }
+                        else
+                        {
+                            beforeBackticks = _here;
+                        }
+
+                        inBackticks = !inBackticks;
                     }
 
                     continue;
@@ -328,7 +357,7 @@ public static class PermissionRisks
             Simple(part, dialect, depth, piped);
             foreach (var run in inner)
             {
-                Command(run, dialect, depth + 1); // what $( ) or backticks run inside a quoted word
+                Child(run, dialect, depth); // what $( ) or backticks run inside a quoted word, a subshell of its own
             }
         }
 
@@ -343,7 +372,12 @@ public static class PermissionRisks
                 return;
             }
 
-            var (name, args) = named;
+            var (name, args, chdir) = named;
+            var here = _here;
+            if (chdir is not null)
+            {
+                _here = Full(chdir, _here); // env -C, sudo -D: the command runs there
+            }
 
             if (piped is { Count: > 0 } && RunsItsInput(name, args) is { } runs && Written(piped) is { } written)
             {
@@ -351,12 +385,20 @@ public static class PermissionRisks
             }
 
             Simple(name, args, dialect, depth);
+            if (chdir is not null)
+            {
+                _here = here;
+            }
         }
 
-        /// <summary>The command's name and its words, past assignments, runners and their options; null when there is none.</summary>
-        private static (string Name, List<string> Args)? Named(List<string> words)
+        /// <summary>
+        /// The command's name and its words, past assignments, runners and their options; and the folder a runner runs it
+        /// in (<c>env -C</c>, <c>sudo -D</c>), if one does. Null when there is no command.
+        /// </summary>
+        public static (string Name, List<string> Args, string? Chdir)? Named(List<string> words)
         {
             var at = 0;
+            string? chdir = null;
             // PowerShell's "$out = git push": the command is what is assigned.
             if (words.Count > 0 && words[0].StartsWith('$'))
             {
@@ -387,11 +429,21 @@ public static class PermissionRisks
                     break;
                 }
 
-                var runner = Name(words[at]);
+                var runner = Name(words[at]).ToLowerInvariant();
                 at++;
                 while (at < words.Count && (words[at].StartsWith('-') || IsAssignment(words[at])))
                 {
-                    at += valued.Contains(words[at], StringComparer.Ordinal) ? 2 : 1; // an option's value is no command
+                    var option = words[at];
+                    if ((runner == "env" && option is "-C" or "--chdir") || (runner == "sudo" && option is "-D" or "--chdir"))
+                    {
+                        chdir = at + 1 < words.Count ? words[at + 1] : null;
+                    }
+                    else if (runner is "env" or "sudo" && option.StartsWith("--chdir=", StringComparison.Ordinal))
+                    {
+                        chdir = option["--chdir=".Length..];
+                    }
+
+                    at += valued.Contains(option, StringComparer.Ordinal) ? 2 : 1; // an option's value is no command
                 }
 
                 if (RunnersWithAnArgument.Contains(runner))
@@ -400,26 +452,58 @@ public static class PermissionRisks
                 }
             }
 
-            return at >= words.Count ? null : (Name(words[at]), words.Skip(at + 1).ToList());
+            return at >= words.Count ? null : (Name(words[at]), words.Skip(at + 1).ToList(), chdir);
         }
 
-        /// <summary>The dialect a command reads its input in when it runs it as commands; null when it does not.</summary>
-        private static ShellDialect? RunsItsInput(string name, List<string> args)
+        /// <summary>
+        /// The dialect a command reads its input in when it runs it as commands, whether piped in or a here-document;
+        /// null when it does not. <c>bash</c>, <c>sh -s</c>, <c>ssh host</c>, <c>ssh host bash</c> and <c>iex</c> do;
+        /// <c>bash script.sh</c>, <c>bash -c "…"</c> and <c>ssh host make</c> run something else.
+        /// </summary>
+        public static ShellDialect? RunsItsInput(string name, List<string> args)
         {
             if (PosixShells.Contains(name))
             {
-                // bash, sh -s, bash -x: commands from what comes in; bash script.sh or bash -c "…" runs something else.
                 var runsOther = args.Any(IsRunFlag) || (args.Any(a => !a.StartsWith('-')) && !args.Contains("-s"));
                 return runsOther ? null : ShellDialect.Posix;
             }
 
-            return (name.Equals("iex", StringComparison.OrdinalIgnoreCase) || name.Equals("invoke-expression", StringComparison.OrdinalIgnoreCase))
-                && args.Count == 0
-                ? ShellDialect.PowerShell
-                : null;
+            if (name.Equals("ssh", StringComparison.OrdinalIgnoreCase))
+            {
+                return SshCommand(args) is not { } remote ? ShellDialect.Posix
+                    : Named(remote.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToList()) is { } named ? RunsItsInput(named.Name, named.Args)
+                    : null;
+            }
+
+            return IsInvokeExpression(name) && args.Count == 0 ? ShellDialect.PowerShell : null;
         }
 
-        /// <summary>What a part writes out, to be read as commands: echo's or Write-Output's words, or a lone string.</summary>
+        /// <summary>What ssh runs on the other machine: the words after its options and the host; null when it runs a shell there.</summary>
+        public static string? SshCommand(List<string> args)
+        {
+            const string valued = "bcDEeFIiJLlmOopQRSWw"; // its options that take a value
+            for (var i = 0; i < args.Count; i++)
+            {
+                var arg = args[i];
+                if (arg.StartsWith('-'))
+                {
+                    i += arg.Length == 2 && valued.Contains(arg[1]) ? 1 : 0;
+                    continue;
+                }
+
+                return i + 1 < args.Count ? string.Join(' ', args.Skip(i + 1)) : null; // arg is the host
+            }
+
+            return null;
+        }
+
+        private static bool IsInvokeExpression(string name) =>
+            name.Equals("iex", StringComparison.OrdinalIgnoreCase) || name.Equals("invoke-expression", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// What a part writes out, to be read as commands: echo's or Write-Output's words, printf's after its format, or a
+        /// lone string.
+        /// </summary>
         private static string? Written(List<string> part)
         {
             if (part.Count == 1)
@@ -427,18 +511,27 @@ public static class PermissionRisks
                 return part[0];
             }
 
-            return Named(part) is { } named && named.Name.ToLowerInvariant() is "echo" or "printf" or "write-output" or "write" or "write-host"
-                ? string.Join(' ', named.Args.Where(a => !a.StartsWith('-')))
-                : null;
+            if (Named(part) is not { } named || named.Name.ToLowerInvariant() is not ("echo" or "printf" or "write-output" or "write" or "write-host"))
+            {
+                return null;
+            }
+
+            var words = named.Args.Where(a => !a.StartsWith('-')).ToList();
+            return string.Join(' ', named.Name.Equals("printf", StringComparison.OrdinalIgnoreCase) && words.Count > 1 ? words.Skip(1) : words);
         }
 
         /// <summary>bash's -c, and -lc, -ec, -xc: the next word is what it runs.</summary>
         private static bool IsRunFlag(string arg) => arg.Length > 1 && arg[0] == '-' && arg[1] != '-' && arg.Contains('c');
 
-        /// <summary>A command another shell runs: a cd in it is that shell's own.</summary>
-        private void Child(string command, ShellDialect dialect, int depth)
+        /// <summary>A command another shell runs, in <paramref name="start"/> if given: a cd in it is that shell's own.</summary>
+        private void Child(string command, ShellDialect dialect, int depth, string? start = null)
         {
             var here = _here;
+            if (start is not null)
+            {
+                _here = Full(start, _here);
+            }
+
             Command(command, dialect, depth + 1);
             _here = here;
         }
@@ -474,7 +567,14 @@ public static class PermissionRisks
             {
                 Command(string.Join(' ', args), ShellDialect.Posix, depth + 1);
             }
-            else if (name.Equals("iex", StringComparison.OrdinalIgnoreCase) || name.Equals("invoke-expression", StringComparison.OrdinalIgnoreCase))
+            else if (name.Equals("ssh", StringComparison.OrdinalIgnoreCase))
+            {
+                if (SshCommand(args) is { } remote)
+                {
+                    Child(remote, ShellDialect.Posix, depth, start: null); // where it runs there is not known here
+                }
+            }
+            else if (IsInvokeExpression(name))
             {
                 Command(Value(args, "-command") ?? string.Join(' ', args), ShellDialect.PowerShell, depth + 1);
             }
@@ -516,8 +616,22 @@ public static class PermissionRisks
             }
             else if (name.Equals("pushd", StringComparison.OrdinalIgnoreCase) || name.Equals("push-location", StringComparison.OrdinalIgnoreCase))
             {
-                _pushed.Push(_here);
-                Move(args, dialect);
+                if (args.Any(a => !a.StartsWith('-')) || Value(args, "-path") is not null || Value(args, "-literalpath") is not null)
+                {
+                    _pushed.Push(_here);
+                    Move(args, dialect);
+                }
+                else if (dialect == ShellDialect.Posix && _pushed.Count > 0)
+                {
+                    // Bash's bare pushd swaps the two top folders.
+                    var top = _pushed.Pop();
+                    _pushed.Push(_here);
+                    _here = top;
+                }
+                else if (dialect != ShellDialect.Posix)
+                {
+                    _pushed.Push(_here); // Push-Location alone stays where it is
+                }
             }
             else if (name.Equals("popd", StringComparison.OrdinalIgnoreCase) || name.Equals("pop-location", StringComparison.OrdinalIgnoreCase))
             {
@@ -531,20 +645,27 @@ public static class PermissionRisks
         /// </summary>
         private void PowerShell(string name, List<string> args, int depth)
         {
+            string? start = null; // -WorkingDirectory: where what it runs starts
             for (var i = 0; i < args.Count; i++)
             {
                 var arg = args[i];
                 if (IsPowerShellOption(arg, "-command", "-c") || IsPowerShellOption(arg, "-commandwithargs", "-cwa"))
                 {
-                    Child(string.Join(' ', args.Skip(i + 1)), ShellDialect.PowerShell, depth);
+                    Child(string.Join(' ', args.Skip(i + 1)), ShellDialect.PowerShell, depth, start);
                     return;
+                }
+
+                if (IsPowerShellOption(arg, "-workingdirectory", "-wd"))
+                {
+                    start = i + 1 < args.Count ? args[++i] : null;
+                    continue;
                 }
 
                 if (IsPowerShellOption(arg, "-encodedcommand", "-e", "-ec"))
                 {
                     try
                     {
-                        Child(i + 1 < args.Count ? Encoding.Unicode.GetString(Convert.FromBase64String(args[i + 1])) : "", ShellDialect.PowerShell, depth);
+                        Child(i + 1 < args.Count ? Encoding.Unicode.GetString(Convert.FromBase64String(args[i + 1])) : "", ShellDialect.PowerShell, depth, start);
                     }
                     catch (FormatException)
                     {
@@ -567,7 +688,7 @@ public static class PermissionRisks
 
                 if (!arg.StartsWith('-') && name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
                 {
-                    Child(string.Join(' ', args.Skip(i)), ShellDialect.PowerShell, depth);
+                    Child(string.Join(' ', args.Skip(i)), ShellDialect.PowerShell, depth, start);
                     return;
                 }
             }
@@ -593,9 +714,11 @@ public static class PermissionRisks
 
         /// <summary>
         /// "git checkout src/App.cs", "git checkout HEAD~1 src/App.cs": a checkout of paths, which throws away their changes.
-        /// One word is a path when it has a file's extension or is a file or folder here; a branch is made with -b, -B or --orphan.
+        /// One word is a path when it is a file or folder in <paramref name="repository"/>, or, with no folder in it, ends in
+        /// a known file type's extension ("README.md"; not "release-2.x" or "bump/Newtonsoft.Json"). A branch is made with
+        /// -b, -B or --orphan.
         /// </summary>
-        private bool ChecksOutPaths(List<string> rest)
+        private static bool ChecksOutPaths(List<string> rest, string? repository)
         {
             if (rest.Any(a => a is "-b" or "-B" or "--orphan"))
             {
@@ -603,15 +726,27 @@ public static class PermissionRisks
             }
 
             var plain = rest.Where(a => !a.StartsWith('-')).ToList();
-            return plain.Count >= 2 || (plain.Count == 1 && (FileExtension.IsMatch(plain[0])
-                || (Full(plain[0], _here) is { } full && (File.Exists(full) || Directory.Exists(full)))));
+            if (plain.Count != 1)
+            {
+                return plain.Count >= 2;
+            }
+
+            var word = plain[0];
+            return (word.IndexOfAny(['/', '\\']) < 0 && FileExtensions.Contains(Path.GetExtension(word)))
+                || (Full(word, repository) is { } full && (File.Exists(full) || Directory.Exists(full)));
         }
 
         private void Git(List<string> args)
         {
             var at = 0;
+            var repository = _here; // git -C <path> works there
             while (at < args.Count && args[at].StartsWith('-'))
             {
+                if (args[at] == "-C" && at + 1 < args.Count)
+                {
+                    repository = Full(args[at + 1], repository);
+                }
+
                 at += args[at] is "-C" or "-c" ? 2 : 1; // git's own options: -C <path>, -c <name=value>, --no-pager
             }
 
@@ -638,7 +773,7 @@ public static class PermissionRisks
                 case "reset" when Has("--hard"):
                 case "switch" when Has("--force", "--discard-changes") || HasShort('f'):
                 // checkout with paths: "git checkout -- src/App.cs", "git checkout .", "git checkout HEAD -- ."
-                case "checkout" when Has("--force", "--discard-changes", "--", ".", "--patch") || HasShort('f') || HasShort('p') || ChecksOutPaths(rest):
+                case "checkout" when Has("--force", "--discard-changes", "--", ".", "--patch") || HasShort('f') || HasShort('p') || ChecksOutPaths(rest, repository):
                 case "restore" when !Has("--staged") || Has("--worktree"):
                 case "stash" when rest.FirstOrDefault() is "drop" or "clear":
                     Risks.Add(PermissionRisk.DiscardsChanges);
@@ -722,14 +857,19 @@ public static class PermissionRisks
             {
                 quote = c;
             }
-            else if (c == '$' && string.CompareOrdinal(line, i, "$((", 0, 3) == 0)
+            else if (c == '#' && (i == 0 || char.IsWhiteSpace(line[i - 1]) || line[i - 1] is ';' or '|' or '&' or '('))
             {
-                var end = line.IndexOf("))", i + 3, StringComparison.Ordinal);
+                break; // a comment to the end of the line
+            }
+            else if (c == '(' && i + 1 < line.Length && line[i + 1] == '(')
+            {
+                // Arithmetic, (( … )) or $(( … )): "1<<BIT" is a shift.
+                var end = line.IndexOf("))", i + 2, StringComparison.Ordinal);
                 i = end < 0 ? line.Length : end + 1;
             }
             else if (c == '<' && (i == 0 || line[i - 1] != '<') && HereDocument.Match(line, i) is { Success: true } start)
             {
-                starts.Add((start.Groups["word"].Value, start.Groups["dash"].Success, FeedsAShell(line[..i])));
+                starts.Add((start.Groups["word"].Value, start.Groups["dash"].Success, FeedsAShell(line[..i], line[(i + start.Length)..])));
                 i += start.Length - 1;
             }
         }
@@ -737,12 +877,46 @@ public static class PermissionRisks
         return starts;
     }
 
-    /// <summary>The command a here-document is fed to is a shell, here or on another machine: "bash", "sudo bash", "ssh host".</summary>
-    private static bool FeedsAShell(string before)
+    /// <summary>
+    /// A here-document is run as commands: the command it is fed to reads its input as commands ("bash", "sudo bash",
+    /// "ssh host"), or pipes into one that does ("cat &lt;&lt;EOF | bash"), by the same rule as a pipe
+    /// (<see cref="Scanner.RunsItsInput"/>).
+    /// </summary>
+    private static bool FeedsAShell(string before, string after)
     {
-        var command = before[(before.LastIndexOfAny([';', '|', '&', '(']) + 1)..];
-        return command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Any(w => PosixShells.Contains(Name(w)) || Name(w).Equals("ssh", StringComparison.OrdinalIgnoreCase));
+        var parts = Parts(Tokens(before, ShellDialect.Posix).Tokens);
+        if (parts.Count > 0 && RunsInput(parts[^1].Words))
+        {
+            return true;
+        }
+
+        return Parts(Tokens(after, ShellDialect.Posix).Tokens).Any(p => p.After is "|" && RunsInput(p.Words));
+
+        static bool RunsInput(List<string> words) => Scanner.Named(words) is { } named && Scanner.RunsItsInput(named.Name, named.Args) is not null;
+    }
+
+    /// <summary>The words of each simple command, with the separator before it ("|" for a pipe).</summary>
+    private static List<(List<string> Words, string? After)> Parts(List<Token> tokens)
+    {
+        var parts = new List<(List<string>, string?)>();
+        var words = new List<string>();
+        string? after = null;
+        foreach (var token in tokens)
+        {
+            if (token.Kind == TokenKind.Separator)
+            {
+                parts.Add((words, after));
+                words = [];
+                after = token.Text;
+            }
+            else if (token.Kind == TokenKind.Word)
+            {
+                words.Add(token.Text);
+            }
+        }
+
+        parts.Add((words, after));
+        return parts;
     }
 
     /// <summary>
@@ -906,6 +1080,22 @@ public static class PermissionRisks
                     i++;
                     continue;
                 }
+            }
+
+            // A comment, to the end of the line: "# Don't touch it" hides no command behind its apostrophe.
+            if (c == '#' && !inWord && dialect != ShellDialect.Cmd)
+            {
+                var end = command.IndexOf('\n', i);
+                i = (end < 0 ? command.Length : end) - 1;
+                continue;
+            }
+
+            // PowerShell's block comment, <# … #>.
+            if (dialect == ShellDialect.PowerShell && c == '<' && i + 1 < command.Length && command[i + 1] == '#')
+            {
+                var end = command.IndexOf("#>", i + 2, StringComparison.Ordinal);
+                i = end < 0 ? command.Length : end + 1;
+                continue;
             }
 
             // ${HOME}, ${env:TEMP}: a variable, not a block.

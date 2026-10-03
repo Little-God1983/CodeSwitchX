@@ -18,6 +18,12 @@ internal static class PermissionLine
 
     public const string OnTheCard = "It's on the card.";
 
+    /// <summary>Words a reply starts with that says nothing of a command.</summary>
+    private static readonly HashSet<string> Fillers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Sure", "Okay", "OK", "Yes", "Certainly", "Alright", "Done", "Understood", "Got",
+    };
+
     /// <summary>A command too long to read out: the teller says what it does.</summary>
     public static bool NeedsTeller(ChatAskCard card) => card.Permission is { } permission && IsCommand(permission) && !IsShort(permission.Subject);
 
@@ -71,14 +77,15 @@ internal static class PermissionLine
             text = text[4..];
         }
 
-        // One word ("Sure", "Okay") says nothing of the command; too many are no few words.
-        if (text.Split(' ') is { Length: < 2 } or { Length: > MaxTellerWords })
+        // One word, or a reply ("Sure thing", "Okay, done"), says nothing of the command; too many are no few words.
+        var said = text.Split(' ');
+        if (said.Length is < 2 or > MaxTellerWords || Fillers.Contains(said[0].TrimEnd(',', '!', '.')))
         {
             return null;
         }
 
         // Models write "A script that …" even when asked for lower case: it still finishes the sentence.
-        if (text.Split(' ')[0] is "A" or "An" or "The")
+        if (said[0] is "A" or "An" or "The")
         {
             text = char.ToLowerInvariant(text[0]) + text[1..];
         }

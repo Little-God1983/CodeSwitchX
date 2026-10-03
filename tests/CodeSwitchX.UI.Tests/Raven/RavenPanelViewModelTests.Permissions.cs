@@ -302,6 +302,8 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("A script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
     [InlineData("3 scripts that build the installer", "CodeSwitchX, chat \"Fix\" wants to run 3 scripts that build the installer.")]
     [InlineData("Sure.", null)]
+    [InlineData("Sure thing.", null)]
+    [InlineData("Okay, done.", null)]
     [InlineData("This command cleans the build output and re-runs the tests. It is safe.",
         "CodeSwitchX, chat \"Fix\" wants to run a long command. This command cleans the build output and re-runs the tests.")]
     public void The_teller_s_words_are_said_after_who_asks_as_a_few_plain_words_or_not_at_all(string words, string? said)
