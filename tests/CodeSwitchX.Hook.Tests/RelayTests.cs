@@ -180,6 +180,17 @@ public class RelayTests : IDisposable
         Relay.BuildEnvelope("PreToolUse", payload, DateTimeOffset.UtcNow, 1, [], maxNestedBytes: 256 * 1024).ShouldContain("Option 200");
     }
 
+    [Fact]
+    public void The_project_folder_goes_along_only_when_given()
+    {
+        const string payload = """{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"ls"}}""";
+        using var with = JsonDocument.Parse(Relay.BuildEnvelope("PermissionRequest", payload, DateTimeOffset.UtcNow, 1, [], projectDir: @"E:\Repo"));
+        using var without = JsonDocument.Parse(Relay.BuildEnvelope("PermissionRequest", payload, DateTimeOffset.UtcNow, 1, []));
+
+        with.RootElement.GetProperty("projectDir").GetString().ShouldBe(@"E:\Repo");
+        without.RootElement.TryGetProperty("projectDir", out _).ShouldBeFalse();
+    }
+
     private static string? HashIn(string envelope)
     {
         using var doc = JsonDocument.Parse(envelope);

@@ -111,12 +111,15 @@ public static class ChatAskParser
             (wants, subject, details) = ($"use {tool}", all, null);
         }
 
+        // Outside is outside the chat's project, not the folder it moved to; a relay older than #107 sends only the latter.
+        var folder = step.ProjectDir ?? step.Cwd;
         var risks = (tool, subject == all) switch
         {
             (_, true) => [],
-            ("Bash" or "PowerShell", _) => PermissionRisks.OfCommand(subject, step.Cwd),
-            ("Edit" or "MultiEdit" or "NotebookEdit", _) => PermissionRisks.OfWrite(subject, step.Cwd),
-            ("Write", _) => PermissionRisks.OfWrite(subject, step.Cwd, emptiesIt: Empties(input, subject)),
+            ("Bash", _) => PermissionRisks.OfCommand(subject, folder, step.Cwd),
+            ("PowerShell", _) => PermissionRisks.OfCommand(subject, folder, step.Cwd, ShellDialect.PowerShell),
+            ("Edit" or "MultiEdit" or "NotebookEdit", _) => PermissionRisks.OfWrite(subject, folder, cwd: step.Cwd),
+            ("Write", _) => PermissionRisks.OfWrite(subject, folder, Empties(input, subject), step.Cwd),
             _ => (IReadOnlyList<PermissionRisk>)[],
         };
 

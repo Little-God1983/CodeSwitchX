@@ -91,7 +91,8 @@ internal static class Relay
             // A permission prompt is shown whole on its card, which allows all of it; the tool uses it may be one of carry
             // the fingerprint it is matched by.
             var envelope = BuildEnvelope(held ? heldEvent : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
-                held ? MaxAskBytes : MaxNestedBytes, keepStrings: permits, fingerprint: permits || eventName == "PreToolUse");
+                held ? MaxAskBytes : MaxNestedBytes, keepStrings: permits, fingerprint: permits || eventName == "PreToolUse",
+                projectDir: permits ? Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR") : null);
 
             if (held)
             {
@@ -214,8 +215,9 @@ internal static class Relay
     /// <param name="maxNestedBytes">Nested values at the top larger than this are left out; a question keeps its tool input whole.</param>
     /// <param name="keepStrings">Strings are not cut: a permission prompt's card shows all it allows.</param>
     /// <param name="fingerprint">The tool input's fingerprint goes along (<see cref="ToolInputHash"/>).</param>
+    /// <param name="projectDir">The chat's project folder (Claude Code's <c>CLAUDE_PROJECT_DIR</c>), for a permission prompt's risks; left out when null.</param>
     internal static string BuildEnvelope(string eventName, string payload, DateTimeOffset now, int relayPid, IReadOnlyList<ProcessInfo> chain,
-        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false)
+        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false, string? projectDir = null)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -234,6 +236,11 @@ internal static class Relay
             }
 
             writer.WriteEndArray();
+            if (projectDir is { Length: > 0 })
+            {
+                writer.WriteString("projectDir", projectDir);
+            }
+
             if (TryParseJson(payload, out var document))
             {
                 using (document)

@@ -44,6 +44,8 @@ public class HookEnvelopeParserTests
             """;
 
         HookEnvelopeParser.Parse(json, Received).ShouldNotBeNull().ToolInputHash.ShouldBe("0123456789abcdef0123456789abcdef");
+        HookEnvelopeParser.Parse(json.Replace("\"relayPid\":1,", "\"relayPid\":1,\"projectDir\":\"E:\\\\Repo\","), Received).ShouldNotBeNull()
+            .ProjectDir.ShouldBe(@"E:\Repo");
     }
 
     [Theory]

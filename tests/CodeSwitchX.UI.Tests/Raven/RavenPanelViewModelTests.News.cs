@@ -38,6 +38,9 @@ public sealed partial class RavenPanelViewModelTests
     /// <summary>Waits until the panel is idle and has said all it says, then lets the grace pass, so the news is told.</summary>
     private async Task GraceAsync(RavenPanelViewModel vm)
     {
+        // Idle shows for a moment between a telling and its speech starting: the grace begins once the voice is quiet.
+        await Until(() => vm.State == RavenState.Idle);
+        await WithinAsync(_voice.WhenQuietAsync());
         await Until(() => vm.State == RavenState.Idle);
         _time.Advance(RavenPanelViewModel.NewsGrace);
         await WithinAsync(vm.PendingAnswers);

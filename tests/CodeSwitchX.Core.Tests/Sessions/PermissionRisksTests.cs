@@ -1,3 +1,4 @@
+using System.Text;
 using CodeSwitchX.Core.Sessions;
 
 namespace CodeSwitchX.Core.Tests.Sessions;
@@ -20,6 +21,13 @@ public class PermissionRisksTests
     [InlineData("if ($a -gt 1) { $b = $a } ; $x => 1")]
     [InlineData("git rm --cached secrets.txt")]
     [InlineData("git restore --staged src/App.cs")]
+    [InlineData("git checkout main")]
+    [InlineData("git checkout -b feature/x")]
+    [InlineData("echo failed >/dev/stderr")]
+    [InlineData("echo failed >&2")]
+    [InlineData("echo hi > /dev/tty")]
+    [InlineData("cat > notes.md <<'EOF'\nrm -rf /\ngit push --force\nEOF")]
+    [InlineData("grep -E \"foo|rm\" log.txt")]
     public void A_command_that_risks_nothing_names_nothing(string command)
     {
         Of(command).ShouldBeEmpty();
@@ -45,9 +53,88 @@ public class PermissionRisksTests
     [InlineData("cmd /c rd /s /q obj")]
     [InlineData("pwsh -NoProfile -Command \"Remove-Item x.txt\"")]
     [InlineData("REMOVE-ITEM x.txt")]
+    [InlineData("bash -lc \"rm -rf build\"")]
+    [InlineData("sh -ec 'rm x'")]
+    [InlineData("eval \"rm -rf dist\"")]
+    [InlineData("sudo -u deploy rm -rf /srv/app")]
+    [InlineData("nice -n 10 rm -rf x")]
+    [InlineData("xargs -n 1 rm")]
+    [InlineData("env -u FOO rm x")]
+    [InlineData("timeout 30 rm -rf x")]
+    [InlineData("timeout -s KILL 30 rm -rf x")]
+    [InlineData("echo \"$(rm -rf dist)\"")]
+    [InlineData("echo \"`rm x`\"")]
+    [InlineData("echo it's gone; rm x")]
     public void A_command_that_deletes_says_so(string command)
     {
         Of(command).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Theory]
+    [InlineData("iex 'Remove-Item -Recurse dist'")]
+    [InlineData("Invoke-Expression \"Remove-Item x\"")]
+    [InlineData("$r = Remove-Item x")]
+    [InlineData("$r=Remove-Item x")]
+    [InlineData("Write-Host \"$(Remove-Item x)\"")]
+    [InlineData("$s = @'\nit's text, not Remove-Item\n'@\nRemove-Item x")]
+    [InlineData("powershell \"Remove-Item x\"")]
+    public void A_PowerShell_command_that_deletes_says_so(string command)
+    {
+        PermissionRisks.OfCommand(command, Folder, dialect: ShellDialect.PowerShell).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Fact]
+    public void A_PowerShell_path_ending_in_a_backslash_hides_no_command_after_it()
+    {
+        PermissionRisks.OfCommand("Copy-Item a \"src\\out\\\"; Remove-Item -Recurse src", Folder, dialect: ShellDialect.PowerShell)
+            .ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Fact]
+    public void An_encoded_PowerShell_command_is_read()
+    {
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes("git push --force"));
+
+        PermissionRisks.OfCommand($"pwsh -NoProfile -EncodedCommand {encoded}", Folder).ShouldBe([PermissionRisk.Pushes, PermissionRisk.RewritesHistory]);
+    }
+
+    [Theory]
+    [InlineData("git checkout -- src/App.cs")]
+    [InlineData("git checkout .")]
+    [InlineData("git checkout HEAD -- .")]
+    [InlineData("git checkout -p")]
+    [InlineData("git stash drop")]
+    [InlineData("git stash clear")]
+    public void A_command_that_throws_away_uncommitted_changes_says_so(string command)
+    {
+        Of(command).ShouldBe([PermissionRisk.DiscardsChanges]);
+    }
+
+    [Fact]
+    public void A_here_document_s_body_is_text_and_what_follows_it_is_read()
+    {
+        Of("cat > notes.md <<EOF\nIt's done\nEOF\ngit push --force").ShouldBe([PermissionRisk.Pushes, PermissionRisk.RewritesHistory]);
+    }
+
+    [Theory]
+    [InlineData(@"cd C:\Windows && echo x > hosts.bak", true)]
+    [InlineData("cd .. && cd .. && echo x > notes.txt", true)]
+    [InlineData("cd src && echo x > out.txt", false)]
+    [InlineData("cd - && echo x > ../../out.txt", false)]
+    [InlineData(@"Set-Location -Path C:\Temp; Set-Content out.txt x", true)]
+    public void A_cd_in_the_command_moves_where_its_relative_writes_land(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Fact]
+    public void A_chat_that_moved_into_a_subfolder_still_writes_inside_its_project()
+    {
+        const string sub = @"E:\Repos\App\src";
+
+        PermissionRisks.OfWrite(@"E:\Repos\App\README.md", Folder, cwd: sub).ShouldBeEmpty();
+        PermissionRisks.OfCommand("echo x > ../README.md", Folder, cwd: sub).ShouldBeEmpty();
+        PermissionRisks.OfCommand("echo x > ../../README.md", Folder, cwd: sub).ShouldBe([PermissionRisk.WritesOutsideItsFolder]);
     }
 
     [Theory]

@@ -1753,10 +1753,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Remove(card);
-        if (_tellerWarm && !_telling && !_untold.Any(PermissionLine.NeedsTeller))
+        if (_tellerWarm && !_telling)
         {
-            _tellerWarm = false;
-            _teller?.Rest(); // warmed up for a long command that will not be read out
+            RestTellerIfIdle(); // warmed up for a long command that may not be read out now
         }
 
         // Not told yet to the brain that acts, it is not told at all: the chat waits for no answer here any more.
@@ -1861,11 +1860,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         ReplyVoice.SpokenReply? spoken = null;
         var asked = false;
+        var warmed = false;
         try
         {
             await previous;
             var cards = _untold.Where(c => c.IsOpen).ToList();
             _untold.Clear();
+            warmed = _tellerWarm;
+            _tellerWarm = false; // a long command's card that comes while these are told warms it up again
             foreach (var card in cards)
             {
                 await card.Naming;
@@ -1918,12 +1920,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            if (_tellerWarm && !asked)
+            // Warmed up for a long command that was not read out, here or by a card that came meanwhile and is gone.
+            if ((warmed && !asked) || _tellerWarm)
             {
-                _teller?.Rest(); // warmed up for a long command that was not read out
+                RestTellerIfIdle();
             }
 
-            _tellerWarm = false;
             spoken?.Complete();
             _telling = false;
             UpdateState();
@@ -1931,8 +1933,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The teller's few words for a long command, with what is risky in it after them; null when it gives none, fails, or
-    /// the floor is taken. Never faults.
+    /// Rests the teller unless something still waits for it: a long command's card not read out yet, or news not told.
+    /// Resting it then would stop the process warmed up for that.
+    /// </summary>
+    private void RestTellerIfIdle()
+    {
+        if (_untold.Any(PermissionLine.NeedsTeller) || _news is { HasNews: true })
+        {
+            return;
+        }
+
+        _tellerWarm = false;
+        _teller?.Rest();
+    }
+
+    /// <summary>
+    /// The teller's few words for a long command, with what is risky in it after them; null when it gives none, fails
+    /// (what came before a failure would be a cut-off sentence), or the floor is taken. Never faults.
     /// </summary>
     private async Task<string?> TellersLineAsync(ChatAskCard card, CancellationToken floor)
     {
@@ -1946,7 +1963,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece }:
                         words.Append(piece);
                         break;
-                    case BrainNotice or BrainFailed:
+                    case BrainFailed:
+                        _logger.LogWarning("Raven's teller, on a permission prompt: {What}", e);
+                        return null;
+                    case BrainNotice:
                         _logger.LogWarning("Raven's teller, on a permission prompt: {What}", e);
                         break;
                 }
@@ -2066,7 +2086,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             if (!asked)
             {
-                _teller?.Rest(); // warmed up for news that came to nothing
+                RestTellerIfIdle(); // warmed up for news that came to nothing
             }
 
             spoken?.Complete();
@@ -2278,6 +2298,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (_pending == 0)
         {
+            // Scheduled before the state says the floor is free: whoever sees it free finds the news's wait already begun.
+            ScheduleNews();
             if (MicMode == MicMode.OpenMic && _attendPaused)
             {
                 State = RavenState.AttendingPaused;
@@ -2300,7 +2322,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 Caption = IdleCaption;
             }
 
-            ScheduleNews();
             return;
         }
 

@@ -24,6 +24,12 @@ public sealed record HookEvent
     /// </summary>
     public string? ToolInputHash { get; init; }
 
+    /// <summary>
+    /// The chat's project folder (Claude Code's <c>CLAUDE_PROJECT_DIR</c>), the relay's on a permission prompt: <see cref="Cwd"/>
+    /// can be a folder in it the chat moved to. Null from a relay older than #107.
+    /// </summary>
+    public string? ProjectDir { get; init; }
+
     /// <summary>The sub-agent the event comes from; null for the chat's main agent. Sub-agents send hooks with the parent's session id.</summary>
     public string? AgentId { get; init; }
     public string? NotificationType { get; init; }

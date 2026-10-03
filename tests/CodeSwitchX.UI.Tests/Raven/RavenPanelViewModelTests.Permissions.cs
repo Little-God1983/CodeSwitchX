@@ -157,8 +157,55 @@ public sealed partial class RavenPanelViewModelTests
         string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a script that builds the installer. "
             + "It deletes files. It's on the card.");
         var question = _teller.Asked.ShouldHaveSingleItem();
-        question.ShouldContain("begins \"ContentAutomatorX, chat \"Fix the upload retry\" wants to run\"");
+        question.ShouldContain("finish the sentence \"The chat wants to run …\"");
         question.ShouldEndWith(LongCommand);
+    }
+
+    [Fact]
+    public async Task A_teller_that_fails_midway_is_not_heard_cut_off_the_fallback_is_said()
+    {
+        _teller.Answer = _ => [new BrainText("a script that"), new BrainFailed("Raven's teller stopped in the middle of an answer.")];
+        var (vm, asks) = await QuestionsVmAsync();
+
+        _ = asks.HoldAsync(Permitting(tool: "PowerShell", subject: LongCommand, risks: [PermissionRisk.DeletesFiles]), CancellationToken.None);
+        await GraceAsync(vm);
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
+
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a long command that deletes files. It's on the card.");
+    }
+
+    [Fact]
+    public async Task A_long_command_s_card_that_comes_while_another_is_read_keeps_its_warm_up_and_rests_it_once_answered()
+    {
+        _teller.Gate = new TaskCompletionSource();
+        _teller.Answer = _ => [new BrainText("a script that builds the installer")];
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting("p1", subject: LongCommand), CancellationToken.None);
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(RavenPanelViewModel.NewsGrace); // not GraceAsync: the teller is held, and with it what the panel waits for
+        await Until(() => _teller.Asked.Count == 1);
+
+        _ = asks.HoldAsync(Permitting("p2", subject: LongCommand + "\nexit 0"), CancellationToken.None);
+        _teller.WarmUps.ShouldBe(2);
+        vm.DenyCommand.Execute(PermissionCards(vm)[1]);
+        _teller.Rests.ShouldBe(0, "the teller is busy with the first card");
+        _teller.Gate.SetResult();
+
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
+        await Until(() => _teller.Rests == 1);
+        _teller.Asked.Count.ShouldBe(1, "the second card was answered before it was read out");
+    }
+
+    [Theory]
+    [InlineData("npm ci && npm test", "npm ci, then npm test")]
+    [InlineData("cd src; make || echo failed", "cd src, then make, or else echo failed")]
+    [InlineData("git log | head -5", "git log piped to head -5")]
+    [InlineData("git commit -m \"fix; tidy\"", "git commit -m \"fix; tidy\"")]
+    [InlineData("grep -E 'foo|bar' log.txt | wc -l", "grep -E 'foo|bar' log.txt piped to wc -l")]
+    [InlineData("echo it's done; ls", "echo it's done, then ls")]
+    public void A_command_s_separators_are_said_as_words_but_not_inside_quotes(string command, string said)
+    {
+        PermissionLine.CommandSaid(command).ShouldBe(said);
     }
 
     [Fact]
@@ -216,14 +263,18 @@ public sealed partial class RavenPanelViewModelTests
     [Theory]
     [InlineData("", null)]
     [InlineData("  \n ", null)]
-    [InlineData("A wants to run `the build`\n\nand **tests**", "A wants to run the build and tests. It deletes files. It's on the card.")]
-    [InlineData("A wants to run the build!", "A wants to run the build! It deletes files. It's on the card.")]
-    public void The_teller_s_words_are_said_as_one_plain_sentence_or_not_at_all(string words, string? said)
+    [InlineData("a script that `builds` the **installer**\n\nand tests it", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer and tests it.")]
+    [InlineData("run a script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
+    [InlineData("The chat wants to run the build. Then it tests v1.2 too.", "CodeSwitchX, chat \"Fix\" wants to run the build.")]
+    [InlineData("This command cleans the build output and re-runs the tests. It is safe.",
+        "CodeSwitchX, chat \"Fix\" wants to run a long command. This command cleans the build output and re-runs the tests.")]
+    public void The_teller_s_words_are_said_after_who_asks_as_a_few_plain_words_or_not_at_all(string words, string? said)
     {
-        var card = new ChatAskCard(Permitting(subject: LongCommand, risks: [PermissionRisk.DeletesFiles]));
+        var card = new ChatAskCard(Permitting(subject: LongCommand, risks: [PermissionRisk.DeletesFiles])) { Said = "CodeSwitchX, chat \"Fix\"" };
 
-        PermissionLine.WithTellersWords(card, words).ShouldBe(said);
-        PermissionLine.WithTellersWords(card, new string('a', PermissionLine.MaxTellerChars + 1)).ShouldBeNull("that is no sentence to say");
+        PermissionLine.WithTellersWords(card, words).ShouldBe(said is null ? null : said + " It deletes files. It's on the card.");
+        PermissionLine.WithTellersWords(card, string.Join(' ', Enumerable.Repeat("word", PermissionLine.MaxTellerWords + 1)))
+            .ShouldBeNull("that is no few words to say");
     }
 
     [Theory]

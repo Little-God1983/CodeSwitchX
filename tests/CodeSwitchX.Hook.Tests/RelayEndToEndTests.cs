@@ -127,6 +127,38 @@ public class RelayEndToEndTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_permission_prompt_carries_the_chat_s_project_folder_so_a_write_from_a_subfolder_is_inside_it()
+    {
+        // Claude Code gives hooks CLAUDE_PROJECT_DIR (checked with CLI 2.1.287); cwd can be a folder the chat moved to.
+        const string fromSubfolder = """
+            {"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","cwd":"E:\\Repo\\src",
+             "tool_input":{"command":"echo x > ../notes.txt"}}
+            """;
+        _asks.Takes = _ => true;
+        ChatAsk? held = null;
+        _asks.Opened += ask =>
+        {
+            held = ask;
+            _asks.Permit(ask.Id, allow: false);
+        };
+
+        var before = Environment.GetEnvironmentVariable("CLAUDE_PROJECT_DIR");
+        Environment.SetEnvironmentVariable("CLAUDE_PROJECT_DIR", @"E:\Repo");
+        try
+        {
+            await Relay.RunAsync([Relay.PermitArgument], Stdin(fromSubfolder), _stdout, _paths.Root);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CLAUDE_PROJECT_DIR", before);
+        }
+
+        var step = held.ShouldNotBeNull().Step;
+        (step.ProjectDir, step.Cwd).ShouldBe((@"E:\Repo", @"E:\Repo\src"));
+        held.Permission.ShouldNotBeNull().Risks.ShouldBeNull("../notes.txt from src is in the project");
+    }
+
+    [Fact]
     public async Task A_permission_prompt_denied_in_the_panel_tells_the_chat_and_lets_it_carry_on()
     {
         _asks.Takes = _ => true;
