@@ -79,7 +79,7 @@ internal static class PermissionLine
 
         // One word, or a reply ("Sure thing", "Okay, done"), says nothing of the command; too many are no few words.
         var said = text.Split(' ');
-        if (said.Length is < 2 or > MaxTellerWords || Fillers.Contains(said[0].TrimEnd(',', '!', '.')))
+        if (said.Length is < 2 or > MaxTellerWords || Fillers.Contains(said[0].TrimEnd(',', '!', '.', ':', ';')))
         {
             return null;
         }

@@ -269,6 +269,80 @@ public class PermissionRisksTests
         Of(command).ShouldBeEmpty();
     }
 
+    [Theory]
+    [InlineData("bash 2>/dev/null <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("bash > setup.log <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("cat <<'EOF' | bash > out.log\nrm -rf build\nEOF")]
+    [InlineData("docker exec -i app sh <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("kubectl exec -i pod -- bash <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("kubectl exec -n prod -c web pod -- sh <<'EOF'\nrm -rf /data\nEOF")]
+    [InlineData("bash -o pipefail <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("bash -euo pipefail <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("ssh host 'cd /app && bash -s' <<'EOF'\nrm -rf build\nEOF")]
+    [InlineData("echo 'rm -rf build' | ssh host 'cd /app && bash -s'")]
+    [InlineData("echo 'rm -rf build' | docker exec -i app sh")]
+    public void A_shell_fed_past_a_redirect_an_option_s_value_a_container_or_a_remote_cd_runs_what_it_is_fed(string command)
+    {
+        Of(command).ShouldBe([PermissionRisk.DeletesFiles]);
+    }
+
+    [Theory]
+    [InlineData("cat > notes.md <<'EOF' && echo hi | bash\nrm -rf docs/old\nEOF")]
+    [InlineData("cat <<'EOF' > notes.md; echo hi | bash\nrm -rf docs/old\nEOF")]
+    [InlineData("docker exec app ls <<'EOF'\nrm -rf /data\nEOF")]
+    public void A_here_document_that_is_text_is_not_read_because_a_later_command_feeds_a_shell(string command)
+    {
+        Of(command).ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("printf 'git stash\\ngit reset --hard\\n' | sh", new[] { PermissionRisk.DiscardsChanges })]
+    [InlineData("printf '%s\\n' 'echo hi' 'git push --force' | sh", new[] { PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("echo -e 'echo hi\\nrm -rf x' | bash", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("echo 'echo hi\\nrm -rf x' | bash", new PermissionRisk[0])]
+    public void What_printf_and_echo_e_write_is_read_line_by_line(string command, PermissionRisk[] risks)
+    {
+        Of(command).ShouldBe(risks);
+    }
+
+    [Theory]
+    [InlineData(@"cd C:\Windows && echo ""$(echo x > hosts.bak)"" && cd E:\Repos\App", true)]
+    [InlineData(@"echo ""$(date > build.log)"" && cd C:\Windows", false)]
+    [InlineData(@"cd C:\Windows && cat ""$(echo x > hosts.bak)"" > /dev/null", true)]
+    public void A_quoted_subshell_runs_where_its_word_is(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
+    [Fact]
+    public void A_checkout_of_a_path_where_the_location_is_unknown_throws_away_its_changes()
+    {
+        PermissionRisks.OfCommand("git checkout src/App.cs", folder: "", cwd: "").ShouldBe([PermissionRisk.DiscardsChanges]);
+        Of("cd - && git checkout src/App.cs").ShouldBe([PermissionRisk.DiscardsChanges]);
+        Of("git -C $NO_SUCH_VARIABLE_107 checkout src/App.cs").ShouldBe([PermissionRisk.DiscardsChanges]);
+        Of("cd - && git checkout bump/release-2.x").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_command_on_another_machine_writes_nowhere_known_here()
+    {
+        Of("ssh host 'echo ok > status.txt'").ShouldBeEmpty();
+        Of("ssh host 'echo ok > /etc/status.txt'").ShouldBe([PermissionRisk.WritesOutsideItsFolder]);
+    }
+
+    [Theory]
+    [InlineData("pushd /tmp && pushd +1 && echo x > out.log", false)]
+    [InlineData("pushd /tmp && pushd -0 && echo x > out.log", false)]
+    [InlineData("pushd /tmp && pushd +0 && echo x > out.log", true)]
+    [InlineData("pushd -n /tmp && echo x > out.log", false)]
+    [InlineData("pushd -n /tmp && popd && echo x > out.log", true)] // popd drops the top and goes to the next: /tmp
+    [InlineData(@"Push-Location -StackName s; Set-Content out.log x", false)]
+    [InlineData(@"Push-Location C:\Temp -StackName s; Set-Content out.log x", true)]
+    public void A_pushd_that_turns_the_stack_or_does_not_move_is_read_as_such(string command, bool outside)
+    {
+        Of(command).ShouldBe(outside ? [PermissionRisk.WritesOutsideItsFolder] : []);
+    }
+
     [Fact]
     public void A_PowerShell_path_ending_in_a_backslash_hides_no_command_after_it()
     {
