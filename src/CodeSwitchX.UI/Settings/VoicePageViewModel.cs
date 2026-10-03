@@ -24,9 +24,6 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _playing;
     private bool _showing;
 
-    /// <summary>The engine picked: Raven speaks with it, or answers in text with the None card.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasVoices), nameof(VoicesHeading))]
     private EngineCard _selectedCard;
 
     [ObservableProperty] private VoiceRow? _selectedVoice;
@@ -69,7 +66,27 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
 
     private EngineCard CardOf(SpeechEngine? engine) => Cards.First(c => c.Engine == engine);
 
-    partial void OnSelectedCardChanged(EngineCard value)
+    /// <summary>
+    /// The engine picked: Raven speaks with it, or answers in text with the None card. Always a card: the list writes
+    /// none on a Ctrl+click of the card picked, and that is ignored.
+    /// </summary>
+    public EngineCard SelectedCard
+    {
+        get => _selectedCard;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedCard, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(HasVoices));
+            OnPropertyChanged(nameof(VoicesHeading));
+            OnSelectedCardChanged(value);
+        }
+    }
+
+    private void OnSelectedCardChanged(EngineCard value)
     {
         if (_showing)
         {

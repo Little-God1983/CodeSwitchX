@@ -5,6 +5,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
+             xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance settings:SettingsViewModel}"
              d:DesignWidth="1100" d:DesignHeight="800">
@@ -155,6 +156,7 @@
       </Setter>
     </Style>
     <Style x:Key="PlainList" TargetType="ListBox">
+      <Setter Property="infra:KeepSelection.IsEnabled" Value="True" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="Padding" Value="0" />
@@ -191,6 +193,7 @@
       </Setter>
     </Style>
     <Style x:Key="Segmented" TargetType="ListBox">
+      <Setter Property="infra:KeepSelection.IsEnabled" Value="True" />
       <Setter Property="HorizontalAlignment" Value="Left" />
       <Setter Property="ItemContainerStyle" Value="{StaticResource SegmentItem}" />
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
@@ -334,7 +337,7 @@
           </StackPanel>
         </StackPanel>
         <Grid>
-          <ListBox ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}"
+          <ListBox ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}" infra:KeepSelection.IsEnabled="True"
                    Background="Transparent" BorderThickness="0" AutomationProperties.Name="Settings pages"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListBox.GroupStyle>

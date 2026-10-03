@@ -65,6 +65,18 @@ public sealed class VoicePageViewModelTests
     }
 
     [Fact]
+    public async Task A_card_unpicked_in_the_list_leaves_the_engine_as_it_was()
+    {
+        var vm = await OpenAsync();
+        vm.SelectedCard = Card(vm, SpeechEngine.Kokoro);
+
+        vm.SelectedCard = null!; // Ctrl+click on the card picked: the list writes none
+
+        vm.SelectedCard.ShouldBe(Card(vm, SpeechEngine.Kokoro));
+        (_shell.Speech.Engine, vm.HasVoices).ShouldBe((SpeechEngine.Kokoro, true));
+    }
+
+    [Fact]
     public async Task Picking_a_voice_stores_it_for_that_engine()
     {
         var vm = await OpenAsync();
@@ -195,6 +207,7 @@ public sealed class VoicePageViewModelTests
     public async Task Closing_Settings_stops_a_sample_and_the_welcome_line()
     {
         var vm = await OpenAsync();
+        _shell.Shell.OpenSettingsAt(SettingsPage.Voice);
         vm.SelectedCard = Card(vm, SpeechEngine.Kokoro);
         vm.ShowWelcome = true;
         var heart = vm.Voices[0];

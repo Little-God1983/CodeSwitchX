@@ -834,6 +834,21 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task Leaving_Settings_for_the_Cab_closes_it_as_Back_to_Yard_does()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.OpenSettingsAt(SettingsPage.Voice);
+        _h.Shell.Settings.VoicePage.ShowWelcome = true;
+
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id); // Raven opens a workspace, or a jump hotkey
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.Settings.VoicePage.ShowWelcome.ShouldBeFalse("the first-run line has had its turn");
+    }
+
+    [Fact]
     public async Task A_dot_on_the_bottom_bar_or_the_chips_open_their_page_of_Settings()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

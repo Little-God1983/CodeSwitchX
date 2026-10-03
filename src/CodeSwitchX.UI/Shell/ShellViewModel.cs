@@ -346,6 +346,18 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     partial void OnModeChanged(ShellMode value) => TellHostWhereTheCabWaits();
 
+    /// <summary>
+    /// Settings left any way (Back to Yard, a workspace opened by Raven or a jump hotkey): a sample playing stops, and the
+    /// first-run welcome line has had its turn.
+    /// </summary>
+    partial void OnModeChanged(ShellMode oldValue, ShellMode newValue)
+    {
+        if (oldValue == ShellMode.Settings && newValue != ShellMode.Settings)
+        {
+            Settings.Closed();
+        }
+    }
+
     partial void OnActiveWorkspaceIdChanged(Guid? value) => TellHostWhereTheCabWaits();
 
     /// <summary>
@@ -442,11 +454,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     [RelayCommand]
-    public void CloseSettings()
-    {
-        Settings.Closed();
-        Mode = ShellMode.Yard;
-    }
+    public void CloseSettings() => Mode = ShellMode.Yard;
 
     /// <summary>
     /// Called by the window when it is minimised or restored. A minimised shell reports an off-screen host rectangle;
