@@ -40,7 +40,8 @@ public sealed partial class RavenPanelViewModelTests
         var card = Card(vm);
         vm.OpenQuestions.ShouldBe(1);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count > 0);
+        // Spoken in pieces, a sentence each: wait for the last.
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Banana.", StringComparison.Ordinal));
 
         card.Chat.ShouldBe("ContentAutomatorX · Fix the upload retry");
         string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" asks: Which fruit? Apple or Banana.");

@@ -99,6 +99,7 @@ public static class ChatAskParser
             "Edit" or "MultiEdit" => ("edit a file", String(input, "file_path"), all),
             "Write" => ("write a file", String(input, "file_path"), all),
             "NotebookEdit" => ("edit a notebook", String(input, "notebook_path"), all),
+            "Read" => ("read a file", String(input, "file_path"), null),
             "WebFetch" => ("fetch a web page", String(input, "url"), null),
             "WebSearch" => ("search the web", String(input, "query"), null),
             _ => ($"use {tool}", all, (string?)null),

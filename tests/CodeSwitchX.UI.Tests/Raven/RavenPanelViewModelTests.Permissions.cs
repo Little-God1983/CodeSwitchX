@@ -27,7 +27,7 @@ public sealed partial class RavenPanelViewModelTests
         var card = PermissionCards(vm).ShouldHaveSingleItem();
         vm.OpenQuestions.ShouldBe(1);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count > 0);
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
 
         (card.Chat, card.Wants, card.Permission!.Subject).ShouldBe(("ContentAutomatorX · Fix the upload retry", " wants to run a command", "npm test"));
         string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a command. It's on the card.");

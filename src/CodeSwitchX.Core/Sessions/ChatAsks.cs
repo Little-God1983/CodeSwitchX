@@ -142,6 +142,11 @@ public sealed class ChatAsks : IDisposable
 
     internal const int EndedKept = 64;
 
+    /// <summary>The asks taken here lately, held or ended, for <see cref="Explains"/>.</summary>
+    private readonly Queue<(string SessionId, DateTimeOffset At)> _taken = new();
+
+    internal const int TakenKept = 256;
+
     /// <summary>How often the held permission prompts are checked against what the chats' tabs show (<see cref="ShowsPrompt"/>).</summary>
     public static readonly TimeSpan SweepEvery = TimeSpan.FromSeconds(2);
 
@@ -228,6 +233,11 @@ public sealed class ChatAsks : IDisposable
             held = new Held(ask, new TaskCompletionSource<ChatAskClosed>(TaskCreationOptions.RunContinuationsAsynchronously));
             _held.Remove(ask.Id, out replaced);
             _held[ask.Id] = held;
+            _taken.Enqueue((ask.SessionId, ask.At));
+            while (_taken.Count > TakenKept)
+            {
+                _taken.Dequeue();
+            }
             if (ask.Kind == ChatAskKind.Permission)
             {
                 _sweep.Change(SweepEvery, SweepEvery);
@@ -399,16 +409,17 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>
-    /// Whether the chat waiting since <paramref name="since"/> waits on an ask held here, so its card tells it and not the
-    /// news: one asked within <see cref="ExplainWindow"/> of it. A prompt's own PermissionRequest can land just before the
-    /// hook that holds it, and its Notification seconds after. A wait that begins long after (a plan to approve while a
-    /// sub-agent's prompt is held) is another one, left to VS Code, and news.
+    /// Whether the chat waiting since <paramref name="since"/> waits on an ask taken here, held still or answered already, so
+    /// its card tells it and not the news: one asked within <see cref="ExplainWindow"/> of it. A prompt's own
+    /// PermissionRequest can land just before the hook that holds it, and its Notification seconds after; the news of it may
+    /// be told only after it was answered on its card. A wait that begins long after (a plan to approve while a sub-agent's
+    /// prompt is held) is another one, left to VS Code, and news.
     /// </summary>
     public bool Explains(string sessionId, DateTimeOffset since)
     {
         lock (_lock)
         {
-            return _held.Values.Any(h => h.Ask.SessionId == sessionId && (h.Ask.At - since).Duration() <= ExplainWindow);
+            return _taken.Any(t => t.SessionId == sessionId && (t.At - since).Duration() <= ExplainWindow);
         }
     }
 
@@ -487,7 +498,16 @@ public sealed class ChatAsks : IDisposable
             case "PreToolUse" when step.ToolUseId is { } id:
                 lock (_lock)
                 {
-                    if (_begun.TryAdd(id, step))
+                    // The same step told twice (an older relay still installed beside this one): the copy with the
+                    // input's fingerprint counts.
+                    if (_begun.TryGetValue(id, out var told))
+                    {
+                        if (told.ToolInputHash is null && step.ToolInputHash is not null)
+                        {
+                            _begun[id] = step;
+                        }
+                    }
+                    else if (_begun.TryAdd(id, step))
                     {
                         _begunOrder.Enqueue(id);
                         while (_begunOrder.Count > BegunKept)

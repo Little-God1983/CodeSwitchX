@@ -71,6 +71,7 @@ public sealed class ChatAskParserTests
     [InlineData("Bash", """{"command":"npm test","description":"Run the tests"}""", "run a command", "npm test")]
     [InlineData("PowerShell", """{"command":"Remove-Item build -Recurse"}""", "run a command", "Remove-Item build -Recurse")]
     [InlineData("WebFetch", """{"url":"https://github.com/x","prompt":"read it"}""", "fetch a web page", "https://github.com/x")]
+    [InlineData("Read", """{"file_path":"C:/outside/notes.md","limit":20}""", "read a file", "C:/outside/notes.md")]
     public void A_permission_prompt_is_read_as_what_the_tool_wants_and_on_what(string tool, string toolInput, string wants, string subject)
     {
         var ask = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull();

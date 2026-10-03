@@ -462,6 +462,20 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
+    public async Task A_step_told_twice_counts_with_its_fingerprint_whichever_comes_first()
+    {
+        // An older relay still installed beside this one tells the same PreToolUse without a fingerprint.
+        Step("PreToolUse", "toolu_1", input: null, ago: TimeSpan.FromSeconds(1));
+        Step("PreToolUse", "toolu_1", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        Step("PreToolUse", "toolu_1", input: null, ago: TimeSpan.FromSeconds(1));
+        var held = _asks.HoldAsync(Permission(input: "npm test"), CancellationToken.None);
+
+        Step("PostToolUse", "toolu_1");
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
+    }
+
+    [Fact]
     public async Task A_prompt_held_long_keeps_its_tool_use_while_many_others_begin()
     {
         Step("PreToolUse", "toolu_1", input: "npm test", ago: TimeSpan.FromSeconds(1));
@@ -486,5 +500,17 @@ public sealed class ChatAsksTests : IDisposable
         _asks.Explains("s1", asked + TimeSpan.FromSeconds(6)).ShouldBeTrue("its Notification comes 6 s later");
         _asks.Explains("s1", asked + TimeSpan.FromMinutes(1)).ShouldBeFalse("a plan to approve, asked later, waits in VS Code");
         _asks.Explains("s2", asked).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_wait_answered_on_its_card_before_its_news_is_told_is_still_that_ask_s()
+    {
+        // Seen on screen: the PermissionRequest landed before the hold, and the news came round only after Deny was clicked.
+        var waitingSince = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromMilliseconds(300));
+        _ = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.Permit("p1", allow: false).ShouldBeTrue();
+
+        _asks.Explains("s1", waitingSince).ShouldBeTrue();
     }
 }
