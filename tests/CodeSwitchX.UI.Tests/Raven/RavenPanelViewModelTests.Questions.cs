@@ -21,7 +21,7 @@ public sealed partial class RavenPanelViewModelTests
         return (vm, asks);
     }
 
-    private ChatAsk Asking(params ChatQuestion[] questions) => new("toolu_1", ChatAskKind.Question,
+    private ChatAsk Asking(params ChatQuestion[] questions) => new("toolu_1",
         new HookEvent { SessionId = "a", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = "toolu_1" },
         questions.Length > 0 ? questions : [Fruit]);
 
@@ -196,7 +196,7 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Answer = _ => [new BrainText("Release notes is done.")];
         _yard.Show("b", "CodeSwitchX", "Release notes");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
-        var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Holds);
+        var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Explains);
         _time.Advance(TimeSpan.FromSeconds(1));
         var (vm, _) = await QuestionsVmAsyncWith(asks, news);
 

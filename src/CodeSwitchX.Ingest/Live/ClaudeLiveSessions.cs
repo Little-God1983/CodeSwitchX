@@ -40,6 +40,9 @@ public sealed class ClaudeLiveSessions
 
     private const string InteractiveKind = "interactive";
 
+    /// <summary>The status of a chat that waits on the user (seen with 2.1.287: <c>"waitingFor": "permission prompt"</c> with it).</summary>
+    private const string WaitingStatus = "waiting";
+
     private readonly string _directory;
     private readonly Func<int, long?> _startOf;
     private readonly TimeProvider _time;
@@ -74,12 +77,7 @@ public sealed class ClaudeLiveSessions
         // is a second old (empty, just after the start). Only the records of a chat asked for have their process looked up.
         lock (_gate)
         {
-            if (_readAt is not { } readAt || _time.GetElapsedTime(readAt) >= MaxAge)
-            {
-                _records = Read();
-                _names.Clear();
-                _readAt = _time.GetTimestamp();
-            }
+            Refresh();
 
             if (!_names.TryGetValue(sessionId, out var name))
             {
@@ -92,12 +90,38 @@ public sealed class ClaudeLiveSessions
     }
 
     /// <summary>
+    /// Whether the chat's VS Code tab waits on the user now (its record's status is <c>waiting</c>: a permission prompt, a
+    /// question): false when it works or idles; null when it is not open in a tab or its record says no status. Read like
+    /// <see cref="NameOf"/>, at most once a <see cref="MaxAge"/>. Any thread; never throws.
+    /// </summary>
+    public bool? ShowsPrompt(string sessionId)
+    {
+        lock (_gate)
+        {
+            Refresh();
+
+            return _records.GetValueOrDefault(sessionId)?.FirstOrDefault(Runs)?.Status is { } status ? status == WaitingStatus : null;
+        }
+    }
+
+    /// <summary>
     /// Every chat open in a VS Code tab right now, read afresh: a chat whose tab opened a moment ago is there. The
     /// records of the processes in <paramref name="skip"/> are not opened, nor their processes looked up: a caller
     /// waiting for a new chat names the ones it knows. Leaves <see cref="NameOf"/>'s read alone. Any thread; never throws.
     /// </summary>
     public IReadOnlyList<LiveChat> RunningNow(IReadOnlySet<int>? skip = null) =>
         Read(skip).Values.SelectMany(r => r).Where(Runs).Select(r => new LiveChat(r.Pid, r.SessionId, r.Name, r.ProcessStart)).ToList();
+
+    /// <summary>Reads the records again when the last read is <see cref="MaxAge"/> old. Under the lock.</summary>
+    private void Refresh()
+    {
+        if (_readAt is not { } readAt || _time.GetElapsedTime(readAt) >= MaxAge)
+        {
+            _records = Read();
+            _names.Clear();
+            _readAt = _time.GetTimestamp();
+        }
+    }
 
     private bool Runs(Record record) => _startOf(record.Pid) is { } start && Math.Abs(start - record.ProcessStart) < StartTolerance;
 
@@ -178,7 +202,7 @@ public sealed class ClaudeLiveSessions
             }
 
             var updatedAt = root.TryGetProperty("updatedAt", out var at) && at.TryGetInt64(out var ms) ? ms : 0;
-            return new Record(id, sessionId, name, updatedAt, processStart.Value);
+            return new Record(id, sessionId, name, updatedAt, processStart.Value, Text(root, "status"));
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
@@ -223,7 +247,8 @@ public sealed class ClaudeLiveSessions
         : null;
 
     /// <param name="ProcessStart">When the process that wrote it started, as a UTC file time.</param>
-    private sealed record Record(int Pid, string SessionId, string Name, long UpdatedAt, long ProcessStart);
+    /// <param name="Status">"idle", "busy" or "waiting"; null when the record says none.</param>
+    private sealed record Record(int Pid, string SessionId, string Name, long UpdatedAt, long ProcessStart, string? Status);
 }
 
 /// <summary>A chat open in a VS Code tab.</summary>

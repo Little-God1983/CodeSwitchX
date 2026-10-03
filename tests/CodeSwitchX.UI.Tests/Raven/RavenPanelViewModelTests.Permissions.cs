@@ -11,7 +11,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 /// </summary>
 public sealed partial class RavenPanelViewModelTests
 {
-    private ChatAsk Permitting(string id = "p1", string? agent = null) => new(id, ChatAskKind.Permission,
+    private ChatAsk Permitting(string id = "p1", string? agent = null) => new(id,
         new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", AgentId = agent, ToolInputHash = "npm test" },
         [], new ChatPermission("Bash", "run a command", "npm test", agent is null ? null : "Explore"));
 

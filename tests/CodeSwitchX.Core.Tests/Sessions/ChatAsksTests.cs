@@ -22,7 +22,7 @@ public sealed class ChatAsksTests : IDisposable
 
     public void Dispose() => _asks.Dispose();
 
-    private ChatAsk Ask(string session = "s1", string toolUse = "toolu_1", int questions = 1) => new(toolUse, ChatAskKind.Question,
+    private ChatAsk Ask(string session = "s1", string toolUse = "toolu_1", int questions = 1) => new(toolUse,
         new HookEvent { SessionId = session, EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = toolUse },
         Enumerable.Range(1, questions).Select(i => new ChatQuestion($"Question {i}?", null,
             [new ChatQuestionOption("Apple", null), new ChatQuestionOption("Banana", "yellow")], false)).ToList());
@@ -221,7 +221,7 @@ public sealed class ChatAsksTests : IDisposable
 
     /// <summary>A prompt for running <paramref name="input"/> (its fingerprint); no fingerprint, as from an older relay, for null.</summary>
     private ChatAsk Permission(string id = "p1", string session = "s1", string? agent = null, string? input = "npm test", string tool = "Bash") =>
-        new(id, ChatAskKind.Permission,
+        new(id,
             new HookEvent { SessionId = session, EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = tool, AgentId = agent, ToolInputHash = input },
             [], new ChatPermission(tool, "run a command", input ?? "npm test", agent is null ? null : "general-purpose"));
 
@@ -388,5 +388,103 @@ public sealed class ChatAsksTests : IDisposable
     {
         Permission().Describe().ShouldBe("permission to run a command: npm test");
         Permission(agent: "a1").Describe().ShouldBe("permission to run a command: npm test (its general-purpose sub-agent asks)");
+    }
+
+    [Fact]
+    public void The_brain_is_shown_the_start_of_a_long_command_the_card_shows_whole()
+    {
+        var described = Permission(input: new string('x', 1000) + "\nrm -rf /").Describe();
+
+        described.Length.ShouldBeLessThan(ChatAsk.MaxDescribedChars + 80);
+        described.ShouldEndWith("… (the card shows all of it)");
+    }
+
+    [Fact]
+    public async Task A_prompt_whose_tool_use_ended_before_its_hook_got_here_is_not_taken()
+    {
+        // Answered in VS Code at once: the tool ran and ended before the relay that holds the prompt reached the app.
+        Step("PreToolUse", "toolu_1", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        Step("PostToolUse", "toolu_1", input: "npm test");
+
+        (await _asks.HoldAsync(Permission(input: "npm test"), CancellationToken.None)).ShouldBeNull();
+        _asks.Holds("s1").ShouldBeFalse();
+
+        // The same command run again later is another tool use, and asks again.
+        _time.Advance(TimeSpan.FromSeconds(5));
+        Step("PreToolUse", "toolu_2", input: "npm test");
+        _ = _asks.HoldAsync(Permission("p2", input: "npm test"), CancellationToken.None);
+        _asks.Holds("s1").ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_main_agent_s_stop_leaves_a_background_sub_agent_s_prompt_held()
+    {
+        // A sub-agent run in the background goes on after the main turn ends, and its prompt still waits.
+        var sub = _asks.HoldAsync(Permission("p2", agent: "a1"), CancellationToken.None);
+        _time.Advance(TimeSpan.FromSeconds(2));
+
+        Step("Stop");
+
+        sub.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_prompt_its_tab_no_longer_shows_was_answered_there()
+    {
+        // Denied in VS Code with words, the agent carries on: no hook tells it, but the chat's record waits on nobody.
+        bool? shows = true;
+        _asks.ShowsPrompt = _ => shows;
+        var held = _asks.HoldAsync(Permission(input: "rm -rf build"), CancellationToken.None);
+
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        held.IsCompleted.ShouldBeFalse("its tab shows the prompt");
+
+        shows = null;
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        held.IsCompleted.ShouldBeFalse("a record that cannot be read tells nothing");
+
+        shows = false;
+        _time.Advance(ChatAsks.SweepEvery);
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
+    }
+
+    [Fact]
+    public void A_prompt_just_held_is_not_checked_against_its_tab_yet()
+    {
+        // Its tab shows it a moment after it is asked.
+        _asks.ShowsPrompt = _ => false;
+        _ = _asks.HoldAsync(Permission(), CancellationToken.None);
+
+        _time.Advance(ChatAsks.SweepEvery);
+
+        _asks.Holds("s1").ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_prompt_held_long_keeps_its_tool_use_while_many_others_begin()
+    {
+        Step("PreToolUse", "toolu_1", input: "npm test", ago: TimeSpan.FromSeconds(1));
+        var held = _asks.HoldAsync(Permission(input: "npm test"), CancellationToken.None);
+        foreach (var i in Enumerable.Range(0, ChatAsks.BegunKept + 100))
+        {
+            Step("PreToolUse", $"toolu_other_{i}", session: "s2", input: $"step {i}");
+        }
+
+        Step("PostToolUse", "toolu_1", input: "npm test");
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.AnsweredInVsCode);
+    }
+
+    [Fact]
+    public void A_wait_that_begins_near_a_held_ask_is_that_ask_s_and_a_later_one_is_another()
+    {
+        _ = _asks.HoldAsync(Permission("p1", agent: "a1"), CancellationToken.None);
+        var asked = _time.GetUtcNow();
+
+        _asks.Explains("s1", asked - TimeSpan.FromSeconds(1)).ShouldBeTrue("its PermissionRequest lands just before the hold");
+        _asks.Explains("s1", asked + TimeSpan.FromSeconds(6)).ShouldBeTrue("its Notification comes 6 s later");
+        _asks.Explains("s1", asked + TimeSpan.FromMinutes(1)).ShouldBeFalse("a plan to approve, asked later, waits in VS Code");
+        _asks.Explains("s2", asked).ShouldBeFalse();
     }
 }

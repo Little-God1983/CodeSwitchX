@@ -83,7 +83,7 @@ public sealed class ChatNewsTests : IDisposable
     [Fact]
     public async Task A_chat_whose_question_waits_in_the_panel_brings_no_needs_you_news_but_its_end_is_news()
     {
-        using var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: id => id == "b");
+        using var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: (id, _) => id == "b");
         _news.Dispose();
 
         Change("b", SessionState.Working, SessionState.Waiting, "Which fruit?");
@@ -101,7 +101,7 @@ public sealed class ChatNewsTests : IDisposable
         // The prompt's own PermissionRequest reaches the Yard through the hook for every event, and can land before the hook
         // that holds it: the news came first, but by the time it is told the card tells it.
         var held = false;
-        using var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: id => id == "b" && held);
+        using var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: (id, _) => id == "b" && held);
         _news.Dispose();
 
         Change("b", SessionState.Working, SessionState.Waiting, "Claude needs your permission to use Bash");

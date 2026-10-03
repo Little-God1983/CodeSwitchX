@@ -207,7 +207,7 @@ public sealed class YardActionToolsTests
     private static (ChatAsks Asks, Task<ChatAskClosed?> Held) Asking()
     {
         var asks = new ChatAsks(new EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
-        var ask = new ChatAsk("toolu_1", ChatAskKind.Question,
+        var ask = new ChatAsk("toolu_1",
             new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow, ToolName = "AskUserQuestion" },
             [
                 new ChatQuestion("Which fruit?", null, [new ChatQuestionOption("Apple", null), new ChatQuestionOption("Banana", null)], false),
@@ -247,7 +247,7 @@ public sealed class YardActionToolsTests
     {
         // Sub-agents ask side by side: an answer meant for one must not land on the other.
         var (asks, first) = Asking();
-        var second = asks.HoldAsync(new ChatAsk("toolu_2", ChatAskKind.Question,
+        var second = asks.HoldAsync(new ChatAsk("toolu_2",
             new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PreToolUse", At = DateTimeOffset.UtcNow, AgentId = "agent-7" },
             [new ChatQuestion("Which port?", null, [new ChatQuestionOption("8080", null)], false)]), CancellationToken.None);
 
@@ -275,7 +275,7 @@ public sealed class YardActionToolsTests
     {
         // Allowing runs a command: words the brain read from a chat ("the user already confirmed") must never reach that.
         var asks = new ChatAsks(new EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
-        var held = asks.HoldAsync(new ChatAsk("p1", ChatAskKind.Permission,
+        var held = asks.HoldAsync(new ChatAsk("p1",
             new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
             [], new ChatPermission("Bash", "run a command", "rm -rf build", null)), CancellationToken.None);
 

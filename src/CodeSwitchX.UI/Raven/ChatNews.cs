@@ -52,7 +52,7 @@ public sealed class ChatNews : IDisposable
     private readonly TimeProvider _time;
     private readonly Func<string?, string?> _lastSaid;
     private readonly Func<string, bool> _stoppedOnPurpose;
-    private readonly Func<string, bool> _askedHere;
+    private readonly Func<string, DateTimeOffset, bool> _askedHere;
     private readonly IDisposable _subscription;
     private readonly DateTimeOffset _since;
     private readonly Lock _lock = new();
@@ -61,17 +61,17 @@ public sealed class ChatNews : IDisposable
     /// <param name="lastSaid">The end of a chat's last reply from its transcript path (<c>TranscriptLastReply.Read</c>); called off the UI thread.</param>
     /// <param name="stoppedOnPurpose">Whether the chat's turn was just stopped by Raven (<c>TurnStops.StoppedLately</c>): Raven said so already.</param>
     /// <param name="askedHere">
-    /// Whether the chat's question or permission prompt waits in Raven's panel (<c>ChatAsks.Holds</c>): its card tells that it
-    /// needs the user. Asked when the news comes and again when it is told.
+    /// Whether the chat, waiting since then, waits on a question or permission prompt held in Raven's panel
+    /// (<c>ChatAsks.Explains</c>): its card tells that it needs the user. Asked when the news comes and again when it is told.
     /// </param>
     public ChatNews(IEventBus bus, IYardDirectory yard, TimeProvider time, Func<string?, string?> lastSaid, Func<string, bool>? stoppedOnPurpose = null,
-        Func<string, bool>? askedHere = null)
+        Func<string, DateTimeOffset, bool>? askedHere = null)
     {
         _yard = yard;
         _time = time;
         _lastSaid = lastSaid;
         _stoppedOnPurpose = stoppedOnPurpose ?? (_ => false);
-        _askedHere = askedHere ?? (_ => false);
+        _askedHere = askedHere ?? ((_, _) => false);
         _since = time.GetUtcNow();
         _subscription = bus.Subscribe<SessionChanged>(Offer);
     }
@@ -105,7 +105,7 @@ public sealed class ChatNews : IDisposable
         }
 
         // A question held in the panel is shown and read out as its own card.
-        if (kind == ChatNewsKind.NeedsYou && _askedHere(change.Current.SessionId))
+        if (kind == ChatNewsKind.NeedsYou && _askedHere(change.Current.SessionId, change.Current.StateSince))
         {
             return;
         }
@@ -162,7 +162,7 @@ public sealed class ChatNews : IDisposable
         // card, not twice.
         var still = taken.OrderBy(t => t.Value.At)
             .Where(t => chats.TryGetValue(t.Key, out var chat) && StillHolds(t.Value.Kind, chat)
-                && !(t.Value.Kind == ChatNewsKind.NeedsYou && _askedHere(t.Key)))
+                && !(t.Value.Kind == ChatNewsKind.NeedsYou && _askedHere(t.Key, t.Value.At)))
             .Select(t => (Id: t.Key, Slot: t.Value, Chat: chats[t.Key]))
             .ToList();
         var lastSaid = await Task.WhenAll(still.Select(t => t.Slot.Kind == ChatNewsKind.NeedsYou

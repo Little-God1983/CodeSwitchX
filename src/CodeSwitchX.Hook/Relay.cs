@@ -88,8 +88,10 @@ internal static class Relay
 
             var payload = await ReadPayloadAsync(stdin).ConfigureAwait(false);
             var heldEvent = asks ? "PreToolUse" : "PermissionRequest";
+            // A permission prompt is shown whole on its card, which allows all of it; the tool uses it may be one of carry
+            // the fingerprint it is matched by.
             var envelope = BuildEnvelope(held ? heldEvent : eventName, payload, DateTimeOffset.UtcNow, Environment.ProcessId, ProcessChain.Ancestors(MaxParentDepth),
-                held ? MaxAskBytes : MaxNestedBytes);
+                held ? MaxAskBytes : MaxNestedBytes, keepStrings: permits, fingerprint: permits || eventName == "PreToolUse");
 
             if (held)
             {
@@ -210,8 +212,10 @@ internal static class Relay
     }
 
     /// <param name="maxNestedBytes">Nested values at the top larger than this are left out; a question keeps its tool input whole.</param>
+    /// <param name="keepStrings">Strings are not cut: a permission prompt's card shows all it allows.</param>
+    /// <param name="fingerprint">The tool input's fingerprint goes along (<see cref="ToolInputHash"/>).</param>
     internal static string BuildEnvelope(string eventName, string payload, DateTimeOffset now, int relayPid, IReadOnlyList<ProcessInfo> chain,
-        int maxNestedBytes = MaxNestedBytes)
+        int maxNestedBytes = MaxNestedBytes, bool keepStrings = false, bool fingerprint = false)
     {
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
@@ -235,14 +239,14 @@ internal static class Relay
                 using (document)
                 {
                     // Taken before anything is cut or left out: a big tool input still has its fingerprint.
-                    if (document.RootElement.ValueKind == JsonValueKind.Object
+                    if (fingerprint && document.RootElement.ValueKind == JsonValueKind.Object
                         && document.RootElement.TryGetProperty("tool_input", out var input) && input.ValueKind == JsonValueKind.Object)
                     {
                         writer.WriteString("toolInputHash", ToolInputHash(input));
                     }
 
                     writer.WritePropertyName("payload");
-                    WriteValue(writer, document.RootElement, top: true, maxNestedBytes);
+                    WriteValue(writer, document.RootElement, top: true, maxNestedBytes, keepStrings);
                 }
             }
             else
@@ -320,10 +324,11 @@ internal static class Relay
     }
 
     /// <summary>
-    /// Writes the value with every string cut and read through <see cref="StringOf"/>, so half an emoji anywhere in it, in
-    /// a name or a value, cannot lose the event. At the top level a nested object or array above the size cap is left out.
+    /// Writes the value with every string cut (unless <paramref name="keepStrings"/>) and read through <see cref="StringOf"/>,
+    /// so half an emoji anywhere in it, in a name or a value, cannot lose the event. At the top level a nested object or
+    /// array above the size cap is left out.
     /// </summary>
-    private static void WriteValue(Utf8JsonWriter writer, JsonElement element, bool top, int maxNestedBytes = MaxNestedBytes)
+    private static void WriteValue(Utf8JsonWriter writer, JsonElement element, bool top, int maxNestedBytes = MaxNestedBytes, bool keepStrings = false)
     {
         switch (element.ValueKind)
         {
@@ -347,7 +352,7 @@ internal static class Relay
                     }
 
                     writer.WritePropertyName(name);
-                    WriteValue(writer, property.Value, top: false);
+                    WriteValue(writer, property.Value, top: false, keepStrings: keepStrings);
                 }
 
                 writer.WriteEndObject();
@@ -356,13 +361,13 @@ internal static class Relay
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    WriteValue(writer, item, top: false);
+                    WriteValue(writer, item, top: false, keepStrings: keepStrings);
                 }
 
                 writer.WriteEndArray();
                 break;
             case JsonValueKind.String:
-                writer.WriteStringValue(Truncate(StringOf(element)));
+                writer.WriteStringValue(keepStrings ? StringOf(element) : Truncate(StringOf(element)));
                 break;
             default:
                 element.WriteTo(writer);

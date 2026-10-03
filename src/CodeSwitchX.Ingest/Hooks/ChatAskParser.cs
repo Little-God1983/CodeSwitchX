@@ -16,12 +16,6 @@ public static class ChatAskParser
 
     public const string PermissionEvent = "PermissionRequest";
 
-    /// <summary>A shell command, a file, a URL or a tool's input is cut here on the card.</summary>
-    internal const int MaxSubjectChars = 600;
-
-    /// <summary>A tool's input shown as its excerpt, for a tool the card knows nothing of.</summary>
-    internal const int MaxExcerptChars = 160;
-
     /// <summary>
     /// Prompts left to VS Code: a question asks there unless its own hook takes it, and a plan to approve has to be read
     /// in its tab.
@@ -75,10 +69,14 @@ public static class ChatAskParser
             questions.Add(new ChatQuestion(text, String(item, "header"), options, multi));
         }
 
-        return questions.Count == 0 ? null : new ChatAsk(step.ToolUseId ?? Guid.NewGuid().ToString("N"), ChatAskKind.Question, step, questions);
+        return questions.Count == 0 ? null : new ChatAsk(step.ToolUseId ?? Guid.NewGuid().ToString("N"), step, questions);
     }
 
-    /// <summary>The permission prompt: what the tool wants and on what, as the card shows it.</summary>
+    /// <summary>
+    /// The permission prompt: what the tool wants and on what, as the card shows it, and all of its input where that says
+    /// more than what it is on (an edit's change, a file's content). Allow allows all of it, so nothing is cut; a prompt
+    /// whose input did not come whole (too big for the relay to hand over) is left to VS Code, whose prompt shows it.
+    /// </summary>
     private static ChatAsk? Permission(string json, HookEvent step)
     {
         if (step.ToolName is not { Length: > 0 } tool || LeftToVsCode.Contains(tool))
@@ -89,43 +87,39 @@ public static class ChatAskParser
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         var payload = root.TryGetProperty("payload", out var inner) ? inner : root;
-        var input = payload.TryGetProperty("tool_input", out var given) && given.ValueKind == JsonValueKind.Object ? given : default;
-        var (wants, subject) = tool switch
+        if (!payload.TryGetProperty("tool_input", out var input) || input.ValueKind != JsonValueKind.Object)
         {
-            "Bash" or "PowerShell" => ("run a command", String(input, "command")),
-            "Edit" or "MultiEdit" => ("edit a file", String(input, "file_path")),
-            "Write" => ("write a file", String(input, "file_path")),
-            "NotebookEdit" => ("edit a notebook", String(input, "notebook_path")),
-            "WebFetch" => ("fetch a web page", String(input, "url")),
-            "WebSearch" => ("search the web", String(input, "query")),
-            _ => ($"use {tool}", Excerpt(input)),
+            return null;
+        }
+
+        var all = Listing(input);
+        var (wants, subject, details) = tool switch
+        {
+            "Bash" or "PowerShell" => ("run a command", String(input, "command"), null),
+            "Edit" or "MultiEdit" => ("edit a file", String(input, "file_path"), all),
+            "Write" => ("write a file", String(input, "file_path"), all),
+            "NotebookEdit" => ("edit a notebook", String(input, "notebook_path"), all),
+            "WebFetch" => ("fetch a web page", String(input, "url"), null),
+            "WebSearch" => ("search the web", String(input, "query"), null),
+            _ => ($"use {tool}", all, (string?)null),
         };
 
-        // Without what it is about, a known tool shows as any other: its name and a piece of its input.
+        // Without what it is about, a known tool shows as any other: its name and its input.
         if (subject is not { Length: > 0 })
         {
-            (wants, subject) = ($"use {tool}", Excerpt(input));
+            (wants, subject, details) = ($"use {tool}", all, null);
         }
 
         var agent = step.AgentId is null ? null : String(payload, "agent_type") is { Length: > 0 } type ? type : "sub-agent";
-        return new ChatAsk(Guid.NewGuid().ToString("N"), ChatAskKind.Permission, step, [],
-            new ChatPermission(tool, wants, Cut(subject, MaxSubjectChars), agent));
+        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details));
     }
 
-    /// <summary>The tool's input as compact JSON, cut short: "{"path":"src","pattern":"TODO"}"; empty for none.</summary>
-    private static string Excerpt(JsonElement input) =>
-        input.ValueKind == JsonValueKind.Object ? Cut(input.GetRawText().ReplaceLineEndings(" "), MaxExcerptChars) : "";
-
-    private static string Cut(string text, int max)
-    {
-        if (text.Length <= max)
-        {
-            return text;
-        }
-
-        var length = char.IsHighSurrogate(text[max - 2]) ? max - 2 : max - 1; // never half an emoji
-        return text[..length].TrimEnd() + "…";
-    }
+    /// <summary>
+    /// The tool's input to read: a line per field, "name: value", text as it is (paths without doubled backslashes, an
+    /// edit's lines as lines), anything else as compact JSON.
+    /// </summary>
+    private static string Listing(JsonElement input) => string.Join('\n', input.EnumerateObject().Select(field =>
+        $"{field.Name}: {(field.Value.ValueKind == JsonValueKind.String ? JsonStrings.TryRead(field.Value) ?? "" : field.Value.GetRawText())}"));
 
     private static string? String(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(name, out var value) ? JsonStrings.TryRead(value)?.Trim() : null;

@@ -27,14 +27,17 @@ public sealed partial class ChatAskCard : ObservableObject
     public ChatPermission? Permission => Ask.Permission;
 
     /// <summary>" wants to run a command", or "'s Explore sub-agent wants to edit a file", as said after the chat's name.</summary>
-    public string Wants => Permission is { } permission
-        ? (permission.Agent is { } agent ? $"'s {agent} sub-agent wants to " : " wants to ") + permission.Wants
-        : " asks";
+    public string Wants => Permission is null ? " asks" : WhoWants("'s ", " wants to ");
 
     /// <summary>The card's line under the chat's name: "Wants to run a command", "Its Explore sub-agent wants to edit a file".</summary>
-    public string WantsLine => Permission is { } permission
-        ? (permission.Agent is { } agent ? $"Its {agent} sub-agent wants to " : "Wants to ") + permission.Wants
-        : "";
+    public string WantsLine => Permission is null ? "" : WhoWants("Its ", "Wants to ");
+
+    /// <summary>
+    /// What the permission is for, after who asks: "<paramref name="ofAgent"/>Explore sub-agent wants to …" for a
+    /// sub-agent, "<paramref name="ofChat"/>…" for the chat's main agent.
+    /// </summary>
+    private string WhoWants(string ofAgent, string ofChat) =>
+        (Permission!.Agent is { } agent ? $"{ofAgent}{agent} sub-agent wants to " : ofChat) + Permission.Wants;
 
     /// <summary>The card has a Send button: more than one question, or one that takes several options.</summary>
     public bool NeedsSend { get; }
