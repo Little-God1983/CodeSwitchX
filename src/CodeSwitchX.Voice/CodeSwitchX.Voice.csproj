@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.Voice.Tests" />
+    <!-- ReplyVoice.WhenQuietAsync: the panel's tests wait for the voice to play out before the news's grace. -->
+    <InternalsVisibleTo Include="CodeSwitchX.UI.Tests" />
   </ItemGroup>
   <ItemGroup>
     <!-- The sample the warm-up decodes; see WarmUpSpeech.cs. -->

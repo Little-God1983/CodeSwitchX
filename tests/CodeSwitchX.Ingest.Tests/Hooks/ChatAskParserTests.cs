@@ -69,7 +69,7 @@ public sealed class ChatAskParserTests
 
     [Theory]
     [InlineData("Bash", """{"command":"npm test","description":"Run the tests"}""", "run a command", "npm test")]
-    [InlineData("PowerShell", """{"command":"Remove-Item build -Recurse"}""", "run a command", "Remove-Item build -Recurse")]
+    [InlineData("PowerShell", """{"command":"Get-ChildItem build -Recurse"}""", "run a command", "Get-ChildItem build -Recurse")]
     [InlineData("WebFetch", """{"url":"https://github.com/x","prompt":"read it"}""", "fetch a web page", "https://github.com/x")]
     [InlineData("Read", """{"file_path":"C:/outside/notes.md","limit":20}""", "read a file", "C:/outside/notes.md")]
     public void A_permission_prompt_is_read_as_what_the_tool_wants_and_on_what(string tool, string toolInput, string wants, string subject)
@@ -106,6 +106,37 @@ public sealed class ChatAskParserTests
             .ShouldNotBeNull().Permission!.Details;
 
         details.ShouldBe("file_path: E:\\Repo\\App.cs\nold_string: a();\nnew_string: a();\nb();\nreplace_all: false");
+    }
+
+    [Theory]
+    [InlineData("Bash", """{"command":"rm -rf dist && git push --force"}""", new[] { PermissionRisk.DeletesFiles, PermissionRisk.Pushes, PermissionRisk.RewritesHistory })]
+    [InlineData("PowerShell", """{"command":"Remove-Item build -Recurse"}""", new[] { PermissionRisk.DeletesFiles })]
+    [InlineData("Edit", """{"file_path":"C:\\Users\\me\\.bashrc","old_string":"a","new_string":"b"}""", new[] { PermissionRisk.WritesOutsideItsFolder })]
+    [InlineData("Write", """{"file_path":"E:\\Repo\\src\\new.txt","content":""}""", new PermissionRisk[0])]
+    [InlineData("Bash", """{"command":"npm test"}""", new PermissionRisk[0])]
+    [InlineData("WebFetch", """{"url":"https://example.com"}""", new PermissionRisk[0])]
+    public void What_is_risky_in_a_permission_prompt_is_found_by_its_rules_in_the_chat_s_folder(string tool, string toolInput, PermissionRisk[] risks)
+    {
+        var permission = ChatAskParser.Parse(Permission(tool, toolInput), At).ShouldNotBeNull().Permission.ShouldNotBeNull();
+
+        (permission.Risks ?? []).ShouldBe(risks);
+    }
+
+    [Fact]
+    public void A_write_of_nothing_over_a_file_that_is_there_empties_it()
+    {
+        var file = Path.GetTempFileName();
+        try
+        {
+            var path = JsonSerializer.Serialize(file);
+            var permission = ChatAskParser.Parse(Permission("Write", $$"""{"file_path":{{path}},"content":"  "}"""), At).ShouldNotBeNull().Permission!;
+
+            permission.Risks.ShouldNotBeNull().ShouldContain(PermissionRisk.EmptiesAFile);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
     }
 
     [Theory]

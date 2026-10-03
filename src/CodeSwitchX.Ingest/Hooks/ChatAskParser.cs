@@ -111,9 +111,26 @@ public static class ChatAskParser
             (wants, subject, details) = ($"use {tool}", all, null);
         }
 
+        // Outside is outside the chat's project, not the folder it moved to; a relay older than #107 sends only the latter.
+        var folder = step.ProjectDir ?? step.Cwd;
+        var risks = (tool, subject == all) switch
+        {
+            (_, true) => [],
+            ("Bash", _) => PermissionRisks.OfCommand(subject, folder, step.Cwd),
+            ("PowerShell", _) => PermissionRisks.OfCommand(subject, folder, step.Cwd, ShellDialect.PowerShell),
+            ("Edit" or "MultiEdit" or "NotebookEdit", _) => PermissionRisks.OfWrite(subject, folder, cwd: step.Cwd),
+            ("Write", _) => PermissionRisks.OfWrite(subject, folder, Empties(input, subject), step.Cwd),
+            _ => (IReadOnlyList<PermissionRisk>)[],
+        };
+
         var agent = step.AgentId is null ? null : String(payload, "agent_type") is { Length: > 0 } type ? type : "sub-agent";
-        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details));
+        return new ChatAsk(Guid.NewGuid().ToString("N"), step, [], new ChatPermission(tool, wants, subject, agent, details, risks.Count > 0 ? risks : null));
     }
+
+    /// <summary>A Write of nothing (or only blanks) over a file that is there.</summary>
+    private static bool Empties(JsonElement input, string path) =>
+        input.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
+        && string.IsNullOrWhiteSpace(content.GetString()) && File.Exists(path);
 
     /// <summary>
     /// The tool's input to read: a line per field, "name: value", text as it is (paths without doubled backslashes, an

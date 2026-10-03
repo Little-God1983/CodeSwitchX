@@ -381,6 +381,18 @@
                        Text="{Binding Chat}" />
           </StackPanel>
           <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding WantsLine}" Margin="0,6,0,0" />
+          <!-- What the rules found risky; Raven always says it too. -->
+          <TextBlock FontSize="12" FontWeight="SemiBold" Foreground="#F87171" TextWrapping="Wrap" Text="{Binding RiskLine, Mode=OneWay}" Margin="0,3,0,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding RiskLine}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
           <!-- All of it, never cut: Allow allows all of it. A long one scrolls. -->
           <Border Background="#111827" BorderBrush="#374151" BorderThickness="1" CornerRadius="5" Padding="8,5" Margin="0,6,0,0">
             <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
