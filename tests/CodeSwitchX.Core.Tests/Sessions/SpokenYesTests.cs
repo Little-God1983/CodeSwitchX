@@ -89,6 +89,14 @@ public sealed class SpokenYesTests
     [InlineData("Na ja.")]
     [InlineData("Ja ja.")]
     [InlineData("yes yes")]
+    // Round 3: a weak yes said twice is the same impatient repeat.
+    [InlineData("okay okay")]
+    [InlineData("Okay, okay.")]
+    [InlineData("sure, sure")]
+    [InlineData("klar klar")]
+    [InlineData("ok ok ok")]
+    [InlineData("OK, okay")]
+    [InlineData("yes, do it, do it")]
     public void Anything_else_is_no_yes(string said)
     {
         SpokenYes.IsYes(said).ShouldBeFalse();

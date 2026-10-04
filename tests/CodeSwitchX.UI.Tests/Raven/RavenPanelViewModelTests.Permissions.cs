@@ -192,7 +192,8 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
-        asks.Propose("p1");
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal)); // the user's 30 s start here (round 3)
 
         _time.Advance(ChatAsks.ProposalLifetime);
 
@@ -209,16 +210,19 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         _ = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        asks.Propose("p1");
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
         _time.Advance(ChatAsks.ProposalLifetime);
         _time.Advance(ChatAsks.ProposalLifetime); // words said after the lapse answer nothing
 
         Type(vm, "what now");
         await WithinAsync(vm.PendingAnswers);
 
-        // The card was read out meanwhile too: that fact goes along, before this one.
-        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed got no "
-            + "yes within 30 seconds, so nothing ran, and its card stays open.]\nwhat now");
+        // The card was read out too, once the proposal no longer held the floor (round 3): that fact goes along.
+        var asked = _brain.Asked.ShouldHaveSingleItem();
+        asked.ShouldContain("ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed got no "
+            + "yes within 30 seconds, so nothing ran, and its card stays open");
+        asked.ShouldEndWith("]\nwhat now");
     }
 
     [Fact]
@@ -243,8 +247,9 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         held.IsCompleted.ShouldBeFalse("the okay was said before Raven asked for a yes");
-        asks.Proposed.ShouldBe(proposal, "and it does not cancel the proposal either");
-        _brain.Asked.ShouldBe(["Okay."]);
+        // Round 3: they take the floor from it all the same; left standing, a yes to the brain's answer to them would allow it.
+        asks.Proposed.ShouldBeNull();
+        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nOkay.");
     }
 
     [Fact]
@@ -294,23 +299,25 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Asked.Last().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
     }
 
-    [Fact]
-    public async Task What_the_brain_says_after_proposing_is_written_but_never_spoken()
+    /// <summary>A brain steered by a chat's words: it proposes, then follows the app's read-back with its own "Say yes."</summary>
+    private static IEnumerable<BrainEvent> Steered(ChatAsks asks)
     {
-        // Round 2: a brain steered by a chat's words could follow the app's read-back with its own "Say yes."
+        yield return new BrainText("Asking you now.");
+        yield return new BrainToolCall("t1", "answer_permission", "{}");
+        asks.Propose("p1");
+        yield return new BrainToolResult("t1", false);
+        yield return new BrainText("Shall I read you the summary? Say yes.");
+    }
+
+    [Fact]
+    public async Task What_the_brain_says_after_proposing_is_neither_spoken_nor_written()
+    {
+        // Round 2: not spoken; round 3: not written either, where muted the log is all the user reads.
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        IEnumerable<BrainEvent> Steered()
-        {
-            yield return new BrainText("Asking you now.");
-            yield return new BrainToolCall("t1", "answer_permission", "{}");
-            asks.Propose("p1");
-            yield return new BrainToolResult("t1", false);
-            yield return new BrainText("Shall I read you the summary? Say yes.");
-        }
 
-        _brain.Answer = _ => Steered();
+        _brain.Answer = _ => Steered(asks);
         Type(vm, "allow it");
         await WithinAsync(vm.PendingAnswers);
         await Until(() => asks.Proposed is { } p && asks.IsHeard(p));
@@ -319,7 +326,8 @@ public sealed partial class RavenPanelViewModelTests
         spoken.ShouldContain("Asking you now.");
         spoken.ShouldContain("Run npm test in ContentAutomatorX? Say yes.");
         spoken.ShouldNotContain("summary");
-        Lines(vm).ShouldContain((RavenLogKind.Raven, "Shall I read you the summary? Say yes."), "it is still written");
+        Lines(vm).ShouldNotContain(l => l.Text.Contains("summary"));
+        Lines(vm).Last(l => l.Kind == RavenLogKind.Raven).Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.");
         held.IsCompleted.ShouldBeFalse();
     }
 
@@ -331,13 +339,61 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
 
-        var proposal = asks.Propose("p1");
+        _brain.Answer = _ => Steered(asks);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
 
-        asks.IsHeard(proposal).ShouldBeTrue("Raven only writes: the line shown is what the user reads");
+        asks.IsHeard(asks.Proposed.ShouldNotBeNull()).ShouldBeTrue("Raven only writes: the line shown is what the user reads");
+        Lines(vm).Last(l => l.Kind == RavenLogKind.Raven).Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.", "the brain's words after it are not shown");
         Type(vm, "yes");
         await WithinAsync(held);
         (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
         _speech.Spoken.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Another_chat_s_question_waits_while_an_allow_awaits_the_yes()
+    {
+        // Round 3: a yes to another chat's question, read out after the read-back, would allow the first chat's prompt.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await GraceAsync(vm);
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        var said = _speech.Spoken.Count;
+
+        _ = asks.HoldAsync(Asking(new ChatQuestion("Should I also update the docs?", null, [], false)), CancellationToken.None);
+        await GraceAsync(vm);
+
+        _speech.Spoken.Count.ShouldBe(said, "nothing is said between the read-back and the user's answer");
+        Type(vm, "Yes.");
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        await GraceAsync(vm);
+        await Until(() => string.Join(" ", _speech.Spoken).Contains("update the docs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_read_back_the_voice_could_not_say_ends_its_proposal_and_says_so()
+    {
+        // Round 3: it asked for a yes, but only a heard read-back takes one.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).Single();
+        await card.Naming;
+        _speech.Fails = new InvalidOperationException("the sidecar broke");
+
+        var proposal = asks.Propose("p1");
+
+        await Until(() => asks.Proposed is null);
+        await Until(() => Lines(vm).Contains((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)));
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        asks.IsHeard(proposal).ShouldBeFalse();
+        _speech.Fails = null;
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+        held.IsCompleted.ShouldBeFalse("a yes after it is only words to the brain");
+        _brain.Asked.Last().ShouldEndWith("not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
     }
 
     [Fact]

@@ -182,18 +182,24 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>
     /// Settles <see cref="SpokenReply.Played"/>: true for the replies complete and spoken to their end, once what plays has
-    /// played out (<paramref name="playedOut"/>); false for those hushed or dropped.
+    /// played out (<paramref name="playedOut"/>); false for those dropped, and for those hushed before their last sentence
+    /// began to play. A hush with <paramref name="leftAtHush"/> still to play cuts only the end of a reply whose last
+    /// sentence is longer than that: all before it was heard.
     /// </summary>
-    private void Settle(bool playedOut)
+    private void Settle(bool playedOut, TimeSpan? leftAtHush = null)
     {
         List<(SpokenReply Reply, bool Heard)> settled = [];
         lock (_lock)
         {
             foreach (var reply in _playing.ToList())
             {
-                if (reply.Dropped || IsHushed(reply.Number))
+                if (reply.Dropped)
                 {
                     settled.Add((reply, false));
+                }
+                else if (IsHushed(reply.Number))
+                {
+                    settled.Add((reply, leftAtHush is { } left && reply.IsSpokenOut && left <= reply.LastSentenceAudio));
                 }
                 else if (playedOut && reply.IsSpokenOut)
                 {
@@ -220,6 +226,7 @@ public sealed class ReplyVoice : IDisposable
     /// </summary>
     public void Hush()
     {
+        var left = _player.Remaining; // before the stop: how much of what was queued is not heard
         CancellationTokenSource hushed;
         lock (_lock)
         {
@@ -232,7 +239,7 @@ public sealed class ReplyVoice : IDisposable
         _ = Task.Run(StopAsAskedAsync);
         hushed.Cancel(); // outside the lock: the cancelled request's callbacks run here. Not disposed: a sentence may still hold its token.
         SetSpeaking(false);
-        Settle(playedOut: false); // what was begun before the hush is not heard to its end
+        Settle(playedOut: false, left); // what was begun before the hush is not heard to its end, unless only its last sentence was cut
     }
 
     private bool IsHushed(long reply) => reply <= Interlocked.Read(ref _hushedThrough);
@@ -315,6 +322,7 @@ public sealed class ReplyVoice : IDisposable
 
         using var stalled = CancellationTokenSource.CreateLinkedTokenSource(hush);
         using var watchdog = _time.CreateTimer(_ => Cancel(stalled), null, FirstAudioTimeout, Timeout.InfiniteTimeSpan);
+        var audio = TimeSpan.Zero;
         try
         {
             await foreach (var chunk in _tts.SpeakAsync(sentence.Text, stalled.Token).ConfigureAwait(false))
@@ -332,6 +340,7 @@ public sealed class ReplyVoice : IDisposable
                     }
 
                     _player.Enqueue(chunk);
+                    audio += TimeSpan.FromSeconds(chunk.Pcm16.Length / 2.0 / chunk.SampleRate);
                 }
                 finally
                 {
@@ -342,7 +351,7 @@ public sealed class ReplyVoice : IDisposable
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }
 
-            reply.SpokenOne(); // all of this sentence is queued to play
+            reply.SpokenOne(audio); // all of this sentence is queued to play
         }
         catch (OperationCanceledException) when (hush.IsCancellationRequested)
         {
@@ -547,6 +556,7 @@ public sealed class ReplyVoice : IDisposable
         private int _dropped;
         private int _heard;
         private int _completed;
+        private long _lastAudio;
 
         internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio, bool whole = false)
         {
@@ -562,15 +572,24 @@ public sealed class ReplyVoice : IDisposable
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
         /// <summary>
-        /// Whether all of it was heard: true once it is complete and every sentence of it has been spoken and played out;
-        /// false when it was muted or silent, had nothing to say, or was hushed or dropped before its end.
+        /// Whether all of it was heard: true once it is complete and every sentence of it has been spoken and played out,
+        /// or hushed once its last sentence had begun to play; false when it was muted or silent, had nothing to say, or
+        /// was hushed or dropped before that.
         /// </summary>
         public Task<bool> Played => _played.Task;
 
         /// <summary>Complete, and every sentence it queued has been spoken (under the voice's lock).</summary>
         internal bool IsSpokenOut => Volatile.Read(ref _completed) == 1 && Volatile.Read(ref _spoken) >= _queued && _queued > 0;
 
-        internal void SpokenOne() => Interlocked.Increment(ref _spoken);
+        /// <summary>How long the audio of the sentence spoken last is.</summary>
+        internal TimeSpan LastSentenceAudio => TimeSpan.FromTicks(Volatile.Read(ref _lastAudio));
+
+        /// <summary>One more sentence, <paramref name="audio"/> long, is all queued to play.</summary>
+        internal void SpokenOne(TimeSpan audio)
+        {
+            Volatile.Write(ref _lastAudio, audio.Ticks);
+            Interlocked.Increment(ref _spoken);
+        }
 
         internal void SetPlayed(bool heard) => _played.TrySetResult(heard);
 

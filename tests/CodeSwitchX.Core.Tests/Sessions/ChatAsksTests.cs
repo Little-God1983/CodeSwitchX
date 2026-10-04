@@ -311,7 +311,8 @@ public sealed class ChatAsksTests : IDisposable
         var ends = new List<ChatProposalEnd>();
         asks.ProposalEnded += (_, end) => ends.Add(end);
         _ = asks.HoldAsync(Permission(), CancellationToken.None);
-        asks.Propose("p1");
+        var proposal = asks.Propose("p1");
+        asks.MarkHeard(proposal, time.GetUtcNow());
 
         time.Lag = TimeSpan.FromMilliseconds(15);
         time.Advance(ChatAsks.ProposalLifetime);
@@ -328,6 +329,49 @@ public sealed class ChatAsksTests : IDisposable
         public TimeSpan Lag { get; set; }
 
         public override DateTimeOffset GetUtcNow() => base.GetUtcNow() - Lag;
+    }
+
+    [Fact]
+    public async Task The_users_time_for_a_yes_starts_when_the_read_back_was_heard()
+    {
+        // Round 3: a read-back queued behind other speech must not eat the user's 30 seconds.
+        var ends = new List<ChatProposalEnd>();
+        _asks.ProposalEnded += (_, end) => ends.Add(end);
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var proposal = _asks.Propose("p1");
+
+        _time.Advance(ChatAsks.ProposalLifetime + TimeSpan.FromSeconds(5)); // still being read back
+        _asks.Proposed.ShouldBeSameAs(proposal);
+        var heard = _time.GetUtcNow();
+        _asks.MarkHeard(proposal, heard).ShouldBeTrue();
+        _time.Advance(ChatAsks.ProposalLifetime - TimeSpan.FromSeconds(1));
+        _asks.Proposed.ShouldBeSameAs(proposal);
+        var yes = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromSeconds(2)); // the yes is transcribed after the lapse
+
+        ends.ShouldBe([ChatProposalEnd.Expired]);
+        _asks.ProposalFor(yes).ShouldBeSameAs(proposal, "said within 30 s of the read-back");
+        _asks.ProposalFor(heard + ChatAsks.ProposalLifetime + TimeSpan.FromSeconds(1)).ShouldBeNull();
+        _asks.Confirm(proposal).ShouldBeTrue();
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_proposal_whose_read_back_is_never_heard_lapses_after_a_while()
+    {
+        var ends = new List<ChatProposalEnd>();
+        _asks.ProposalEnded += (_, end) => ends.Add(end);
+        _ = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var proposal = _asks.Propose("p1");
+
+        _time.Advance(ChatAsks.ReadBackLifetime - TimeSpan.FromSeconds(1));
+        _asks.Proposed.ShouldBeSameAs(proposal);
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        _asks.Proposed.ShouldBeNull();
+        ends.ShouldBe([ChatProposalEnd.Expired]);
+        _asks.IsHeard(proposal).ShouldBeFalse();
+        _asks.ProposalFor(_time.GetUtcNow()).ShouldBeNull();
     }
 
     [Fact]

@@ -1504,10 +1504,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _asks.Cancel(proposal); // the brain is told (OnProposalEnded)
         }
-        else if (_asks?.Proposed is { } unheard && !_asks.IsHeard(unheard))
+        else if (_asks?.Proposed is { } standing)
         {
-            // Its read-back was not heard to its end, and these words take the floor from it: no yes could answer it now.
-            _asks.Cancel(unheard);
+            // Said before its read-back was heard to its end, these words take the floor from it: the brain's answer to
+            // them comes after the read-back, and a yes to that answer must not allow the prompt.
+            _asks.Cancel(standing);
         }
 
         AskBrain(text, ended);
@@ -1610,8 +1611,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         RavenLogEntry? reply = null;
         var said = false;
         var began = _time.GetUtcNow();
-        var hushed = false; // an allow was proposed in this turn: the rest of it is only written
-        bool Speaks() => !(hushed |= _asks?.Proposed is { } proposed && proposed.At >= began);
+        // An allow was proposed in this turn: the rest of the brain's words go to the app's log only. After the app's
+        // read-back, a brain steered by a chat's words could ask "Say yes." to something else, in speech or in writing.
+        var proposed = false;
+        bool Proposed() => proposed |= _asks?.Proposed is { } standing && standing.At >= began;
         try
         {
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
@@ -1627,27 +1630,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         }
 
                         break;
+                    case BrainText { Delta: var piece } when Proposed():
+                        _logger.LogInformation("Raven's brain after proposing an allow, not shown: {Words}", piece);
+                        if (reply is not null)
+                        {
+                            reply.Text = reply.Text.TrimEnd();
+                            reply = null;
+                        }
+
+                        break;
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
                             reply = AddEntry(RavenLogKind.Raven, start);
                             said = true;
-                            if (Speaks())
-                            {
-                                spoken.Add(start);
-                            }
+                            spoken.Add(start);
                         }
 
                         break;
                     case BrainText { Delta: var piece }:
                         reply!.Text += piece;
-                        // After the app's read-back, a brain steered by a chat's words could ask "Say yes." to something
-                        // else: what it says after proposing is written, never spoken.
-                        if (Speaks())
-                        {
-                            spoken.Add(piece);
-                        }
-
+                        spoken.Add(piece);
                         break;
                     case BrainToolCall call:
                         spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
@@ -1714,8 +1717,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Nobody talks: no recording, no clip or question unanswered, nothing being said.</summary>
-    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking && !_openSpeech;
+    /// <summary>
+    /// Nobody talks: no recording, no clip or question unanswered, nothing being said, and no allow waiting for the user's
+    /// yes. The user's next words answer the read-back, so nothing else is said or written to them in between: a yes or
+    /// an okay to another chat's question or news would allow the prompt.
+    /// </summary>
+    private bool FloorIsFree => !_capturing && _heldInputs.Count == 0 && _pending == 0 && _asking == 0 && !_telling && !_speaking && !_openSpeech
+        && _asks?.Proposed is null;
 
     private void TellNewsIfFree()
     {
@@ -1828,22 +1836,37 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        // Spoken whole, risks and all: only a yes said after its last word answers it. While the user talks in Open mic it
-        // is only written, and their words take the floor from it.
+        // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
+        // written, and is not heard.
         var spoken = _voice.Begin(silent: _openSpeech, whole: true);
         spoken.Add(line);
         spoken.Complete();
         _ = HeardAsync(proposal, spoken.Played);
     }
 
-    /// <summary>Marks the proposal's read-back heard once it has played to its end; one hushed or dropped midway is not.</summary>
+    /// <summary>
+    /// Marks the proposal's read-back heard once it has played to its end. One not heard (hushed midway, dropped, or only
+    /// written while the user talked) ends its proposal: it asked for a yes that cannot answer it, so the user is told.
+    /// </summary>
     private async Task HeardAsync(ChatAllowProposal proposal, Task<bool> played)
     {
         if (await played.ConfigureAwait(false))
         {
             _asks?.MarkHeard(proposal, _time.GetUtcNow());
+            return;
         }
+
+        _dispatcher.Post(() =>
+        {
+            if (_asks?.Cancel(proposal) == true)
+            {
+                AddEntry(RavenLogKind.Note, NotHeardLine);
+            }
+        });
     }
+
+    /// <summary>The note when a read-back was not heard to its end.</summary>
+    internal const string NotHeardLine = "That was not read out to its end, so a yes cannot allow it. Ask again, or click Allow.";
 
     /// <summary>
     /// A proposed allow ended. Nothing said for a yes (<see cref="ConfirmProposal"/> says it), other words (they are the
@@ -1862,11 +1885,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
         }
 
-        if (end == ChatProposalEnd.Expired)
+        if (end == ChatProposalEnd.Expired && _asks?.IsHeard(proposal) == false)
+        {
+            AddEntry(RavenLogKind.Note, NotHeardLine);
+            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open"));
+        }
+        else if (end == ChatProposalEnd.Expired)
         {
             AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.");
             _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open"));
         }
+
+        ScheduleNews(); // what was held while it stood
     }
 
     /// <summary>
