@@ -2306,8 +2306,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
             {
                 var ofWindow = group.ToList();
-                var card = AddEntry(RavenLogKind.News, ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}", group.Key);
-                card.Lines = ofWindow;
+                var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
+                Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
             }
 
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
@@ -2625,8 +2625,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         entry.Chat = chat ?? CurrentChat;
         while (Log.Count >= MaximumLogEntries)
         {
-            Shown.Remove(Log[0]);
+            var dropped = Log[0];
+            Shown.Remove(dropped);
             Log.RemoveAt(0);
+            if (dropped.Ask is { IsOpen: true })
+            {
+                CountWaiting(dropped.Chat);
+            }
         }
 
         Log.Add(entry);
@@ -2635,7 +2640,62 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Shown.Add(entry);
         }
 
+        Mark(entry);
         return entry;
+    }
+
+    /// <summary>
+    /// The list's marks for a new entry: a card waits in its chat, and blinks there until the chat is opened; Raven's
+    /// answers, news lines and cards that come while the user is in another chat are counted; a chat that failed is marked.
+    /// The user's own words and the panel's notes are said where the user is, and count for nothing.
+    /// </summary>
+    private void Mark(RavenLogEntry entry)
+    {
+        var chat = entry.Chat;
+        var elsewhere = chat != CurrentChat;
+        if (entry.Ask is { IsOpen: true } card)
+        {
+            card.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ChatAskCard.IsOpen))
+                {
+                    CountWaiting(entry.Chat); // where the card is now: a removed window's card moved to the Yard
+                }
+            };
+            chat.IsWaiting = true;
+            chat.IsWaitingUnseen |= elsewhere;
+        }
+
+        if (!elsewhere)
+        {
+            return;
+        }
+
+        chat.Unread += entry.Kind switch
+        {
+            RavenLogKind.News => entry.Lines?.Count ?? 0,
+            RavenLogKind.Raven or RavenLogKind.Question or RavenLogKind.Permission => 1,
+            _ => 0,
+        };
+        if (entry.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true)
+        {
+            chat.HasFailed = true;
+        }
+    }
+
+    /// <summary>Whether a card in the chat still waits; with none, nothing blinks.</summary>
+    private void CountWaiting(RavenChat chat)
+    {
+        chat.IsWaiting = Log.Any(e => e.Chat == chat && e.Ask is { IsOpen: true });
+        chat.IsWaitingUnseen &= chat.IsWaiting;
+    }
+
+    /// <summary>The user opened the chat: what came there is seen; a card still waiting keeps its outline, no longer blinking.</summary>
+    private static void Seen(RavenChat chat)
+    {
+        chat.Unread = 0;
+        chat.HasFailed = false;
+        chat.IsWaitingUnseen = false;
     }
 
     /// <summary>
@@ -2712,6 +2772,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
+        Seen(CurrentChat);
         ShowSelected();
     }
 
@@ -2741,6 +2802,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 open.Chat = YardChat;
                 open.Ask!.ShownIn = YardChat;
                 moved = true;
+            }
+
+            if (moved)
+            {
+                YardChat.IsWaiting = true;
+                YardChat.IsWaitingUnseen |= CurrentChat != YardChat && SelectedChat != gone;
             }
 
             if (SelectedChat == gone)

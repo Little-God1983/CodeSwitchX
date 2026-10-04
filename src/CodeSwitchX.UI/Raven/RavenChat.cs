@@ -36,6 +36,7 @@ public sealed partial class RavenChat : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Label))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
     private string _name;
 
     /// <summary>The workspace's tile: the chat's header shows its colour and where its repositories stand. Null for the Yard and Activity.</summary>
@@ -48,4 +49,48 @@ public sealed partial class RavenChat : ObservableObject
 
     /// <summary>"3 ContentAutomatorX", "0 Yard", "Activity": as the list and the brain name it.</summary>
     public string Label => IsActivity ? Name : $"{Number} {Name}";
+
+    /// <summary>A card in it still waits for an answer: its number wears an outline until the card is answered.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private bool _isWaiting;
+
+    /// <summary>It waits, and the user has not opened it since the card came: the outline blinks.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private bool _isWaitingUnseen;
+
+    /// <summary>Lines that came while the user was in another chat (Raven's answers, news lines, cards); opening it clears them.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UnreadText))]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private int _unread;
+
+    /// <summary>The badge on the number: "3", "9+"; nothing for none.</summary>
+    public string UnreadText => Unread switch
+    {
+        <= 0 => "",
+        > 9 => "9+",
+        _ => Unread.ToString(System.Globalization.CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>A Claude chat of it failed since the user last opened it: a red mark.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private bool _hasFailed;
+
+    /// <summary>The marks in words, for the tooltip and screen readers: "waits for you, not seen yet, 3 unread, failed"; "" for none.</summary>
+    public string Status => string.Join(", ", new[]
+    {
+        IsWaitingUnseen ? "waits for you, not seen yet" : IsWaiting ? "waits for you" : null,
+        Unread > 0 ? $"{Unread} unread" : null,
+        HasFailed ? "failed" : null,
+    }.Where(s => s is not null));
+
+    /// <summary>The list's tooltip: "3 ContentAutomatorX: waits for you, 2 unread"; the label alone with no marks.</summary>
+    public string Tip => Status.Length == 0 ? Label : $"{Label}: {Status}";
 }
