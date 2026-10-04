@@ -223,6 +223,46 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_of_a_window_removed_before_its_turn_goes_to_the_yard_s_brain_not_a_new_one()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true;
+        _brain.Answer = _ => [new BrainText("Done.")];
+        Type(vm, "zero");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "hello"); // waits behind "zero"
+        vm.SelectedChat = vm.YardChat;
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows.ContainsKey(ContentAutomatorX).ShouldBeFalse("a brain for a window gone would act on nothing and stay");
+        _brain.Sent[^1].ShouldEndWith("hello");
+    }
+
+    [Fact]
+    public async Task What_became_of_an_allow_proposed_from_a_window_gone_is_told_to_no_brain()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+
+        asks.Propose("p1", Guid.NewGuid()); // from a window no longer on the Yard
+        Type(vm, "what now");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+    }
+
+    [Fact]
     public async Task Talking_warms_up_the_brain_of_the_chat_the_user_is_in()
     {
         var (vm, brains) = await ChatBrainsVmAsync();

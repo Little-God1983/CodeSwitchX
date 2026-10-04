@@ -65,12 +65,21 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
             }
         }
 
-        if (brain is not null)
+        // Off the caller's thread, the UI's: stopping a process kills its whole tree.
+        _ = Task.Run(() =>
         {
-            Dispose(brain.Inner);
-        }
-
-        sessions?.Save(BrainChat.Of(workspaceId, sessions).Key, null);
+            try
+            {
+                if (brain is not null)
+                {
+                    Dispose(brain.Inner);
+                }
+            }
+            finally
+            {
+                sessions?.Save(BrainChat.Of(workspaceId, sessions).Key, null);
+            }
+        });
     }
 
     private static void Dispose(IConductorBrain brain)

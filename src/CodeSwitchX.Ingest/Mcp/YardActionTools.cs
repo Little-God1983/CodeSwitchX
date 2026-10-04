@@ -252,11 +252,19 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("With deny: the user's words to the chat, when they said more than no.")] string? message = null,
         CancellationToken cancellationToken = default)
     {
-        // An ask id names its prompt wherever it is: two chats of the window may ask at once.
-        var byId = string.IsNullOrWhiteSpace(chat) && !string.IsNullOrWhiteSpace(ask)
-            ? asks?.Open().Where(a => a.Kind == ChatAskKind.Permission && a.Id.StartsWith(ask.Trim(), StringComparison.OrdinalIgnoreCase)).Select(a => a.SessionId)
-                .Distinct().ToList() is [var session] ? session : null
-            : null;
+        // An ask id names its prompt, also when two chats of the window ask at once; in a window's chat only among that
+        // window's chats: another window's is answered only when the user names it.
+        string? byId = null;
+        if (string.IsNullOrWhiteSpace(chat) && !string.IsNullOrWhiteSpace(ask))
+        {
+            var window = await WindowAsync(cancellationToken).ConfigureAwait(false);
+            var mine = window is null ? null
+                : (await yard.ChatsAsync(cancellationToken).ConfigureAwait(false)).Where(c => c.WorkspaceId == window.Id).Select(c => c.Id).ToHashSet();
+            byId = asks?.Open().Where(a => a.Kind == ChatAskKind.Permission && a.Id.StartsWith(ask.Trim(), StringComparison.OrdinalIgnoreCase)
+                    && (mine is null || mine.Contains(a.SessionId)))
+                .Select(a => a.SessionId).Distinct().ToList() is [var session] ? session : null;
+        }
+
         var one = byId is not null ? await OneChatAsync(byId, "", cancellationToken).ConfigureAwait(false)
             : string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(Asking(ChatAskKind.Permission), "to answer", "asks for permission in Raven's panel", cancellationToken).ConfigureAwait(false)

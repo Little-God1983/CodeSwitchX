@@ -156,6 +156,21 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task An_ask_id_of_another_window_is_not_answered_from_a_window_chat_that_names_no_chat()
+    {
+        var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
+        var held = asks.HoldAsync(new ChatAsk("p1",
+            new HookEvent { SessionId = "cccccccc-0003", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+
+        var error = await Should.ThrowAsync<McpException>(
+            () => new YardActionTools(_yard, _actions, asks, InCodeSwitchX).AnswerPermission("deny", ask: "p1", cancellationToken: Ct));
+
+        error.Message.ShouldStartWith("No chat in CodeSwitchX asks for permission");
+        held.IsCompleted.ShouldBeFalse("it is Diffusion-Full's, which the user did not name");
+    }
+
+    [Fact]
     public async Task A_question_and_a_permission_prompt_are_answered_in_the_window_without_naming_the_chat()
     {
         var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };

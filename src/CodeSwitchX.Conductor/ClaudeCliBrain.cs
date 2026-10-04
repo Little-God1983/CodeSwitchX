@@ -129,6 +129,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Questions and warm-ups so far: a rest asked for before the latest of them is dropped.</summary>
     private long _uses;
 
+    /// <summary>The process picked a conversation up again, and no answer of it has come through yet.</summary>
+    private bool _unproven;
+
+    /// <summary>This turn's conversation is to be left once the turn is over: picked up again, it could not go on.</summary>
+    private bool _abandon;
+
     /// <param name="role">Raven itself, with the Yard's tools; or the teller of chat news, with none (<see cref="TellerPrompt"/>).</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
@@ -266,19 +272,36 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         break;
                     case ClaudeTurnOver over:
                         finished = true;
-                        if (over.Error is { } error)
+                        if (over.Error is { } error && _unproven)
                         {
-                            _logger.LogWarning("{Brain} could not answer: {Error}", _name, error);
-                            yield return new BrainFailed($"Raven's brain could not answer: {error}");
+                            // Picked up again and failing at once (a transcript the API now refuses, say): kept, it would
+                            // fail every question, and each try would keep it young.
+                            _logger.LogWarning("{Brain} could not answer in the conversation it picked up again; it is left: {Error}", _name, error);
+                            _abandon = true;
+                            yield return new BrainFailed($"Raven's brain could not answer: {error} It starts a new conversation with the next question.");
+                        }
+                        else if (over.Error is { } failed)
+                        {
+                            _logger.LogWarning("{Brain} could not answer: {Error}", _name, failed);
+                            yield return new BrainFailed($"Raven's brain could not answer: {failed}");
                         }
 
+                        _unproven = false;
                         yield break;
                 }
             }
         }
         finally
         {
-            if (_chat is not null && sent && _started is { } held)
+            if (_abandon)
+            {
+                _abandon = false;
+                Stop();
+                ForgetSession();
+            }
+
+            // Not once the brain is disposed: a window retired meanwhile has its conversation forgotten.
+            if (_chat is not null && sent && !_disposed && _started is { } held)
             {
                 _session = new BrainSession(held.Id, held.Model, _time.GetUtcNow());
                 _chat.Sessions.Save(_chat.Key, _session);
@@ -554,6 +577,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         if (session is { } started)
         {
             _resuming = resume;
+            _unproven = resume;
             _started = (started.Id, model);
         }
 

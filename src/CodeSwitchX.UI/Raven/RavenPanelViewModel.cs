@@ -1156,8 +1156,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         BrainOf(CurrentChat).WarmUp();
     }
 
-    /// <summary>The chat's own brain: a window's chat talks with its window's, chat 0 with the Yard's.</summary>
-    private IConductorBrain BrainOf(RavenChat chat) => _brains?.For(chat.WorkspaceId) ?? _brain;
+    /// <summary>
+    /// The chat's own brain: a window's chat talks with its window's, chat 0 with the Yard's. A window gone from the list
+    /// has its brain retired, and is not given a new one: what is left of it goes to the Yard's.
+    /// </summary>
+    private IConductorBrain BrainOf(RavenChat chat) =>
+        _brains?.For(chat.WorkspaceId is { } id && Chats.Contains(chat) ? id : null) ?? _brain;
 
     private void OnOpenSpeech(OpenMicRun run)
     {
@@ -2002,22 +2006,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             card.AwaitsYes = false;
         }
 
-        var proposer = Proposer(proposal);
         if (end == ChatProposalEnd.Cancelled)
         {
-            _toldNews.Add(new(_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open", proposer));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open");
         }
 
         var chat = ChatOfAsk(proposal.Ask);
         if (end == ChatProposalEnd.Expired && _asks?.IsHeard(proposal) == false)
         {
             AddEntry(RavenLogKind.Note, NotHeardLine, chat);
-            _toldNews.Add(new(_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open", proposer));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open");
         }
         else if (end == ChatProposalEnd.Expired)
         {
             AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.", chat);
-            _toldNews.Add(new(_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open", proposer));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open");
         }
 
         ScheduleNews(); // what was held while it stood
@@ -2032,11 +2035,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         var who = WhoAsked(proposal.Ask); // before the confirm closes its card
         var chat = ChatOfAsk(proposal.Ask);
-        var proposer = Proposer(proposal);
         var allowed = _asks!.Confirm(proposal);
         var said = allowed ? "Allowed. The chat carries on." : "The chat no longer waits for that: it was answered elsewhere, or its turn ended.";
         _toldNews.RemoveAll(t => t.Fact.StartsWith(who + ": the allow you proposed got no yes", StringComparison.Ordinal));
-        _toldNews.Add(new(_time.GetUtcNow(), $"{who}: the user said yes to the allow you proposed, and {(allowed ? "it was allowed" : "it was gone already")}", proposer));
+        TellProposer(proposal, $"{who}: the user said yes to the allow you proposed, and {(allowed ? "it was allowed" : "it was gone already")}");
         if (Unsent() is [.., var waiting])
         {
             // Their own turns end at once; their words go again, with the news of the yes.
@@ -2054,8 +2056,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         spoken.Complete();
     }
 
-    /// <summary>The brain that proposed the allow: the one of the chat its tool call came from.</summary>
-    private IConductorBrain Proposer(ChatAllowProposal proposal) => BrainOf(ChatOf(proposal.Window));
+    /// <summary>The brain that proposed the allow: the one of the chat its tool call came from; null for a window gone, whose brain went with it.</summary>
+    private IConductorBrain? Proposer(ChatAllowProposal proposal) =>
+        proposal.Window is { } window && Chats.All(c => c.WorkspaceId != window) ? null : BrainOf(ChatOf(proposal.Window));
+
+    /// <summary>What became of a proposed allow, for the brain that proposed it, and no other.</summary>
+    private void TellProposer(ChatAllowProposal proposal, string fact)
+    {
+        if (Proposer(proposal) is { } proposer)
+        {
+            _toldNews.Add(new(_time.GetUtcNow(), fact, proposer));
+        }
+    }
 
     /// <summary>The chat an ask is of, as the brain is told it: "ContentAutomatorX, chat "Fix" (chat id a)".</summary>
     private string WhoAsked(ChatAsk ask) =>
@@ -2891,7 +2903,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
             }
 
-            if (gone.WorkspaceId is { } retired)
+            if (gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired))
             {
                 _brains?.Retire(retired); // its process, config and conversation go with it
             }

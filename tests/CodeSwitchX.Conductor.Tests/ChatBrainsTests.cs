@@ -315,11 +315,50 @@ public sealed class ChatBrainsTests : IDisposable
 
         pool.Retire(Window3);
 
-        _launcher.Last.Disposed.ShouldBeTrue();
-        File.Exists(own).ShouldBeFalse();
-        _sessions.Load(Window3.ToString("N")).ShouldBeNull();
+        await WaitUntil(() => _launcher.Last.Disposed); // off the caller's thread, the UI's: a process tree is killed
+        await WaitUntil(() => !File.Exists(own));
+        await WaitUntil(() => _sessions.Load(Window3.ToString("N")) is null);
         pool.For(Window3);
         made.Count.ShouldBe(2, "a window back on the Yard gets a new brain");
+    }
+
+    /// <summary>A conversation Claude Code picks up but cannot go on with (one the API now refuses) must not hold the chat for good.</summary>
+    [Fact]
+    public async Task A_picked_up_conversation_whose_first_answer_fails_is_left_for_a_new_one()
+    {
+        var brain = BrainOf(Window3);
+        await AskAsync(brain, "One");
+        var id = Value(_launcher.Started[0].Arguments, "--session-id");
+        brain.Rest();
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.ModelNotFoundResult];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        Value(_launcher.Started[1].Arguments, "--resume").ShouldBe(id);
+        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldContain("starts a new conversation with the next question");
+        _launcher.Answer = StreamJson.Reply("Hi.");
+        await AskAsync(brain, "Three");
+        Value(_launcher.Started[2].Arguments, "--resume").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_failed_answer_in_a_conversation_that_went_on_fine_keeps_it()
+    {
+        var brain = BrainOf(Window3);
+        await AskAsync(brain, "One");
+        _launcher.Last.Answer = _ => [StreamJson.Init(), StreamJson.ModelNotFoundResult];
+        await AskAsync(brain, "Two");
+        brain.Rest();
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+
+        await AskAsync(brain, "Three");
+
+        Value(_launcher.Started[1].Arguments, "--resume").ShouldNotBeNull("one failed answer, an overload say, is no reason to forget it");
     }
 
     [Fact]
