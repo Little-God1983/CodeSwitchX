@@ -37,6 +37,13 @@ public static class SpokenYes
 
     private const int MaxAfter = 4;
 
+    /// <summary>
+    /// The words that may not be said twice: those of a yes, not the ones that only go with it ("it", "please"): "allow
+    /// it, run it" is a yes, "do it, do it" is none.
+    /// </summary>
+    private static readonly HashSet<string> YesWords = Strong.SelectMany(s => s.Split(' ')).Concat(Weak)
+        .Except(["it", "that", "es", "das", "please", "bitte", "now", "jetzt"]).ToHashSet(StringComparer.Ordinal);
+
     public static bool IsYes(string text)
     {
         if (text.Contains('?'))
@@ -45,7 +52,8 @@ public static class SpokenYes
         }
 
         var words = Words(text);
-        if (words.Select(w => w == "ok" ? "okay" : w).Distinct().Count() < words.Count)
+        var yesWords = words.Select(w => w == "ok" ? "okay" : w).Where(YesWords.Contains).ToList();
+        if (yesWords.Distinct().Count() < yesWords.Count)
         {
             return false; // "okay, okay", "ja ja", "sure, sure": an impatient "yeah yeah", not a yes to what was read
         }

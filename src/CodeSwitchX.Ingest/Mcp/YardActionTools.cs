@@ -249,7 +249,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     /// yes answers what the app said, not anything a brain steered by a chat's words could ask.
     /// </summary>
     internal const string ProposedReply = "Proposed, not allowed: nothing runs until the user says yes, which the app checks itself. The app "
-        + "reads the prompt back to the user and asks for the yes itself: say nothing about it, and ask the user nothing. If their next "
+        + "reads the prompt back to the user and asks for the yes itself: nothing you say from now on in this turn reaches the user, "
+        + "so say nothing, and ask the user nothing. If their next "
         + "words are a yes, the app allows it and tells them; you are not asked and must never say it was allowed. Any other words cancel "
         + "the proposal, and the card stays open.";
 

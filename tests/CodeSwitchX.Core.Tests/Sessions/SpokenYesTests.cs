@@ -35,6 +35,10 @@ public sealed class SpokenYesTests
     [InlineData("Raven, yes.")]
     [InlineData("Raven, okay.")]
     [InlineData("Okay Raven, do it.")]
+    // Round 4: only the words of a yes may not repeat; "it" may.
+    [InlineData("Allow it, run it.")]
+    [InlineData("Yes, do it, run it.")]
+    [InlineData("Go ahead, run it, do it.")]
     [InlineData("Hey Raven, do it.")]
     [InlineData("Please, go ahead.")]
     [InlineData("confirmed")]
