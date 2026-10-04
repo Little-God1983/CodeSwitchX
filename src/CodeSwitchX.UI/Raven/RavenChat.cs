@@ -91,6 +91,12 @@ public sealed partial class RavenChat : ObservableObject
         HasFailed ? "failed" : null,
     }.Where(s => s is not null));
 
+    /// <summary>
+    /// What chat 0, the overview, knows of a window's chat (#124): one or two lines the summarizer words after each turn and
+    /// each piece of news in it; null until the first. Never set for the Yard or Activity.
+    /// </summary>
+    public string? Summary { get; set; }
+
     /// <summary>The list's tooltip: "3 ContentAutomatorX: waits for you, 2 unread"; the label alone with no marks.</summary>
     public string Tip => Status.Length == 0 ? Label : $"{Label}: {Status}";
 }

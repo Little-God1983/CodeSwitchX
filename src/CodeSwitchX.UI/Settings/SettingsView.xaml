@@ -648,11 +648,16 @@
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Raven's brain" />
               <TextBlock Style="{StaticResource Help}" Text="The model Raven answers with, through the Yard's tools only. A faster model answers sooner. A change starts a new conversation." />
-              <TextBlock Style="{StaticResource Label}" Text="Model" />
+              <TextBlock Style="{StaticResource Label}" Text="Window chats" />
               <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Raven model"
                         ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
                         Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
                         ToolTip="A full model id. Pick one or type another." />
+              <TextBlock Style="{StaticResource Label}" Text="Chat 0, the overview" Margin="0,18,0,6" />
+              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Chat 0 model"
+                        ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
+                        Text="{Binding RavenOverviewModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                        ToolTip="Chat 0 knows each window's chat by a short summary, worded with this model too. A small model is enough." />
             </StackPanel>
           </Border>
 

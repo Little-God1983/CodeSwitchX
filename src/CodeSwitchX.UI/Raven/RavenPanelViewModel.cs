@@ -119,6 +119,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The key of the brain that words chat news (<see cref="ClaudeCliBrain.TellerPrompt"/>) among the app's services.</summary>
     public const string TellerKey = "raven-teller";
 
+    /// <summary>The key of the brain that sums a window's chat up for chat 0 (<see cref="ClaudeCliBrain.SummarizerPrompt"/>).</summary>
+    public const string SummarizerKey = "raven-summarizer";
+
+    /// <summary>
+    /// Words the line chat 0 knows a window's chat by (#124). It reads that chat's words and cards and has no tools; chat 0's
+    /// brain gets the line only. Null: chat 0 is given what every chat is, the news facts.
+    /// </summary>
+    private readonly IConductorBrain? _summarizer;
+
+    /// <summary>Window chats to sum up again, each once, in the order asked (UI thread).</summary>
+    private readonly List<RavenChat> _toSummarize = [];
+
+    /// <summary>The summing up running now, or the last; it never faults (UI thread).</summary>
+    private Task _summaries = Task.CompletedTask;
+
+    /// <summary>The latest entries of a window's chat its summary is made from; the summary so far stands for those before.</summary>
+    internal const int SummaryEntries = 12;
+
+    /// <summary>The most of an entry the summarizer is given: a long answer says what it is about in its start.</summary>
+    internal const int SummaryEntryLength = 400;
+
+    /// <summary>The most of a summary chat 0 is given: the prompt asks for two short lines, and a brain may say more.</summary>
+    internal const int SummaryLength = 300;
+
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
 
@@ -228,7 +252,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
-        IChatBrains? brains = null)
+        IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -237,6 +261,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _vocabulary = vocabulary;
         _brain = brain;
         _brains = brains;
+        _summarizer = brains is null ? null : summarizer; // with one brain for every chat there is no overview to keep
         _voice = voice;
         _tts = speech;
         _dispatcher = dispatcher;
@@ -407,6 +432,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The last question to Raven's brain; completes once every question asked is answered.</summary>
     internal Task PendingAnswers => _conversation;
+
+    /// <summary>The window chats being summed up for chat 0.</summary>
+    internal Task PendingSummaries => _summaries;
 
     /// <summary>
     /// The recorder's Start of the current recording, which runs off the UI thread: opening a Bluetooth headset or a
@@ -1697,6 +1725,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
+            if (question.Sent)
+            {
+                Summarize(question.Chat);
+            }
+
             question.Ended = true;
             _questions.Remove(question);
             spoken.Complete();
@@ -1884,7 +1917,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
     {
         await card.Naming;
-        _dispatcher.Post(() => card.ShownIn = Append(entry, ChatOf(card.WorkspaceId)).Chat);
+        _dispatcher.Post(() =>
+        {
+            card.ShownIn = Append(entry, ChatOf(card.WorkspaceId)).Chat;
+            Summarize(card.ShownIn);
+        });
     }
 
     /// <summary>The chat an ask's card is in, the lines about it go beside it; the Yard's for one without a card.</summary>
@@ -1937,6 +1974,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.IsOpen = false;
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
+        Summarize(card.ShownIn);
     }
 
     /// <summary>
@@ -2370,6 +2408,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 var ofWindow = group.ToList();
                 var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
                 Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
+                Summarize(group.Key);
             }
 
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
@@ -2456,12 +2495,142 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
+        if (_summarizer is not null && brain == _brain)
+        {
+            // Chat 0 is the overview: it is given each window's chat by its summary, and no fact of a card or a chat's news.
+            question.Told = [];
+            return Overview() + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
+        }
+
         question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain))];
         var text = question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
             ? text
             : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;
     }
+
+    /// <summary>
+    /// What chat 0 is told of the window chats with each question: each one's number, name, the cards waiting in it, and
+    /// its summary. Never the chat's words or a card's text: those reach the summarizer only.
+    /// </summary>
+    private string Overview()
+    {
+        var lines = Chats.Where(c => c.WorkspaceId is not null).Select(chat =>
+        {
+            var waiting = WaitingIn(chat);
+            var cards = waiting switch { 0 => "nothing waiting", 1 => "1 card waiting", _ => $"{waiting} cards waiting" };
+            return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "nothing said here yet"}";
+        }).ToList();
+        return lines.Count == 0
+            ? "[There are no window chats now: no window is on the Yard.]\n"
+            : "[The window chats now, as their summaries say: " + string.Join("; ", lines) + ".]\n";
+    }
+
+    /// <summary>The cards that wait for an answer in the chat.</summary>
+    private int WaitingIn(RavenChat chat) => _askCards.Values.Count(c => c.IsOpen && c.ShownIn == chat);
+
+    /// <summary>
+    /// Sums the window's chat up again once those asked before it are: after a turn in it, news in it, a card that came
+    /// or went. Chat 0 and Activity are not summed up, nor a window's chat once its window is gone (UI thread).
+    /// </summary>
+    private void Summarize(RavenChat? chat)
+    {
+        if (_summarizer is null || chat?.WorkspaceId is null || !Chats.Contains(chat) || _toSummarize.Contains(chat))
+        {
+            return;
+        }
+
+        _toSummarize.Add(chat);
+        if (_toSummarize.Count == 1 && _summaries.IsCompleted)
+        {
+            _summaries = SummarizeAllAsync();
+        }
+    }
+
+    /// <summary>One chat after the other: the summarizer takes one question at a time anyway. Never faults.</summary>
+    private async Task SummarizeAllAsync()
+    {
+        while (_toSummarize.Count > 0)
+        {
+            var chat = _toSummarize[0];
+            if (Chats.Contains(chat))
+            {
+                // Taken off the list as it begins: what happens in the chat while it runs sums it up again after.
+                _toSummarize.RemoveAt(0);
+                await SummarizeAsync(chat);
+            }
+            else
+            {
+                _toSummarize.RemoveAt(0);
+            }
+        }
+    }
+
+    /// <summary>The chat's new summary; one that fails or says nothing keeps the one before. Out of sight: nothing goes in the panel. Never faults.</summary>
+    private async Task SummarizeAsync(RavenChat chat)
+    {
+        var words = new System.Text.StringBuilder();
+        try
+        {
+            await foreach (var e in _summarizer!.AskAsync(SummaryPrompt(chat), CancellationToken.None))
+            {
+                switch (e)
+                {
+                    case BrainText { Delta: var piece }:
+                        words.Append(piece);
+                        break;
+                    case BrainFailed or BrainNotice:
+                        _logger.LogWarning("Raven's chat summarizer, on chat {Chat}: {What}", chat.Number, e);
+                        if (e is BrainFailed)
+                        {
+                            return;
+                        }
+
+                        break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Raven's chat summarizer failed on chat {Chat}", chat.Number);
+            return;
+        }
+
+        var summary = string.Join(' ', words.ToString().Split((char[])['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim())).Trim();
+        if (summary.Length > 0)
+        {
+            chat.Summary = summary.Length <= SummaryLength ? summary : summary[..(SummaryLength - 1)].TrimEnd() + "…";
+        }
+    }
+
+    /// <summary>What the summarizer is given: the summary so far, the chat's latest entries, and how many cards wait in it.</summary>
+    private string SummaryPrompt(RavenChat chat)
+    {
+        var text = new System.Text.StringBuilder($"Chat {chat.Number}, {chat.Name}.\n");
+        text.Append("The summary so far: ").Append(chat.Summary ?? "none yet").Append('\n');
+        text.Append("The latest in the chat, oldest first:");
+        foreach (var entry in Log.Where(e => e.Chat == chat).TakeLast(SummaryEntries))
+        {
+            if (SummaryLine(entry) is { Length: > 0 } line)
+            {
+                text.Append("\n- ").Append(line.Length <= SummaryEntryLength ? line : line[..SummaryEntryLength] + "…");
+            }
+        }
+
+        return text.Append($"\nCards waiting on the user now: {WaitingIn(chat)}").ToString();
+    }
+
+    /// <summary>An entry as the summarizer reads it; null for a note or warning about Raven itself.</summary>
+    private static string? SummaryLine(RavenLogEntry entry) => entry.Kind switch
+    {
+        RavenLogKind.You => "The user: " + entry.Text,
+        RavenLogKind.Raven => "Raven: " + entry.Text,
+        RavenLogKind.Action => entry.ActivityLine + (entry.Failed ? ", which failed" : ""),
+        RavenLogKind.News => "News: " + string.Join("; ", entry.Lines?.Select(Fact) ?? []),
+        RavenLogKind.Question or RavenLogKind.Permission when entry.Ask is { } card =>
+            entry.ActivityLine + (card.IsOpen ? " (waiting on the user)" : $" ({card.Outcome})"),
+        _ => null,
+    };
 
     /// <summary>The chat of the last question each brain took (<see cref="BrainQuestionSent"/>); the Yard's until one of another went in.</summary>
     private readonly Dictionary<IConductorBrain, RavenChat> _toldChats = [];

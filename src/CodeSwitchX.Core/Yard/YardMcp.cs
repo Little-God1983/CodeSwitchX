@@ -11,7 +11,10 @@ public static class YardMcp
 
     /// <summary>
     /// The header a window chat's brain sends with every tool call: the workspace id of its window, which the tools act on
-    /// when no other is named. A brain without it (chat 0, the Yard) acts on no window in particular.
+    /// when no other is named. Chat 0's brain sends <see cref="OverviewChat"/>; a brain without it acts on no window in particular.
     /// </summary>
     public const string ChatHeader = "X-CodeSwitchX-Chat";
+
+    /// <summary>What chat 0, the Yard's overview, sends as <see cref="ChatHeader"/>: it sees no card's text and answers none.</summary>
+    public const string OverviewChat = "yard";
 }
