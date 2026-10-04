@@ -317,6 +317,10 @@ public sealed class TranscriptIndexer : BackgroundService
             // the lines behind its offset were read without a look at their title lines (a /rename name among them), so the
             // file is read again from the start, as after a rewrite, which counts no usage twice.
             var beforeTitles = cursor.Title is null && cursor.TitleSource == TitleSource.Prompt;
+            // A title stored before #118 can be the start of SendMessage's envelope, which names no task: it is no title,
+            // and the file is read again the same way for the task in its first prompt.
+            var envelope = cursor is { TitleSource: TitleSource.Prompt, Title: { } stored } && ChatTitle.FromPrompt(stored, int.MaxValue) is null;
+            beforeTitles |= envelope;
             readAgain += beforeTitles ? 1 : 0;
             _files[cursor.Path] = new FileState
             {
@@ -324,11 +328,11 @@ public sealed class TranscriptIndexer : BackgroundService
                 CountedUntil = beforeTitles ? cursor.LastWriteUtc : null,
                 LastWriteUtc = cursor.LastWriteUtc,
                 SessionId = cursor.SessionId,
-                Title = cursor.Title,
-                TitleSource = cursor.TitleSource,
+                Title = envelope ? null : cursor.Title,
+                TitleSource = envelope ? TitleSource.None : cursor.TitleSource,
                 // The chat engine may not have shown it (the chat was historical, or the app was closed before its next
                 // live update): it goes out again with the first live update after the restart.
-                UndeliveredTitle = cursor.Title,
+                UndeliveredTitle = envelope ? null : cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
             };
         }

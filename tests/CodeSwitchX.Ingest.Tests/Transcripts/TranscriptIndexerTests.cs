@@ -623,6 +623,30 @@ public class TranscriptIndexerTests : IDisposable
         update.Cursor.ShouldNotBeNull().ByteOffset.ShouldBe(new FileInfo(path).Length);
     }
 
+    /// <summary>
+    /// A cursor stored before #118 titles a chat Raven started by the start of SendMessage's envelope. That title goes
+    /// out no more after a restart; the transcript is read again for the task in its first prompt, without counting its usage again.
+    /// </summary>
+    [Fact]
+    public async Task A_cursor_titled_by_a_cross_session_envelope_is_titled_again_by_the_task_in_it()
+    {
+        var path = Transcript("s1");
+        const string envelope = """Another Claude session sent a message:\n<cross-session-message from=\"uds:x\" from-name=\"raven-3\">Fix the build</cross-session-message>""";
+        File.WriteAllLines(path, [User("s1", envelope), Assistant("s1", "m1", TextBlock)]);
+        using var restarted = RestoredWith(new TranscriptCursor
+        {
+            Path = path.ToLowerInvariant(), ByteOffset = new FileInfo(path).Length, LastWriteUtc = new DateTimeOffset(2026, 9, 23, 10, 0, 10, TimeSpan.Zero),
+            SessionId = "s1", Title = "<cross-session-message from=\"uds:x\" from-name=\"raven-3\" from-mo…", TitleSource = TitleSource.Prompt,
+        });
+
+        await restarted.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Title.ShouldBe("Fix the build");
+        update.Usage.ShouldBeEmpty("counted before the restart");
+        update.Cursor.ShouldNotBeNull().Title.ShouldBe("Fix the build");
+    }
+
     private static string LastPrompt(string session) => $$$"""{"type":"last-prompt","lastPrompt":"go","sessionId":"{{{session}}}"}""";
 
     [Fact]

@@ -6,8 +6,35 @@ public static class ChatTitle
 {
     public const int DefaultMaxLength = 60;
 
+    /// <summary>How SendMessage wraps a message from another session: the task is between this tag's end and its closing tag.</summary>
+    private const string EnvelopeOpen = "<cross-session-message ";
+    private const string EnvelopeClose = "</cross-session-message>";
+    private const string EnvelopePreamble = "Another Claude session sent a message:";
+
+    /// <summary>
+    /// A chat's title from a prompt: one line, cut to <paramref name="maxLength"/>. A message from another session
+    /// (SendMessage's envelope, how Raven hands a chat its task) is titled by the task inside it; an envelope with no task
+    /// left in it (empty, or cut off inside its opening tag) gives no title.
+    /// </summary>
     public static string? FromPrompt(string? prompt, int maxLength = DefaultMaxLength)
     {
+        // Only a prompt that opens with the envelope (after SendMessage's line before it) is one: a prompt that quotes the
+        // tag, a bug report or a summary, is the user's own.
+        var body = prompt?.TrimStart() ?? "";
+        body = body.StartsWith(EnvelopePreamble, StringComparison.Ordinal) ? body[EnvelopePreamble.Length..].TrimStart() : body;
+        if (prompt is not null && body.StartsWith(EnvelopeOpen, StringComparison.Ordinal))
+        {
+            prompt = body;
+            var tagEnd = prompt.IndexOf('>');
+            if (tagEnd < 0)
+            {
+                return null;
+            }
+
+            var close = prompt.IndexOf(EnvelopeClose, tagEnd, StringComparison.Ordinal);
+            prompt = close < 0 ? prompt[(tagEnd + 1)..] : prompt[(tagEnd + 1)..close];
+        }
+
         if (string.IsNullOrWhiteSpace(prompt))
         {
             return null;
