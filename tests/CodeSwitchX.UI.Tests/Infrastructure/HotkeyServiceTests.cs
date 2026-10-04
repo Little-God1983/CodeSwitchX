@@ -398,7 +398,7 @@ public class HotkeyServiceTests
 
     [Theory]
     [InlineData("Ctrl+Alt+Y")] // no workspace was opened yet, so there is nothing to toggle to
-    [InlineData("Ctrl+Shift+Alt+9")] // the Yard has one tile
+    [InlineData("Ctrl+Shift+Alt+9")] // no workspace has number 9
     public async Task A_hotkey_with_nothing_to_do_leaves_a_minimised_shell_where_it_is(string label)
     {
         var harness = new ShellTestHarness();

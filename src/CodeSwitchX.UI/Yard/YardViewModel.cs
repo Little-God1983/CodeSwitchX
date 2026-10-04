@@ -101,7 +101,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var tracks = await _store.GetTracksAsync(ct);
         var workspaces = await _store.GetAllAsync(ct);
         Tracks.Clear();
-        // Ordinal, ignoring case, like AddTile and Resort: the jump keys follow the order shown, so it must not change with "Needs me first".
+        // Ordinal, ignoring case, like AddTile and Resort, so a tile keeps its place whichever adds it.
         foreach (var track in tracks.OrderBy(t => t.SortOrder).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase))
         {
             var group = new TrackGroupViewModel(track);
