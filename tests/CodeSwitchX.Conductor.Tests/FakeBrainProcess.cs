@@ -138,6 +138,10 @@ internal static class StreamJson
     public static string Result(string text = "Hi.") =>
         $$"""{"type":"result","subtype":"success","is_error":false,"result":"{{text}}","session_id":"s"}""";
 
+    /// <summary>What Claude Code writes, at once and before its init, for a <c>--resume</c> of a session it does not have (CLI 2.1.285).</summary>
+    public const string NoConversation =
+        """{"type":"result","subtype":"error_during_execution","duration_ms":0,"is_error":true,"num_turns":0,"session_id":"s"}""";
+
     /// <summary>The message Claude Code writes itself for a model that does not exist (CLI 2.1.286), before the failed result.</summary>
     public const string ModelNotFound =
         """{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"There's an issue with the selected model (claude-opus-5-6)."}]},"parent_tool_use_id":null,"error":"model_not_found"}""";

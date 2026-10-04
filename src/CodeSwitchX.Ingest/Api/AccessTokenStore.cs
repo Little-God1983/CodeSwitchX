@@ -1,6 +1,4 @@
-using System.Security.AccessControl;
 using System.Security.Cryptography;
-using System.Security.Principal;
 using CodeSwitchX.Core;
 
 namespace CodeSwitchX.Ingest.Api;
@@ -54,13 +52,5 @@ public sealed class AccessTokenStore
             System.Text.Encoding.ASCII.GetBytes(token), System.Text.Encoding.ASCII.GetBytes(candidate));
     }
 
-    internal static void RestrictToCurrentUser(string file)
-    {
-        var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No current user SID.");
-        var security = new FileSecurity();
-        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-        security.SetOwner(user);
-        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
-        new FileInfo(file).SetAccessControl(security);
-    }
+    internal static void RestrictToCurrentUser(string file) => SecretFile.RestrictToCurrentUser(file);
 }

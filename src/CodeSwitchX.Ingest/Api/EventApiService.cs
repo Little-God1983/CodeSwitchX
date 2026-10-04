@@ -101,6 +101,9 @@ public sealed class EventApiService : IHostedService
         {
             // Stateless: every request stands alone, so a restarted brain or app needs no session to be re-established.
             builder.Services.AddSingleton(_yard);
+            // The Raven chat a tool call comes from: a window's chat sends its window, which the tools act on by default.
+            builder.Services.AddHttpContextAccessor();
+            builder.Services.AddTransient(sp => ChatScope.Of(sp.GetRequiredService<IHttpContextAccessor>().HttpContext));
             if (_asks is not null)
             {
                 builder.Services.AddSingleton(_asks);

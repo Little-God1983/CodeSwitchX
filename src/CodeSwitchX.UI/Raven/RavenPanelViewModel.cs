@@ -61,7 +61,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IDictationService _dictation;
     private readonly IWhisperModelStore _models;
     private readonly IDictationVocabularyProvider _vocabulary;
+    /// <summary>The Yard's brain; every chat's when there are no <see cref="_brains"/>.</summary>
     private readonly IConductorBrain _brain;
+
+    /// <summary>Each chat's own brain (#123): what is said in a chat is only in its conversation.</summary>
+    private readonly IChatBrains? _brains;
     private readonly ReplyVoice _voice;
     private readonly ITextToSpeech _tts;
     private readonly IUiDispatcher _dispatcher;
@@ -212,7 +216,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
-        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null)
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
+        IChatBrains? brains = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -220,6 +225,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _models = models;
         _vocabulary = vocabulary;
         _brain = brain;
+        _brains = brains;
         _voice = voice;
         _tts = speech;
         _dispatcher = dispatcher;
@@ -1135,8 +1141,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _digest?.Cancel();
         _voice.Hush();
         _voice.Expect();
-        _brain.WarmUp();
+        BrainOf(CurrentChat).WarmUp();
     }
+
+    /// <summary>The chat's own brain: a window's chat talks with its window's, chat 0 with the Yard's.</summary>
+    private IConductorBrain BrainOf(RavenChat chat) => _brains?.For(chat.WorkspaceId) ?? _brain;
 
     private void OnOpenSpeech(OpenMicRun run)
     {
@@ -1641,7 +1650,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
+            await StreamAnswerAsync(BrainOf(question.Chat), WithToldNews(question), spoken, floor, question.Chat, question);
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
             // And only while the user is still in that chat: one who moved on is not answering it.
@@ -2406,8 +2415,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenChat? _toldChat;
 
     /// <summary>
-    /// Which chat the user asks in, until each chat has a brain of its own (#123): a window's chat each time, so "stop it"
-    /// and "open it" mean that window; the Yard's once the user is back in it, and not before.
+    /// Which chat the user asks in: a window's chat each time, so "stop it" and "open it" mean that window, also in words
+    /// taken along from another chat; the Yard's once the user is back in it, and not before. Each chat has a brain of
+    /// its own, whose tools act on its window anyway; the words say it to the brain, which reads them.
     /// </summary>
     /// <param name="always">Words of another chat go before: the Yard is named too, or the words after them would seem to be of that chat.</param>
     private string WhereTheUserIs(RavenChat chat, bool always = false)

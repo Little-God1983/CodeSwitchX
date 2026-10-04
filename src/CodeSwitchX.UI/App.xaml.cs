@@ -205,9 +205,18 @@ public partial class App : Application
         // Raven's brain, and the Yard it looks at through the MCP tools the Event API serves.
         services.AddSingleton<BrainSettings>();
         services.AddSingleton<IBrainProcessLauncher, BrainProcessLauncher>();
-        services.AddSingleton<IConductorBrain>(sp => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<BrainSettings>(),
-            sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<ClaudeCliBrain>>()));
+        // A brain per Raven chat, each with its conversation kept (and picked up again after a restart) and its tools on its
+        // window; few run at a time. Chat 0's is the Yard's.
+        services.AddSingleton(sp =>
+        {
+            var paths = sp.GetRequiredService<AppPaths>();
+            var sessions = new BrainSessionFile(Path.Combine(paths.RavenDirectory, "sessions.json"));
+            return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
+                () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
+                BrainRole.Raven, BrainChat.Of(window, sessions)));
+        });
+        services.AddSingleton<IChatBrains>(sp => sp.GetRequiredService<ChatBrains>());
+        services.AddSingleton<IConductorBrain>(sp => sp.GetRequiredService<ChatBrains>().For(null));
         // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the
         // brain that acts.
         services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),

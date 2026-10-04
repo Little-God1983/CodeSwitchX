@@ -11,10 +11,12 @@ namespace CodeSwitchX.Conductor;
 /// so the conversation carries on from turn to turn. It works only through the Yard: of the built-in tools just
 /// <c>SendMessage</c>, with which it tells a chat running in VS Code something, the Yard's MCP tools from <c>mcp.json</c>
 /// and no others, anything not allowed denied without asking, and a working folder that is no repository. The user's settings are loaded (a proxy, a base URL or an API key helper in them is how some users reach
-/// the API at all), but with every hook turned off, so their hooks (the Yard's own, RAIVEN's) do not fire for its turns;
-/// nothing of it is saved as a session. A process that dies is started again for the next turn, which says so; one whose
-/// model no longer is the one set is replaced, and so is one that could not connect to the Yard (a few times) and one
-/// left quiet for <see cref="QuietReset"/>.
+/// the API at all), but with every hook turned off, so their hooks (the Yard's own, RAIVEN's) do not fire for its turns.
+/// A process that dies is started again for the next turn, which says so; one whose model no longer is the one set is
+/// replaced, and so is one that could not connect to the Yard (a few times) and one left quiet for <see cref="QuietReset"/>.
+/// A Raven chat's brain (<see cref="BrainChat"/>) keeps its conversation as a Claude Code session: a process rested by the
+/// pool or ended with the app is started again with it (<c>--resume</c>) while it is younger than the quiet reset; it is
+/// not shown in VS Code's chat list, which lists only VS Code's own sessions. Any other brain saves nothing.
 /// </summary>
 public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 {
@@ -104,11 +106,24 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Why the last process went, when it went on its own: the next start says so.</summary>
     private string? _lost;
 
+    /// <summary>The chat whose brain it is; null for a brain that keeps no conversation beyond its process.</summary>
+    private readonly BrainChat? _chat;
+
+    /// <summary>The chat's conversation; loaded from its store before the first start. Touched while holding <see cref="_turns"/>.</summary>
+    private BrainSession? _session;
+
+    private bool _sessionLoaded;
+
+    /// <summary>The process was started to pick the conversation up again, and has not said a line yet.</summary>
+    private bool _resuming;
+
     /// <param name="role">Raven itself, with the Yard's tools; or the teller of chat news, with none (<see cref="TellerPrompt"/>).</param>
+    /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
-        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven)
+        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null)
     {
         _role = role;
+        _chat = role == BrainRole.Raven ? chat : null;
         _name = role == BrainRole.Teller ? "Raven's news teller" : "Raven's brain";
         _paths = paths;
         _settings = settings;
@@ -154,7 +169,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             if (!sent)
             {
                 finished = true;
-                yield return new BrainFailed(await LoseAsync(process, "stopped before it could take the question").ConfigureAwait(false));
+                yield return new BrainFailed(_resuming ? ResumeFailed(process)
+                    : await LoseAsync(process, "stopped before it could take the question").ConfigureAwait(false));
                 yield break;
             }
 
@@ -175,11 +191,23 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 if (line is null)
                 {
                     finished = true;
-                    yield return new BrainFailed(await LoseAsync(process, "stopped in the middle of an answer").ConfigureAwait(false));
+                    yield return new BrainFailed(_resuming ? ResumeFailed(process)
+                        : await LoseAsync(process, "stopped in the middle of an answer").ConfigureAwait(false));
                     yield break;
                 }
 
-                switch (ClaudeStream.Read(line))
+                var read = ClaudeStream.Read(line);
+                if (_resuming && read is ClaudeTurnOver { Error: not null })
+                {
+                    // Claude Code ends at once, before its init, when the session is gone ("No conversation found").
+                    finished = true;
+                    yield return new BrainFailed(ResumeFailed(process));
+                    yield break;
+                }
+
+                _resuming = false; // it said something: the conversation was picked up
+
+                switch (read)
                 {
                     case ClaudeInit when _role == BrainRole.Teller:
                         break; // it has no tools to report on
@@ -255,6 +283,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
 
             _lastTurnAt = _time.GetUtcNow();
+            if (_chat is not null && _session is not null && sent)
+            {
+                _session = _session with { LastTurnAt = _lastTurnAt };
+                _chat.Sessions.Save(_chat.Key, _session);
+            }
+
             _turns.Release();
         }
     }
@@ -320,7 +354,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }
 
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
-    internal IReadOnlyList<string> Arguments(string model)
+    /// <param name="mcpConfig">A window chat's own MCP config; the app's for null.</param>
+    /// <param name="session">The conversation to keep, new or picked up again; none is saved for null.</param>
+    internal IReadOnlyList<string> Arguments(string model, string? mcpConfig = null, (string Id, bool Resume)? session = null)
     {
         var teller = _role == BrainRole.Teller;
         List<string> arguments =
@@ -331,14 +367,19 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             "--verbose",
             "--include-partial-messages",
             "--model", model,
-            "--mcp-config", teller ? NoMcpServers : _paths.McpConfigFile,
+            "--mcp-config", teller ? NoMcpServers : mcpConfig ?? _paths.McpConfigFile,
             "--strict-mcp-config",
             "--tools", teller ? "" : SendTool,
             "--permission-mode", "dontAsk",
             "--settings", NoHooks,
-            "--no-session-persistence",
             "--system-prompt", teller ? TellerPrompt : BrainSettings.SystemPrompt,
         ];
+        arguments.AddRange(session switch
+        {
+            { Resume: true } kept => ["--resume", kept.Id],
+            { } fresh => ["--session-id", fresh.Id],
+            null => ["--no-session-persistence"],
+        });
         if (!teller)
         {
             arguments.AddRange(["--allowedTools", AllowedTools]);
@@ -358,7 +399,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var model = _settings.Model;
         if (_process is { } running)
         {
-            if (running.Exited.IsCompleted)
+            if (running.Exited.IsCompleted && _resuming)
+            {
+                Notice(ResumeFailed(running, ask: false));
+            }
+            else if (running.Exited.IsCompleted)
             {
                 Lose(running, $"stopped (exit code {running.Exited.Result})");
             }
@@ -369,12 +414,32 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             else if (_processModel == model)
             {
                 Stop(); // quiet long enough: a new conversation, without a word about it
+                ForgetSession();
             }
             else
             {
                 Stop();
+                ForgetSession();
                 Notice($"Raven now thinks with {model}, starting a new conversation.");
             }
+        }
+
+        // A chat's conversation is picked up again while it is young enough and of the model set; a model set since starts
+        // a new one, and says so, as it does for a process that runs.
+        if (_chat is not null && !_sessionLoaded)
+        {
+            _sessionLoaded = true;
+            _session = _chat.Sessions.Load(_chat.Key);
+        }
+
+        if (_session is { } kept && (kept.Model != model || _time.GetUtcNow() - kept.LastTurnAt >= QuietReset))
+        {
+            if (kept.Model != model && _time.GetUtcNow() - kept.LastTurnAt < QuietReset)
+            {
+                Notice($"Raven now thinks with {model}, starting a new conversation.");
+            }
+
+            ForgetSession();
         }
 
         string? claude;
@@ -398,10 +463,27 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             return $"Raven cannot see the Yard: CodeSwitchX's MCP server did not start ({_paths.McpConfigFile} is missing). Restart CodeSwitchX.";
         }
 
+        string? mcpConfig = null;
+        if (_chat?.WorkspaceId is { } window)
+        {
+            mcpConfig = Path.Combine(_paths.RavenDirectory, "mcp", window.ToString("N") + ".json");
+            try
+            {
+                ChatMcpConfig.Write(_paths.McpConfigFile, mcpConfig, window);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Could not write the MCP config of {Brain} for workspace {Workspace}", _name, window);
+                return $"Raven cannot see the Yard from this chat: its MCP config could not be written ({ex.Message}). Restart CodeSwitchX.";
+            }
+        }
+
+        var resume = _session is not null;
+        (string Id, bool Resume)? session = _chat is null ? null : (_session?.Id ?? Guid.NewGuid().ToString("D"), resume);
         try
         {
             Directory.CreateDirectory(_paths.RavenDirectory);
-            _process = _launcher.Start(claude, Arguments(model), _paths.RavenDirectory);
+            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -417,8 +499,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         _processModel = model;
-        _lastTurnAt = _time.GetUtcNow();
-        _logger.LogInformation("Started {Brain}: {Claude} with {Model}", _name, claude, model);
+        _lastTurnAt = _session?.LastTurnAt ?? _time.GetUtcNow();
+        if (_chat is not null && session is { } started)
+        {
+            _resuming = resume;
+            _session ??= new BrainSession(started.Id, model, _lastTurnAt);
+            _chat.Sessions.Save(_chat.Key, _session);
+        }
+
+        _logger.LogInformation("Started {Brain}{Chat}: {Claude} with {Model}{Resumed}", _name, _chat is null ? "" : $" of chat {_chat.Key}", claude, model,
+            resume ? ", picking its conversation up again" : "");
         if (_lost is not null)
         {
             Notice($"Raven's brain {_lost} and was started again. It has forgotten the conversation so far.");
@@ -547,6 +637,30 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _logger.LogWarning("{Brain} {Why}. Its last errors: {Errors}", _name, why, process.ErrorTail);
         _lost = why;
         Stop();
+        ForgetSession(); // as it says: the conversation is forgotten
+    }
+
+    /// <summary>
+    /// A process started to pick the conversation up again went before it said anything (its session is gone, say): the
+    /// next start begins a new one. Returns what the user is told.
+    /// </summary>
+    private string ResumeFailed(IBrainProcess process, bool ask = true)
+    {
+        _logger.LogWarning("{Brain} could not pick its conversation up again. Its last errors: {Errors}", _name, process.ErrorTail);
+        _resuming = false;
+        Stop();
+        ForgetSession();
+        return "Raven could not pick this chat's conversation up again, so it starts a new one." + (ask ? " Ask again." : "");
+    }
+
+    /// <summary>The next start begins a new conversation.</summary>
+    private void ForgetSession()
+    {
+        if (_chat is not null && _session is not null)
+        {
+            _session = null;
+            _chat.Sessions.Save(_chat.Key, null);
+        }
     }
 
     /// <summary>Takes the process in one step: <see cref="Dispose"/> can stop it from another thread while a turn loses it.</summary>
@@ -569,6 +683,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             _ => $"Raven cannot see the Yard: its tools did not connect ({status}). Its answers can only guess.",
         }
         : "Raven cannot see the Yard: its tools are missing. Its answers can only guess.";
+}
+
+/// <summary>A Raven chat, for its brain (<see cref="ChatBrains"/>).</summary>
+/// <param name="Key">What its conversation is kept under: "yard", or the window's workspace id.</param>
+/// <param name="WorkspaceId">The window its tools act on when no other is named; null for chat 0, the Yard.</param>
+public sealed record BrainChat(string Key, Guid? WorkspaceId, IBrainSessionStore Sessions)
+{
+    public static BrainChat Of(Guid? workspaceId, IBrainSessionStore sessions) => new(workspaceId?.ToString("N") ?? "yard", workspaceId, sessions);
 }
 
 public enum BrainRole

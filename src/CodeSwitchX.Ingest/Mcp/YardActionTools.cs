@@ -11,40 +11,55 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// a chat's question waiting in Raven's panel, deny its permission prompt or propose to allow it (the user's yes, checked by the
 /// app, allows), set the model
 /// and effort chats start with, and move between the Yard and a workspace. Names are matched here, like the looking tools
-/// match them; what cannot be done comes back as a tool error in words the brain can repeat.
+/// match them; what cannot be done comes back as a tool error in words the brain can repeat. Asked from a window's Raven
+/// chat (<see cref="ChatScope"/>), a tool given no workspace or chat acts on that window: "stop it" there stops the chat
+/// working in it. Naming another one acts on that one.
 /// </summary>
 [McpServerToolType]
-public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, ChatAsks? asks = null)
+public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, ChatAsks? asks = null, ChatScope? scope = null)
 {
     [McpServerTool(Name = "start_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Opens a new, empty Claude Code chat in a tab of the workspace's VS Code window (VS Code is started in the background "
         + "when it does not run); it shows on the workspace's tile. VS Code starts every new chat in the workspace's first folder: a "
         + "workspace named by another of its folders, or another folder named, is refused, and you say so. It returns the chat's "
         + "send_to name: then send it its task with SendMessage to that name, or it does nothing. Leave model "
-        + "and effort out to use the defaults; give them only when the user wants them for this one chat.")]
+        + "and effort out to use the defaults; give them only when the user wants them for this one chat. In a window's chat, leave "
+        + "workspace out for that window.")]
     public async Task<StartedChatView> StartChat(
-        [Description("The workspace or project as the user named it, matched like find_workspace.")] string workspace,
+        [Description("The workspace or project as the user named it, matched like find_workspace. Left out: the window of the chat the user is in.")]
+        string? workspace = null,
         [Description("A folder of the workspace, only when the user named one apart from the workspace.")] string? folder = null,
         [Description("A model for this chat only: an alias (Fable, Opus, Sonnet, Haiku) or a full id.")] string? model = null,
         [Description("An effort level for this chat only: low, medium, high, xhigh or max.")] string? effort = null,
         CancellationToken cancellationToken = default)
     {
-        var match = await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false);
-        YardFolder? named;
-        if (!string.IsNullOrWhiteSpace(folder))
+        YardWorkspace target;
+        YardFolder? named = null;
+        if (string.IsNullOrWhiteSpace(workspace))
         {
-            named = WorkspaceMatcher.FindFolder(folder, match.Workspace)
-                ?? throw new McpException($"{match.Workspace.Name} has no folder like '{folder}'. Its folders: {string.Join(", ", match.Workspace.Folders.Select(f => f.Name))}.");
+            target = await WindowAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new McpException("Say in which workspace to start the chat: the user is in chat 0, the Yard, no window in particular.");
         }
         else
         {
-            // A workspace found by one of its folders' names ("Diffusion Nexus" for Diffusion-Full) is that folder asked
-            // for: started elsewhere without a word, the work would land in the wrong repository.
-            var matched = WorkspaceMatcher.FolderOf(match);
-            named = SamePath(matched.Path, match.Workspace.RootPath) ? null : matched;
+            var match = await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false);
+            target = match.Workspace;
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                // A workspace found by one of its folders' names ("Diffusion Nexus" for Diffusion-Full) is that folder asked
+                // for: started elsewhere without a word, the work would land in the wrong repository.
+                var matched = WorkspaceMatcher.FolderOf(match);
+                named = SamePath(matched.Path, match.Workspace.RootPath) ? null : matched;
+            }
         }
 
-        var started = await Act(() => actions.StartChatAsync(match.Workspace, named, model, effort, cancellationToken)).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(folder))
+        {
+            named = WorkspaceMatcher.FindFolder(folder, target)
+                ?? throw new McpException($"{target.Name} has no folder like '{folder}'. Its folders: {string.Join(", ", target.Folders.Select(f => f.Name))}.");
+        }
+
+        var started = await Act(() => actions.StartChatAsync(target, named, model, effort, cancellationToken)).ConfigureAwait(false);
         return new StartedChatView(VoiceChatOf(started), $"Now send it its task: SendMessage to \"{started.SendTo}\".");
     }
 
@@ -59,7 +74,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
     [McpServerTool(Name = "open_workspace", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows a workspace's VS Code in CodeSwitchX (\"open it\", \"take me to …\"). Given a chat, it shows the workspace the chat "
-        + "runs in, where the chat is a tab of VS Code's Claude Code.")]
+        + "runs in, where the chat is a tab of VS Code's Claude Code. In a window's chat, give neither to open that window.")]
     public async Task<string> OpenWorkspace(
         [Description("The workspace as the user named it; may be left out when a chat is given.")] string? workspace = null,
         [Description("A chat's id from start_chat or list_chats, to show the workspace it runs in.")] string? chat = null,
@@ -67,7 +82,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         if (string.IsNullOrWhiteSpace(workspace) && string.IsNullOrWhiteSpace(chat))
         {
-            throw new McpException("Say which workspace or chat to open.");
+            var window = await WindowAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new McpException("Say which workspace or chat to open.");
+            return await Act(() => actions.OpenWorkspaceAsync(window, cancellationToken)).ConfigureAwait(false);
         }
 
         if (!string.IsNullOrWhiteSpace(workspace))
@@ -149,12 +166,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     [Description("Stops what a working chat is doing (\"stop the … chat\"), as its stop button would, and keeps the chat with all it did. "
         + "Call it at once, without asking first. The stop lands at the chat's next tool step: one that is writing its answer or in a "
         + "long step (a test run, say) stops when that is done. It returns what came of it; say that. To carry on, the user tells the "
-        + "chat to continue, through SendMessage.")]
+        + "chat to continue, through SendMessage. In a window's chat, leave chat out to stop the one chat working in that window.")]
     public async Task<string> StopChat(
-        [Description("The chat's id from list_chats or start_chat; its start is enough.")] string chat,
+        [Description("The chat's id from list_chats or start_chat; its start is enough. Left out: the one working in the window of the chat the user is in.")]
+        string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var one = string.IsNullOrWhiteSpace(chat)
+            ? await WindowChatAsync(c => c.State == SessionState.Working && !c.NeedsYou, "to stop", "is working", cancellationToken).ConfigureAwait(false)
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         if (one.NeedsYou)
         {
             throw new McpException($"The {one.Title} chat is waiting for the user, not working: they can answer or refuse it in its VS Code tab. Nothing was stopped.");
@@ -173,13 +193,16 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "user's words when it was read out to them). Give one answer per question, in their order: the label of the option the "
         + "user meant (\"the first one\" is the first option's label), several labels joined by \", \" where any of them may be "
         + "picked, or the user's own words when they said something else. Only answer what the user said; never pick for them. "
-        + "The chat carries on with the answer.")]
+        + "The chat carries on with the answer. In a window's chat, leave chat out for the one chat of that window that asks.")]
     public async Task<string> AnswerQuestion(
-        [Description("The chat's id from list_chats; its start is enough.")] string chat,
         [Description("One answer per question, in the order the chat asked them.")] string[] answers,
+        [Description("The chat's id from list_chats; its start is enough. Left out: the one asking in the window of the chat the user is in.")]
+        string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var one = string.IsNullOrWhiteSpace(chat)
+            ? await WindowChatAsync(c => Asks(c, ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         var held = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
         var open = held.Where(a => a.Kind == ChatAskKind.Question).ToList();
         var ask = open switch
@@ -219,15 +242,19 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "denies it at once: the chat is told the user's own words beyond the no as message (\"no, run the tests instead\"), or that "
         + "the user denied it, and carries on. decision \"allow\" only PROPOSES the allow: nothing runs. The app reads the prompt back "
         + "to the user and asks for their yes itself, and allows it when their next words are a yes. Say nothing about it after the "
-        + "call. No tool of yours can allow it, and you never say it was allowed before the app did.")]
+        + "call. No tool of yours can allow it, and you never say it was allowed before the app did. In a window's chat, chat may be "
+        + "left out for the one chat of that window that asks.")]
     public async Task<string> AnswerPermission(
-        [Description("The chat's id from list_chats; its start is enough.")] string chat,
         [Description("deny or allow.")] string decision,
+        [Description("The chat's id from list_chats; its start is enough. Left out: the one asking in the window of the chat the user is in.")]
+        string? chat = null,
         [Description("The ask id you were told for the prompt; its start is enough. May be left out when the chat has one prompt open.")] string? ask = null,
         [Description("With deny: the user's words to the chat, when they said more than no.")] string? message = null,
         CancellationToken cancellationToken = default)
     {
-        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var one = string.IsNullOrWhiteSpace(chat)
+            ? await WindowChatAsync(c => Asks(c, ChatAskKind.Permission), "to answer", "asks for permission in Raven's panel", cancellationToken).ConfigureAwait(false)
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         var allow = (decision ?? "").Trim().ToLowerInvariant() switch
         {
             "allow" or "yes" => true,
@@ -301,6 +328,35 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             _ => throw new McpException($"'{chat}' fits more than one chat. Give more of its id."),
         };
     }
+
+    /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard, and for a window gone from the Yard.</summary>
+    private async Task<YardWorkspace?> WindowAsync(CancellationToken ct) => scope?.WorkspaceId is { } id
+        ? (await yard.WorkspacesAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id)
+        : null;
+
+    /// <summary>
+    /// The one chat of the caller's window that <paramref name="fits"/>: what "stop it" means there. None, or more than one,
+    /// is an error that says which there are; so is a call from the Yard's chat, which has no window.
+    /// </summary>
+    /// <param name="what">What it is for: "to stop".</param>
+    /// <param name="doing">What a fitting chat does: "is working".</param>
+    private async Task<YardChat> WindowChatAsync(Func<YardChat, bool> fits, string what, string doing, CancellationToken ct)
+    {
+        var window = await WindowAsync(ct).ConfigureAwait(false)
+            ?? throw new McpException($"Say which chat {what}: give its id from list_chats.");
+        var chats = (await yard.ChatsAsync(ct).ConfigureAwait(false)).Where(c => c.WorkspaceId == window.Id && fits(c)).ToList();
+        return chats switch
+        {
+            [var one] => one,
+            [] => throw new McpException($"No chat in {window.Name} {doing}, so nothing was done. Say so; a chat in another window "
+                + "is acted on only when the user names that window."),
+            _ => throw new McpException($"{chats.Count} chats in {window.Name} fit: "
+                + string.Join("; ", chats.Select(c => $"{c.Title} (id {c.Id[..Math.Min(8, c.Id.Length)]})")) + ". Nothing was done. Ask the user which one."),
+        };
+    }
+
+    /// <summary>The chat waits on an ask of that kind in Raven's panel.</summary>
+    private bool Asks(YardChat chat, ChatAskKind kind) => asks?.Open().Any(a => a.SessionId == chat.Id && a.Kind == kind) == true;
 
     /// <summary>The one workspace a name means; more than one equally good is a question back, none an error.</summary>
     private async Task<WorkspaceMatch> OneWorkspaceAsync(string? name, CancellationToken ct)
