@@ -63,9 +63,6 @@ public sealed partial class ChatAskCard : ObservableObject
     /// <summary>The Raven chat the card is shown in, once placed: what is said about it is said there too.</summary>
     public RavenChat? ShownIn { get; set; }
 
-    /// <summary>The chat whose brain proposed to allow it: what became of the proposal is told to that brain. Null when unknown.</summary>
-    public RavenChat? ProposedBy { get; set; }
-
     /// <summary>The workspace whose tile shows the chat; null until named, or when it is on none.</summary>
     public Guid? WorkspaceId { get; set; }
 

@@ -264,6 +264,65 @@ public sealed class ChatBrainsTests : IDisposable
     }
 
     [Fact]
+    public async Task Closing_the_app_in_the_middle_of_an_answer_keeps_the_conversation_to_pick_up()
+    {
+        var brain = BrainOf(Window3);
+        await AskAsync(brain, "One");
+        var id = _sessions.Load(Window3.ToString("N")).ShouldNotBeNull().Id;
+        _launcher.Last.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")]; // the answer runs on
+        var turn = AskAsync(brain, "Two");
+        await WaitUntil(() => _launcher.Last.Written.Count == 2);
+
+        brain.Dispose(); // the app closes
+        await turn;
+
+        new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(Window3.ToString("N")).ShouldNotBeNull().Id.ShouldBe(id);
+    }
+
+    [Fact]
+    public async Task A_rest_waiting_when_a_question_is_asked_is_dropped_before_the_question_runs()
+    {
+        var brain = BrainOf(Window3);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")];
+        var first = AskAsync(brain, "One");
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+        brain.Rest();
+
+        var asked = brain.AskAsync("Two", TestContext.Current.CancellationToken); // asked, not yet read
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        _launcher.Last.Emit(StreamJson.Result("Half"));
+        await first;
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await foreach (var _ in asked)
+        {
+        }
+
+        _launcher.Started.ShouldHaveSingleItem().Process.Disposed.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_window_s_brain_is_retired_with_its_window_its_process_config_and_conversation_gone()
+    {
+        var made = new List<ClaudeCliBrain>();
+        using var pool = new ChatBrains(window =>
+        {
+            var brain = BrainOf(window);
+            made.Add(brain);
+            return brain;
+        }, sessions: _sessions);
+        await AskAsync(pool.For(Window3), "Hi");
+        var own = Value(_launcher.Started[0].Arguments, "--mcp-config").ShouldNotBeNull();
+
+        pool.Retire(Window3);
+
+        _launcher.Last.Disposed.ShouldBeTrue();
+        File.Exists(own).ShouldBeFalse();
+        _sessions.Load(Window3.ToString("N")).ShouldBeNull();
+        pool.For(Window3);
+        made.Count.ShouldBe(2, "a window back on the Yard gets a new brain");
+    }
+
+    [Fact]
     public async Task A_window_chat_s_tools_name_its_window_in_a_config_of_its_own_and_the_yard_s_use_the_app_s()
     {
         await AskAsync(BrainOf(Window3), "Hi");

@@ -67,9 +67,15 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
         var everywhere = string.Equals(workspace?.Trim(), AllWorkspaces, StringComparison.OrdinalIgnoreCase);
         var byName = !everywhere && !string.IsNullOrWhiteSpace(workspace);
         var window = byName || everywhere ? null : scope?.WorkspaceId;
-        var (workspaces, chats) = byName
+        var (workspaces, chats) = byName || window is not null
             ? await ReadAsync(cancellationToken).ConfigureAwait(false)
             : ([], await yard.ChatsAsync(cancellationToken).ConfigureAwait(false));
+        if (window is { } gone && workspaces.All(w => w.Id != gone))
+        {
+            // Its chats would be none, and "nothing needs you" a wrong answer.
+            throw new McpException("The window of the chat the user is in is not on the Yard any more. Give list_chats the workspace \"all\", or one by name.");
+        }
+
         IEnumerable<YardChat> shown = filter.Trim().ToLowerInvariant() switch
         {
             "needs_me" => chats.Where(c => c.NeedsYou),

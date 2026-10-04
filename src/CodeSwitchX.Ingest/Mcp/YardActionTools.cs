@@ -201,7 +201,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var one = string.IsNullOrWhiteSpace(chat)
-            ? await WindowChatAsync(c => Asks(c, ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
+            ? await WindowChatAsync(Asking(ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
             : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         var held = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
         var open = held.Where(a => a.Kind == ChatAskKind.Question).ToList();
@@ -252,8 +252,14 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("With deny: the user's words to the chat, when they said more than no.")] string? message = null,
         CancellationToken cancellationToken = default)
     {
-        var one = string.IsNullOrWhiteSpace(chat)
-            ? await WindowChatAsync(c => Asks(c, ChatAskKind.Permission), "to answer", "asks for permission in Raven's panel", cancellationToken).ConfigureAwait(false)
+        // An ask id names its prompt wherever it is: two chats of the window may ask at once.
+        var byId = string.IsNullOrWhiteSpace(chat) && !string.IsNullOrWhiteSpace(ask)
+            ? asks?.Open().Where(a => a.Kind == ChatAskKind.Permission && a.Id.StartsWith(ask.Trim(), StringComparison.OrdinalIgnoreCase)).Select(a => a.SessionId)
+                .Distinct().ToList() is [var session] ? session : null
+            : null;
+        var one = byId is not null ? await OneChatAsync(byId, "", cancellationToken).ConfigureAwait(false)
+            : string.IsNullOrWhiteSpace(chat)
+            ? await WindowChatAsync(Asking(ChatAskKind.Permission), "to answer", "asks for permission in Raven's panel", cancellationToken).ConfigureAwait(false)
             : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         var allow = (decision ?? "").Trim().ToLowerInvariant() switch
         {
@@ -291,7 +297,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
         try
         {
-            asks!.Propose(prompt.Id);
+            asks!.Propose(prompt.Id, scope?.WorkspaceId); // the brain of this chat is told what comes of it
         }
         catch (ArgumentException)
         {
@@ -356,8 +362,12 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         };
     }
 
-    /// <summary>The chat waits on an ask of that kind in Raven's panel.</summary>
-    private bool Asks(YardChat chat, ChatAskKind kind) => asks?.Open().Any(a => a.SessionId == chat.Id && a.Kind == kind) == true;
+    /// <summary>Whether a chat waits on an ask of that kind in Raven's panel, from one look at the asks.</summary>
+    private Func<YardChat, bool> Asking(ChatAskKind kind)
+    {
+        var asking = asks?.Open().Where(a => a.Kind == kind).Select(a => a.SessionId).ToHashSet() ?? [];
+        return chat => asking.Contains(chat.Id);
+    }
 
     /// <summary>The one workspace a name means; more than one equally good is a question back, none an error.</summary>
     private async Task<WorkspaceMatch> OneWorkspaceAsync(string? name, CancellationToken ct)

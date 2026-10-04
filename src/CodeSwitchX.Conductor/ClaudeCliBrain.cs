@@ -145,11 +145,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _logger = logger;
     }
 
-    public async IAsyncEnumerable<BrainEvent> AskAsync(string text, [EnumeratorCancellation] CancellationToken ct)
+    public IAsyncEnumerable<BrainEvent> AskAsync(string text, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _uses); // asked, though not read yet: a rest waiting now is dropped
+        return AskCoreAsync(text, ct);
+    }
+
+    private async IAsyncEnumerable<BrainEvent> AskCoreAsync(string text, [EnumeratorCancellation] CancellationToken ct)
     {
         // Off the caller's thread first, the panel's UI thread: looking for claude.exe, starting it and killing an old
         // process tree would otherwise run there whenever no turn is queued ahead.
-        Interlocked.Increment(ref _uses);
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         await _turns.WaitAsync(ct).ConfigureAwait(false);
         IBrainProcess? process = null;
@@ -682,7 +687,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _logger.LogWarning("{Brain} {Why}. Its last errors: {Errors}", _name, why, process.ErrorTail);
         _lost = why;
         Stop();
-        ForgetSession(); // as it says: the conversation is forgotten
+        if (!_disposed)
+        {
+            ForgetSession(); // as it says: the conversation is forgotten. One cut off by the app closing is picked up again.
+        }
     }
 
     /// <summary>

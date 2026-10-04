@@ -5,6 +5,9 @@ public interface IChatBrains
 {
     /// <summary>The brain of a window's chat; of chat 0, the Yard, for null.</summary>
     IConductorBrain For(Guid? workspaceId);
+
+    /// <summary>The window left the Yard: its brain goes, with its process, its config and its conversation.</summary>
+    void Retire(Guid workspaceId);
 }
 
 /// <summary>
@@ -12,7 +15,9 @@ public interface IChatBrains
 /// theirs, and an older one is rested (its process stopped once its turn is over). A rested brain starts again on its next
 /// question and picks its conversation up where it was (<see cref="ClaudeCliBrain"/> resumes it). Thread-safe.
 /// </summary>
-public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = ChatBrains.Warm) : IChatBrains, IDisposable, IAsyncDisposable
+/// <param name="sessions">Where the chats' conversations are kept: a retired window's is forgotten.</param>
+public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = ChatBrains.Warm, IBrainSessionStore? sessions = null)
+    : IChatBrains, IDisposable, IAsyncDisposable
 {
     /// <summary>How many brains keep their process: the chat in use and the one or two used before it.</summary>
     public const int Warm = 3;
@@ -42,6 +47,41 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
             }
 
             return brain;
+        }
+    }
+
+    public void Retire(Guid workspaceId)
+    {
+        PooledBrain? brain;
+        lock (_gate)
+        {
+            if (_disposed || !_brains.Remove(workspaceId, out brain))
+            {
+                brain = null;
+            }
+            else if (brain.Node.List is not null)
+            {
+                _used.Remove(brain.Node);
+            }
+        }
+
+        if (brain is not null)
+        {
+            Dispose(brain.Inner);
+        }
+
+        sessions?.Save(BrainChat.Of(workspaceId, sessions).Key, null);
+    }
+
+    private static void Dispose(IConductorBrain brain)
+    {
+        if (brain is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+        else
+        {
+            brain.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
@@ -96,14 +136,7 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
 
         foreach (var brain in all)
         {
-            if (brain.Inner is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
-            else
-            {
-                brain.Inner.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            }
+            Dispose(brain.Inner);
         }
     }
 

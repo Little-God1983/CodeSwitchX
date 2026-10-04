@@ -17,6 +17,10 @@ public sealed partial class RavenPanelViewModelTests
         public IConductorBrain For(Guid? workspaceId) => workspaceId is { } id
             ? Windows.TryGetValue(id, out var brain) ? brain : Windows[id] = new FakeBrain { Answer = _ => [new BrainText("Window answer.")] }
             : yard;
+
+        public List<Guid> Retired { get; } = [];
+
+        public void Retire(Guid workspaceId) => Retired.Add(workspaceId);
     }
 
     private async Task<(RavenPanelViewModel Vm, FakeChatBrains Brains)> ChatBrainsVmAsync()
@@ -89,7 +93,7 @@ public sealed partial class RavenPanelViewModelTests
         var three = (FakeBrain)brains.For(ContentAutomatorX);
         IEnumerable<BrainEvent> Proposes()
         {
-            asks.Propose("p1"); // as answer_permission does, during the turn
+            asks.Propose("p1", ContentAutomatorX); // as answer_permission does from chat 3's brain, whose header names its window
             yield break;
         }
 
@@ -178,6 +182,44 @@ public sealed partial class RavenPanelViewModelTests
         one[0].ShouldContain("[Chat news the user was given");
         one[1].ShouldNotContain("[Chat news", Case.Sensitive, "told once");
         _brain.Sent[^1].ShouldContain("[Chat news the user was given");
+    }
+
+    /// <summary>
+    /// "Stop it" in chat 3 waits for its brain to start; a question in chat 1 comes, then one in chat 3 again before either
+    /// went in: nothing is lost, and each chat's words go to its own brain.
+    /// </summary>
+    [Fact]
+    public async Task Questions_waiting_on_a_cold_brain_across_chats_all_reach_their_own_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        var three = (FakeBrain)brains.For(ContentAutomatorX);
+        var one = (FakeBrain)brains.For(CodeSwitchX);
+        three.BeforeSent = new TaskCompletionSource(); // starting
+        one.BeforeSent = new TaskCompletionSource();
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "stop it");
+        await Until(() => three.Asked.Count == 1);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "what is here");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "and the tests?");
+        three.BeforeSent.SetResult();
+        one.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        three.Sent.ShouldHaveSingleItem().ShouldEndWith("stop it" + "\n" + "and the tests?");
+        one.Sent.ShouldHaveSingleItem().ShouldEndWith("what is here");
+    }
+
+    [Fact]
+    public async Task A_window_removed_from_the_yard_retires_its_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        brains.Retired.ShouldBe([ContentAutomatorX]);
     }
 
     [Fact]

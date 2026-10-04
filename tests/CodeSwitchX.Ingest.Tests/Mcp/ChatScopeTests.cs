@@ -128,6 +128,34 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task List_chats_of_a_window_gone_from_the_yard_says_so_rather_than_nothing()
+    {
+        var error = await Should.ThrowAsync<McpException>(() => new YardTools(_yard, scope: new ChatScope(Guid.NewGuid())).ListChats(cancellationToken: Ct));
+
+        error.Message.ShouldContain("not on the Yard any more");
+    }
+
+    [Fact]
+    public async Task An_ask_id_picks_the_prompt_though_two_chats_in_the_window_ask()
+    {
+        var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
+        var first = asks.HoldAsync(new ChatAsk("p1",
+            new HookEvent { SessionId = "aaaaaaaa-0001", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+        var second = asks.HoldAsync(new ChatAsk("q9",
+            new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "rm -rf build", null)), CancellationToken.None);
+
+        (await new YardActionTools(_yard, _actions, asks, InCodeSwitchX).AnswerPermission("deny", ask: "q9", cancellationToken: Ct))
+            .ShouldStartWith("Denied. The Raven brain chat");
+        (await new YardActionTools(_yard, _actions, asks, ChatScope.None).AnswerPermission("deny", ask: "p1", cancellationToken: Ct))
+            .ShouldStartWith("Denied. The Speech gate chat");
+
+        (await first).ShouldNotBeNull();
+        (await second).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task A_question_and_a_permission_prompt_are_answered_in_the_window_without_naming_the_chat()
     {
         var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
