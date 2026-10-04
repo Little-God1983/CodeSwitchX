@@ -345,17 +345,18 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         };
     }
 
-    /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard. One gone from the Yard is an error that says so.</summary>
     /// <summary>Chat 0 knows the windows' chats by their summaries only: a card is answered in its window's chat, which reads it out.</summary>
     private void NotFromTheOverview()
     {
         if (scope?.Overview == true)
         {
             throw new McpException("Chat 0, the Yard, does not answer a chat's cards: the user answers them in the window's Raven chat, "
-                + "where the card is read out, or with a click on the card. Say which chat that is; switch_chat takes the user there.");
+                + "where the card is read out, or with a click on the card. Say which chat that is; switch_chat takes the user there. "
+                + "A chat on no tile asks in chat 0 itself: its card is answered there with a click.");
         }
     }
 
+    /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard. One gone from the Yard is an error that says so.</summary>
     private async Task<YardWorkspace?> WindowAsync(CancellationToken ct) => scope?.WorkspaceId is { } id
         ? (await yard.WorkspacesAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id)
             ?? throw new McpException("The window of the chat the user is in is not on the Yard any more. Ask which workspace they mean.")

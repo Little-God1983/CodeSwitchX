@@ -821,11 +821,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 }
 
 /// <summary>A Raven chat, for its brain (<see cref="ChatBrains"/>).</summary>
-/// <param name="Key">What its conversation is kept under: "yard", or the window's workspace id.</param>
+/// <param name="Key">
+/// What its conversation is kept under: "overview" for chat 0, or the window's workspace id. Chat 0's was "yard" before it
+/// became the overview (#124), when it was told cards and news in full: that conversation is not picked up again.
+/// </param>
 /// <param name="WorkspaceId">The window its tools act on when no other is named; null for chat 0, the Yard.</param>
 public sealed record BrainChat(string Key, Guid? WorkspaceId, IBrainSessionStore Sessions)
 {
-    public static BrainChat Of(Guid? workspaceId, IBrainSessionStore sessions) => new(workspaceId?.ToString("N") ?? "yard", workspaceId, sessions);
+    public static BrainChat Of(Guid? workspaceId, IBrainSessionStore sessions) => new(workspaceId?.ToString("N") ?? "overview", workspaceId, sessions);
 }
 
 public enum BrainRole

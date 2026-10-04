@@ -2521,6 +2521,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var cards = waiting switch { 0 => "nothing waiting", 1 => "1 card waiting", _ => $"{waiting} cards waiting" };
             return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "nothing said here yet"}";
         }).ToList();
+        if (WaitingIn(YardChat) is > 0 and var here)
+        {
+            // Chats on no tile ask here, and a removed window's open cards come here: counted, as no summary has them.
+            lines.Add($"Chat 0 itself, for chats on no tile ({(here == 1 ? "1 card waiting" : $"{here} cards waiting")}, answered here with a click)");
+        }
+
         return lines.Count == 0
             ? "[There are no window chats now: no window is on the Yard.]\n"
             : "[The window chats now, as their summaries say: " + string.Join("; ", lines) + ".]\n";
@@ -2552,16 +2558,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         while (_toSummarize.Count > 0)
         {
+            // Taken off the list as it begins: what happens in the chat while it runs sums it up again after.
             var chat = _toSummarize[0];
+            _toSummarize.RemoveAt(0);
             if (Chats.Contains(chat))
             {
-                // Taken off the list as it begins: what happens in the chat while it runs sums it up again after.
-                _toSummarize.RemoveAt(0);
                 await SummarizeAsync(chat);
-            }
-            else
-            {
-                _toSummarize.RemoveAt(0);
             }
         }
     }
@@ -2596,7 +2598,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        var summary = string.Join(' ', words.ToString().Split((char[])['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim())).Trim();
+        // One line, and no bracket: chat 0 is told the summaries inside one, which the summarizer, steered by what a chat
+        // wrote, must not be able to close.
+        var summary = string.Join(' ', words.ToString().Split((char[])['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim())).Trim()
+            .Replace('[', '(').Replace(']', ')');
         if (summary.Length > 0)
         {
             chat.Summary = summary.Length <= SummaryLength ? summary : summary[..(SummaryLength - 1)].TrimEnd() + "…";

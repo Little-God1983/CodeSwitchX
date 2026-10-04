@@ -53,7 +53,7 @@ public sealed class ChatBrainsTests : IDisposable
         arguments.ShouldNotContain("--no-session-persistence");
         var id = Value(arguments, "--session-id").ShouldNotBeNull();
         Guid.TryParse(id, out _).ShouldBeTrue();
-        _sessions.Load("yard").ShouldNotBeNull().Id.ShouldBe(id);
+        _sessions.Load("overview").ShouldNotBeNull().Id.ShouldBe(id);
     }
 
     [Fact]
@@ -518,6 +518,20 @@ public sealed class ChatBrainsTests : IDisposable
             .ShouldBe(YardMcp.OverviewChat, "the tools show chat 0 no card's text");
         overview.Dispose();
         File.Exists(own).ShouldBeFalse("it holds the token");
+    }
+
+    /// <summary>Before #124 chat 0 was told cards and news in full: that conversation must not become the overview's.</summary>
+    [Fact]
+    public async Task The_overview_does_not_pick_up_chat_zero_s_conversation_from_before_it_was_the_overview()
+    {
+        _sessions.Save("yard", new BrainSession("11111111-0000-0000-0000-000000000000", BrainSettings.DefaultOverviewModel, _time.GetUtcNow()));
+        var overview = new ClaudeCliBrain(_paths, _settings, _launcher, () => Claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Overview,
+            BrainChat.Of(null, _sessions));
+
+        await AskAsync(overview, "What's going on?");
+
+        Value(_launcher.Started.ShouldHaveSingleItem().Arguments, "--resume").ShouldBeNull();
+        overview.Dispose();
     }
 
     [Fact]
