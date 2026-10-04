@@ -32,6 +32,10 @@ public sealed class ChatScopeTests
 
         context.Request.Headers[YardMcp.ChatHeader] = "not a window";
         ChatScope.Of(context).ShouldBe(ChatScope.None);
+
+        context.Request.Headers[YardMcp.ChatHeader] = YardMcp.OverviewChat;
+        ChatScope.Of(context).ShouldBe(ChatScope.Yard);
+        ChatScope.Yard.WorkspaceId.ShouldBeNull("chat 0 is of no window in particular");
     }
 
     [Fact]
@@ -168,6 +172,45 @@ public sealed class ChatScopeTests
 
         error.Message.ShouldStartWith("No chat in CodeSwitchX asks for permission");
         held.IsCompleted.ShouldBeFalse("it is Diffusion-Full's, which the user did not name");
+    }
+
+    private ChatAsks AsksWithPermission(out Task<ChatAskClosed?> held)
+    {
+        var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };
+        held = asks.HoldAsync(new ChatAsk("p1",
+            new HookEvent { SessionId = "cccccccc-0003", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+        return asks;
+    }
+
+    [Fact]
+    public async Task Chat_zero_is_told_a_card_waits_and_where_but_not_what_it_asks()
+    {
+        var asks = AsksWithPermission(out _);
+
+        var chats = await new YardTools(_yard, asks, ChatScope.Yard).ListChats(cancellationToken: Ct);
+        var detail = await new YardTools(_yard, asks, ChatScope.Yard).GetChat("cccccccc", Ct);
+
+        var asking = chats.Single(c => c.Id == "cccccccc-0003");
+        asking.Asks.ShouldBe("a permission prompt, answered in its window's Raven chat");
+        detail.Asks.ShouldBe(asking.Asks);
+        (await new YardTools(_yard, asks, ChatScope.Yard).GetChat("bbbbbbbb", Ct)).LastNotification.ShouldBeNull("what the chat said: chat 0 knows a window's chats by its summary only");
+        (await new YardTools(_yard, asks, InCodeSwitchX).GetChat("bbbbbbbb", Ct)).LastNotification.ShouldNotBeNull();
+        (await new YardTools(_yard, asks, InDiffusion).ListChats(cancellationToken: Ct)).Single().Asks.ShouldNotBeNull().ShouldContain("npm test", customMessage: "a window's chat reads it");
+    }
+
+    [Fact]
+    public async Task Chat_zero_answers_no_card()
+    {
+        var asks = AsksWithPermission(out var held);
+        var tools = new YardActionTools(_yard, _actions, asks, ChatScope.Yard);
+
+        (await Should.ThrowAsync<McpException>(() => tools.AnswerPermission("deny", chat: "cccccccc", cancellationToken: Ct)))
+            .Message.ShouldContain("answers them in the window's Raven chat");
+        (await Should.ThrowAsync<McpException>(() => tools.AnswerQuestion(["Yes"], chat: "cccccccc", cancellationToken: Ct)))
+            .Message.ShouldContain("answers them in the window's Raven chat");
+
+        held.IsCompleted.ShouldBeFalse();
     }
 
     [Fact]

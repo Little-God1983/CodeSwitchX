@@ -53,7 +53,7 @@ public sealed class ChatBrainsTests : IDisposable
         arguments.ShouldNotContain("--no-session-persistence");
         var id = Value(arguments, "--session-id").ShouldNotBeNull();
         Guid.TryParse(id, out _).ShouldBeTrue();
-        _sessions.Load("yard").ShouldNotBeNull().Id.ShouldBe(id);
+        _sessions.Load("overview").ShouldNotBeNull().Id.ShouldBe(id);
     }
 
     [Fact]
@@ -493,6 +493,80 @@ public sealed class ChatBrainsTests : IDisposable
         pool.Dispose();
 
         brains.ShouldAllBe(b => b.Disposed);
+    }
+
+    [Fact]
+    public async Task Chat_zero_s_brain_is_the_overview_on_its_own_model_with_no_tool_that_answers_a_card()
+    {
+        _settings.Model = "claude-opus-5-5";
+        _settings.OverviewModel = "claude-sonnet-5-5";
+        var overview = new ClaudeCliBrain(_paths, _settings, _launcher, () => Claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Overview,
+            BrainChat.Of(null, _sessions));
+
+        await AskAsync(overview, "What's going on?");
+
+        var arguments = _launcher.Started.ShouldHaveSingleItem().Arguments;
+        Value(arguments, "--model").ShouldBe("claude-sonnet-5-5");
+        Value(arguments, "--system-prompt").ShouldBe(BrainSettings.OverviewPrompt);
+        Value(arguments, "--disallowedTools").ShouldBe("mcp__codeswitchx__answer_question,mcp__codeswitchx__answer_permission");
+        Value(arguments, "--allowedTools").ShouldBe(ClaudeCliBrain.AllowedTools);
+        Value(arguments, "--session-id").ShouldNotBeNull("its conversation is kept, as a window chat's is");
+        var own = Value(arguments, "--mcp-config").ShouldNotBeNull();
+        own.ShouldNotBe(_paths.McpConfigFile);
+        using var config = JsonDocument.Parse(File.ReadAllText(own));
+        config.RootElement.GetProperty("mcpServers").GetProperty(YardMcp.ServerName).GetProperty("headers").GetProperty(YardMcp.ChatHeader).GetString()
+            .ShouldBe(YardMcp.OverviewChat, "the tools show chat 0 no card's text");
+        overview.Dispose();
+        File.Exists(own).ShouldBeFalse("it holds the token");
+    }
+
+    /// <summary>Before #124 chat 0 was told cards and news in full: that conversation must not become the overview's.</summary>
+    [Fact]
+    public async Task The_overview_does_not_pick_up_chat_zero_s_conversation_from_before_it_was_the_overview()
+    {
+        _sessions.Save("yard", new BrainSession("11111111-0000-0000-0000-000000000000", BrainSettings.DefaultOverviewModel, _time.GetUtcNow()));
+        var overview = new ClaudeCliBrain(_paths, _settings, _launcher, () => Claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Overview,
+            BrainChat.Of(null, _sessions));
+
+        await AskAsync(overview, "What's going on?");
+
+        Value(_launcher.Started.ShouldHaveSingleItem().Arguments, "--resume").ShouldBeNull();
+        overview.Dispose();
+    }
+
+    [Fact]
+    public async Task A_window_chat_s_brain_keeps_the_window_model_and_the_tools_that_answer_cards()
+    {
+        _settings.Model = "claude-opus-5-5";
+
+        await AskAsync(BrainOf(Window3), "Deny it");
+
+        var arguments = _launcher.Started.ShouldHaveSingleItem().Arguments;
+        Value(arguments, "--model").ShouldBe("claude-opus-5-5");
+        Value(arguments, "--system-prompt").ShouldBe(BrainSettings.SystemPrompt);
+        Value(arguments, "--disallowedTools").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_summarizer_has_no_tools_runs_on_the_overview_model_and_keeps_nothing_from_one_summary_to_the_next()
+    {
+        _settings.Model = "claude-opus-5-5";
+        var summarizer = new ClaudeCliBrain(_paths, _settings, _launcher, () => Claude, _time, NullLogger<ClaudeCliBrain>.Instance, BrainRole.Summarizer,
+            BrainChat.Of(Window3, _sessions));
+
+        await AskAsync(summarizer, "Chat 3, ContentAutomatorX.");
+        await AskAsync(summarizer, "Chat 1, CodeSwitchX.");
+
+        _launcher.Started.Count.ShouldBe(2, "a process per summary: chat 3's words must not reach chat 1's summary");
+        _launcher.Started[0].Process.Disposed.ShouldBeTrue();
+        var arguments = _launcher.Started[0].Arguments;
+        Value(arguments, "--model").ShouldBe(BrainSettings.DefaultOverviewModel);
+        Value(arguments, "--system-prompt").ShouldBe(ClaudeCliBrain.SummarizerPrompt);
+        Value(arguments, "--tools").ShouldBe("");
+        Value(arguments, "--mcp-config").ShouldBe(ClaudeCliBrain.NoMcpServers);
+        Value(arguments, "--allowedTools").ShouldBeNull();
+        arguments.ShouldContain("--no-session-persistence");
+        _sessions.Load(Window3.ToString("N")).ShouldBeNull();
     }
 
     private static async Task WaitUntil(Func<bool> condition)

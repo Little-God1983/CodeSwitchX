@@ -103,7 +103,7 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
         }
 
         var asked = asks?.Open().ToLookup(a => a.SessionId);
-        return shown.Select(c => ChatView.Of(c, AsksOf(asked, c.Id))).ToList();
+        return shown.Select(c => ChatView.Of(c, AsksOf(asked, c.Id, scope?.Overview == true))).ToList();
     }
 
     [McpServerTool(Name = "get_chat", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -114,10 +114,11 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
         var key = (id ?? "").Trim();
         var chats = await yard.ChatsAsync(cancellationToken).ConfigureAwait(false);
         var found = chats.Where(c => c.Id.StartsWith(key, StringComparison.OrdinalIgnoreCase)).ToList();
+        var overview = scope?.Overview == true;
         return found switch
         {
             _ when key.Length == 0 => throw new McpException("Give a chat id from list_chats."),
-            [var chat] => ChatDetailView.Of(chat, AsksOf(asks?.Open().ToLookup(a => a.SessionId), chat.Id)),
+            [var chat] => ChatDetailView.Of(chat, AsksOf(asks?.Open().ToLookup(a => a.SessionId), chat.Id, overview), overview),
             [] => throw new McpException($"The Yard shows no chat '{id}'. list_chats lists them."),
             _ => throw new McpException($"'{id}' fits {found.Count} chats. Give more of the id."),
         };
@@ -126,11 +127,13 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
     /// <summary>
     /// What the chat asks in Raven's panel, as the brain reads it; null when it asks nothing there. Two held asks (agents
     /// asking side by side) read apart from one ask of two questions, whose questions "; " joins. A permission prompt
-    /// carries its ask id, which answer_permission names it by.
+    /// carries its ask id, which answer_permission names it by. To chat 0, the overview, only what kind of card waits, and where.
     /// </summary>
-    private static string? AsksOf(ILookup<string, ChatAsk>? asked, string chatId) =>
-        asked?[chatId].Select(a => a.Kind == ChatAskKind.Permission ? $"{a.Describe()} (ask id {a.Id})" : a.Describe()).ToList() is { Count: > 0 } said
-            ? string.Join(AlsoAsks, said) : null;
+    private static string? AsksOf(ILookup<string, ChatAsk>? asked, string chatId, bool overview = false) =>
+        asked?[chatId].Select(a => overview ? (a.Kind == ChatAskKind.Permission ? "a permission prompt" : "a question")
+                : a.Kind == ChatAskKind.Permission ? $"{a.Describe()} (ask id {a.Id})" : a.Describe()).ToList() is { Count: > 0 } said
+            ? overview ? $"{string.Join(" and ", said)}, answered in its window's Raven chat" : string.Join(AlsoAsks, said)
+            : null;
 
     /// <summary>Between two asks of one chat.</summary>
     internal const string AlsoAsks = " | Separately, it also asks: ";
@@ -211,7 +214,8 @@ public sealed record ChatView(string Id, string Title, string Workspace, int Wor
 public sealed record ChatDetailView(string Id, string Title, string Workspace, int WorkspaceNumber, string State, string For, DateTimeOffset Since, string? Model,
     string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven, string? SendTo, string? Asks = null)
 {
-    internal static ChatDetailView Of(YardChat chat, string? asks = null) => new(
+    /// <param name="overview">For chat 0: without the last notification, what the chat said, as chat 0 knows a window's chats by its summary only.</param>
+    internal static ChatDetailView Of(YardChat chat, string? asks = null, bool overview = false) => new(
         chat.Id, chat.Title, chat.Workspace, chat.WorkspaceNumber, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
-        YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName, asks);
+        YardTools.Percent(chat.ContextFill), overview ? null : chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName, asks);
 }

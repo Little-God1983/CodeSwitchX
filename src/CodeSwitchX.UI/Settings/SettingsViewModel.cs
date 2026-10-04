@@ -58,6 +58,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The model Raven's brain answers with; a change takes effect with the next question, which starts a new conversation.</summary>
     [ObservableProperty] private string _ravenBrainModel = BrainSettings.DefaultModel;
 
+    /// <summary>The model chat 0, the overview, answers with, and its chat summaries are worded with (#124).</summary>
+    [ObservableProperty] private string _ravenOverviewModel = BrainSettings.DefaultOverviewModel;
+
     /// <summary>What a chat Raven starts runs with unless said otherwise: an alias name or model id, or <see cref="ClaudeDefault"/>.</summary>
     [ObservableProperty] private string _ravenChatModel = ClaudeDefault;
 
@@ -329,6 +332,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenBrainModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenBrainModel, "the Raven brain model", ct) is { Length: > 0 } model
                 ? model
                 : BrainSettings.DefaultModel;
+            RavenOverviewModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenOverviewModel, "chat 0's model", ct) is { Length: > 0 } overview
+                ? overview
+                : BrainSettings.DefaultOverviewModel;
             RavenModelAliases = await LoadOrDefaultAsync<string>(SettingKeys.RavenModelAliases, "the model aliases", ct) is { Length: > 0 } aliases
                 ? aliases
                 : ChatModels.FormatAliases(ChatModels.DefaultAliases);
@@ -574,6 +580,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _brain.Model = value;
         Persist(SettingKeys.RavenBrainModel, value);
+    }
+
+    /// <summary>As <see cref="OnRavenBrainModelChanged"/>, for chat 0.</summary>
+    partial void OnRavenOverviewModelChanged(string value)
+    {
+        _brain.OverviewModel = value;
+        Persist(SettingKeys.RavenOverviewModel, value);
     }
 
     /// <summary>The models the Settings view offers to pick from; any other id can be typed.</summary>

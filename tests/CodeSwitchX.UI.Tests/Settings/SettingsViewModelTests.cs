@@ -207,6 +207,31 @@ public class SettingsViewModelTests : IDisposable
         await _store.DidNotReceive().SetAsync(SettingKeys.RavenBrainModel, "claude-sonnet-5-5", Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Chat_zero_s_model_is_loaded_into_the_brain_and_saved_apart_from_the_windows()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenOverviewModel, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("claude-sonnet-5-5"));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenOverviewModel.ShouldBe("claude-sonnet-5-5");
+        _brain.OverviewModel.ShouldBe("claude-sonnet-5-5");
+        _brain.Model.ShouldBe(BrainSettings.DefaultModel);
+
+        _vm.RavenOverviewModel = "claude-opus-5-5";
+        await FlushAsync();
+
+        _brain.OverviewModel.ShouldBe("claude-opus-5-5");
+        await _store.Received().SetAsync(SettingKeys.RavenOverviewModel, "claude-opus-5-5", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task No_stored_model_for_chat_zero_means_haiku()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenOverviewModel.ShouldBe(BrainSettings.DefaultOverviewModel);
+        _brain.OverviewModel.ShouldBe("claude-haiku-4-5-20251001");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

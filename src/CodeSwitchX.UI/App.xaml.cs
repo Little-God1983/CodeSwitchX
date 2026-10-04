@@ -206,7 +206,7 @@ public partial class App : Application
         services.AddSingleton<BrainSettings>();
         services.AddSingleton<IBrainProcessLauncher, BrainProcessLauncher>();
         // A brain per Raven chat, each with its conversation kept (and picked up again after a restart) and its tools on its
-        // window; few run at a time. Chat 0's is the Yard's.
+        // window; few run at a time. Chat 0's is the Yard's overview, which knows the window chats by their summaries only.
         services.AddSingleton(sp =>
         {
             var paths = sp.GetRequiredService<AppPaths>();
@@ -214,15 +214,18 @@ public partial class App : Application
             ChatMcpConfig.Clear(Path.Combine(paths.RavenDirectory, "mcp")); // a crash left them; each brain writes its own
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
                 () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
-                BrainRole.Raven, BrainChat.Of(window, sessions)));
+                window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions)));
         });
         services.AddSingleton<IChatBrains>(sp => sp.GetRequiredService<ChatBrains>());
         services.AddSingleton<IConductorBrain>(sp => sp.GetRequiredService<ChatBrains>().For(null));
         // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the
         // brain that acts.
-        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),
+        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => ToollessBrain(sp, BrainRole.Teller));
+        // The summarizer, likewise with no tools, words the line chat 0 knows each window's chat by.
+        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.SummarizerKey, (sp, _) => ToollessBrain(sp, BrainRole.Summarizer));
+        static ClaudeCliBrain ToollessBrain(IServiceProvider sp, BrainRole role) => new(sp.GetRequiredService<AppPaths>(),
             sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), BrainRole.Teller));
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,

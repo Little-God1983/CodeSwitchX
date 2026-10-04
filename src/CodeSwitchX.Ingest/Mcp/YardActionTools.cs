@@ -200,6 +200,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         string? chat = null,
         CancellationToken cancellationToken = default)
     {
+        NotFromTheOverview();
         var one = string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(Asking(ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
             : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
@@ -252,6 +253,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("With deny: the user's words to the chat, when they said more than no.")] string? message = null,
         CancellationToken cancellationToken = default)
     {
+        NotFromTheOverview();
         // An ask id names its prompt, also when two chats of the window ask at once; in a window's chat only among that
         // window's chats: another window's is answered only when the user names it.
         string? byId = null;
@@ -341,6 +343,17 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             [] => throw new McpException($"The Yard shows no chat '{chat}'.{otherwise}"),
             _ => throw new McpException($"'{chat}' fits more than one chat. Give more of its id."),
         };
+    }
+
+    /// <summary>Chat 0 knows the windows' chats by their summaries only: a card is answered in its window's chat, which reads it out.</summary>
+    private void NotFromTheOverview()
+    {
+        if (scope?.Overview == true)
+        {
+            throw new McpException("Chat 0, the Yard, does not answer a chat's cards: the user answers them in the window's Raven chat, "
+                + "where the card is read out, or with a click on the card. Say which chat that is; switch_chat takes the user there. "
+                + "A chat on no tile asks in chat 0 itself: its card is answered there with a click.");
+        }
     }
 
     /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard. One gone from the Yard is an error that says so.</summary>
