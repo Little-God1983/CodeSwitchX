@@ -308,7 +308,7 @@ public class ShellViewModelTests
         _h.App.Number = 2;
         await _h.Shell.InitializeAsync(CancellationToken.None);
 
-        _h.Shell.Raven.SelectChatCommand.Execute(_h.Shell.Raven.Chats[1]);
+        _h.Shell.Raven.SelectedChat = _h.Shell.Raven.Chats[1];
 
         _h.Shell.Mode.ShouldBe(ShellMode.Yard);
         _h.Launcher.ReceivedCalls().ShouldBeEmpty();

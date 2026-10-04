@@ -54,11 +54,11 @@ public sealed partial class RavenPanelViewModelTests
         _ = asks.HoldAsync(PermittingIn("b", "p2"), CancellationToken.None);
 
         vm.Shown.ShouldBeEmpty("the Yard's chat has neither");
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         vm.Shown.ShouldHaveSingleItem().Ask!.Ask.SessionId.ShouldBe("a");
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+        vm.SelectedChat = ChatNumbered(vm, 1);
         vm.Shown.ShouldHaveSingleItem().Ask!.Ask.SessionId.ShouldBe("b");
-        vm.SelectChatCommand.Execute(vm.ActivityChat);
+        vm.SelectedChat = vm.ActivityChat;
         vm.Shown.Select(e => (e.Chat.Number, e.Ask!.Ask.SessionId)).ShouldBe([(3, "a"), (1, "b")]);
     }
 
@@ -68,10 +68,10 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await ChatsVmAsync();
         _brain.Gate = new TaskCompletionSource();
         _brain.Answer = _ => [new BrainText("Running."), new BrainToolCall("t1", "list_chats", "{}")];
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
 
         Type(vm, "Is the retry test green?");
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+        vm.SelectedChat = ChatNumbered(vm, 1);
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
 
@@ -86,10 +86,10 @@ public sealed partial class RavenPanelViewModelTests
 
         Type(vm, "one");
         await WithinAsync(vm.PendingAnswers);
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "stop it");
         await WithinAsync(vm.PendingAnswers);
-        vm.SelectChatCommand.Execute(vm.YardChat);
+        vm.SelectedChat = vm.YardChat;
         Type(vm, "two");
         await WithinAsync(vm.PendingAnswers);
         Type(vm, "three");
@@ -114,9 +114,9 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Gate = new TaskCompletionSource();
         _brain.IgnoresCancel = true;
         Type(vm, "zero");
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "stop it"); // waits behind "zero"
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+        vm.SelectedChat = ChatNumbered(vm, 1);
 
         Type(vm, "open it");
         _brain.Gate.SetResult();
@@ -135,9 +135,9 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Gate = new TaskCompletionSource();
         _brain.IgnoresCancel = true;
         Type(vm, "zero");
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "how far is it"); // waits behind "zero"
-        vm.SelectChatCommand.Execute(vm.YardChat);
+        vm.SelectedChat = vm.YardChat;
 
         Type(vm, "stop it");
         _brain.Gate.SetResult();
@@ -152,10 +152,10 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_yard_is_named_again_when_the_question_that_named_it_never_went_in()
     {
         var (vm, _) = await ChatsVmAsync();
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "how far is it");
         await WithinAsync(vm.PendingAnswers);
-        vm.SelectChatCommand.Execute(vm.YardChat);
+        vm.SelectedChat = vm.YardChat;
         _brain.BeforeSent = new TaskCompletionSource(); // "what needs me" is asked but not in yet
         Type(vm, "what needs me");
         await Until(() => _brain.Asked.Count == 2);
@@ -171,7 +171,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Typing_in_activity_goes_to_the_yard_s_chat()
     {
         var (vm, _) = await ChatsVmAsync();
-        vm.SelectChatCommand.Execute(vm.ActivityChat);
+        vm.SelectedChat = vm.ActivityChat;
 
         Type(vm, "What's waiting on me?");
         await WithinAsync(vm.PendingAnswers);
@@ -194,19 +194,43 @@ public sealed partial class RavenPanelViewModelTests
         vm.Chats.Select(c => c.Label).ShouldBe(["0 Yard", "1 CodeSwitchX", "Activity"]);
     }
 
+    /// <summary>A workspace added again is a new one (a new id), and may take the freed number: its chat starts empty, the old entries stay in Activity.</summary>
     [Fact]
-    public async Task A_window_removed_and_added_back_keeps_its_chat()
+    public async Task A_window_that_takes_a_removed_one_s_number_starts_an_empty_chat()
     {
         var (vm, _) = await ChatsVmAsync();
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "hello");
         await WithinAsync(vm.PendingAnswers);
 
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (Guid.NewGuid(), 3, "RawCutX")]);
+        vm.SelectedChat = ChatNumbered(vm, 3);
 
-        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("hello");
+        vm.Shown.ShouldBeEmpty();
+        vm.Log.ShouldHaveSingleItem().Text.ShouldBe("hello");
+    }
+
+    /// <summary>
+    /// A window removed while its chat waits on a card: the card moves to the Yard's chat, where chats on no tile ask, so
+    /// it can still be answered by a click (Activity has no buttons).
+    /// </summary>
+    [Fact]
+    public async Task A_removed_window_s_open_card_moves_to_the_yard_s_chat_and_can_still_be_answered()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "hello");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        var card = vm.Shown.ShouldHaveSingleItem("its other entries stay in Activity only").Ask.ShouldNotBeNull();
+        vm.AllowCommand.Execute(card);
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
     }
 
     [Fact]
@@ -250,7 +274,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await ChatsVmAsync();
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading Qwen3-TTS"));
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
 
         _speech.Report(new TextToSpeechStatus(TextToSpeechState.Failed, "CUDA out of memory"));
 
@@ -279,7 +303,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task What_the_panel_says_about_itself_is_said_in_the_chat_the_user_is_in()
     {
         var (vm, _) = await ChatsVmAsync();
-        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.SelectedChat = ChatNumbered(vm, 3);
 
         vm.Note("Using the headset again.");
 

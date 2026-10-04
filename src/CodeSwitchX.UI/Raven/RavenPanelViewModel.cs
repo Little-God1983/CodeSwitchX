@@ -2675,6 +2675,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        ShowSelected();
+    }
+
+    /// <summary>Fills <see cref="Shown"/> anew with the selected chat's entries.</summary>
+    private void ShowSelected()
+    {
         Shown.Clear();
         foreach (var entry in Log.Where(IsShown))
         {
@@ -2682,27 +2688,31 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
-    private void SelectChat(RavenChat? chat)
-    {
-        if (chat is not null && Chats.Contains(chat))
-        {
-            SelectedChat = chat;
-        }
-    }
-
     /// <summary>
     /// The workspaces the Yard shows, by number: each gets its chat, a renamed one keeps it, a removed one's chat leaves the
-    /// list (its entries stay in Activity; the Yard's chat is selected if it was). UI thread.
+    /// list. Its entries stay in Activity, the Yard's chat is selected if it was, and a card of it still open moves to the
+    /// Yard's chat, where chats on no tile ask: Activity has no buttons to answer it with. UI thread.
     /// </summary>
     public void SetWorkspaces(IEnumerable<(Guid Id, int Number, string Name)> workspaces)
     {
         var wanted = workspaces.Where(w => w.Number > 0).OrderBy(w => w.Number).ToList();
         foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id || w.Number != c.Number)).ToList())
         {
+            var moved = false;
+            foreach (var open in Log.Where(e => e.Chat == gone && e.Ask is { IsOpen: true }))
+            {
+                open.Chat = YardChat;
+                open.Ask!.ShownIn = YardChat;
+                moved = true;
+            }
+
             if (SelectedChat == gone)
             {
                 SelectedChat = YardChat;
+            }
+            else if (moved)
+            {
+                ShowSelected(); // the Yard's chat gets the cards, Activity their new number
             }
 
             Chats.Remove(gone);
@@ -2714,8 +2724,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var chat = Chats.FirstOrDefault(c => c.WorkspaceId == id);
             if (chat is null)
             {
-                chat = _chatsBefore.TryGetValue(id, out var before) && before.Number == number ? before : RavenChat.Of(id, number, name);
-                _chatsBefore[id] = chat;
+                chat = RavenChat.Of(id, number, name);
                 Chats.Insert(i + 1, chat);
             }
 
@@ -2736,9 +2745,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
         }
     }
-
-    /// <summary>Every chat a workspace had in this run: a workspace removed and added back gets its entries back.</summary>
-    private readonly Dictionary<Guid, RavenChat> _chatsBefore = [];
 
     /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
     private RavenChat ChatOf(Guid? workspaceId) =>
