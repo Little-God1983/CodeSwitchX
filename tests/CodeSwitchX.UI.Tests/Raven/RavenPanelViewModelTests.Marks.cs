@@ -172,6 +172,82 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task An_answer_that_goes_on_after_the_user_left_its_chat_counts_once()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Pause = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("It is green, "), new BrainText("but two tests "), new BrainText("were skipped.")];
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+
+        Type(vm, "Is the retry test green?");
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        three.Unread.ShouldBe(0, "its beginning came before the user's eyes");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        three.Unread.ShouldBe(1, "the rest came unread, and is one line");
+
+        vm.SelectedChat = three;
+        three.Unread.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_question_raven_could_not_answer_counts_in_the_chat_the_user_left()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainFailed("Claude Code stopped.")];
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+
+        Type(vm, "Is the retry test green?");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        three.Unread.ShouldBe(1, "the user would not learn the question went unanswered");
+    }
+
+    /// <summary>Activity shows every line, so none that comes there is unread; its cards have no buttons, so opening it sees no chat's card.</summary>
+    [Fact]
+    public async Task Activity_reads_every_chat_s_lines_and_opens_no_chat()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _ = asks.HoldAsync(PermittingIn("zz", "p0"), CancellationToken.None); // a chat on no tile asks in the Yard's chat
+        await Until(() => vm.YardChat.IsWaitingUnseen);
+
+        vm.SelectedChat = vm.ActivityChat;
+        vm.YardChat.IsWaitingUnseen.ShouldBeTrue("Activity is not the Yard's chat: the card cannot be answered there");
+        vm.YardChat.Unread.ShouldBe(1);
+
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        var three = ChatNumbered(vm, 3);
+        three.IsWaitingUnseen.ShouldBeTrue();
+        three.Unread.ShouldBe(0, "the card came before the user's eyes, in Activity");
+
+        vm.SelectedChat = vm.YardChat;
+        vm.YardChat.IsWaitingUnseen.ShouldBeFalse();
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_card_the_user_has_seen_does_not_blink_again_when_its_window_is_removed()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        vm.YardChat.IsWaiting.ShouldBeTrue();
+        vm.YardChat.IsWaitingUnseen.ShouldBeFalse();
+    }
+
+    [Fact]
     public void The_badge_says_at_most_nine_plus()
     {
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,

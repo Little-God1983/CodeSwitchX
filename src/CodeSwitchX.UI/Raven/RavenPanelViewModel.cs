@@ -1711,6 +1711,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainText { Delta: var piece }:
                         reply!.Text += piece;
+                        CountUnread(reply);
                         spoken.Add(piece);
                         break;
                     case BrainToolCall call:
@@ -2645,14 +2646,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The list's marks for a new entry: a card waits in its chat, and blinks there until the chat is opened; Raven's
-    /// answers, news lines and cards that come while the user is in another chat are counted; a chat that failed is marked.
-    /// The user's own words and the panel's notes are said where the user is, and count for nothing.
+    /// The list's marks for a new entry: a card waits in its chat, and blinks there until the chat is opened, as a chat
+    /// that failed is marked until then; Raven's answers and warnings, news lines and cards are counted when they come
+    /// where the user does not see them. Activity shows every line, so none that comes there is unread, but it opens no
+    /// chat: its cards have no buttons. The user's own words and the panel's notes count for nothing.
     /// </summary>
     private void Mark(RavenLogEntry entry)
     {
         var chat = entry.Chat;
-        var elsewhere = chat != CurrentChat;
+        var elsewhere = chat != SelectedChat;
         if (entry.Ask is { IsOpen: true } card)
         {
             card.PropertyChanged += (_, e) =>
@@ -2666,21 +2668,34 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             chat.IsWaitingUnseen |= elsewhere;
         }
 
-        if (!elsewhere)
+        if (elsewhere && entry.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true)
+        {
+            chat.HasFailed = true;
+        }
+
+        CountUnread(entry);
+    }
+
+    /// <summary>
+    /// Counts an entry the user does not see, once: a news card by its lines, Raven's answer, a warning (the question
+    /// went unanswered) and a card as one. Called again as a reply grows: one whose beginning the user saw before
+    /// leaving its chat counts for the rest.
+    /// </summary>
+    private void CountUnread(RavenLogEntry entry)
+    {
+        if (entry.IsUnread || IsShown(entry))
         {
             return;
         }
 
-        chat.Unread += entry.Kind switch
+        var lines = entry.Kind switch
         {
             RavenLogKind.News => entry.Lines?.Count ?? 0,
-            RavenLogKind.Raven or RavenLogKind.Question or RavenLogKind.Permission => 1,
+            RavenLogKind.Raven or RavenLogKind.Warning or RavenLogKind.Question or RavenLogKind.Permission => 1,
             _ => 0,
         };
-        if (entry.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true)
-        {
-            chat.HasFailed = true;
-        }
+        entry.IsUnread = lines > 0;
+        entry.Chat.Unread += lines;
     }
 
     /// <summary>Whether a card in the chat still waits; with none, nothing blinks.</summary>
@@ -2691,8 +2706,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>The user opened the chat: what came there is seen; a card still waiting keeps its outline, no longer blinking.</summary>
-    private static void Seen(RavenChat chat)
+    private void Seen(RavenChat chat)
     {
+        foreach (var entry in Log.Where(e => e.IsUnread && e.Chat == chat))
+        {
+            entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
+        }
+
         chat.Unread = 0;
         chat.HasFailed = false;
         chat.IsWaitingUnseen = false;
@@ -2772,7 +2792,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
-        Seen(CurrentChat);
+        if (!value.IsActivity)
+        {
+            Seen(value);
+        }
+
         ShowSelected();
     }
 
@@ -2807,7 +2831,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (moved)
             {
                 YardChat.IsWaiting = true;
-                YardChat.IsWaitingUnseen |= CurrentChat != YardChat && SelectedChat != gone;
+                YardChat.IsWaitingUnseen |= gone.IsWaitingUnseen && SelectedChat != YardChat; // seen in its window's chat is seen
             }
 
             if (SelectedChat == gone)
