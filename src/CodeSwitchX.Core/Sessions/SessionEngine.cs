@@ -100,7 +100,9 @@ public sealed class SessionEngine : IDisposable
                 var restored = snapshot with { HookSeen = false };
                 _sessions[restored.SessionId] = restored;
 
-                var corrected = restored;
+                // A title stored before #118 can be the start of a cross-session envelope, which names no task: none then. No cut:
+                // a title is never shortened here, whatever length it was stored at.
+                var corrected = restored.TitleLocked ? restored : restored with { Title = ChatTitle.FromPrompt(restored.Title, int.MaxValue) };
                 if (corrected.ClaudePid is { } pid && !ProcessStillRuns(pid, corrected.LastEventAt))
                 {
                     corrected = corrected with { ClaudePid = null };

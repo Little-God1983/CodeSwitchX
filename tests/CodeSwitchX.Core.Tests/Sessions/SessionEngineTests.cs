@@ -284,6 +284,32 @@ public class SessionEngineTests
         _engine.Get("s9")!.State.ShouldBe(SessionState.Ended);
     }
 
+    /// <summary>
+    /// Before #118 a chat Raven started was titled by the start of SendMessage's envelope. Such a stored title carries
+    /// no task, so it is dropped on restore; the next prompt names the chat. A rename stays whatever it says.
+    /// </summary>
+    [Fact]
+    public void Restore_drops_a_stored_title_that_is_only_the_start_of_a_cross_session_message()
+    {
+        var at = _time.GetUtcNow().AddMinutes(-1);
+        var envelope = new SessionSnapshot
+        {
+            SessionId = "raven-started", State = SessionState.Idle, StartedAt = at, LastEventAt = at, StateSince = at,
+            Title = """<cross-session-message from="uds:\\.\pipe\LOCAL\cc-msg-6bd2…""",
+        };
+        var renamed = envelope with { SessionId = "renamed", TitleLocked = true };
+        var readable = envelope with { SessionId = "readable", Title = "Fix the build" };
+
+        _engine.Restore([envelope, renamed, readable]);
+
+        _engine.Get("raven-started")!.Title.ShouldBeNull();
+        _engine.Get("renamed")!.Title.ShouldBe(envelope.Title);
+        _engine.Get("readable")!.Title.ShouldBe("Fix the build");
+
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "raven-started", prompt: "Run the tests"));
+        _engine.Get("raven-started")!.Title.ShouldBe("Run the tests");
+    }
+
     /// <summary>The writer listens before the engine restores, so a corrected chat's stored row follows; the rest is already right as stored.</summary>
     [Fact]
     public void Restore_publishes_only_the_snapshots_it_corrected()
