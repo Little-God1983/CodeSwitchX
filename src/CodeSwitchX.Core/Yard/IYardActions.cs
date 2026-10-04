@@ -41,6 +41,12 @@ public interface IYardActions
     /// <summary>Shows the Yard.</summary>
     Task BackToYardAsync(CancellationToken ct);
 
+    /// <summary>
+    /// Shows another chat in Raven's panel (and its window in the Cab when it says open); returns what Raven says of it,
+    /// "Chat 3, ContentAutomatorX.". Throws when no chat has the number.
+    /// </summary>
+    Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct);
+
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
 }

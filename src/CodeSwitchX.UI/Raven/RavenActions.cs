@@ -17,6 +17,9 @@ public interface IRavenShell
 
     void ShowYard();
 
+    /// <summary>Shows the chat in Raven's panel, its window in the Cab too when it says open; what Raven says of it, or null when no chat has the number.</summary>
+    string? SwitchChat(ChatSwitch target);
+
     /// <summary>Shows, stores and uses the defaults, as if they were picked in Settings.</summary>
     void SetChatDefaults(ChatDefaults defaults);
 
@@ -188,6 +191,13 @@ public sealed class RavenActions : IYardActions
     }
 
     public Task BackToYardAsync(CancellationToken ct) => OnUiAsync(() => _shell().ShowYard(), ct);
+
+    public async Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)
+    {
+        string? said = null;
+        await OnUiAsync(() => said = _shell().SwitchChat(target), ct).ConfigureAwait(false);
+        return said ?? throw new YardActionException($"No window has the number {target.Number}: list_workspaces shows each one's number.");
+    }
 
     /// <summary>How the row's voice mark reads: "Fable 5.1 · high".</summary>
     internal static string Label(string? model, string? effort) =>

@@ -338,6 +338,8 @@ public sealed class RavenActionsTests
         {
         }
 
+        public string? SwitchChat(ChatSwitch target) => null;
+
         public void SetChatDefaults(ChatDefaults defaults)
         {
             Defaults.Add(defaults);

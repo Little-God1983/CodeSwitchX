@@ -309,4 +309,79 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("Using the headset again.");
     }
+
+    [Fact]
+    public async Task Saying_chat_three_switches_at_once_without_a_brain_turn_and_says_where()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        Type(vm, "Chat drei");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+        _brain.Asked.ShouldBeEmpty();
+        vm.Log.ShouldBeEmpty("a switch is navigation, not a question");
+        await Until(() => string.Join(" ", _speech.Spoken) == "Chat 3, ContentAutomatorX.");
+    }
+
+    [Fact]
+    public async Task Open_chat_three_switches_and_asks_for_its_window_in_the_cab()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        Guid? opened = null;
+        vm.CabRequested += (_, id) => opened = id;
+
+        Type(vm, "open chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+        opened.ShouldBe(ContentAutomatorX);
+    }
+
+    [Fact]
+    public async Task Switching_alone_opens_no_window()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        var opened = false;
+        vm.CabRequested += (_, _) => opened = true;
+
+        Type(vm, "go to chat 1");
+        Type(vm, "activity");
+
+        vm.SelectedChat.ShouldBe(vm.ActivityChat);
+        opened.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_number_no_window_has_is_said_and_nothing_switches()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "chat nine");
+
+        vm.SelectedChat.Label.ShouldBe("1 CodeSwitchX");
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("There is no chat 9.");
+        _brain.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_sentence_about_a_chat_goes_to_the_brain()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        Type(vm, "what is chat three doing");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        _brain.Asked.ShouldBe(["what is chat three doing"]);
+    }
+
+    [Fact]
+    public async Task Stepping_goes_round_the_list_and_skips_activity()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        vm.StepChat(-1).Label.ShouldBe("3 ContentAutomatorX");
+        vm.StepChat(1).Label.ShouldBe("0 Yard");
+        vm.StepChat(1).Label.ShouldBe("1 CodeSwitchX");
+    }
 }
