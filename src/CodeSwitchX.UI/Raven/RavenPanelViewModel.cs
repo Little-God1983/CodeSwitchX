@@ -1529,15 +1529,25 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>The words go to the brain as the next question, after any not sent yet (UI thread).</summary>
     /// <param name="chat">Where the user asked: the answer goes there, wherever the user is when it comes.</param>
-    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat)
+    /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
+    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "")
     {
         if (_lastQuestion is { Sent: false, Ended: false } waiting)
         {
             waiting.Merged = true;
-            text = waiting.Text + "\n" + text;
+            if (waiting.Chat == chat)
+            {
+                (earlier, text) = (waiting.Earlier, waiting.Text + "\n" + text);
+            }
+            else
+            {
+                // Asked in another chat: it keeps saying where, or "stop it" there would mean the window the user is in now.
+                earlier = waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {(waiting.Chat == YardChat ? "the Yard" : waiting.Chat.Name)}:] "
+                    + waiting.Text + "\n";
+            }
         }
 
-        var question = new Question(text, chat);
+        var question = new Question(text, chat, earlier);
         _lastQuestion = question;
         var floor = TakeFloor();
         _asking++;
@@ -1557,9 +1567,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <see cref="Merged"/> when a later one took it along, because it had not, and <see cref="Ended"/> once its turn is over
     /// (answered, failed): a question that failed is not asked again with a later one (UI thread).
     /// </summary>
-    private sealed class Question(string text, RavenChat chat)
+    private sealed class Question(string text, RavenChat chat, string earlier)
     {
+        /// <summary>The words asked in <see cref="Chat"/>, those of a question it took along from the same chat first.</summary>
         public string Text { get; } = text;
+
+        /// <summary>Words it took along from another chat, each part tagged with the chat it was asked in; empty for none.</summary>
+        public string Earlier { get; } = earlier;
 
         /// <summary>The chat it was asked in: its answer goes there.</summary>
         public RavenChat Chat { get; } = chat;
@@ -1949,7 +1963,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _lastQuestion = null;
             waiting.Merged = true; // its own turn ends at once; its words go again, with the news of the yes
-            AskBrain(waiting.Text, ended, waiting.Chat);
+            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier);
         }
         else
         {
@@ -2351,7 +2365,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
         question.Told = [.. _toldNews];
-        var text = WhereTheUserIs(question.Chat) + question.Text;
+        var text = question.Earlier + WhereTheUserIs(question.Chat) + question.Text;
         return question.Told.Count == 0
             ? text
             : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;

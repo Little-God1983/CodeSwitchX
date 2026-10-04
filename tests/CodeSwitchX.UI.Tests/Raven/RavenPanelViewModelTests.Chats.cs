@@ -102,6 +102,30 @@ public sealed partial class RavenPanelViewModelTests
         ]);
     }
 
+    /// <summary>
+    /// A question still waiting its turn goes along with the next one: asked in another chat, each part says where it was
+    /// asked, so "stop it" keeps meaning the window it was said in.
+    /// </summary>
+    [Fact]
+    public async Task A_waiting_question_from_another_chat_goes_along_with_the_chat_it_was_asked_in()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true;
+        Type(vm, "zero");
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        Type(vm, "stop it"); // waits behind "zero"
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+
+        Type(vm, "open it");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked[^1].ShouldBe(
+            "[Said in chat 3, ContentAutomatorX:] stop it\n"
+            + "[The user is in chat 1, CodeSwitchX: \"it\" and \"this\" mean that window unless they name another.]\nopen it");
+    }
+
     [Fact]
     public async Task Typing_in_activity_goes_to_the_yard_s_chat()
     {
