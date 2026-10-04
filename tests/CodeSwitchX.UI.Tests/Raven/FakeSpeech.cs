@@ -26,6 +26,9 @@ internal sealed class FakeSpeech : ITextToSpeech
     /// <summary>While set and not completed, every sentence waits for it before its audio.</summary>
     public TaskCompletionSource? Gate { get; set; }
 
+    /// <summary>While set, every sentence fails with it, as a sidecar that broke.</summary>
+    public Exception? Fails { get; set; }
+
     public TextToSpeechStatus Status { get; private set; } = new(TextToSpeechState.Ready);
 
     public event EventHandler<TextToSpeechStatus>? StatusChanged;
@@ -52,6 +55,11 @@ internal sealed class FakeSpeech : ITextToSpeech
         if (Gate is { } gate)
         {
             await gate.Task.WaitAsync(ct);
+        }
+
+        if (Fails is { } error)
+        {
+            throw error;
         }
 
         yield return new SpeechChunk(new byte[480], 24000);

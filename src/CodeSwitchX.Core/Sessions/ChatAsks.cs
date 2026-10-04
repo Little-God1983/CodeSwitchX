@@ -154,8 +154,17 @@ public sealed class ChatAsks : IDisposable
     /// <summary>What a chat denied here is told, unless the user said more.</summary>
     public const string DeniedMessage = "The user denied this in the Raven panel.";
 
-    /// <summary>A proposed allow not confirmed within this lapses: nothing runs, and the card stays open for a click.</summary>
+    /// <summary>
+    /// A proposed allow not confirmed within this of its read-back being heard lapses: nothing runs, and the card stays
+    /// open for a click. The read-back's own length is not part of it.
+    /// </summary>
     public static readonly TimeSpan ProposalLifetime = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// A proposal whose read-back is not heard within this lapses too: the read-back is spoken, dropped or hushed well
+    /// before, so this only keeps a proposal from standing for good.
+    /// </summary>
+    public static readonly TimeSpan ReadBackLifetime = TimeSpan.FromMinutes(2);
 
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
@@ -458,7 +467,7 @@ public sealed class ChatAsks : IDisposable
             _lapsed = null;
             (_proposedHeard, _lapsedHeard) = (null, null);
             proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
-            _proposalExpiry.Change(ProposalLifetime, Timeout.InfiniteTimeSpan);
+            _proposalExpiry.Change(ReadBackLifetime, Timeout.InfiniteTimeSpan); // the user's 30 s start once it is heard
         }
 
         if (replaced is not null)
@@ -473,7 +482,8 @@ public sealed class ChatAsks : IDisposable
     /// <summary>
     /// The user has heard the read-back of <paramref name="proposal"/> to its end, or been shown it where Raven does not
     /// speak, at <paramref name="at"/>: only words said after that answer it. A yes said before the app asked for it, or
-    /// to a read-back cut off midway, allows nothing. False when it no longer stands.
+    /// to a read-back cut off midway, allows nothing. The user has <see cref="ProposalLifetime"/> from then. False when it
+    /// no longer stands.
     /// </summary>
     public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at)
     {
@@ -484,7 +494,12 @@ public sealed class ChatAsks : IDisposable
                 return false;
             }
 
-            _proposedHeard ??= at;
+            if (_proposedHeard is null)
+            {
+                _proposedHeard = at;
+                _proposalExpiry.Change(Remaining(at + ProposalLifetime), Timeout.InfiniteTimeSpan);
+            }
+
             return true;
         }
     }
@@ -501,7 +516,7 @@ public sealed class ChatAsks : IDisposable
     /// <summary>
     /// The proposal words the user finished speaking at <paramref name="said"/> answer: the one standing, if they were said
     /// after its read-back was heard (<see cref="MarkHeard"/>); or the one that lapsed last, if they were said after that
-    /// and within its <see cref="ProposalLifetime"/>, and only transcribed after it (its prompt still held). Null when they
+    /// and within <see cref="ProposalLifetime"/> of it, and only transcribed after it lapsed (its prompt still held). Null when they
     /// answer none: words said before the read-back ended are about something else.
     /// </summary>
     public ChatAllowProposal? ProposalFor(DateTimeOffset said)
@@ -513,7 +528,7 @@ public sealed class ChatAsks : IDisposable
                 return _proposedHeard is { } heard && said >= heard ? standing : null;
             }
 
-            return _lapsed is { } lapsed && _lapsedHeard is { } lapsedHeard && said >= lapsedHeard && said - lapsed.At <= ProposalLifetime
+            return _lapsed is { } lapsed && _lapsedHeard is { } lapsedHeard && said >= lapsedHeard && said - lapsedHeard <= ProposalLifetime
                 && _held.ContainsKey(lapsed.Ask.Id) ? lapsed : null;
         }
     }
@@ -611,7 +626,7 @@ public sealed class ChatAsks : IDisposable
             }
 
             // A timer can fire a little early (its tick is about 15 ms), or the clock can move: wait out the rest.
-            var left = ProposalLifetime - (_time.GetUtcNow() - _proposed.At);
+            var left = Remaining(_proposedHeard is { } heard ? heard + ProposalLifetime : _proposed.At + ReadBackLifetime);
             if (left > TimeSpan.Zero)
             {
                 _proposalExpiry.Change(left, Timeout.InfiniteTimeSpan);
@@ -626,6 +641,9 @@ public sealed class ChatAsks : IDisposable
 
         ProposalEnded?.Invoke(proposal, ChatProposalEnd.Expired);
     }
+
+    /// <summary>How long until <paramref name="end"/>; zero when it is past.</summary>
+    private TimeSpan Remaining(DateTimeOffset end) => end - _time.GetUtcNow() is { } left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     /// <summary>Lets a held ask go to VS Code, which asks it in the chat's tab. False when it is not held any more.</summary>
     public bool ToVsCode(string askId) => Close(askId, ChatAskOutcome.ToVsCode, null);

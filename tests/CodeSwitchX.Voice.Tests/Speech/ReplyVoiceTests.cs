@@ -72,6 +72,25 @@ public sealed class ReplyVoiceTests : IDisposable
         (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeFalse();
     }
 
+    [Theory]
+    // Each sentence of the fake voice is 10 ms of audio. Round 3: a press during "Say yes." cuts nothing the user needed.
+    [InlineData(5, true)]
+    [InlineData(200, false)]
+    public async Task A_hush_once_the_last_sentence_has_begun_to_play_counts_as_heard(int leftMs, bool heard)
+    {
+        _player.Remaining = TimeSpan.FromSeconds(1);
+        var reply = _voice.Begin(whole: true);
+        reply.Add("It deletes files. Say yes.");
+        reply.Complete();
+        await Until(() => _player.Played == 2);
+        await Task.Delay(50, TestContext.Current.CancellationToken); // its last sentence is all queued
+
+        _player.Remaining = TimeSpan.FromMilliseconds(leftMs);
+        _voice.Hush();
+
+        (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBe(heard);
+    }
+
     [Fact]
     public async Task A_silent_muted_or_dropped_reply_was_not_played()
     {
