@@ -284,6 +284,36 @@ public class ShellViewModelTests
         _h.Shell.StatusMessage.ShouldBeNull();
     }
 
+    /// <summary>Raven's list has a chat per tile; the Cab opening a window selects its chat and folds the list, the Yard unfolds it.</summary>
+    [Fact]
+    public async Task Opening_a_window_in_the_cab_selects_its_raven_chat_and_folds_the_list()
+    {
+        _h.App.Number = 2;
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.Chats.Select(c => c.Label).ShouldBe(["0 Yard", "2 App", "Activity"]);
+        _h.VsCodeWindowAppears();
+
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App");
+        _h.Shell.Raven.IsListFolded.ShouldBeTrue();
+        _h.Shell.BackToYardCommand.Execute(null);
+        _h.Shell.Raven.IsListFolded.ShouldBeFalse();
+        _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
+    }
+
+    [Fact]
+    public async Task Choosing_a_raven_chat_does_not_open_its_window()
+    {
+        _h.App.Number = 2;
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.SelectedChat = _h.Shell.Raven.Chats[1];
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Launcher.ReceivedCalls().ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Going_back_to_the_yard_while_a_new_window_waits_in_the_cab_puts_it_back_and_hides_it_once_known()
     {

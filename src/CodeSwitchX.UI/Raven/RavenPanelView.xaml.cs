@@ -27,14 +27,14 @@ public partial class RavenPanelView : UserControl
     {
         if (_viewModel is not null)
         {
-            _viewModel.Log.CollectionChanged -= OnLogChanged;
+            _viewModel.Shown.CollectionChanged -= OnLogChanged;
             _viewModel.PropertyChanged -= OnViewModelChanged;
         }
 
         _viewModel = viewModel;
         if (_viewModel is not null)
         {
-            _viewModel.Log.CollectionChanged += OnLogChanged;
+            _viewModel.Shown.CollectionChanged += OnLogChanged;
             _viewModel.PropertyChanged += OnViewModelChanged;
         }
     }
@@ -48,10 +48,13 @@ public partial class RavenPanelView : UserControl
         }
     }
 
-    /// <summary>The newest line is the one to read: scroll to it once the new item has been laid out.</summary>
+    /// <summary>
+    /// The newest line is the one to read: scroll to it once the new item has been laid out, and in a chat just chosen
+    /// (its entries come in anew).
+    /// </summary>
     private void OnLogChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Add)
+        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Reset)
         {
             ScrollLogToEnd();
         }

@@ -226,6 +226,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _time = time;
         _logger = logger;
         _gesture = new PushToTalkGesture(time);
+        Chats = [YardChat, ActivityChat];
+        _selectedChat = YardChat;
 
         _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
@@ -370,6 +372,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public ObservableCollection<MicrophoneDevice> Microphones { get; } = [];
 
+    /// <summary>Every entry of every chat, in time order: Activity (UI thread).</summary>
     public ObservableCollection<RavenLogEntry> Log { get; } = [];
 
     /// <summary>
@@ -1062,7 +1065,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var stop = StopCaptureAsync(_started);
         PendingStop = stop;
         var number = ++_clipsQueued;
-        var turn = TranscribeInTurnAsync(_pipeline, number, stop, speech, mic, words, ended);
+        var turn = TranscribeInTurnAsync(_pipeline, number, stop, speech, mic, words, ended, CurrentChat);
         _pipeline = turn;
         return turn;
     }
@@ -1076,10 +1079,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        AddEntry(RavenLogKind.You, text);
+        var chat = CurrentChat;
+        AddEntry(RavenLogKind.You, text, chat);
         TypedText = "";
         _voice.Expect();
-        Ask(text, _time.GetUtcNow());
+        Ask(text, _time.GetUtcNow(), chat);
     }
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
@@ -1154,7 +1158,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
         var number = ++_clipsQueued;
         var transcribed = TranscribeInTurnAsync(_pipeline, number, Task.FromResult<RecordedClip?>(new RecordedClip(clip, length)), heard,
-            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), quiet: true);
+            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), CurrentChat, quiet: true);
         _pipeline = transcribed;
         UpdateState();
     }
@@ -1402,10 +1406,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// and the state live. Never faults, so the clip behind it always gets its turn.
     /// </summary>
     /// <param name="ended">When the user's turn ended: the mic was let go.</param>
+    /// <param name="chat">The chat the user was in when the turn ended: the words, and what is said of them, go there.</param>
     /// <param name="quiet">An Open mic turn: one too short or without words is only logged, never noted in the panel, as
     /// the user pressed nothing.</param>
     private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, SpeechReading speech,
-        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended, bool quiet = false)
+        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended, RavenChat chat, bool quiet = false)
     {
         try
         {
@@ -1425,7 +1430,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
 
                 // A tap read as a hold (a late or lost key release) ends here as well: never silently.
-                AddEntry(RavenLogKind.Note, "That was too short. Hold the keys or the mic button while you talk.");
+                AddEntry(RavenLogKind.Note, "That was too short. Hold the keys or the mic button while you talk.", chat);
                 return;
             }
 
@@ -1434,7 +1439,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _logger.LogInformation(
                     "No speech in {Seconds:0.0} s from {Microphone}: loudest block {Loudest:0.0000}, {Speech:0.00} s at the open level {Open:0.0000}",
                     clip.Length.TotalSeconds, mic, speech.Loudest, speech.Speech.TotalSeconds, speech.OpenRms);
-                AddEntry(RavenLogKind.Note, "I didn't hear anything.");
+                AddEntry(RavenLogKind.Note, "I didn't hear anything.", chat);
                 return;
             }
 
@@ -1461,8 +1466,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (text.Length > 0)
             {
-                AddEntry(RavenLogKind.You, text);
-                Ask(text, ended);
+                AddEntry(RavenLogKind.You, text, chat);
+                Ask(text, ended, chat);
             }
         }
         catch (DictationModelLoadException ex)
@@ -1470,14 +1475,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // A damaged download fails here on every press, and nothing else ever replaces the file: say which to delete.
             _logger.LogWarning(ex, "The speech model could not be loaded");
             var reason = (ex.InnerException?.Message ?? ex.Message).TrimEnd().TrimEnd('.');
-            AddEntry(RavenLogKind.Warning,
+            AddEntry(RavenLogKind.Warning, chat: chat, text:
                 quiet ? $"The speech model could not be loaded: {reason}. Delete {_models.ModelPath}; it is downloaded again with your next turn."
                     : $"The speech model could not be loaded: {reason}. Delete {_models.ModelPath} and press the mic to download it again.");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Transcription failed");
-            AddEntry(RavenLogKind.Warning, $"Transcription failed: {ex.Message}");
+            AddEntry(RavenLogKind.Warning, $"Transcription failed: {ex.Message}", chat);
         }
         finally
         {
@@ -1496,7 +1501,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// answered. One asked before it that has not gone to the brain yet is not lost: it goes with this one, as the first
     /// half of what the user said. The answer's voice begins here, as it is asked, unless the user is talking in Open mic.
     /// </remarks>
-    private void Ask(string text, DateTimeOffset ended)
+    private void Ask(string text, DateTimeOffset ended, RavenChat chat)
     {
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
         // goes no further; anything else drops the proposal and is the next question. Words are judged by when they were
@@ -1519,19 +1524,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
-        AskBrain(text, ended);
+        AskBrain(text, ended, chat);
     }
 
     /// <summary>The words go to the brain as the next question, after any not sent yet (UI thread).</summary>
-    private void AskBrain(string text, DateTimeOffset ended)
+    /// <param name="chat">Where the user asked: the answer goes there, wherever the user is when it comes.</param>
+    /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
+    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "")
     {
         if (_lastQuestion is { Sent: false, Ended: false } waiting)
         {
             waiting.Merged = true;
-            text = waiting.Text + "\n" + text;
+            if (waiting.Chat == chat)
+            {
+                (earlier, text) = (waiting.Earlier, waiting.Text + "\n" + text);
+            }
+            else
+            {
+                // Asked in another chat: it keeps saying where, or "stop it" there would mean the window the user is in now.
+                earlier = waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {(waiting.Chat == YardChat ? "the Yard" : waiting.Chat.Name)}:] "
+                    + waiting.Text + "\n";
+            }
         }
 
-        var question = new Question(text);
+        var question = new Question(text, chat, earlier);
         _lastQuestion = question;
         var floor = TakeFloor();
         _asking++;
@@ -1551,9 +1567,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <see cref="Merged"/> when a later one took it along, because it had not, and <see cref="Ended"/> once its turn is over
     /// (answered, failed): a question that failed is not asked again with a later one (UI thread).
     /// </summary>
-    private sealed class Question(string text)
+    private sealed class Question(string text, RavenChat chat, string earlier)
     {
+        /// <summary>The words asked in <see cref="Chat"/>, those of a question it took along from the same chat first.</summary>
         public string Text { get; } = text;
+
+        /// <summary>Words it took along from another chat, each part tagged with the chat it was asked in; empty for none.</summary>
+        public string Earlier { get; } = earlier;
+
+        /// <summary>The chat it was asked in: its answer goes there.</summary>
+        public RavenChat Chat { get; } = chat;
 
         public bool Sent { get; set; }
 
@@ -1596,7 +1619,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             asked.Value = _time.GetUtcNow();
-            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question);
+            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
         }
         finally
         {
@@ -1613,8 +1636,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     /// <param name="question">Marked sent once the brain has it; null for a digest.</param>
     /// <param name="quiet">The teller's: what it says about itself goes to the app's log, not the panel's (the fallback sentence covers a failure).</param>
+    /// <param name="chat">Where the reply, its cards and what is said about it go.</param>
     private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ReplyVoice.SpokenReply spoken, CancellationToken floor,
-        Question? question = null, bool quiet = false)
+        RavenChat chat, Question? question = null, bool quiet = false)
     {
         RavenLogEntry? reply = null;
         var said = false;
@@ -1632,6 +1656,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 {
                     case BrainQuestionSent when question is not null:
                         question.Sent = true;
+                        _toldChat = question.Chat; // only now does the brain know where the user is
                         foreach (var told in question.Told)
                         {
                             _toldNews.Remove(told); // the brain has it now
@@ -1650,7 +1675,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
-                            reply = AddEntry(RavenLogKind.Raven, start);
+                            reply = AddEntry(RavenLogKind.Raven, start, chat);
                             said = true;
                             spoken.Add(start);
                         }
@@ -1669,7 +1694,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             reply = null;
                         }
 
-                        var card = AddEntry(RavenLogKind.Action, call.Tool);
+                        var card = AddEntry(RavenLogKind.Action, call.Tool, chat);
                         card.Detail = ActionDetail(call.Input);
                         cards[call.Id] = card;
                         break;
@@ -1680,10 +1705,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         _logger.LogWarning("Raven's news teller: {What}", e);
                         break;
                     case BrainNotice notice:
-                        AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text);
+                        AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
                         break;
                     case BrainFailed { Reason: var reason }:
-                        AddEntry(RavenLogKind.Warning, reason);
+                        AddEntry(RavenLogKind.Warning, reason, chat);
                         break;
                 }
             }
@@ -1707,7 +1732,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Raven's brain failed");
-            AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}");
+            AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}", chat);
         }
 
         return said;
@@ -1762,11 +1787,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var card = new ChatAskCard(ask);
         var kind = ask.Kind == ChatAskKind.Permission ? RavenLogKind.Permission : RavenLogKind.Question;
         var entry = new RavenLogEntry(kind, "asks", _time.GetUtcNow()) { Ask = card };
-        Append(entry);
         _askCards[ask.Id] = card;
         _untold.Add(card);
         OpenQuestions = _askCards.Count;
         card.Naming = NameAsync(card);
+        _ = PlaceAsync(entry, card);
         if (PermissionLine.NeedsTeller(card) && SpeakNews && !IsMuted && _teller is not null)
         {
             _tellerWarm = true;
@@ -1775,6 +1800,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         ScheduleNews();
     }
+
+    /// <summary>
+    /// The card goes in its window's chat, and only there: it is answered where that window's other cards are. Which
+    /// window that is the naming finds; a chat the Yard shows on no tile asks in the Yard's chat. Never faults.
+    /// </summary>
+    private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
+    {
+        await card.Naming;
+        _dispatcher.Post(() => card.ShownIn = Append(entry, ChatOf(card.WorkspaceId)).Chat);
+    }
+
+    /// <summary>The chat an ask's card is in, the lines about it go beside it; the Yard's for one without a card.</summary>
+    private RavenChat ChatOfAsk(ChatAsk ask) =>
+        _askCards.TryGetValue(ask.Id, out var card) ? card.ShownIn ?? ChatOf(card.WorkspaceId) : YardChat;
 
     /// <summary>Names the chat as the Yard shows it, for the card and for what Raven says. Never faults.</summary>
     private async Task NameAsync(ChatAskCard card)
@@ -1837,7 +1876,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        AddEntry(RavenLogKind.Raven, line);
+        AddEntry(RavenLogKind.Raven, line, ChatOfAsk(proposal.Ask));
         if (IsMuted || _tts.Status.State != TextToSpeechState.Ready)
         {
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
@@ -1858,6 +1897,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private async Task HeardAsync(ChatAllowProposal proposal, Task<bool> played)
     {
+        var chat = ChatOfAsk(proposal.Ask);
         if (await played.ConfigureAwait(false))
         {
             _asks?.MarkHeard(proposal, _time.GetUtcNow());
@@ -1868,7 +1908,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             if (_asks?.IsHeard(proposal) == false && _asks.Cancel(proposal))
             {
-                AddEntry(RavenLogKind.Note, NotHeardLine);
+                AddEntry(RavenLogKind.Note, NotHeardLine, chat);
             }
         });
     }
@@ -1893,14 +1933,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
         }
 
+        var chat = ChatOfAsk(proposal.Ask);
         if (end == ChatProposalEnd.Expired && _asks?.IsHeard(proposal) == false)
         {
-            AddEntry(RavenLogKind.Note, NotHeardLine);
+            AddEntry(RavenLogKind.Note, NotHeardLine, chat);
             _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open"));
         }
         else if (end == ChatProposalEnd.Expired)
         {
-            AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.");
+            AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.", chat);
             _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open"));
         }
 
@@ -1915,6 +1956,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void ConfirmProposal(ChatAllowProposal proposal, DateTimeOffset ended)
     {
         var who = WhoAsked(proposal.Ask); // before the confirm closes its card
+        var chat = ChatOfAsk(proposal.Ask);
         var allowed = _asks!.Confirm(proposal);
         var said = allowed ? "Allowed. The chat carries on." : "The chat no longer waits for that: it was answered elsewhere, or its turn ended.";
         _toldNews.RemoveAll(t => t.Fact.StartsWith(who + ": the allow you proposed got no yes", StringComparison.Ordinal));
@@ -1923,14 +1965,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _lastQuestion = null;
             waiting.Merged = true; // its own turn ends at once; its words go again, with the news of the yes
-            AskBrain(waiting.Text, ended);
+            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier);
         }
         else
         {
             TakeFloor();
         }
 
-        AddEntry(RavenLogKind.Raven, said);
+        AddEntry(RavenLogKind.Raven, said, chat);
         var spoken = _voice.Begin(silent: _openSpeech);
         spoken.Add(said);
         spoken.Complete();
@@ -2232,8 +2274,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             var taken = _time.GetUtcNow();
 
-            var card = AddEntry(RavenLogKind.News, lines.Count == 1 ? "Chat news" : $"Chat news · {lines.Count}");
-            card.Lines = lines;
+            // A card per window, in that window's chat: the news of a chat is read where its window's other cards are.
+            foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
+            {
+                var ofWindow = group.ToList();
+                var card = AddEntry(RavenLogKind.News, ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}", group.Key);
+                card.Lines = ofWindow;
+            }
+
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
             // facts with the next question either way, so "open it" finds what "it" is.
             var at = _time.GetUtcNow();
@@ -2251,11 +2299,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
             asked = _teller is not null;
             asking = _time.GetUtcNow();
-            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, quiet: true);
+            // What Raven says of it is written in the window's chat when the news is all of one window, else in the Yard's.
+            var chat = SameChat(fresh.Select(l => (Guid?)l.WorkspaceId));
+            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(fresh), spoken, floor, chat, quiet: true);
             if (!said && !floor.IsCancellationRequested)
             {
                 var sentence = FallbackSentence(fresh);
-                AddEntry(RavenLogKind.Raven, sentence);
+                AddEntry(RavenLogKind.Raven, sentence, chat);
                 spoken.Add(sentence);
             }
 
@@ -2317,9 +2367,29 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
         question.Told = [.. _toldNews];
+        var text = question.Earlier + WhereTheUserIs(question.Chat, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
-            ? question.Text
-            : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + question.Text;
+            ? text
+            : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;
+    }
+
+    /// <summary>The chat of the last question the brain took (<see cref="BrainQuestionSent"/>); the Yard's until one of another went in.</summary>
+    private RavenChat? _toldChat;
+
+    /// <summary>
+    /// Which chat the user asks in, until each chat has a brain of its own (#123): a window's chat each time, so "stop it"
+    /// and "open it" mean that window; the Yard's once the user is back in it, and not before.
+    /// </summary>
+    /// <param name="always">Words of another chat go before: the Yard is named too, or the words after them would seem to be of that chat.</param>
+    private string WhereTheUserIs(RavenChat chat, bool always = false)
+    {
+        var told = _toldChat;
+        if (chat.WorkspaceId is not null)
+        {
+            return $"[The user is in chat {chat.Number}, {chat.Name}: \"it\" and \"this\" mean that window unless they name another.]\n";
+        }
+
+        return always || told is { WorkspaceId: not null } ? "[The user is in chat 0, the Yard: no window in particular.]\n" : "";
     }
 
     /// <summary>The digest when the brain gives none: "ContentAutomatorX finished, and CodeSwitchX needs you."</summary>
@@ -2514,31 +2584,186 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             : "Transcribing…";
     }
 
-    /// <summary>The oldest entries go first: the log of a panel left open for days of dictation would grow for good.</summary>
-    private RavenLogEntry AddEntry(RavenLogKind kind, string text) => Append(new RavenLogEntry(kind, text, _time.GetUtcNow()));
+    /// <summary>
+    /// An entry in <paramref name="chat"/>, or in the chat the user is in (<see cref="CurrentChat"/>): what the panel
+    /// says about itself (the mic, the voice) is said where the user looks. The oldest entries go first: the log of a
+    /// panel left open for days of dictation would grow for good.
+    /// </summary>
+    private RavenLogEntry AddEntry(RavenLogKind kind, string text, RavenChat? chat = null) =>
+        Append(new RavenLogEntry(kind, text, _time.GetUtcNow()), chat);
 
-    private RavenLogEntry Append(RavenLogEntry entry)
+    private RavenLogEntry Append(RavenLogEntry entry, RavenChat? chat = null)
     {
+        entry.Chat = chat ?? CurrentChat;
         while (Log.Count >= MaximumLogEntries)
         {
+            Shown.Remove(Log[0]);
             Log.RemoveAt(0);
         }
 
         Log.Add(entry);
+        if (IsShown(entry))
+        {
+            Shown.Add(entry);
+        }
+
         return entry;
     }
 
-    /// <summary>Puts a new entry in the old one's place; one already dropped from the log is added at the end instead.</summary>
+    /// <summary>
+    /// What a note about the panel turned into (a download failed, the mic is live again) takes the note's place. The note
+    /// is said where the user was; the outcome is said where the user is: a note in another chat gives way to one added
+    /// here, as does one already dropped from the log.
+    /// </summary>
     private void ReplaceEntry(RavenLogEntry old, RavenLogKind kind, string text)
     {
         var index = Log.IndexOf(old);
-        if (index < 0)
+        if (index < 0 || old.Chat != CurrentChat)
         {
+            if (index >= 0)
+            {
+                Log.RemoveAt(index);
+                Shown.Remove(old);
+            }
+
             AddEntry(kind, text);
             return;
         }
 
-        Log[index] = new RavenLogEntry(kind, text, old.At);
+        var entry = new RavenLogEntry(kind, text, old.At) { Chat = old.Chat };
+        Log[index] = entry;
+        if (Shown.IndexOf(old) is var shown and >= 0)
+        {
+            Shown[shown] = entry;
+        }
+    }
+
+    /// <summary>The selected chat shows its own entries; Activity shows all of them.</summary>
+    private bool IsShown(RavenLogEntry entry) => SelectedChat.IsActivity || entry.Chat == SelectedChat;
+
+    /// <summary>The chat the user is in: the selected one, or the Yard's while Activity, which takes no words, is selected.</summary>
+    public RavenChat CurrentChat => SelectedChat.IsActivity ? YardChat : SelectedChat;
+
+    /// <summary>Chat 0: what belongs to no single window, and to a window the Yard does not show (any more).</summary>
+    public RavenChat YardChat { get; } = RavenChat.Yard();
+
+    public RavenChat ActivityChat { get; } = RavenChat.Activity();
+
+    /// <summary>The chat list: the Yard, one chat per workspace by its number, Activity last (UI thread).</summary>
+    public ObservableCollection<RavenChat> Chats { get; }
+
+    /// <summary>The entries of the selected chat, in the order they came; all of them in Activity (UI thread).</summary>
+    public ObservableCollection<RavenLogEntry> Shown { get; } = [];
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CurrentChat))]
+    [NotifyPropertyChangedFor(nameof(TypePrompt))]
+    private RavenChat _selectedChat;
+
+    /// <summary>The Cab shows a VS Code: the list folds to its numbers, so VS Code keeps its width.</summary>
+    [ObservableProperty]
+    private bool _isListFolded;
+
+    /// <summary>The type box's hint: where the words go.</summary>
+    public string TypePrompt => CurrentChat == YardChat ? "Type to the Yard…" : $"Type to {CurrentChat.Name}…";
+
+    partial void OnSelectedChatChanged(RavenChat value)
+    {
+        if (value is null)
+        {
+            SelectedChat = YardChat; // the list lets go of a chat it no longer shows
+            return;
+        }
+
+        ShowSelected();
+    }
+
+    /// <summary>Fills <see cref="Shown"/> anew with the selected chat's entries.</summary>
+    private void ShowSelected()
+    {
+        Shown.Clear();
+        foreach (var entry in Log.Where(IsShown))
+        {
+            Shown.Add(entry);
+        }
+    }
+
+    /// <summary>
+    /// The workspaces the Yard shows, by number: each gets its chat, a renamed one keeps it, a removed one's chat leaves the
+    /// list. Its entries stay in Activity, the Yard's chat is selected if it was, and a card of it still open moves to the
+    /// Yard's chat, where chats on no tile ask: Activity has no buttons to answer it with. UI thread.
+    /// </summary>
+    public void SetWorkspaces(IEnumerable<(Guid Id, int Number, string Name)> workspaces)
+    {
+        var wanted = workspaces.Where(w => w.Number > 0).OrderBy(w => w.Number).ToList();
+        foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id || w.Number != c.Number)).ToList())
+        {
+            var moved = false;
+            foreach (var open in Log.Where(e => e.Chat == gone && e.Ask is { IsOpen: true }))
+            {
+                open.Chat = YardChat;
+                open.Ask!.ShownIn = YardChat;
+                moved = true;
+            }
+
+            if (SelectedChat == gone)
+            {
+                SelectedChat = YardChat;
+            }
+            else if (moved)
+            {
+                ShowSelected(); // the Yard's chat gets the cards, Activity their new number
+            }
+
+            Chats.Remove(gone);
+        }
+
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            var (id, number, name) = wanted[i];
+            var chat = Chats.FirstOrDefault(c => c.WorkspaceId == id);
+            if (chat is null)
+            {
+                chat = RavenChat.Of(id, number, name);
+                Chats.Insert(i + 1, chat);
+            }
+
+            chat.Name = name;
+        }
+    }
+
+    /// <summary>The Yard's tiles, by number: as <see cref="SetWorkspaces(IEnumerable{ValueTuple{Guid, int, string}})"/>, and each chat keeps its tile.</summary>
+    public void SetWorkspaces(IEnumerable<CodeSwitchX.UI.Yard.WorkspaceTileViewModel> tiles)
+    {
+        var all = tiles.ToList();
+        SetWorkspaces(all.Select(t => (t.Id, t.Number, t.Name)));
+        foreach (var tile in all)
+        {
+            if (Chats.FirstOrDefault(c => c.WorkspaceId == tile.Id) is { } chat)
+            {
+                chat.Tile = tile;
+            }
+        }
+    }
+
+    /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
+    private RavenChat ChatOf(Guid? workspaceId) =>
+        workspaceId is { } id ? Chats.FirstOrDefault(c => c.WorkspaceId == id) ?? YardChat : YardChat;
+
+    /// <summary>The chat of the windows given when they are all one window's, else the Yard's.</summary>
+    private RavenChat SameChat(IEnumerable<Guid?> workspaceIds)
+    {
+        var chats = workspaceIds.Select(ChatOf).Distinct().ToList();
+        return chats.Count == 1 ? chats[0] : YardChat;
+    }
+
+    /// <summary>The Cab opened a workspace: its chat is shown. The list never opens a workspace itself.</summary>
+    public void ShowChatOf(Guid workspaceId)
+    {
+        if (Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat)
+        {
+            SelectedChat = chat;
+        }
     }
 
     private static string WarningFor(MicrophoneFailureKind kind, MicrophoneDevice? mic) => kind switch

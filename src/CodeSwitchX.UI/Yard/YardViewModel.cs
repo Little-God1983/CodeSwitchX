@@ -93,6 +93,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>A tile left the board (its workspace was unregistered): the Cab cannot show it any more.</summary>
     public event Action<Guid>? TileRemoved;
 
+    /// <summary>The tiles came in, or one was added or removed: Raven's chat list follows them (UI thread).</summary>
+    public event Action? TilesChanged;
+
     /// <summary>A tile's VS Code window, open until now, is gone: closed by the user, or taken over by another folder.</summary>
     public event Action<Guid>? HostStopped;
 
@@ -112,6 +115,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
             Tracks.Add(group);
         }
+
+        TilesChanged?.Invoke();
 
         // Subscribe first, then read the current snapshots: a change published in between would otherwise be lost
         // (applying a snapshot twice is harmless).
@@ -517,6 +522,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.Upsert(snapshot, _pricing.Pricing);
         }
 
+        TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
     }
 
@@ -553,6 +559,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             if (tile is not null)
             {
                 group.Tiles.Remove(tile);
+                TilesChanged?.Invoke();
                 TileRemoved?.Invoke(workspaceId);
                 return;
             }
