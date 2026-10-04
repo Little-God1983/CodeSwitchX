@@ -115,6 +115,10 @@ public sealed class ChatAskParserTests
         "Allow commands starting with npm test for this session")]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Read","ruleContent":"docs/:*"}],"behavior":"allow"}""",
         "Always allow Read of anything starting with docs/")]
+    // Round 4: the CLI sends a prefix rule as "echo two *"; a star inside one stays.
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"echo two *"}],"behavior":"allow","destination":"localSettings"}""",
+        "Always allow commands starting with echo two in this folder, just you")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"git * main"}],"behavior":"allow"}""", "Always allow git * main")]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Edit","ruleContent":"src/**"},{"toolName":"WebSearch"}],"behavior":"allow","destination":"userSettings"}""",
         "Always allow Edit of src/**, every use of WebSearch in every folder")]
     [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "Allow all edits for this session")]

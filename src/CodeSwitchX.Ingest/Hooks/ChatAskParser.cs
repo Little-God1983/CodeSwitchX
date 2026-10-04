@@ -201,10 +201,12 @@ public static class ChatAskParser
         }
 
         var command = tool is "Bash" or "PowerShell";
-        // Claude Code's prefix rule "npm test:*" is said as people say it.
-        if (content.EndsWith(":*", StringComparison.Ordinal) && content.Length > 2)
+        // Claude Code's prefix rule, "npm test *" or the older "npm test:*", is said as people say it; a star inside a
+        // rule ("git * main") stays as it is.
+        if ((content.EndsWith(" *", StringComparison.Ordinal) || content.EndsWith(":*", StringComparison.Ordinal))
+            && content[..^2].TrimEnd() is { Length: > 0 } prefix)
         {
-            return command ? $"commands starting with {content[..^2]}" : $"{tool} of anything starting with {content[..^2]}";
+            return command ? $"commands starting with {prefix}" : $"{tool} of anything starting with {prefix}";
         }
 
         return command ? content : $"{tool} of {content}";
