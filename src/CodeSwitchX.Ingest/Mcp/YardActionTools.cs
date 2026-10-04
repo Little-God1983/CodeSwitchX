@@ -329,9 +329,10 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         };
     }
 
-    /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard, and for a window gone from the Yard.</summary>
+    /// <summary>The window of the Raven chat the call comes from; null in chat 0, the Yard. One gone from the Yard is an error that says so.</summary>
     private async Task<YardWorkspace?> WindowAsync(CancellationToken ct) => scope?.WorkspaceId is { } id
         ? (await yard.WorkspacesAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id)
+            ?? throw new McpException("The window of the chat the user is in is not on the Yard any more. Ask which workspace they mean.")
         : null;
 
     /// <summary>

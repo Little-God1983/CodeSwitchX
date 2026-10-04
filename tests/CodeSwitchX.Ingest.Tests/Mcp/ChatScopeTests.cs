@@ -118,6 +118,16 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task A_window_gone_from_the_yard_is_said_so_not_that_the_user_is_in_the_yard()
+    {
+        var tools = new YardActionTools(_yard, _actions, scope: new ChatScope(Guid.NewGuid()));
+
+        (await Should.ThrowAsync<McpException>(() => tools.StartChat(cancellationToken: Ct))).Message.ShouldContain("not on the Yard any more");
+        (await Should.ThrowAsync<McpException>(() => tools.StopChat(cancellationToken: Ct))).Message.ShouldContain("not on the Yard any more");
+        (await Should.ThrowAsync<McpException>(() => tools.OpenWorkspace(cancellationToken: Ct))).Message.ShouldContain("not on the Yard any more");
+    }
+
+    [Fact]
     public async Task A_question_and_a_permission_prompt_are_answered_in_the_window_without_naming_the_chat()
     {
         var asks = new ChatAsks(new EventBus(NullLogger<EventBus>.Instance), TimeProvider.System) { Takes = _ => true };

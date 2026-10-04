@@ -29,6 +29,6 @@ public static class McpConfigFile
         };
 
         AtomicFile.Replace(file, config.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ".tmp");
-        AccessTokenStore.RestrictToCurrentUser(file);
+        SecretFile.RestrictToCurrentUser(file);
     }
 }

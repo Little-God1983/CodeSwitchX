@@ -230,6 +230,39 @@ public sealed class ChatBrainsTests : IDisposable
         events.ShouldBe([new BrainFailed("Raven's brain has shut down with CodeSwitchX.")]);
     }
 
+    /// <summary>The pool rested the brain while its turn ran; the user came back to it before the rest got its turn.</summary>
+    [Fact]
+    public async Task A_rest_of_a_brain_used_again_before_it_came_is_dropped()
+    {
+        var brain = BrainOf(Window3);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Half")]; // the turn runs on
+        var first = AskAsync(brain, "One");
+        await WaitUntil(() => _launcher.Started.Count == 1 && _launcher.Last.Written.Count == 1);
+
+        brain.Rest(); // queued behind the turn
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        var second = AskAsync(brain, "Two"); // used again
+        _launcher.Last.Emit(StreamJson.Result("Half"));
+        await first;
+        await second;
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _launcher.Started.ShouldHaveSingleItem().Process.Disposed.ShouldBeFalse("the chat is in use again: it stays warm");
+    }
+
+    [Fact]
+    public void Configs_left_by_an_earlier_run_are_cleared()
+    {
+        var folder = Path.Combine(_paths.RavenDirectory, "mcp");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, Window3.ToString("N") + ".json"), "{}");
+
+        ChatMcpConfig.Clear(folder);
+
+        Directory.GetFiles(folder).ShouldBeEmpty("a crash leaves them, with the token in them");
+        ChatMcpConfig.Clear(Path.Combine(_paths.RavenDirectory, "none")); // no folder: nothing to do
+    }
+
     [Fact]
     public async Task A_window_chat_s_tools_name_its_window_in_a_config_of_its_own_and_the_yard_s_use_the_app_s()
     {

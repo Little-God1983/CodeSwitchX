@@ -26,4 +26,33 @@ public static class ChatMcpConfig
         AtomicFile.Replace(target, config.ToJsonString(), ".tmp");
         SecretFile.RestrictToCurrentUser(target);
     }
+
+    /// <summary>
+    /// Deletes the configs in the folder: an earlier run that crashed left them, the token in them. Each brain writes its
+    /// own again as it starts. Never throws; one that cannot be deleted stays.
+    /// </summary>
+    public static void Clear(string folder)
+    {
+        try
+        {
+            if (!Directory.Exists(folder))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(folder))
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
 }

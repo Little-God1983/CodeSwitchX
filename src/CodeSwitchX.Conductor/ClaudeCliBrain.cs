@@ -126,6 +126,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>A window chat's own MCP config, written when its process started; it holds the token, so it goes with the brain.</summary>
     private string? _mcpConfig;
 
+    /// <summary>Questions and warm-ups so far: a rest asked for before the latest of them is dropped.</summary>
+    private long _uses;
+
     /// <param name="role">Raven itself, with the Yard's tools; or the teller of chat news, with none (<see cref="TellerPrompt"/>).</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
@@ -146,6 +149,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         // Off the caller's thread first, the panel's UI thread: looking for claude.exe, starting it and killing an old
         // process tree would otherwise run there whenever no turn is queued ahead.
+        Interlocked.Increment(ref _uses);
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         await _turns.WaitAsync(ct).ConfigureAwait(false);
         IBrainProcess? process = null;
@@ -302,7 +306,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
     }
 
-    public void WarmUp() => _ = Task.Run(async () =>
+    public void WarmUp()
+    {
+        Interlocked.Increment(ref _uses);
+        _ = Task.Run(WarmUpAsync);
+    }
+
+    private async Task WarmUpAsync()
     {
         try
         {
@@ -326,24 +336,32 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         {
             _logger.LogWarning(ex, "Warming up {Brain} failed", _name);
         }
-    });
+    }
 
     /// <summary>
     /// Nothing is coming after the warm-up: the process is stopped once no turn or warm-up holds it, so a teller warmed up
-    /// for news that came to nothing does not sit there. Returns at once; never throws.
+    /// for news that came to nothing does not sit there. A question or warm-up that comes before then keeps it: the brain
+    /// is in use again. Returns at once; never throws.
     /// </summary>
-    public void Rest() => _ = Task.Run(async () =>
+    public void Rest()
     {
-        await _turns.WaitAsync().ConfigureAwait(false);
-        try
+        var asOf = Interlocked.Read(ref _uses);
+        _ = Task.Run(async () =>
         {
-            Stop();
-        }
-        finally
-        {
-            _turns.Release();
-        }
-    });
+            await _turns.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (Interlocked.Read(ref _uses) == asOf)
+                {
+                    Stop();
+                }
+            }
+            finally
+            {
+                _turns.Release();
+            }
+        });
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -360,11 +378,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         _disposed = true;
         Stop();
-        if (_mcpConfig is { } config)
+        DeleteMcpConfig();
+    }
+
+    /// <summary>The window chat's config goes with the brain, like mcp.json, which goes when the server stops.</summary>
+    private void DeleteMcpConfig()
+    {
+        if (Interlocked.Exchange(ref _mcpConfig, null) is { } config)
         {
             try
             {
-                File.Delete(config); // like mcp.json, which goes when the server stops
+                File.Delete(config);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -514,8 +538,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         if (_disposed)
         {
-            // Disposed while it started: the process it got would be owned by nothing.
+            // Disposed while it started: the process it got would be owned by nothing, and the config it wrote by no one.
             Stop();
+            DeleteMcpConfig();
             return "Raven's brain has shut down with CodeSwitchX.";
         }
 

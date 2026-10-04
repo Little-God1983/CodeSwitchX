@@ -36,7 +36,7 @@ public sealed class AccessTokenStore
             _paths.EnsureCreated();
             var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
             File.WriteAllText(_paths.TokenFile, token);
-            RestrictToCurrentUser(_paths.TokenFile);
+            SecretFile.RestrictToCurrentUser(_paths.TokenFile);
             return _cached = token;
         }
     }
@@ -51,6 +51,4 @@ public sealed class AccessTokenStore
         return CryptographicOperations.FixedTimeEquals(
             System.Text.Encoding.ASCII.GetBytes(token), System.Text.Encoding.ASCII.GetBytes(candidate));
     }
-
-    internal static void RestrictToCurrentUser(string file) => SecretFile.RestrictToCurrentUser(file);
 }

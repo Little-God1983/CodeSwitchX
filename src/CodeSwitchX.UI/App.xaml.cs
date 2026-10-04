@@ -211,6 +211,7 @@ public partial class App : Application
         {
             var paths = sp.GetRequiredService<AppPaths>();
             var sessions = new BrainSessionFile(Path.Combine(paths.RavenDirectory, "sessions.json"));
+            ChatMcpConfig.Clear(Path.Combine(paths.RavenDirectory, "mcp")); // a crash left them; each brain writes its own
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
                 () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
                 BrainRole.Raven, BrainChat.Of(window, sessions)));
