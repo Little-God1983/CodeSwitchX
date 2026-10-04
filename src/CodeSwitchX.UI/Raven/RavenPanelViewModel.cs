@@ -1711,6 +1711,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainText { Delta: var piece }:
                         reply!.Text += piece;
+                        CountUnread(reply);
                         spoken.Add(piece);
                         break;
                     case BrainToolCall call:
@@ -2306,8 +2307,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
             {
                 var ofWindow = group.ToList();
-                var card = AddEntry(RavenLogKind.News, ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}", group.Key);
-                card.Lines = ofWindow;
+                var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
+                Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
             }
 
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
@@ -2625,8 +2626,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         entry.Chat = chat ?? CurrentChat;
         while (Log.Count >= MaximumLogEntries)
         {
-            Shown.Remove(Log[0]);
+            var dropped = Log[0];
+            Shown.Remove(dropped);
             Log.RemoveAt(0);
+            if (dropped.Ask is { IsOpen: true })
+            {
+                CountWaiting(dropped.Chat);
+            }
+
+            if (dropped.IsUnread)
+            {
+                dropped.Chat.Unread -= UnreadLines(dropped); // opening the chat would not show it any more
+            }
         }
 
         Log.Add(entry);
@@ -2635,7 +2646,83 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Shown.Add(entry);
         }
 
+        Mark(entry);
         return entry;
+    }
+
+    /// <summary>
+    /// The list's marks for a new entry: a card waits in its chat, and blinks there until the chat is opened, as a chat
+    /// that failed is marked until then; Raven's answers and warnings, news lines and cards are counted when they come
+    /// where the user does not see them. Activity shows every line, so none that comes there is unread, but it opens no
+    /// chat: its cards have no buttons. The user's own words and the panel's notes count for nothing.
+    /// </summary>
+    private void Mark(RavenLogEntry entry)
+    {
+        var chat = entry.Chat;
+        var elsewhere = chat != SelectedChat;
+        if (entry.Ask is { IsOpen: true } card)
+        {
+            card.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(ChatAskCard.IsOpen))
+                {
+                    CountWaiting(entry.Chat); // where the card is now: a removed window's card moved to the Yard
+                }
+            };
+            chat.IsWaiting = true;
+            chat.IsWaitingUnseen |= elsewhere;
+        }
+
+        if (elsewhere && entry.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true)
+        {
+            chat.HasFailed = true;
+        }
+
+        CountUnread(entry);
+    }
+
+    /// <summary>
+    /// Counts an entry the user does not see, once: a news card by its lines, Raven's answer, a warning (the question
+    /// went unanswered) and a card as one. Called again as a reply grows: one whose beginning the user saw before
+    /// leaving its chat counts for the rest.
+    /// </summary>
+    private void CountUnread(RavenLogEntry entry)
+    {
+        if (entry.IsUnread || IsShown(entry))
+        {
+            return;
+        }
+
+        var lines = UnreadLines(entry);
+        entry.IsUnread = lines > 0;
+        entry.Chat.Unread += lines;
+    }
+
+    private static int UnreadLines(RavenLogEntry entry) => entry.Kind switch
+    {
+        RavenLogKind.News => entry.Lines?.Count ?? 0,
+        RavenLogKind.Raven or RavenLogKind.Warning or RavenLogKind.Question or RavenLogKind.Permission => 1,
+        _ => 0,
+    };
+
+    /// <summary>Whether a card in the chat still waits; with none, nothing blinks.</summary>
+    private void CountWaiting(RavenChat chat)
+    {
+        chat.IsWaiting = Log.Any(e => e.Chat == chat && e.Ask is { IsOpen: true });
+        chat.IsWaitingUnseen &= chat.IsWaiting;
+    }
+
+    /// <summary>The user opened the chat: what came there is seen; a card still waiting keeps its outline, no longer blinking.</summary>
+    private void Seen(RavenChat chat)
+    {
+        foreach (var entry in Log.Where(e => e.IsUnread && e.Chat == chat))
+        {
+            entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
+        }
+
+        chat.Unread = 0;
+        chat.HasFailed = false;
+        chat.IsWaitingUnseen = false;
     }
 
     /// <summary>
@@ -2712,6 +2799,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
+        if (!value.IsActivity)
+        {
+            Seen(value);
+        }
+
         ShowSelected();
     }
 
@@ -2741,6 +2833,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 open.Chat = YardChat;
                 open.Ask!.ShownIn = YardChat;
                 moved = true;
+                if (open.IsUnread)
+                {
+                    open.IsUnread = false;
+                    CountUnread(open); // still unread, where it is now
+                }
+            }
+
+            if (moved)
+            {
+                YardChat.IsWaiting = true;
+                YardChat.IsWaitingUnseen |= gone.IsWaitingUnseen && SelectedChat != YardChat; // seen in its window's chat is seen
             }
 
             if (SelectedChat == gone)

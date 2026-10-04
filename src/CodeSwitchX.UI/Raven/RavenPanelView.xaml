@@ -469,6 +469,7 @@
       <Setter Property="Margin" Value="0,0,0,2" />
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+      <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
       <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
       <Setter Property="Template">
         <Setter.Value>
@@ -652,21 +653,72 @@
                      AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type raven:RavenChat}">
-                  <Grid ToolTip="{Binding Label}">
+                  <Grid ToolTip="{Binding Tip}">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
-                      <Grid>
-                        <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
+                    <!-- The number's dot and its marks: they show on the folded list in the Cab too. -->
+                    <Grid VerticalAlignment="Center">
+                      <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
+                        <Grid>
+                          <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          <!-- Activity has no number: a list of everything. -->
+                          <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                                     Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
+                        </Grid>
+                      </Border>
+                      <!--
+                        A card waits for the user: an amber ring until it is answered, blinking gently until the chat is opened.
+                        With Windows' "Show animations" off it stays steady (SystemParameters tells its bindings when it changes).
+                      -->
+                      <Border Margin="-3" CornerRadius="15" BorderThickness="2" BorderBrush="#F59E0B" IsHitTestVisible="False"
+                              Visibility="{Binding IsWaiting, Converter={StaticResource BoolVisible}}">
+                        <Border.Style>
+                          <Style TargetType="Border">
+                            <Style.Triggers>
+                              <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                  <Condition Binding="{Binding IsWaitingUnseen}" Value="True" />
+                                  <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <MultiDataTrigger.EnterActions>
+                                  <BeginStoryboard x:Name="Blink">
+                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                      <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.2" Duration="0:0:0.8" />
+                                    </Storyboard>
+                                  </BeginStoryboard>
+                                </MultiDataTrigger.EnterActions>
+                                <MultiDataTrigger.ExitActions>
+                                  <StopStoryboard BeginStoryboardName="Blink" />
+                                </MultiDataTrigger.ExitActions>
+                              </MultiDataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Border.Style>
+                      </Border>
+                      <!-- The chat failed: a red mark at the lower left until it is opened. -->
+                      <Ellipse Width="9" Height="9" Fill="#EF4444" Stroke="#0B1220" StrokeThickness="1.5" IsHitTestVisible="False"
+                               HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-3,0,0,-3"
+                               Visibility="{Binding HasFailed, Converter={StaticResource BoolVisible}}" />
+                      <!-- Lines that came while the user was elsewhere: their count at the upper right. -->
+                      <Border MinWidth="15" Height="15" CornerRadius="7.5" Background="#3B82F6" Padding="3,0" IsHitTestVisible="False"
+                              HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-7,0">
+                        <Border.Style>
+                          <Style TargetType="Border">
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding Unread}" Value="0">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding UnreadText}" FontSize="9.5" FontWeight="Bold" Foreground="White"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        <!-- Activity has no number: a list of everything. -->
-                        <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
-                      </Grid>
-                    </Border>
+                      </Border>
+                    </Grid>
                     <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                   </Grid>
