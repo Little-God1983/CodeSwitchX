@@ -124,6 +124,30 @@ public sealed class YardActionToolsTests
         _actions.Opened!.Name.ShouldBe("CodeSwitchX");
     }
 
+    [Theory]
+    [InlineData("4", 4, false)]
+    [InlineData("four", 4, false)]
+    [InlineData("code switch ex", 1, false)]
+    [InlineData("Yard", 0, false)]
+    [InlineData("the Yard", 0, false)]
+    [InlineData("chat 0, the Yard", 0, false)]
+    public async Task Switch_chat_takes_a_number_a_window_s_name_or_the_yard(string chat, int number, bool activity)
+    {
+        await Tools.SwitchChat(chat, cancellationToken: Ct);
+
+        _actions.Switched.ShouldBe(new ChatSwitch(number, activity, Open: false));
+    }
+
+    [Fact]
+    public async Task Switch_chat_opens_the_window_only_when_asked_and_activity_never()
+    {
+        await Tools.SwitchChat("code switch ex", open: true, cancellationToken: Ct);
+        _actions.Switched.ShouldBe(new ChatSwitch(1, false, Open: true));
+
+        await Tools.SwitchChat("Activity", open: true, cancellationToken: Ct);
+        _actions.Switched.ShouldBe(new ChatSwitch(null, true, Open: false));
+    }
+
     [Fact]
     public async Task Opening_needs_a_workspace_or_a_chat_it_can_find()
     {
@@ -387,5 +411,15 @@ public sealed class YardActionToolsTests
 
         error.Message.ShouldStartWith("The Raven brain chat asks a question, not for permission: \"Which fruit?\"");
         held.IsCompleted.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("Aktivitat")]
+    [InlineData("activity")]
+    public async Task Switch_chat_reads_activity_as_the_app_does(string said)
+    {
+        await Tools.SwitchChat(said, cancellationToken: Ct);
+
+        _actions.Switched.ShouldBe(new ChatSwitch(null, true, Open: false));
     }
 }

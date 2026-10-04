@@ -338,6 +338,9 @@ public sealed class RavenActionsTests
         {
         }
 
+        public (string Said, Guid? WorkspaceId)? SwitchChat(ChatSwitch target) =>
+            target.Number == 4 ? ("Chat 4, Diffusion-Full.", Diffusion.Id) : null;
+
         public void SetChatDefaults(ChatDefaults defaults)
         {
             Defaults.Add(defaults);
@@ -371,5 +374,16 @@ public sealed class RavenActionsTests
             Sequence.Add($"close {sessionId}");
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
+    }
+
+    [Fact]
+    public async Task Switch_chat_with_open_says_when_the_window_could_not_be_opened()
+    {
+        _shell.OpenProblem = "VS Code did not start.";
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.SwitchChatAsync(new ChatSwitch(4, false, Open: true), Ct));
+
+        error.Message.ShouldBe("Chat 4, Diffusion-Full. Its window could not be opened: VS Code did not start.");
+        _shell.Opened.ShouldBe([Diffusion.Id]);
     }
 }

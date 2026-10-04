@@ -461,4 +461,122 @@ public class HotkeyServiceTests
             }
         });
     }
+
+    /// <summary>A chat hotkey switches Raven's chat like push to talk works: the minimised shell stays down, no window opens.</summary>
+    [Fact]
+    public async Task A_chat_hotkey_switches_the_chat_and_leaves_a_minimised_shell_where_it_is()
+    {
+        var harness = new ShellTestHarness();
+        harness.App.Number = 2;
+        await harness.Shell.InitializeAsync(CancellationToken.None);
+        await harness.Shell.Raven.PendingRefresh;
+        var keys = new ChatHotkeys();
+
+        await StaThread.RunAsync(() =>
+        {
+            var window = new Window
+            {
+                WindowState = WindowState.Minimized, ShowInTaskbar = false, ShowActivated = false,
+                Left = -20000, Top = -20000, Width = 200, Height = 200,
+            };
+            window.Show();
+            var hwnd = new WindowInteropHelper(window).Handle;
+            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, chatHotkeys: keys);
+            hotkeys.Attach(hwnd, harness.Shell);
+            try
+            {
+                StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, HotkeyService.ChatBaseId + 2, 0); // chat 2
+
+                harness.Shell.Raven.SelectedChat.Label.ShouldBe("2 App");
+                window.WindowState.ShouldBe(WindowState.Minimized, "VS Code keeps the focus");
+                harness.Shell.Mode.ShouldBe(ShellMode.Yard, "switching never opens the window");
+
+                StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, HotkeyService.ChatBaseId + 12, 0); // previous
+                harness.Shell.Raven.SelectedChat.ShouldBe(harness.Shell.Raven.YardChat);
+
+                StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, HotkeyService.ChatBaseId + 5, 0); // no window has 5
+                harness.Shell.Raven.Shown.Last().Text.ShouldBe("There is no chat 5.");
+            }
+            finally
+            {
+                hotkeys.Detach();
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>A chat hotkey another window holds is marked taken in Settings; let go while a chord box captures keys.</summary>
+    [Fact]
+    public async Task A_chat_hotkey_held_elsewhere_is_marked_taken_and_capturing_lets_them_go()
+    {
+        var harness = new ShellTestHarness();
+        var keys = new ChatHotkeys();
+        var theirs = new ChatHotkeys();
+
+        await StaThread.RunAsync(() =>
+        {
+            var first = HiddenWindow();
+            var second = HiddenWindow();
+            var holder = new HotkeyService(NullLogger<HotkeyService>.Instance, chatHotkeys: theirs);
+            var late = new HotkeyService(NullLogger<HotkeyService>.Instance, chatHotkeys: keys);
+            try
+            {
+                holder.Attach(new WindowInteropHelper(first).Handle, harness.Shell);
+                late.Attach(new WindowInteropHelper(second).Handle, harness.Shell);
+                keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Capturing = true; // a box to fix one in has the keyboard: the warnings stay while it is edited
+                keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Rows[5].Chord = "Ctrl+Shift+F5"; // one is set anew: the others are still taken, and say so
+                keys.Rows.Where(r => r != keys.Rows[5]).ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Capturing = false;
+                keys.Rows[5].Problem.ShouldBeNull("nobody holds the new chord");
+                keys.Rows[5].Chord = "Ctrl+Alt+F5";
+
+                theirs.Capturing = true; // the holder lets go while its chord box has the keyboard
+                keys.Rows[3].Chord = "Ctrl+Shift+Alt+F3"; // any change registers again, and tries the taken ones once more
+                keys.Rows.ShouldAllBe(r => r.Problem == null);
+            }
+            finally
+            {
+                late.Detach();
+                holder.Detach();
+                first.Close();
+                second.Close();
+            }
+        });
+    }
+
+    /// <summary>While a chord box has the keyboard, CodeSwitchX's own hotkeys are let go too: pressing one reaches the box.</summary>
+    [Fact]
+    public async Task Capturing_lets_go_of_the_fixed_hotkeys_too_and_takes_them_back_after()
+    {
+        var harness = new ShellTestHarness();
+        var keys = new ChatHotkeys();
+
+        await StaThread.RunAsync(() =>
+        {
+            var window = HiddenWindow();
+            var other = HiddenWindow();
+            var hwnd = new WindowInteropHelper(window).Handle;
+            var otherHwnd = new WindowInteropHelper(other).Handle;
+            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, chatHotkeys: keys);
+            hotkeys.Attach(hwnd, harness.Shell);
+            var toggle = HotkeyService.Bindings.Single(b => b.Label == "Ctrl+Alt+Y");
+            try
+            {
+                keys.Capturing = true;
+                HotkeyInterop.Register(otherHwnd, 999, toggle.Modifiers, toggle.VirtualKey).ShouldBeTrue("let go while capturing");
+                HotkeyInterop.Unregister(otherHwnd, 999);
+
+                keys.Capturing = false;
+                HotkeyInterop.Register(otherHwnd, 999, toggle.Modifiers, toggle.VirtualKey).ShouldBeFalse("taken back after");
+            }
+            finally
+            {
+                hotkeys.Detach();
+                window.Close();
+                other.Close();
+            }
+        });
+    }
 }

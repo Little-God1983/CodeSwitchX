@@ -34,7 +34,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["ContentAutomatorX", "Diffusion-Full", "DiffusionNexus.Installer.SDK", "DiffusionNexus"]);
+        vocabulary.Words.ShouldBe(["Chat", "ContentAutomatorX", "Diffusion-Full", "DiffusionNexus.Installer.SDK", "DiffusionNexus"]);
         vocabulary.Corrections.ShouldBeEmpty();
     }
 
@@ -49,7 +49,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Diffusion-Full", "ContentAutomatorX", "DiffusionNexus"]);
+        vocabulary.Words.ShouldBe(["Chat", "Diffusion-Full", "ContentAutomatorX", "DiffusionNexus"]);
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Diffusion-Full"]);
+        vocabulary.Words.ShouldBe(["Chat", "Diffusion-Full"]);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public sealed class WorkspaceVocabularyProviderTests
             new Workspace { Name = "raven", RootPath = @"c:\b" });
         using var provider = NewProvider(store, _ => null);
 
-        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Raven"]);
+        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Chat", "Raven"]);
     }
 
     // Every press of the mic asks for the vocabulary: it is read from the store and the workspace files once, not per press.
@@ -121,7 +121,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Raven", "Shop"]);
+        vocabulary.Words.ShouldBe(["Chat", "Raven", "Shop"]);
         await store.Received(2).GetAllAsync(Arg.Any<CancellationToken>());
     }
 
@@ -156,7 +156,7 @@ public sealed class WorkspaceVocabularyProviderTests
         await Should.ThrowAsync<IOException>(() => provider.GetAsync(TestContext.Current.CancellationToken));
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Raven"]);
+        vocabulary.Words.ShouldBe(["Chat", "Raven"]);
     }
 
     // The workspaces changed while the vocabulary was being read: what that read found is not kept.
@@ -175,6 +175,6 @@ public sealed class WorkspaceVocabularyProviderTests
         reading.SetResult([new Workspace { Name = "Raven", RootPath = @"c:\a" }]);
         await stale;
 
-        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Shop"]);
+        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Chat", "Shop"]);
     }
 }

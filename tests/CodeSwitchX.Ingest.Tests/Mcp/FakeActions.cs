@@ -55,6 +55,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult(Defaults);
     }
 
+    public ChatSwitch? Switched { get; private set; }
+
+    public Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)
+    {
+        Act("switch_chat");
+        Switched = target;
+        return Task.FromResult($"Chat {target.Number}.");
+    }
+
     public Task<string> OpenWorkspaceAsync(YardWorkspace workspace, CancellationToken ct)
     {
         Act("open_workspace");

@@ -2,6 +2,9 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Speech;
+using CodeSwitchX.Voice.Dictation;
+using NSubstitute;
+using CodeSwitchX.Core.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -308,5 +311,333 @@ public sealed partial class RavenPanelViewModelTests
         vm.Note("Using the headset again.");
 
         vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("Using the headset again.");
+    }
+
+    [Fact]
+    public async Task Saying_chat_three_switches_at_once_without_a_brain_turn_and_says_where()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        Type(vm, "Chat drei");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+        _brain.Asked.ShouldBeEmpty();
+        vm.Log.ShouldBeEmpty("a switch is navigation, not a question");
+        await Until(() => string.Join(" ", _speech.Spoken) == "Chat 3, ContentAutomatorX.");
+    }
+
+    [Fact]
+    public async Task Open_chat_three_switches_and_asks_for_its_window_in_the_cab()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        Guid? opened = null;
+        vm.CabRequested += (_, id) => opened = id;
+
+        Type(vm, "open chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+        opened.ShouldBe(ContentAutomatorX);
+    }
+
+    [Fact]
+    public async Task Switching_alone_opens_no_window()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        var opened = false;
+        vm.CabRequested += (_, _) => opened = true;
+
+        Type(vm, "go to chat 1");
+        Type(vm, "activity");
+
+        vm.SelectedChat.ShouldBe(vm.ActivityChat);
+        opened.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_number_no_window_has_is_said_and_nothing_switches()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "chat nine");
+
+        vm.SelectedChat.Label.ShouldBe("1 CodeSwitchX");
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("There is no chat 9.");
+        _brain.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_sentence_about_a_chat_goes_to_the_brain()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        Type(vm, "what is chat three doing");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        _brain.Asked.ShouldBe(["what is chat three doing"]);
+    }
+
+    [Fact]
+    public async Task Stepping_goes_round_the_list_and_skips_activity()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        vm.StepChat(-1).Label.ShouldBe("3 ContentAutomatorX");
+        vm.StepChat(1).Label.ShouldBe("0 Yard");
+        vm.StepChat(1).Label.ShouldBe("1 CodeSwitchX");
+    }
+
+    /// <summary>Any switch away from the chat whose allow waits for a yes ends it: a yes said in the next chat is not for it.</summary>
+    [Theory]
+    [InlineData("hotkey")]
+    [InlineData("click")]
+    public async Task A_switch_by_hotkey_or_click_ends_an_allow_waiting_for_a_yes(string how)
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        asks.Propose("p1");
+
+        if (how == "hotkey")
+        {
+            vm.SwitchChat(new ChatSwitch(1, false, false));
+        }
+        else
+        {
+            vm.SelectedChat = ChatNumbered(vm, 1);
+        }
+
+        asks.Proposed.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Showing_the_chat_whose_allow_waits_keeps_it()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        asks.Propose("p1");
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        asks.Proposed.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task From_activity_next_is_the_yard_and_previous_the_last_chat()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectedChat = vm.ActivityChat;
+
+        vm.StepChat(1).ShouldBe(vm.YardChat);
+        vm.SelectedChat = vm.ActivityChat;
+        vm.StepChat(-1).Label.ShouldBe("3 ContentAutomatorX");
+    }
+
+    /// <summary>
+    /// "Chat three" and the question said right after it, before the first was transcribed: the question is asked in
+    /// chat 3, where the user asked to be.
+    /// </summary>
+    [Fact]
+    public async Task A_question_said_right_after_a_spoken_switch_goes_to_the_chat_switched_to()
+    {
+        var first = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var (vm, _) = await ChatsVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        var switchRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStop);
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        var questionRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStop);
+
+        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        await WithinAsync(switchRelease);
+        await WithinAsync(questionRelease);
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.You).Chat.Label.ShouldBe("3 ContentAutomatorX");
+        _brain.Asked.ShouldHaveSingleItem().ShouldStartWith("[The user is in chat 3, ContentAutomatorX");
+    }
+
+    /// <summary>Raven just asked something: "chat three" may be the answer, so it goes to the brain (which can still switch).</summary>
+    [Fact]
+    public async Task Chat_three_right_after_raven_asks_something_answers_the_brain()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Should I start it in chat 3 or chat 1?")];
+        Type(vm, "start the release notes");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Answer = _ => [new BrainText("Starting it in chat 3.")];
+        Type(vm, "chat three");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        _brain.Asked.Last().ShouldBe("chat three");
+
+        Type(vm, "chat three"); // its answer asked nothing: a switch again
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+    }
+
+    [Fact]
+    public async Task Looking_at_activity_keeps_an_allow_waiting_for_a_yes()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        asks.Propose("p1");
+
+        vm.SelectedChat = vm.ActivityChat;
+
+        asks.Proposed.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void What_raven_says_on_a_switch_is_no_switch_itself()
+    {
+        RavenPanelViewModel.SwitchLine(RavenChat.Activity()).ShouldBe("Activity is shown.");
+        foreach (var chat in new[] { RavenChat.Activity(), RavenChat.Yard(), RavenChat.Of(Guid.NewGuid(), 3, "ContentAutomatorX") })
+        {
+            SpokenChatSwitch.TryRead(RavenPanelViewModel.SwitchLine(chat), out _).ShouldBeFalse("heard back through speakers, it must not switch again");
+        }
+    }
+
+    /// <summary>Two spoken switches and a question, all said before the first was heard: the question goes to the last chat.</summary>
+    [Fact]
+    public async Task A_question_after_two_spoken_switches_goes_to_the_last_one()
+    {
+        var first = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, Task.FromResult(new DictationResult("chat one", TimeSpan.FromSeconds(2))),
+                Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var (vm, _) = await ChatsVmAsync();
+        var releases = new List<Task>();
+        for (var i = 0; i < 3; i++)
+        {
+            vm.PressMic(TalkInput.MicButton);
+            await WithinAsync(vm.PendingStart);
+            Speak();
+            _time.Advance(Hold);
+            releases.Add(vm.ReleaseMicAsync(TalkInput.MicButton));
+            await WithinAsync(vm.PendingStop);
+        }
+
+        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        foreach (var release in releases)
+        {
+            await WithinAsync(release);
+        }
+
+        await WithinAsync(vm.PendingAnswers);
+        vm.Log.Single(e => e.Kind == RavenLogKind.You).Chat.Label.ShouldBe("1 CodeSwitchX");
+    }
+
+    /// <summary>Raven asked something, and the user moved to another chat by hotkey: they moved on, "chat five" is a switch again.</summary>
+    [Fact]
+    public async Task A_switch_by_hotkey_after_raven_asked_something_makes_chat_n_a_switch_again()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Want me to start it?")];
+        Type(vm, "the release notes");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SwitchChat(new ChatSwitch(1, false, false));
+        Type(vm, "chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+    }
+
+    /// <summary>A turn that only looked something up asked nothing, whatever an earlier answer asked.</summary>
+    [Fact]
+    public async Task A_turn_without_words_asked_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Which one?")];
+        Type(vm, "open it");
+        await WithinAsync(vm.PendingAnswers);
+        _brain.Answer = _ => [new BrainToolCall("t1", "list_chats", "{}")];
+        Type(vm, "the first");
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+    }
+
+    /// <summary>An answer that ends on a question in a chat the user has left holds back no switch: they moved on.</summary>
+    [Fact]
+    public async Task An_answer_that_asks_something_in_a_chat_the_user_left_holds_back_no_switch()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("Want me to start it?")];
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "the release notes");
+        vm.SelectedChat = ChatNumbered(vm, 3); // moved on while it answers
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "chat zero");
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+    }
+
+    /// <summary>Saying the chat of the prompt keeps its allow, as a click on it does; saying another chat ends it.</summary>
+    [Fact]
+    public async Task Saying_the_chat_of_a_waiting_allow_keeps_it_and_saying_another_ends_it()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.IsMuted = true; // the read-back counts as heard at once
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        asks.Propose("p1");
+
+        Type(vm, "chat three");
+        asks.Proposed.ShouldNotBeNull();
+
+        Type(vm, "chat one");
+        asks.Proposed.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// "Chat three", "chat one", and a question said once the first was heard but not the second: the question was said
+    /// after "chat one", so it is asked in chat 1.
+    /// </summary>
+    [Fact]
+    public async Task A_question_said_between_two_spoken_switches_being_heard_goes_to_the_second()
+    {
+        var first = new TaskCompletionSource<DictationResult>();
+        var second = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, second.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var (vm, _) = await ChatsVmAsync();
+        var releases = new List<Task>();
+        async Task SayAsync()
+        {
+            vm.PressMic(TalkInput.MicButton);
+            await WithinAsync(vm.PendingStart);
+            Speak();
+            _time.Advance(Hold);
+            releases.Add(vm.ReleaseMicAsync(TalkInput.MicButton));
+            await WithinAsync(vm.PendingStop);
+        }
+
+        await SayAsync();
+        await SayAsync();
+        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        await Until(() => vm.SelectedChat.Number == 3);
+        await SayAsync(); // the question, while "chat one" is still being transcribed
+        second.SetResult(new DictationResult("chat one", TimeSpan.FromSeconds(2)));
+        foreach (var release in releases)
+        {
+            await WithinAsync(release);
+        }
+
+        await WithinAsync(vm.PendingAnswers);
+        vm.Log.Single(e => e.Kind == RavenLogKind.You).Chat.Label.ShouldBe("1 CodeSwitchX");
     }
 }

@@ -99,7 +99,9 @@ public sealed class WorkspaceVocabularyProvider : IDictationVocabularyProvider, 
                 }
             }
 
-            // Every workspace name before any folder label: the prompt keeps the first words when the list is long.
+            // "Chat" first, as in "chat three", the switch the app hears itself (#121); then every workspace name before any
+            // folder label: the prompt keeps the first words when the list is long.
+            Add("Chat");
             foreach (var workspace in workspaces)
             {
                 Add(workspace.Name);

@@ -114,8 +114,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
-        ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger)
+        ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null)
     {
+        Shortcuts = shortcuts ?? new ChatHotkeys(settings);
         _installer = installer;
         _settings = settings;
         _writerOptions = writerOptions;
@@ -306,6 +307,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public static string DefaultRelayExecutable => Path.Combine(AppContext.BaseDirectory, "relay", "csx-hook.exe");
 
+    /// <summary>The hotkeys that switch Raven's chat, on the Shortcuts page.</summary>
+    public ChatHotkeys Shortcuts { get; }
+
     public string DataFolder { get; }
     public string LogsFolder { get; }
     public string SettingsFile { get; }
@@ -366,6 +370,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             _loading = false;
         }
 
+        // Outside the reads above: one of them failing must not leave the defaults in place of the stored chords, which
+        // the next change would then save over. It never throws.
+        await Shortcuts.LoadAsync(ct);
         Refresh();
     }
 

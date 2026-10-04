@@ -82,6 +82,36 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.OpenWorkspaceAsync(target, cancellationToken)).ConfigureAwait(false);
     }
 
+    [McpServerTool(Name = "switch_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Shows another chat in your panel, the one of a window (\"go to the audio one\", \"switch to the installer\"), or chat 0, "
+        + "the Yard, or Activity. Switching never opens the window's VS Code: give open true only when the user asked to open it too. "
+        + "The app itself already handles \"chat three\" and the like before you hear them; this is for wording it does not know. "
+        + "Returns what you say: the chat's number and name.")]
+    public async Task<string> SwitchChat(
+        [Description("The chat: its number (\"3\", \"three\"), a window's name as the user said it, \"Yard\" or \"Activity\".")] string chat,
+        [Description("True when the user also asked to open the window (\"open the audio one\").")] bool open = false,
+        CancellationToken cancellationToken = default)
+    {
+        ChatSwitch target;
+        var said = chat.Trim();
+        // As the app reads a spoken switch: "activity", "chat 3", or the number alone.
+        if (SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read))
+        {
+            target = read with { Open = !read.Activity && (open || read.Open) };
+        }
+        else if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
+        {
+            target = new ChatSwitch(0, Activity: false, Open: false);
+        }
+        else
+        {
+            var match = await OneWorkspaceAsync(said, cancellationToken).ConfigureAwait(false);
+            target = new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
+        }
+
+        return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
+    }
+
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)

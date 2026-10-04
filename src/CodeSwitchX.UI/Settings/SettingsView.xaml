@@ -789,6 +789,42 @@
           </Border>
         </StackPanel>
 
+        <!-- Shortcuts: the chat hotkeys. A box takes the chord pressed in it (the hotkeys are let go meanwhile); Backspace
+             or Delete clears it. -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Shortcuts}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Switch chats" />
+              <TextBlock Style="{StaticResource Help}" Text="Click a box and press the keys: two of Ctrl, Shift, Alt and Win, one of them Ctrl or Win, and a key. They work while VS Code has the focus, and never open a window. Ctrl+Alt with a digit or a letter is not offered: AltGr counts as Ctrl+Alt and would stop AltGr+2 or AltGr+7 from typing ² or {." />
+              <ItemsControl ItemsSource="{Binding Shortcuts.Rows}" Focusable="False">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,4">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="210" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="{Binding Label}" FontSize="14" VerticalAlignment="Center" />
+                      <TextBox Grid.Column="1" Text="{Binding Chord, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource Mono}" FontSize="13.5"
+                               AutomationProperties.Name="{Binding Label, StringFormat='Hotkey for {0}'}" PreviewKeyDown="OnChordKeyDown"
+                               GotKeyboardFocus="OnChordFocus" LostKeyboardFocus="OnChordFocusLost" />
+                      <Button Grid.Column="2" Style="{StaticResource Small}" Content="Default" Command="{Binding ResetCommand}" Margin="8,0,0,0"
+                              AutomationProperties.Name="{Binding Label, StringFormat='Default hotkey for {0}'}" />
+                      <Button Grid.Column="3" Style="{StaticResource Small}" Content="None" Command="{Binding ClearCommand}" Margin="6,0,0,0"
+                              AutomationProperties.Name="{Binding Label, StringFormat='No hotkey for {0}'}" />
+                      <TextBlock Grid.Column="4" Text="{Binding Problem}" Foreground="#F59E0B" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center"
+                                 Margin="12,0,0,0" Visibility="{Binding Problem, Converter={StaticResource NullToCollapsed}}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
         <!-- Usage -->
         <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Usage}">
           <Border Style="{StaticResource Card}">
