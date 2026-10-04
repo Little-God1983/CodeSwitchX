@@ -535,4 +535,38 @@ public class HotkeyServiceTests
             }
         });
     }
+
+    /// <summary>While a chord box has the keyboard, CodeSwitchX's own hotkeys are let go too: pressing one reaches the box.</summary>
+    [Fact]
+    public async Task Capturing_lets_go_of_the_fixed_hotkeys_too_and_takes_them_back_after()
+    {
+        var harness = new ShellTestHarness();
+        var keys = new ChatHotkeys();
+
+        await StaThread.RunAsync(() =>
+        {
+            var window = HiddenWindow();
+            var other = HiddenWindow();
+            var hwnd = new WindowInteropHelper(window).Handle;
+            var otherHwnd = new WindowInteropHelper(other).Handle;
+            var hotkeys = new HotkeyService(NullLogger<HotkeyService>.Instance, chatHotkeys: keys);
+            hotkeys.Attach(hwnd, harness.Shell);
+            var toggle = HotkeyService.Bindings.Single(b => b.Label == "Ctrl+Alt+Y");
+            try
+            {
+                keys.Capturing = true;
+                HotkeyInterop.Register(otherHwnd, 999, toggle.Modifiers, toggle.VirtualKey).ShouldBeTrue("let go while capturing");
+                HotkeyInterop.Unregister(otherHwnd, 999);
+
+                keys.Capturing = false;
+                HotkeyInterop.Register(otherHwnd, 999, toggle.Modifiers, toggle.VirtualKey).ShouldBeFalse("taken back after");
+            }
+            finally
+            {
+                hotkeys.Detach();
+                window.Close();
+                other.Close();
+            }
+        });
+    }
 }

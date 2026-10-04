@@ -359,7 +359,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             StorePayloads = _writerOptions.StorePayloads;
             FiveHourBudgetTokens = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
             RelayExecutable = await _settings.GetAsync<string>(SettingKeys.RelayExecutable, ct) ?? DefaultRelayExecutable;
-            await Shortcuts.LoadAsync(ct);
         }
         catch (Exception ex)
         {
@@ -371,6 +370,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             _loading = false;
         }
 
+        // Outside the reads above: one of them failing must not leave the defaults in place of the stored chords, which
+        // the next change would then save over. It never throws.
+        await Shortcuts.LoadAsync(ct);
         Refresh();
     }
 

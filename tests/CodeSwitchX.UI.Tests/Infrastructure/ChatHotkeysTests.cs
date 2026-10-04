@@ -42,7 +42,7 @@ public class ChatHotkeysTests
     [InlineData("Ctrl+Alt+3", "AltGr counts as Ctrl+Alt: this would stop AltGr+3 from typing in every app. Add Shift.")]
     [InlineData("Ctrl+Alt+Y", "CodeSwitchX uses Ctrl+Alt+Y already (Ctrl+Alt+Y).")]
     [InlineData("Ctrl+Alt+Space", "CodeSwitchX uses Ctrl+Alt+Space already (Push to talk).")]
-    [InlineData("banana", "Not a key chord: press the keys in the box, or write them like Ctrl+Alt+F3.")]
+    [InlineData("banana", "Not a key chord: click the box and press the keys.")]
     public void A_chord_that_cannot_work_says_why_and_is_not_registered(string chord, string problem)
     {
         var keys = new ChatHotkeys();

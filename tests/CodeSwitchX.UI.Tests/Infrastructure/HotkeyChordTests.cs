@@ -30,7 +30,6 @@ public class HotkeyChordTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("F3")]
     [InlineData("Ctrl+Alt")]
     [InlineData("Ctrl+Alt+Banana")]
     [InlineData("Ctrl+Ctrl+F3")]
@@ -41,7 +40,10 @@ public class HotkeyChordTests
 
     [Theory]
     [InlineData("Ctrl+Alt+F3", null)]
-    [InlineData("Shift+F3", "Use Ctrl, Alt or Win with it: a key without them is taken from every app.")]
+    [InlineData("F3", "Use Ctrl or Win with it: without them the key is taken from every app.")]
+    [InlineData("Shift+F3", "Use Ctrl or Win with it: without them the key is taken from every app.")]
+    [InlineData("Alt+F4", "Use Ctrl or Win with it: without them the key is taken from every app.")]
+    [InlineData("Win+Alt+K", null)]
     [InlineData("Ctrl+Alt+3", "AltGr counts as Ctrl+Alt: this would stop AltGr+3 from typing in every app. Add Shift.")]
     [InlineData("Ctrl+Alt+Q", "AltGr counts as Ctrl+Alt: this would stop AltGr+Q from typing in every app. Add Shift.")]
     [InlineData("Ctrl+Shift+Alt+3", null)]

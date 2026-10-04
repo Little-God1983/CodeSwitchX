@@ -25,7 +25,7 @@ public sealed record HotkeyChord(HotkeyModifiers Modifiers, uint VirtualKey)
     {
         chord = null!;
         var parts = (text ?? "").Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (parts.Length < 2)
+        if (parts.Length < 1)
         {
             return false;
         }
@@ -104,13 +104,14 @@ public sealed record HotkeyChord(HotkeyModifiers Modifiers, uint VirtualKey)
     }
 
     /// <summary>
-    /// Why the chord cannot be a global hotkey, in words for Settings; null when it can. It needs Ctrl, Alt or Win, or
-    /// it takes a plain key from every app. AltGr counts as Ctrl+Alt, so Ctrl+Alt with a key AltGr types with (a digit,
-    /// Q, E, M) would stop that character in every app (see <see cref="HotkeyService"/>).
+    /// Why the chord cannot be a global hotkey, in words for Settings; null when it can. It needs Ctrl or Win: a key
+    /// alone, with Shift or with Alt alone (Alt+F4, Alt+Space, a menu's Alt+letter) is one every app uses. AltGr counts
+    /// as Ctrl+Alt, so Ctrl+Alt with a key AltGr types with (a digit, Q, E, M) would stop that character in every app
+    /// (see <see cref="HotkeyService"/>).
     /// </summary>
     public string? WhyNot =>
-        (Modifiers & (HotkeyModifiers.Control | HotkeyModifiers.Alt | HotkeyModifiers.Win)) == 0
-            ? "Use Ctrl, Alt or Win with it: a key without them is taken from every app."
+        (Modifiers & (HotkeyModifiers.Control | HotkeyModifiers.Win)) == 0
+            ? "Use Ctrl or Win with it: without them the key is taken from every app."
             : (Modifiers & Chord) == (HotkeyModifiers.Control | HotkeyModifiers.Alt) && AltGrTypes.Contains(VirtualKey)
                 ? $"AltGr counts as Ctrl+Alt: this would stop AltGr+{NameOf(VirtualKey)} from typing in every app. Add Shift."
                 : null;

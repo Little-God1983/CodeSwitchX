@@ -124,7 +124,7 @@ public sealed partial class ChatHotkeys : ObservableObject
 
             if (!HotkeyChord.TryParse(row.Chord, out var chord))
             {
-                row.Problem = "Not a key chord: press the keys in the box, or write them like Ctrl+Alt+F3.";
+                row.Problem = "Not a key chord: click the box and press the keys.";
             }
             else if (chord.WhyNot is { } why)
             {

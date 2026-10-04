@@ -131,7 +131,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
         Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
-        Raven.CabRequested += (_, workspaceId) => _ = EnterCabAsync(workspaceId);
+        // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised.
+        Raven.CabRequested += (_, workspaceId) => _ = ((IRavenShell)this).OpenInCabAsync(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         Raven.PropertyChanged += (_, e) =>
         {

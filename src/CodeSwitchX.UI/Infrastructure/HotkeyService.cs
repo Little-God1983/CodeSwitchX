@@ -104,6 +104,9 @@ public sealed class HotkeyService
     private bool _unseenReleaseNoted;
     private readonly ChatHotkeys? _chatHotkeys;
 
+    /// <summary>CodeSwitchX's own hotkeys were let go while a chord box has the keyboard (UI thread).</summary>
+    private bool _fixedLetGo;
+
     /// <summary>The chat hotkeys registered now, by id (UI thread).</summary>
     private readonly Dictionary<int, ChatHotkeyRow> _chatIds = [];
 
@@ -205,7 +208,26 @@ public sealed class HotkeyService
         _chatHotkeys.Check();
         if (_chatHotkeys.Capturing)
         {
+            // CodeSwitchX's own hotkeys too: pressed in the box, Ctrl+Alt+Y would leave Settings, and the box should say "used already".
+            foreach (var binding in Bindings)
+            {
+                HotkeyInterop.Unregister(_hwnd, binding.Id);
+            }
+
+            _fixedLetGo = true;
             return;
+        }
+
+        if (_fixedLetGo)
+        {
+            _fixedLetGo = false;
+            foreach (var binding in Bindings.Where(b => FailedBindings.All(f => f.Id != b.Id)))
+            {
+                if (!HotkeyInterop.Register(_hwnd, binding.Id, binding.Modifiers, binding.VirtualKey))
+                {
+                    _logger.LogWarning("Global hotkey {Hotkey} ({Keys}) was taken by another application while a chord was set", binding.Label, binding.Keys);
+                }
+            }
         }
 
         foreach (var (row, chord) in _chatHotkeys.Active)

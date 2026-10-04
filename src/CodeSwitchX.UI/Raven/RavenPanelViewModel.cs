@@ -1423,6 +1423,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             await previous;
+            // Said after "chat three" but before it was heard (transcribed): the user is in chat 3 already.
+            if (_spokenSwitch is { } switched && number > switched.At && number <= switched.Through && chat == switched.From)
+            {
+                chat = switched.To;
+            }
             var clip = await stopping;
             if (clip is null)
             {
@@ -1472,7 +1477,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _logger.LogInformation("Open mic's turn of {Seconds:0.0} s had no words", clip.Length.TotalSeconds);
             }
 
-            if (text.Length > 0 && !SwitchBySaying(text))
+            if (text.Length > 0 && SwitchBySaying(text))
+            {
+                _spokenSwitch = (number, _clipsQueued, chat, CurrentChat);
+            }
+            else if (text.Length > 0)
             {
                 AddEntry(RavenLogKind.You, text, chat);
                 Ask(text, ended, chat);
@@ -2683,6 +2692,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
+        // something in the chat shown, not for that prompt.
+        if (_asks?.Proposed is { } standing && value != ChatOfAsk(standing.Ask))
+        {
+            _asks.Cancel(standing);
+        }
+
         ShowSelected();
     }
 
@@ -2802,6 +2818,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return true;
     }
 
+    /// <summary>
+    /// The last spoken switch: the clip it was said in, the last clip queued when it was heard, and the chats it went
+    /// from and to. The clips between were said after it, while the panel still showed the chat before (UI thread).
+    /// </summary>
+    private (long At, long Through, RavenChat From, RavenChat To)? _spokenSwitch;
+
     /// <summary>What Raven says on a switch: "Chat 3, ContentAutomatorX.", "Chat 0, the Yard.", "Activity."</summary>
     internal static string SwitchLine(RavenChat chat) =>
         chat.IsActivity ? "Activity." : chat.WorkspaceId is null ? "Chat 0, the Yard." : $"Chat {chat.Number}, {chat.Name}.";
@@ -2835,7 +2857,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public RavenChat StepChat(int step)
     {
         var chats = Chats.Where(c => !c.IsActivity).ToList();
-        var at = chats.IndexOf(CurrentChat);
+        // Activity is last in the list: the next chat after it is the first, the one before it the last.
+        var at = SelectedChat.IsActivity ? (step > 0 ? -1 : chats.Count) : chats.IndexOf(SelectedChat);
         var next = chats[((at + step) % chats.Count + chats.Count) % chats.Count];
         SelectedChat = next;
         return next;

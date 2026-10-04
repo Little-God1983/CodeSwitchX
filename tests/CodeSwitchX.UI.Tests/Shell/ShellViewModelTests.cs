@@ -309,11 +309,14 @@ public class ShellViewModelTests
         _h.App.Number = 2;
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
+        var forwarded = false;
+        _h.Shell.ForwardRequested += () => forwarded = true;
 
         _h.Shell.Raven.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(2, false, Open: true));
         _h.Shell.Mode.ShouldBe(ShellMode.Cab); // set before the Cab waits for VS Code
 
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        forwarded.ShouldBeTrue("the window comes forward, as when the brain opens a workspace");
         IRavenShell shell = _h.Shell;
         shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false)).ShouldBe("Chat 0, the Yard.");
         shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(9, false, false)).ShouldBeNull();
