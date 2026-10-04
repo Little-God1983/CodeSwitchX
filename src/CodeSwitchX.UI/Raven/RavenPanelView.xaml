@@ -440,6 +440,18 @@
                     Command="{Binding DataContext.AnswerInVsCodeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
                     ToolTip="Leave it to the prompt in the chat's VS Code tab" />
           </StackPanel>
+          <!-- What Claude Code suggests to allow for good, one button each; by click only (#109). None when it suggests none. -->
+          <ItemsControl x:Name="Always" ItemsSource="{Binding Suggestions}" Focusable="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="{x:Type raven:ChatSuggestionView}">
+                <Button Style="{StaticResource CardButton}" HorizontalAlignment="Left" Margin="0,5,0,0"
+                        Command="{Binding DataContext.AlwaysAllowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
+                        ToolTip="{Binding ToolTip}" AutomationProperties.Name="{Binding Text}">
+                  <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
           <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
         </StackPanel>
       </Border>
@@ -447,6 +459,7 @@
         <DataTrigger Binding="{Binding Ask.IsOpen}" Value="False">
           <Setter TargetName="Card" Property="BorderBrush" Value="#1F2937" />
           <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
+          <Setter TargetName="Always" Property="Visibility" Value="Collapsed" />
           <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
         </DataTrigger>
       </DataTemplate.Triggers>

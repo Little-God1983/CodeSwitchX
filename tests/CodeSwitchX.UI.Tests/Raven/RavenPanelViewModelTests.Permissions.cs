@@ -129,6 +129,65 @@ public sealed partial class RavenPanelViewModelTests
             + "that only the user's next yes, checked by the app, makes real.]\nallow it");
     }
 
+    private static readonly ChatPermissionSuggestion AlwaysNpmTest = new(
+        """{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}""",
+        "Always allow npm test", "in this folder, just you", "Claude Code keeps the rule and does not ask for this again.");
+
+    [Fact]
+    public async Task A_prompt_with_a_suggestion_has_an_always_allow_button_and_its_click_allows_for_good()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting() with { Suggestions = [AlwaysNpmTest] }, CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+
+        var button = card.Suggestions.ShouldHaveSingleItem();
+        button.Text.ShouldBe("Always allow npm test in this folder, just you");
+        button.ToolTip.ShouldBe("Always allow npm test in this folder, just you. The chat carries on. Claude Code keeps the rule and does not ask for this again.");
+        vm.AlwaysAllowCommand.Execute(button);
+
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null, AlwaysNpmTest));
+        (card.IsOpen, card.Outcome).ShouldBe((false, "Allowed, and kept as a rule: Always allow npm test in this folder, just you."));
+    }
+
+    [Fact]
+    public async Task A_prompt_without_suggestions_has_no_such_button_and_a_closed_card_takes_no_click()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting("p1"), CancellationToken.None);
+        var held = asks.HoldAsync(Permitting("p2", agent: "a1") with { Suggestions = [AlwaysNpmTest] }, CancellationToken.None);
+        var cards = PermissionCards(vm);
+
+        cards[0].Suggestions.ShouldBeEmpty();
+        vm.DenyCommand.Execute(cards[1]);
+        await WithinAsync(held);
+        vm.AlwaysAllowCommand.Execute(cards[1].Suggestions.Single());
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse("it was denied, and stays so");
+    }
+
+    [Fact]
+    public void A_long_rule_is_cut_on_its_button_but_where_it_is_kept_is_not_and_the_tooltip_has_all_of_it()
+    {
+        var rule = "Always allow " + string.Join(" && ", Enumerable.Range(1, 6).Select(i => $"dotnet test tests/Project{i}"));
+        var card = new ChatAskCard(Permitting() with { Suggestions = [new ChatPermissionSuggestion("{}", rule, "in this folder, just you")] });
+
+        var button = card.Suggestions.ShouldHaveSingleItem();
+
+        button.Text.ShouldBe(rule[..(ChatSuggestionView.MaxButtonChars - 1)].TrimEnd() + "… in this folder, just you");
+        button.ToolTip.ShouldStartWith(rule + " in this folder, just you.");
+    }
+
+    [Fact]
+    public void A_long_prefix_rule_still_says_it_is_a_prefix_on_its_button()
+    {
+        // Round 3: "… and anything after it" at the end was cut away, and the rule looked like one exact command.
+        const string rule = "Always allow commands starting with dotnet test tests/CodeSwitchX.Core.Tests --filter";
+        var card = new ChatAskCard(Permitting() with { Suggestions = [new ChatPermissionSuggestion("{}", rule, "in this folder, just you")] });
+
+        card.Suggestions.ShouldHaveSingleItem().Text.ShouldStartWith("Always allow commands starting with dotnet test");
+    }
+
     [Fact]
     public async Task A_yes_after_a_proposed_allow_is_the_app_s_to_find_it_allows_and_goes_to_no_brain()
     {

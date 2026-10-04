@@ -127,6 +127,19 @@ public class RelayEndToEndTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_prompt_allowed_for_good_hands_Claude_Code_the_rule_it_suggested_to_write_itself()
+    {
+        _asks.Takes = _ => true;
+        _asks.Opened += ask => _asks.Permit(ask.Id, allow: true, always: ask.Suggestions.ShouldNotBeNull().ShouldHaveSingleItem());
+
+        var code = await Relay.RunAsync([Relay.PermitArgument], Stdin(Prompt), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        _stdout.ToString().ShouldBe("""{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":"""
+            + """[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"localSettings"}]}}}""");
+    }
+
+    [Fact]
     public async Task A_permission_prompt_carries_the_chat_s_project_folder_so_a_write_from_a_subfolder_is_inside_it()
     {
         // Claude Code gives hooks CLAUDE_PROJECT_DIR (checked with CLI 2.1.287); cwd can be a folder the chat moved to.

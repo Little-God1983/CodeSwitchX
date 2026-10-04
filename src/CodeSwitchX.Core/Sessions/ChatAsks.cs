@@ -25,8 +25,25 @@ public enum ChatAskKind
 public sealed record ChatPermission(string ToolName, string Wants, string Subject, string? Agent, string? Details = null,
     IReadOnlyList<PermissionRisk>? Risks = null);
 
-/// <summary>The user's answer to a permission prompt: allowed, or denied with what the chat is told.</summary>
-public sealed record ChatPermit(bool Allow, string? Message);
+/// <summary>
+/// A standing rule Claude Code suggests with a permission prompt ("always allow npm test in this folder"), offered on the
+/// card, by click only: it outlives the one command. <see cref="Json"/> is the suggestion as Claude Code sent it; it goes
+/// back unchanged with the allow, and Claude Code writes the rule itself.
+/// </summary>
+/// <param name="Label">What it does: "Always allow npm test", "Allow all edits".</param>
+/// <param name="Where">Where the rule is kept, as said after the label: "in this folder, just you"; empty when not told.</param>
+/// <param name="Effect">What the click does from now on, for its tooltip: "Claude Code keeps the rule and does not ask for this again."</param>
+public sealed record ChatPermissionSuggestion(string Json, string Label, string Where, string Effect = "")
+{
+    /// <summary>"Always allow npm test in this folder, just you".</summary>
+    public string Said => Where.Length == 0 ? Label : $"{Label} {Where}";
+}
+
+/// <summary>
+/// The user's answer to a permission prompt: allowed, or denied with what the chat is told; allowed for good when
+/// <paramref name="Always"/> is the suggestion the user clicked.
+/// </summary>
+public sealed record ChatPermit(bool Allow, string? Message, ChatPermissionSuggestion? Always = null);
 
 /// <summary>One option of a question, as the chat wrote it.</summary>
 public sealed record ChatQuestionOption(string Label, string? Description);
@@ -40,7 +57,9 @@ public sealed record ChatQuestion(string Text, string? Header, IReadOnlyList<Cha
 /// has its <see cref="Questions"/>; a permission prompt has its <see cref="Permission"/>, which makes it one, and no
 /// questions.
 /// </summary>
-public sealed record ChatAsk(string Id, HookEvent Step, IReadOnlyList<ChatQuestion> Questions, ChatPermission? Permission = null)
+/// <param name="Suggestions">The standing rules Claude Code suggests with a permission prompt; null when it suggests none.</param>
+public sealed record ChatAsk(string Id, HookEvent Step, IReadOnlyList<ChatQuestion> Questions, ChatPermission? Permission = null,
+    IReadOnlyList<ChatPermissionSuggestion>? Suggestions = null)
 {
     /// <summary>What the brain is shown of a long command or input; the card shows all of it.</summary>
     public const int MaxDescribedChars = 300;
@@ -391,8 +410,12 @@ public sealed class ChatAsks : IDisposable
     /// Allows or denies a held permission prompt; a deny tells the chat <paramref name="message"/>, or
     /// <see cref="DeniedMessage"/>, and the chat carries on. False when it is not held any more.
     /// </summary>
-    /// <exception cref="ArgumentException">The ask is a question.</exception>
-    public bool Permit(string askId, bool allow, string? message = null)
+    /// <param name="always">
+    /// One of the prompt's own <see cref="ChatAsk.Suggestions"/>, to allow it for good: the user's click on its button, and
+    /// nothing else (no voice, no brain tool) gives it.
+    /// </param>
+    /// <exception cref="ArgumentException">The ask is a question; or <paramref name="always"/> comes with a deny, or is no suggestion of this prompt.</exception>
+    public bool Permit(string askId, bool allow, string? message = null, ChatPermissionSuggestion? always = null)
     {
         ChatAsk? ask;
         lock (_lock)
@@ -410,8 +433,13 @@ public sealed class ChatAsks : IDisposable
             throw new ArgumentException("The chat asks a question, not for permission: it needs answers.", nameof(askId));
         }
 
+        if (always is not null && (!allow || ask.Suggestions?.Contains(always) != true))
+        {
+            throw new ArgumentException("Only a rule Claude Code suggested with this prompt can be allowed for good, and only with an allow.", nameof(always));
+        }
+
         var said = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
-        return Close(askId, ChatAskOutcome.Answered, null, new ChatPermit(allow, allow ? said : said ?? DeniedMessage));
+        return Close(askId, ChatAskOutcome.Answered, null, new ChatPermit(allow, allow ? said : said ?? DeniedMessage, always));
     }
 
     /// <summary>

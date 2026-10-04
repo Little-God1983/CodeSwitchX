@@ -58,6 +58,7 @@ public static class HookEnvelopeParser
             int? relayPid = null;
             string? toolInputHash = null;
             string? projectDir = null;
+            var keepsRules = false;
             var chain = new List<ProcessRef>();
 
             if (root.TryGetProperty("payload", out var payloadElement))
@@ -72,6 +73,7 @@ public static class HookEnvelopeParser
                 relayPid = GetInt(root, "relayPid");
                 toolInputHash = GetString(root, "toolInputHash");
                 projectDir = GetString(root, "projectDir");
+                keepsRules = root.TryGetProperty("keepsRules", out var keeps) && keeps.ValueKind == JsonValueKind.True;
                 if (root.TryGetProperty("parentChain", out var chainElement) && chainElement.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var item in chainElement.EnumerateArray())
@@ -118,6 +120,7 @@ public static class HookEnvelopeParser
                 ToolUseId = GetString(payload, "tool_use_id"),
                 ToolInputHash = toolInputHash,
                 ProjectDir = projectDir,
+                RelayKeepsRules = keepsRules,
                 AgentId = GetString(payload, "agent_id"),
                 NotificationType = notificationType,
                 Message = GetString(payload, "message") ?? GetString(payload, "title"),

@@ -1945,6 +1945,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         (ChatAskKind.Permission, ChatAskOutcome.Answered) => closed.Permit switch
         {
+            { Allow: true, Always: { } always } => $"Allowed, and kept as a rule: {always.Said}.",
             { Allow: true } => "Allowed.",
             { Message: { } message } when message != ChatAsks.DeniedMessage => $"Denied: {message}",
             _ => "Denied. The chat carries on without it.",
@@ -2010,14 +2011,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void Deny(ChatAskCard? card) => Permit(card, allow: false);
 
-    private void Permit(ChatAskCard? card, bool allow)
+    /// <summary>
+    /// The chat may do what it asked, now and from now on: the rule Claude Code suggested goes back with the allow, and
+    /// Claude Code writes it. A click only: no voice tool reaches this.
+    /// </summary>
+    [RelayCommand]
+    private void AlwaysAllow(ChatSuggestionView? suggestion) => Permit(suggestion?.Card, allow: true, suggestion?.Suggestion);
+
+    private void Permit(ChatAskCard? card, bool allow, ChatPermissionSuggestion? always = null)
     {
         if (card is not { IsOpen: true, Permission: not null } || _asks is null)
         {
             return;
         }
 
-        if (!_asks.Permit(card.Ask.Id, allow) && card.IsOpen)
+        if (!_asks.Permit(card.Ask.Id, allow, always: always) && card.IsOpen)
         {
             card.IsOpen = false;
             card.Outcome = "The chat no longer waits for it.";
