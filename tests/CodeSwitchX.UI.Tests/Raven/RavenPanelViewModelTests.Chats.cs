@@ -126,6 +126,26 @@ public sealed partial class RavenPanelViewModelTests
             + "[The user is in chat 1, CodeSwitchX: \"it\" and \"this\" mean that window unless they name another.]\nopen it");
     }
 
+    /// <summary>Words of a window's chat taken along into the Yard's: the Yard's part says it is the Yard's, though the brain was never told otherwise.</summary>
+    [Fact]
+    public async Task A_waiting_question_from_a_window_s_chat_taken_into_the_yard_s_says_the_user_is_in_the_yard()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true;
+        Type(vm, "zero");
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        Type(vm, "how far is it"); // waits behind "zero"
+        vm.SelectChatCommand.Execute(vm.YardChat);
+
+        Type(vm, "stop it");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked[^1].ShouldBe(
+            "[Said in chat 3, ContentAutomatorX:] how far is it\n[The user is in chat 0, the Yard: no window in particular.]\nstop it");
+    }
+
     [Fact]
     public async Task Typing_in_activity_goes_to_the_yard_s_chat()
     {

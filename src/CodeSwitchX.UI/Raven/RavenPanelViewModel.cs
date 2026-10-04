@@ -2365,7 +2365,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
         question.Told = [.. _toldNews];
-        var text = question.Earlier + WhereTheUserIs(question.Chat) + question.Text;
+        var text = question.Earlier + WhereTheUserIs(question.Chat, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
             ? text
             : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;
@@ -2378,7 +2378,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Which chat the user asks in, until each chat has a brain of its own (#123): a window's chat each time, so "stop it"
     /// and "open it" mean that window; the Yard's once the user is back in it, and not before.
     /// </summary>
-    private string WhereTheUserIs(RavenChat chat)
+    /// <param name="always">Words of another chat go before: the Yard is named too, or the words after them would seem to be of that chat.</param>
+    private string WhereTheUserIs(RavenChat chat, bool always = false)
     {
         var told = _toldChat;
         _toldChat = chat;
@@ -2387,7 +2388,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return $"[The user is in chat {chat.Number}, {chat.Name}: \"it\" and \"this\" mean that window unless they name another.]\n";
         }
 
-        return told is { WorkspaceId: not null } ? "[The user is in chat 0, the Yard: no window in particular.]\n" : "";
+        return always || told is { WorkspaceId: not null } ? "[The user is in chat 0, the Yard: no window in particular.]\n" : "";
     }
 
     /// <summary>The digest when the brain gives none: "ContentAutomatorX finished, and CodeSwitchX needs you."</summary>
