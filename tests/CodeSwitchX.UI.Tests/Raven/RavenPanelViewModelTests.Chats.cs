@@ -146,6 +146,26 @@ public sealed partial class RavenPanelViewModelTests
             "[Said in chat 3, ContentAutomatorX:] how far is it\n[The user is in chat 0, the Yard: no window in particular.]\nstop it");
     }
 
+    /// <summary>The brain only knows where the user is once a question that said so went in: one it never took told it nothing.</summary>
+    [Fact]
+    public async Task The_yard_is_named_again_when_the_question_that_named_it_never_went_in()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        Type(vm, "how far is it");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectChatCommand.Execute(vm.YardChat);
+        _brain.BeforeSent = new TaskCompletionSource(); // "what needs me" is asked but not in yet
+        Type(vm, "what needs me");
+        await Until(() => _brain.Asked.Count == 2);
+
+        Type(vm, "stop it");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent[^1].ShouldBe("[The user is in chat 0, the Yard: no window in particular.]\nwhat needs me\nstop it");
+    }
+
     [Fact]
     public async Task Typing_in_activity_goes_to_the_yard_s_chat()
     {

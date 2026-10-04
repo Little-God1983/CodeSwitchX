@@ -1656,6 +1656,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 {
                     case BrainQuestionSent when question is not null:
                         question.Sent = true;
+                        _toldChat = question.Chat; // only now does the brain know where the user is
                         foreach (var told in question.Told)
                         {
                             _toldNews.Remove(told); // the brain has it now
@@ -2371,7 +2372,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;
     }
 
-    /// <summary>The chat the brain was last told the user is in; the Yard's until told otherwise.</summary>
+    /// <summary>The chat of the last question the brain took (<see cref="BrainQuestionSent"/>); the Yard's until one of another went in.</summary>
     private RavenChat? _toldChat;
 
     /// <summary>
@@ -2382,7 +2383,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private string WhereTheUserIs(RavenChat chat, bool always = false)
     {
         var told = _toldChat;
-        _toldChat = chat;
         if (chat.WorkspaceId is not null)
         {
             return $"[The user is in chat {chat.Number}, {chat.Name}: \"it\" and \"this\" mean that window unless they name another.]\n";
