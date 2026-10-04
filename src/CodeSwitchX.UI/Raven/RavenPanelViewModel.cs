@@ -2519,7 +2519,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             var waiting = WaitingIn(chat);
             var cards = waiting switch { 0 => "nothing waiting", 1 => "1 card waiting", _ => $"{waiting} cards waiting" };
-            return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "nothing said here yet"}";
+            return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "no summary yet"}";
         }).ToList();
         if (WaitingIn(YardChat) is > 0 and var here)
         {

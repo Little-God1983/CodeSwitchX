@@ -220,13 +220,12 @@ public partial class App : Application
         services.AddSingleton<IConductorBrain>(sp => sp.GetRequiredService<ChatBrains>().For(null));
         // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the
         // brain that acts.
-        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),
-            sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), BrainRole.Teller));
+        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => ToollessBrain(sp, BrainRole.Teller));
         // The summarizer, likewise with no tools, words the line chat 0 knows each window's chat by.
-        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.SummarizerKey, (sp, _) => new ClaudeCliBrain(sp.GetRequiredService<AppPaths>(),
+        services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.SummarizerKey, (sp, _) => ToollessBrain(sp, BrainRole.Summarizer));
+        static ClaudeCliBrain ToollessBrain(IServiceProvider sp, BrainRole role) => new(sp.GetRequiredService<AppPaths>(),
             sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), BrainRole.Summarizer));
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
