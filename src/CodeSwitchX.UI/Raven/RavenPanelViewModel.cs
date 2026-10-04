@@ -564,9 +564,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void ToggleMute() => IsMuted = !IsMuted;
 
-    /// <summary>Muting stops what is being said; unmuting gets the voice ready, so the next answer is spoken.</summary>
+    /// <summary>
+    /// Muting stops what is being said; unmuting gets the voice ready, so the next answer is spoken. A read-back cut by the
+    /// mute counts as heard, as one shown while muted does: its whole line is in the log.
+    /// </summary>
     partial void OnIsMutedChanged(bool value)
     {
+        if (value && _asks?.Proposed is { } proposal)
+        {
+            _asks.MarkHeard(proposal, _time.GetUtcNow()); // before the hush, which would settle it as not heard
+        }
+
         _voice.Muted = value;
         if (!value)
         {
@@ -1858,7 +1866,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _dispatcher.Post(() =>
         {
-            if (_asks?.Cancel(proposal) == true)
+            if (_asks?.IsHeard(proposal) == false && _asks.Cancel(proposal))
             {
                 AddEntry(RavenLogKind.Note, NotHeardLine);
             }

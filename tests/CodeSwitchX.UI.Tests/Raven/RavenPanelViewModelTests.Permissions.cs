@@ -352,6 +352,30 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task Muting_during_the_read_back_counts_it_as_heard_and_a_yes_after_it_allows()
+    {
+        // Round 4: muting to read the line gave the opposite of being muted already.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.IsMuted = true;
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingAnswers);
+
+        asks.IsHeard(proposal).ShouldBeTrue("its whole line is in the log");
+        asks.Proposed.ShouldBeSameAs(proposal);
+        Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine));
+        Type(vm, "yes");
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Another_chat_s_question_waits_while_an_allow_awaits_the_yes()
     {
         // Round 3: a yes to another chat's question, read out after the read-back, would allow the first chat's prompt.
