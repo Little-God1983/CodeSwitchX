@@ -58,6 +58,9 @@ public sealed class HotkeyService
     private const int JumpBaseId = 10;
     private const int PushToTalkId = 21;
     private const int ToggleRavenId = 22;
+
+    /// <summary>The chat hotkeys (<see cref="ChatHotkeys"/>) take ids from here, one per row in its order.</summary>
+    internal const int ChatBaseId = 100;
     private const uint VkY = 0x59;
     private const uint Vk1 = 0x31;
     private const uint VkSpace = 0x20;
@@ -99,6 +102,10 @@ public sealed class HotkeyService
     private nint _hwnd;
     private DispatcherTimer? _talkRelease;
     private bool _unseenReleaseNoted;
+    private readonly ChatHotkeys? _chatHotkeys;
+
+    /// <summary>The chat hotkeys registered now, by id (UI thread).</summary>
+    private readonly Dictionary<int, ChatHotkeyRow> _chatIds = [];
 
     /// <param name="isKeyDown">Whether a virtual key reads as held; GetAsyncKeyState unless a test replaces it.</param>
     /// <param name="isForegroundElevated">Whether the foreground window is an elevated process's (which hides the
@@ -106,10 +113,12 @@ public sealed class HotkeyService
     /// unless a test replaces it.</param>
     /// <param name="messageAge">How long ago the WM_HOTKEY being handled was posted; GetMessageTime unless a test
     /// replaces it.</param>
+    /// <param name="chatHotkeys">The hotkeys that switch Raven's chat, set in Settings; none without it.</param>
     public HotkeyService(ILogger<HotkeyService> logger, Func<uint, bool>? isKeyDown = null, Func<bool>? isForegroundElevated = null,
-        Func<TimeSpan>? messageAge = null)
+        Func<TimeSpan>? messageAge = null, ChatHotkeys? chatHotkeys = null)
     {
         _logger = logger;
+        _chatHotkeys = chatHotkeys;
         _isKeyDown = isKeyDown ?? HotkeyInterop.IsKeyDown;
         _isForegroundElevated = isForegroundElevated ?? HotkeyInterop.IsForegroundElevated;
         _messageAge = messageAge ?? HotkeyInterop.CurrentMessageAge;
@@ -169,6 +178,49 @@ public sealed class HotkeyService
         }
 
         FailedBindings = failed;
+        if (_chatHotkeys is not null)
+        {
+            _chatHotkeys.Changed += RegisterChatHotkeys;
+            RegisterChatHotkeys();
+        }
+    }
+
+    /// <summary>
+    /// Registers the chat hotkeys as they are set now, after letting go of the ones before; none while a chord box in
+    /// Settings has the keyboard. A binding Windows refuses is marked taken, so Settings shows it instead of failing silently.
+    /// </summary>
+    private void RegisterChatHotkeys()
+    {
+        if (_hwnd == 0 || _chatHotkeys is null)
+        {
+            return;
+        }
+
+        foreach (var id in _chatIds.Keys)
+        {
+            HotkeyInterop.Unregister(_hwnd, id);
+        }
+
+        _chatIds.Clear();
+        _chatHotkeys.Check();
+        if (_chatHotkeys.Capturing)
+        {
+            return;
+        }
+
+        foreach (var (row, chord) in _chatHotkeys.Active)
+        {
+            var id = ChatBaseId + _chatHotkeys.Rows.ToList().IndexOf(row);
+            if (HotkeyInterop.Register(_hwnd, id, chord.Modifiers | HotkeyModifiers.NoRepeat, chord.VirtualKey))
+            {
+                _chatIds[id] = row;
+            }
+            else
+            {
+                _logger.LogWarning("The chat hotkey {Hotkey} ({Keys}) is already taken by another application", row.Label, chord.Text);
+                _chatHotkeys.MarkTaken(row);
+            }
+        }
     }
 
     public void Detach()
@@ -181,6 +233,17 @@ public sealed class HotkeyService
         foreach (var binding in Bindings)
         {
             HotkeyInterop.Unregister(_hwnd, binding.Id);
+        }
+
+        foreach (var id in _chatIds.Keys)
+        {
+            HotkeyInterop.Unregister(_hwnd, id);
+        }
+
+        _chatIds.Clear();
+        if (_chatHotkeys is not null)
+        {
+            _chatHotkeys.Changed -= RegisterChatHotkeys;
         }
 
         _talkRelease?.Stop();
@@ -221,6 +284,20 @@ public sealed class HotkeyService
         else if (id == ToggleRavenId)
         {
             _shell.Raven.TogglePanelCommand.Execute(null);
+            handled = true;
+        }
+        else if (_chatIds.TryGetValue(id, out var chat))
+        {
+            // Like push to talk: the shell stays where it is, and VS Code keeps the focus. Switching never opens a window.
+            if (chat.Target is { } target)
+            {
+                _shell.Raven.SwitchChat(target);
+            }
+            else
+            {
+                _shell.Raven.StepChat(chat.Step);
+            }
+
             handled = true;
         }
 

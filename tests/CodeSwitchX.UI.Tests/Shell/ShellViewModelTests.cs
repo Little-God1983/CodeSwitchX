@@ -302,6 +302,23 @@ public class ShellViewModelTests
         _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
     }
 
+    /// <summary>"Open chat two" switches Raven's chat and docks its window; the brain's switch_chat gets Raven's line back.</summary>
+    [Fact]
+    public async Task Open_chat_two_docks_its_window_and_the_brain_s_switch_says_where()
+    {
+        _h.App.Number = 2;
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+
+        _h.Shell.Raven.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(2, false, Open: true));
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab); // set before the Cab waits for VS Code
+
+        _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        IRavenShell shell = _h.Shell;
+        shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false)).ShouldBe("Chat 0, the Yard.");
+        shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(9, false, false)).ShouldBeNull();
+    }
+
     [Fact]
     public async Task Choosing_a_raven_chat_does_not_open_its_window()
     {

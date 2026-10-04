@@ -256,6 +256,7 @@ public partial class App : Application
         services.AddSingleton<ShellViewModel>();
         services.AddTransient<AddWorkspaceViewModel>();
         services.AddSingleton<Func<AddWorkspaceViewModel>>(sp => () => sp.GetRequiredService<AddWorkspaceViewModel>());
+        services.AddSingleton<ChatHotkeys>();
         services.AddSingleton<HotkeyService>();
         services.AddSingleton<TrayIconService>();
         services.AddSingleton<MainWindow>();
