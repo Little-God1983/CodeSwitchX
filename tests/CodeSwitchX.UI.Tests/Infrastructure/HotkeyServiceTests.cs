@@ -526,7 +526,11 @@ public class HotkeyServiceTests
                 keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
                 keys.Capturing = true; // a box to fix one in has the keyboard: the warnings stay while it is edited
                 keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Rows[5].Chord = "Ctrl+Shift+F5"; // one is set anew: the others are still taken, and say so
+                keys.Rows.Where(r => r != keys.Rows[5]).ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
                 keys.Capturing = false;
+                keys.Rows[5].Problem.ShouldBeNull("nobody holds the new chord");
+                keys.Rows[5].Chord = "Ctrl+Alt+F5";
 
                 theirs.Capturing = true; // the holder lets go while its chord box has the keyboard
                 keys.Rows[3].Chord = "Ctrl+Shift+Alt+F3"; // any change registers again, and tries the taken ones once more

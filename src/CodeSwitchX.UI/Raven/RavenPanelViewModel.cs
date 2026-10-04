@@ -1426,7 +1426,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Said after "chat three" but before it was heard (transcribed): the user is in chat 3 already. From the chat
             // the clip was said in, so a second switch in the queue maps the clips behind it too.
             var saidIn = chat;
-            if (_spokenSwitch is { } switched && number > switched.At && number <= switched.Through && chat == switched.From)
+            if (_spokenSwitch is { } switched && number > switched.At && number <= switched.Through
+                && (chat == switched.From || chat == switched.Via))
             {
                 chat = switched.To;
             }
@@ -1481,7 +1482,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (text.Length > 0 && SwitchBySaying(text))
             {
-                _spokenSwitch = (number, _clipsQueued, saidIn, CurrentChat);
+                _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
             }
             else if (text.Length > 0)
             {
@@ -1643,7 +1644,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
-            _brainAsked = !floor.IsCancellationRequested
+            // And only while the user is still in that chat: one who moved on is not answering it.
+            _brainAsked = !floor.IsCancellationRequested && CurrentChat == question.Chat
                 && Log.Skip(before is null ? 0 : Log.IndexOf(before) + 1).LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
                 && said.Text.TrimEnd().EndsWith('?');
         }
@@ -2795,8 +2797,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// "Chat three", "zu Chat drei", "activity", "open chat three": the app switches the chat itself, at once and without
     /// a brain turn (<see cref="SpokenChatSwitch"/>), and says where the user is now. Navigation, not a question: nothing
-    /// is written to a chat, and the brain's answer still on its way goes on in the chat it was asked in. Like any other
-    /// words, it ends an allow waiting for a yes: a yes said in the next chat must not allow another chat's prompt.
+    /// is written to a chat, and the brain's answer still on its way goes on in the chat it was asked in. A switch to
+    /// another window's chat ends an allow waiting for a yes, as one by hotkey or click does (see
+    /// <see cref="OnSelectedChatChanged"/>): a yes said there must not allow another chat's prompt.
     /// Returns whether the words were a switch.
     /// </summary>
     private bool SwitchBySaying(string text)
@@ -2804,11 +2807,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_brainAsked || !SpokenChatSwitch.TryRead(text, out var target))
         {
             return false; // after Raven asked something, "chat three" may be the answer: the brain hears it, and can still switch
-        }
-
-        if (_asks?.Proposed is { } standing)
-        {
-            _asks.Cancel(standing);
         }
 
         var chat = SwitchChat(target);
@@ -2831,9 +2829,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The last spoken switch: the clip it was said in, the last clip queued when it was heard, and the chats it went
-    /// from and to. The clips between were said after it, while the panel still showed the chat before (UI thread).
+    /// from and to. The clips between were said after it, while the panel still showed a chat before it: the one it was
+    /// said in (From), or the one an earlier switch, heard meanwhile, had gone to (Via). UI thread.
     /// </summary>
-    private (long At, long Through, RavenChat From, RavenChat To)? _spokenSwitch;
+    private (long At, long Through, RavenChat From, RavenChat Via, RavenChat To)? _spokenSwitch;
 
     /// <summary>The brain's last answer asked the user something, and nothing was said since (UI thread).</summary>
     private bool _brainAsked;

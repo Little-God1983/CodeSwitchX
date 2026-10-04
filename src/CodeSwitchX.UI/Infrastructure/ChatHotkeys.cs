@@ -102,13 +102,18 @@ public sealed partial class ChatHotkeys : ObservableObject
         }
 
         Check();
-        _ = SaveAsync();
+        _saving = SaveAsync(_saving);
         Changed?.Invoke();
     }
 
+    /// <summary>The last save, never faulting: the next waits for it, so the chords stored last are the ones set last.</summary>
+    private Task _saving = Task.CompletedTask;
+
+    private const string TakenText = "Taken by another app: pick another chord.";
+
     /// <summary>
-    /// Gives every row its problem, or none: not a chord, one that breaks typing, set twice, or one CodeSwitchX uses itself.
-    /// A "taken" from the registration before is cleared, so each registration tries again: the other app may have let go.
+    /// Gives every row its problem, or none: not a chord, one that breaks typing, set twice, one CodeSwitchX uses itself,
+    /// or one Windows refused at the last registration (<see cref="MarkTaken"/>), which stays until the next one.
     /// </summary>
     public void Check()
     {
@@ -141,15 +146,30 @@ public sealed partial class ChatHotkeys : ObservableObject
             else
             {
                 seen[chord] = row;
-                row.Problem = null;
+                row.Problem = row.Taken ? TakenText : null;
             }
         }
     }
 
     /// <summary>Windows refused the binding: another app holds it.</summary>
-    public void MarkTaken(ChatHotkeyRow row) => row.Problem = $"Taken by another app: pick another chord.";
+    public void MarkTaken(ChatHotkeyRow row)
+    {
+        row.Taken = true;
+        row.Problem = TakenText;
+    }
 
-    private async Task SaveAsync()
+    /// <summary>Before a registration: every "taken" is forgotten, so each is tried again (the other app may have let go).</summary>
+    public void ForgetTaken()
+    {
+        foreach (var row in Rows)
+        {
+            row.Taken = false;
+        }
+
+        Check();
+    }
+
+    private async Task SaveAsync(Task previous)
     {
         if (_store is null)
         {
@@ -158,6 +178,7 @@ public sealed partial class ChatHotkeys : ObservableObject
 
         try
         {
+            await previous;
             await _store.SetAsync(SettingKey, Rows.ToDictionary(r => r.Id, r => r.Chord));
         }
         catch (Exception ex)
@@ -190,7 +211,14 @@ public sealed partial class ChatHotkeyRow(string id, string label, string defaul
     [ObservableProperty]
     private string? _problem;
 
-    partial void OnChordChanged(string value) => owner.OnChordChanged();
+    /// <summary>Windows refused the chord at the last registration; forgotten when the chord changes, and before the next one.</summary>
+    internal bool Taken { get; set; }
+
+    partial void OnChordChanged(string value)
+    {
+        Taken = false;
+        owner.OnChordChanged();
+    }
 
     [RelayCommand]
     private void Reset() => Chord = Default;

@@ -217,7 +217,7 @@ public sealed class HotkeyService
             return;
         }
 
-        _chatHotkeys.Check(); // clears a "taken" from before: it is tried again below
+        _chatHotkeys.ForgetTaken(); // each is tried again below
         if (_fixedLetGo)
         {
             _fixedLetGo = false;

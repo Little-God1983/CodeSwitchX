@@ -568,4 +568,76 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
     }
+
+    /// <summary>An answer that ends on a question in a chat the user has left holds back no switch: they moved on.</summary>
+    [Fact]
+    public async Task An_answer_that_asks_something_in_a_chat_the_user_left_holds_back_no_switch()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("Want me to start it?")];
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "the release notes");
+        vm.SelectedChat = ChatNumbered(vm, 3); // moved on while it answers
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "chat zero");
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+    }
+
+    /// <summary>Saying the chat of the prompt keeps its allow, as a click on it does; saying another chat ends it.</summary>
+    [Fact]
+    public async Task Saying_the_chat_of_a_waiting_allow_keeps_it_and_saying_another_ends_it()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.IsMuted = true; // the read-back counts as heard at once
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        asks.Propose("p1");
+
+        Type(vm, "chat three");
+        asks.Proposed.ShouldNotBeNull();
+
+        Type(vm, "chat one");
+        asks.Proposed.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// "Chat three", "chat one", and a question said once the first was heard but not the second: the question was said
+    /// after "chat one", so it is asked in chat 1.
+    /// </summary>
+    [Fact]
+    public async Task A_question_said_between_two_spoken_switches_being_heard_goes_to_the_second()
+    {
+        var first = new TaskCompletionSource<DictationResult>();
+        var second = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(first.Task, second.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        var (vm, _) = await ChatsVmAsync();
+        var releases = new List<Task>();
+        async Task SayAsync()
+        {
+            vm.PressMic(TalkInput.MicButton);
+            await WithinAsync(vm.PendingStart);
+            Speak();
+            _time.Advance(Hold);
+            releases.Add(vm.ReleaseMicAsync(TalkInput.MicButton));
+            await WithinAsync(vm.PendingStop);
+        }
+
+        await SayAsync();
+        await SayAsync();
+        first.SetResult(new DictationResult("chat three", TimeSpan.FromSeconds(2)));
+        await Until(() => vm.SelectedChat.Number == 3);
+        await SayAsync(); // the question, while "chat one" is still being transcribed
+        second.SetResult(new DictationResult("chat one", TimeSpan.FromSeconds(2)));
+        foreach (var release in releases)
+        {
+            await WithinAsync(release);
+        }
+
+        await WithinAsync(vm.PendingAnswers);
+        vm.Log.Single(e => e.Kind == RavenLogKind.You).Chat.Label.ShouldBe("1 CodeSwitchX");
+    }
 }
