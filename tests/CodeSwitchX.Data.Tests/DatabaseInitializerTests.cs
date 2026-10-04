@@ -88,6 +88,26 @@ public class DatabaseInitializerTests : IAsyncLifetime
         }
     }
 
+    /// <summary>Workspaces stored before numbers were are numbered once, in the order the Yard shows them: by track, then by name.</summary>
+    [Fact]
+    public async Task An_upgrade_numbers_the_stored_workspaces_in_yard_order()
+    {
+        await MigrateToAsync("20261001105022_SessionWindowFolders");
+        const string first = "11111111-1111-1111-1111-111111111111", second = "22222222-2222-2222-2222-222222222222";
+        await ExecuteAsync($"""
+            INSERT INTO "Tracks" ("Id", "Name", "SortOrder") VALUES ('{second}', 'Later', 2), ('{first}', 'Earlier', 1);
+            INSERT INTO "Workspaces" ("Id", "Name", "RootPath", "TrackId", "AccentColor", "HostMode", "AutoStart", "CreatedAt") VALUES
+              ('A0000000-0000-0000-0000-000000000001', 'zeta', 'c:\z', '{first}', '#000000', 'Snap', 0, 0),
+              ('A0000000-0000-0000-0000-000000000002', 'Alpha', 'c:\a', '{second}', '#000000', 'Snap', 0, 0),
+              ('A0000000-0000-0000-0000-000000000003', 'beta', 'c:\b', '{first}', '#000000', 'Snap', 0, 0);
+            """);
+
+        await InitializeWithinTenSecondsAsync();
+
+        (await _db.Get<IWorkspaceStore>().GetAllAsync(TestContext.Current.CancellationToken)).ToDictionary(w => w.Name, w => w.Number)
+            .ShouldBe(new Dictionary<string, int> { ["beta"] = 1, ["zeta"] = 2, ["Alpha"] = 3 }, ignoreOrder: true);
+    }
+
     [Fact]
     public async Task An_upgrade_marks_the_cursors_stored_before_titles_were_as_having_found_a_prompt_title()
     {

@@ -14,7 +14,7 @@ public sealed class YardToolsTests
     {
         var workspaces = await Tools.ListWorkspaces(CancellationToken.None);
 
-        workspaces.Select(w => w.Name).ShouldBe(["CodeSwitchX", "Diffusion-Full"]);
+        workspaces.Select(w => (w.Number, w.Name)).ShouldBe([(1, "CodeSwitchX"), (4, "Diffusion-Full")]);
         var codeSwitchX = workspaces[0];
         codeSwitchX.Track.ShouldBe("Tools");
         codeSwitchX.Git.ShouldBe(["main, clean"]);
@@ -22,6 +22,15 @@ public sealed class YardToolsTests
         var diffusion = workspaces[1];
         diffusion.Folders.ShouldBe(["DiffusionNexus.Installer.SDK", "DiffusionNexus"]);
         diffusion.Git.ShouldBe(["DiffusionNexus.Installer.SDK: develop, 3 changed", "DiffusionNexus: main"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_is_found_by_the_number_on_its_tile()
+    {
+        var match = (await Tools.FindWorkspace("number four", CancellationToken.None)).ShouldHaveSingleItem();
+
+        match.Workspace.Name.ShouldBe("Diffusion-Full");
+        match.Workspace.Number.ShouldBe(4);
     }
 
     [Fact]

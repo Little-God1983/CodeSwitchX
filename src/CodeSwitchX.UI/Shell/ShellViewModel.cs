@@ -425,16 +425,14 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
+    /// <summary>Opens workspace number <paramref name="number"/> in the Cab, wherever its tile is; nothing when no workspace has it.</summary>
     [RelayCommand]
-    public async Task JumpToAsync(int oneBasedIndex)
+    public async Task JumpToAsync(int number)
     {
-        var tiles = Yard.Tiles.ToList();
-        if (oneBasedIndex < 1 || oneBasedIndex > tiles.Count)
+        if (number > 0 && Yard.Tiles.FirstOrDefault(t => t.Number == number) is { } tile)
         {
-            return;
+            await EnterCabAsync(tile.Id);
         }
-
-        await EnterCabAsync(tiles[oneBasedIndex - 1].Id);
     }
 
     [RelayCommand]

@@ -30,6 +30,14 @@ public static class WorkspaceMatcher
     /// <summary>The workspaces that match, best first; a workspace appears once, under its best-matching name.</summary>
     public static IReadOnlyList<WorkspaceMatch> Find(string query, IEnumerable<YardWorkspace> workspaces)
     {
+        // A number ("3", "number three", "Chat drei") means the workspace that has it, by its own name; when none has it,
+        // the words are matched as a name like any other.
+        if (SpokenNumber.TryRead(query, out var number) && number > 0
+            && workspaces.FirstOrDefault(w => w.Number == number) is { } numbered)
+        {
+            return [new WorkspaceMatch(numbered, numbered.Name, 1)];
+        }
+
         var key = Squash(query);
         if (key.Length == 0)
         {

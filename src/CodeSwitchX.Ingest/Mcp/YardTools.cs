@@ -19,7 +19,7 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
     public static readonly IReadOnlyList<string> ChatFilters = ["needs_me", "working", "live", "all"];
 
     [McpServerTool(Name = "list_workspaces", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("Lists the workspaces on the Yard, the user's board of VS Code workspaces: name, track (the group it is in), "
+    [Description("Lists the workspaces on the Yard, the user's board of VS Code workspaces: number, name, track (the group it is in), "
         + "folders, git state (branch and uncommitted changes per repository) and how many chats need the user or are working.")]
     public async Task<IReadOnlyList<WorkspaceView>> ListWorkspaces(CancellationToken cancellationToken)
     {
@@ -30,7 +30,8 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
     [McpServerTool(Name = "find_workspace", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Finds the workspaces a name means, best match first. Matches the workspace names and the names of the folders "
         + "inside them, ignoring case, spaces and punctuation, and allows for a misheard name. Use it whenever the user names a "
-        + "workspace or a project: they speak, so the name reaches you through speech recognition.")]
+        + "workspace or a project: they speak, so the name reaches you through speech recognition. A number (\"3\", \"number "
+        + "three\", \"Chat drei\") finds the workspace with that number: every workspace has one, shown on its tile.")]
     public async Task<IReadOnlyList<WorkspaceMatchView>> FindWorkspace(
         [Description("The name as the user said it, e.g. \"Diffusion Nexus\".")] string query, CancellationToken cancellationToken)
     {
@@ -141,14 +142,16 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
     internal static string Percent(double fill) => (Math.Clamp(fill, 0, 1) * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
 }
 
+/// <param name="Number">The workspace's number, on its tile: the user may name the workspace by it ("chat 3").</param>
 /// <param name="Git">One line per repository: "main, clean", or "DiffusionNexus: main, 3 changed" on a tile with several.</param>
-public sealed record WorkspaceView(string Name, string Track, IReadOnlyList<string> Folders, IReadOnlyList<string> Git, int ChatsNeedingYou,
+public sealed record WorkspaceView(int Number, string Name, string Track, IReadOnlyList<string> Folders, IReadOnlyList<string> Git, int ChatsNeedingYou,
     int ChatsWorking, int Chats)
 {
     internal static WorkspaceView Of(YardWorkspace workspace, IReadOnlyList<YardChat> chats)
     {
         var own = chats.Where(c => c.WorkspaceId == workspace.Id).ToList();
         return new WorkspaceView(
+            workspace.Number,
             workspace.Name,
             workspace.Track,
             workspace.Folders.Select(f => f.Name).ToList(),
@@ -177,20 +180,21 @@ public sealed record WorkspaceMatchView(string MatchedName, double Score, Worksp
 /// The question the chat waits on in Raven's panel, with its options, or the permission it asks there; null when it asks
 /// nothing there.
 /// </param>
-public sealed record ChatView(string Id, string Title, string Workspace, string State, string For, string? Model, string? LastTool, string Context,
+/// <param name="WorkspaceNumber">The number of the chat's workspace.</param>
+public sealed record ChatView(string Id, string Title, string Workspace, int WorkspaceNumber, string State, string For, string? Model, string? LastTool, string Context,
     bool StartedByRaven, string? SendTo, string? Asks = null)
 {
     internal static ChatView Of(YardChat chat, string? asks = null) => new(
-        chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool, YardTools.Percent(chat.ContextFill),
-        chat.Voice, chat.SendName, asks);
+        chat.Id, chat.Title, chat.Workspace, chat.WorkspaceNumber, YardTools.StateText(chat), chat.StateFor, chat.Model, chat.LastTool,
+        YardTools.Percent(chat.ContextFill), chat.Voice, chat.SendName, asks);
 }
 
 /// <param name="SendTo">As <see cref="ChatView.SendTo"/>.</param>
 /// <param name="Asks">As <see cref="ChatView.Asks"/>.</param>
-public sealed record ChatDetailView(string Id, string Title, string Workspace, string State, string For, DateTimeOffset Since, string? Model,
+public sealed record ChatDetailView(string Id, string Title, string Workspace, int WorkspaceNumber, string State, string For, DateTimeOffset Since, string? Model,
     string? LastTool, string Context, string? LastNotification, string? Folder, bool StartedByRaven, string? SendTo, string? Asks = null)
 {
     internal static ChatDetailView Of(YardChat chat, string? asks = null) => new(
-        chat.Id, chat.Title, chat.Workspace, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
+        chat.Id, chat.Title, chat.Workspace, chat.WorkspaceNumber, YardTools.StateText(chat), chat.StateFor, chat.StateSince, chat.Model, chat.LastTool,
         YardTools.Percent(chat.ContextFill), chat.LastNotification, chat.Cwd, chat.Voice, chat.SendName, asks);
 }

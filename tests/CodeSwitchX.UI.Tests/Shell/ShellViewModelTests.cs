@@ -363,17 +363,20 @@ public class ShellViewModelTests
         _h.Docker.DidNotReceive().MoveTo(500, ScreenRect.FromSize(0, 0, 50, 50));
     }
 
+    /// <summary>Ctrl+Shift+Alt+N opens workspace number N, not the N-th tile: the numbers stay put when tiles move.</summary>
     [Fact]
-    public async Task JumpTo_out_of_range_is_ignored_and_in_range_enters_the_cab()
+    public async Task JumpTo_opens_the_workspace_with_that_number_and_ignores_a_number_none_has()
     {
+        _h.App.Number = 3;
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
 
-        await _h.Shell.JumpToAsync(5);
-        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
-
         await _h.Shell.JumpToAsync(1);
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard, "the first tile has number 3, and no workspace has 1");
+
+        await _h.Shell.JumpToAsync(3);
         _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.Cab.ActiveTile!.Id.ShouldBe(_h.App.Id);
     }
 
     [Fact]

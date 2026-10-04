@@ -37,6 +37,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public Workspace Workspace { get; }
     public Guid Id => Workspace.Id;
     public string Name => Workspace.Name;
+
+    /// <summary>The workspace's number, in the tile's upper left corner: what the user says and presses for it.</summary>
+    public int Number => Workspace.Number;
     public string AccentColor => Workspace.AccentColor;
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];

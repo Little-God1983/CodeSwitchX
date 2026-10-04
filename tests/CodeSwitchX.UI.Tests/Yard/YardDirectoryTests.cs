@@ -28,10 +28,10 @@ public sealed class YardDirectoryTests
 
     public YardDirectoryTests()
     {
-        _codeSwitchX = new Workspace { Name = "CodeSwitchX", RootPath = @"E:\Repos\CodeSwitchX", TrackId = _tools.Id };
+        _codeSwitchX = new Workspace { Name = "CodeSwitchX", RootPath = @"E:\Repos\CodeSwitchX", TrackId = _tools.Id, Number = 1 };
         _diffusion = new Workspace
         {
-            Name = "Diffusion-Full", RootPath = @"E:\Repos\DiffusionNexus.Installer.SDK", WorkspaceFile = DiffusionFile, TrackId = _apps.Id,
+            Name = "Diffusion-Full", RootPath = @"E:\Repos\DiffusionNexus.Installer.SDK", WorkspaceFile = DiffusionFile, TrackId = _apps.Id, Number = 2,
         };
         _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Track>>([_tools, _apps]));
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_codeSwitchX, _diffusion]));
@@ -79,7 +79,7 @@ public sealed class YardDirectoryTests
 
         var workspaces = await Directory().WorkspacesAsync(CancellationToken.None);
 
-        workspaces.Select(w => (w.Name, w.Track)).ShouldBe([("CodeSwitchX", "Tools"), ("Diffusion-Full", "Apps")]);
+        workspaces.Select(w => (w.Number, w.Name, w.Track)).ShouldBe([(1, "CodeSwitchX", "Tools"), (2, "Diffusion-Full", "Apps")]);
         workspaces[0].Git.ShouldBe([new YardGitLine(null, "main", "clean")]);
         workspaces[1].Git.ShouldBe([new YardGitLine("DiffusionNexus.Installer.SDK", "develop", "3 changed"), new YardGitLine("Nexus app", "main", null)]);
     }

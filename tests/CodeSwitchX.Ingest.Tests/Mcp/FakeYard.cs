@@ -13,10 +13,10 @@ internal sealed class FakeYard : IYardDirectory
     public List<YardWorkspace> Workspaces { get; } =
     [
         new(CodeSwitchXId, "CodeSwitchX", "Tools", @"E:\Repos\CodeSwitchX", [new("CodeSwitchX", @"E:\Repos\CodeSwitchX")],
-            [new(null, "main", "clean")]),
+            [new(null, "main", "clean")], Number: 1),
         new(DiffusionId, "Diffusion-Full", "Apps", @"E:\Repos\DiffusionNexus.Installer.SDK",
             [new("DiffusionNexus.Installer.SDK", @"E:\Repos\DiffusionNexus.Installer.SDK"), new("DiffusionNexus", @"E:\Repos\DiffusionNexus")],
-            [new("DiffusionNexus.Installer.SDK", "develop", "3 changed"), new("DiffusionNexus", "main", null)]),
+            [new("DiffusionNexus.Installer.SDK", "develop", "3 changed"), new("DiffusionNexus", "main", null)], Number: 4),
     ];
 
     public List<YardChat> Chats { get; } =

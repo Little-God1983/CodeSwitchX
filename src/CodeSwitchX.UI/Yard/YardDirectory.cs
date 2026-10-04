@@ -50,7 +50,8 @@ public sealed class YardDirectory : IYardDirectory
                 t.Track,
                 t.Workspace.RootPath,
                 FoldersOf(t.Workspace),
-                t.Git.Select(l => new YardGitLine(l.Folder, l.Branch, l.GitStateLabel)).ToList()))
+                t.Git.Select(l => new YardGitLine(l.Folder, l.Branch, l.GitStateLabel)).ToList(),
+                t.Workspace.Number))
             .ToList();
     }
 
@@ -66,7 +67,7 @@ public sealed class YardDirectory : IYardDirectory
                 var snapshot = _sessionOf(r.Row.Id);
                 return new YardChat(r.Row.Id, r.Row.Title, r.Workspace.Id, r.Workspace.Name, r.Row.State, r.Row.NeedsYou, r.Row.StateSince,
                     r.Row.StateFor, snapshot?.Model, r.Row.LastTool, r.Row.ContextFill, snapshot?.LastNotification, snapshot?.Cwd, _isVoice(r.Row.Id),
-                    _sendNameOf(r.Row.Id));
+                    _sendNameOf(r.Row.Id), r.Workspace.Number);
             })
             .ToList();
     }
