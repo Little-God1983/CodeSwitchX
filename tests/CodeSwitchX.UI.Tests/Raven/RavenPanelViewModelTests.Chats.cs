@@ -258,6 +258,23 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.ShouldHaveSingleItem("the installing note gave way to it");
     }
 
+    /// <summary>
+    /// A card asked before its window's chat was in the list stays in the Yard's chat; the read-back of an allow for it is
+    /// said beside it there, not in the window's chat added since.
+    /// </summary>
+    [Fact]
+    public async Task The_lines_about_a_card_go_to_the_chat_the_card_is_in()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+
+        asks.Propose("p1");
+
+        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.Permission, 0), (RavenLogKind.Raven, 0)]);
+    }
+
     [Fact]
     public async Task What_the_panel_says_about_itself_is_said_in_the_chat_the_user_is_in()
     {

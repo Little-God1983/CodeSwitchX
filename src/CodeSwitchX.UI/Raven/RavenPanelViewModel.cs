@@ -1808,11 +1808,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
     {
         await card.Naming;
-        _dispatcher.Post(() => Append(entry, ChatOf(card.WorkspaceId)));
+        _dispatcher.Post(() => card.ShownIn = Append(entry, ChatOf(card.WorkspaceId)).Chat);
     }
 
-    /// <summary>The chat an ask's card is in; the Yard's for one without a card.</summary>
-    private RavenChat ChatOfAsk(ChatAsk ask) => _askCards.TryGetValue(ask.Id, out var card) ? ChatOf(card.WorkspaceId) : YardChat;
+    /// <summary>The chat an ask's card is in, the lines about it go beside it; the Yard's for one without a card.</summary>
+    private RavenChat ChatOfAsk(ChatAsk ask) =>
+        _askCards.TryGetValue(ask.Id, out var card) ? card.ShownIn ?? ChatOf(card.WorkspaceId) : YardChat;
 
     /// <summary>Names the chat as the Yard shows it, for the card and for what Raven says. Never faults.</summary>
     private async Task NameAsync(ChatAskCard card)

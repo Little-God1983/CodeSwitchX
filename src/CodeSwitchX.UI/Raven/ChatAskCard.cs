@@ -60,6 +60,9 @@ public sealed partial class ChatAskCard : ObservableObject
     [ObservableProperty]
     private string _chat = "A chat";
 
+    /// <summary>The Raven chat the card is shown in, once placed: what is said about it is said there too.</summary>
+    public RavenChat? ShownIn { get; set; }
+
     /// <summary>The workspace whose tile shows the chat; null until named, or when it is on none.</summary>
     public Guid? WorkspaceId { get; set; }
 
