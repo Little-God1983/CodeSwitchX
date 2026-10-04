@@ -43,7 +43,8 @@ public sealed record HotkeyBinding(int Id, HotkeyModifiers Modifiers, uint Virtu
 }
 
 /// <summary>
-/// Ctrl+Alt+Y toggles Yard/Cab; Ctrl+Shift+Alt+1..9 jumps to a tile. The digit row deliberately adds Shift:
+/// Ctrl+Alt+Y toggles Yard/Cab; Ctrl+Shift+Alt+1..9 opens the workspace with that number (Workspace.Number), wherever
+/// its tile is. The digit row deliberately adds Shift:
 /// AltGr is reported to RegisterHotKey as Ctrl+Alt, so a bare Ctrl+Alt+digit hotkey would swallow AltGr+2/3/7/8/9/0
 /// (² ³ { [ ] }) in every application on German and many other European layouts while CodeSwitchX runs.
 /// <see cref="PushToTalk"/> is Raven's push-to-talk and Ctrl+Alt+J folds its panel; neither brings the shell up, so
@@ -206,9 +207,9 @@ public sealed class HotkeyService
         }
         else if (id > JumpBaseId && id <= JumpBaseId + 9)
         {
-            var index = id - JumpBaseId;
-            var acts = index <= _shell.Yard.Tiles.Count();
-            _ = _shell.JumpToAsync(index);
+            var number = id - JumpBaseId;
+            var acts = _shell.Yard.Tiles.Any(t => t.Number == number);
+            _ = _shell.JumpToAsync(number);
             BringUpShellIf(acts);
             handled = true;
         }

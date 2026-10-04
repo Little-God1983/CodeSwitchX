@@ -17,8 +17,9 @@ public interface IYardDirectory
 
 /// <param name="Folders">The folders a .code-workspace file lists, the root first; just the root for a folder workspace.</param>
 /// <param name="Git">One line per repository, as the tile shows them; the root's first.</param>
+/// <param name="Number">The workspace's number, shown on its tile (<see cref="Workspaces.Workspace.Number"/>).</param>
 public sealed record YardWorkspace(Guid Id, string Name, string Track, string RootPath, IReadOnlyList<YardFolder> Folders,
-    IReadOnlyList<YardGitLine> Git);
+    IReadOnlyList<YardGitLine> Git, int Number = 0);
 
 /// <param name="Name">What the workspace file calls the folder, else its own name.</param>
 public sealed record YardFolder(string Name, string Path);
@@ -36,6 +37,7 @@ public sealed record YardGitLine(string? Folder, string? Branch, string? Changes
 /// The name another Claude session messages it by while its VS Code tab is open; null when it is not open in one (closed,
 /// or run in a terminal or by <c>claude -p</c>).
 /// </param>
+/// <param name="WorkspaceNumber">The number of the workspace whose tile shows the chat.</param>
 public sealed record YardChat(string Id, string Title, Guid WorkspaceId, string Workspace, SessionState State, bool NeedsYou, DateTimeOffset StateSince,
     string StateFor, string? Model, string? LastTool, double ContextFill, string? LastNotification, string? Cwd, bool Voice = false,
-    string? SendName = null);
+    string? SendName = null, int WorkspaceNumber = 0);

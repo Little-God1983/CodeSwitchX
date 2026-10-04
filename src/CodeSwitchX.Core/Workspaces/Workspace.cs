@@ -8,6 +8,13 @@ public sealed class Workspace
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
+    /// What the user says and presses for this workspace ("chat 3"), shown on its tile. The store gives it when the
+    /// workspace is added, the lowest number from 1 that no other workspace has, and never changes it; removing the
+    /// workspace frees it. 0 belongs to the Yard's own Raven chat and is never a workspace's.
+    /// </summary>
+    public int Number { get; set; }
+
+    /// <summary>
     /// Canonical folder that owns the tile (see <see cref="PathNormalizer.Canonical"/>): real casing, no trailing separator.
     /// Not unique: a <c>.code-workspace</c> roots at its first folder, which can be a shared repository registered on its own too.
     /// </summary>

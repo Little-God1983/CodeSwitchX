@@ -60,6 +60,36 @@ public sealed class DatabaseInitializer
             db.Tracks.Add(new Track { Name = DefaultTrackName, SortOrder = 0 });
             await db.SaveChangesAsync(ct);
         }
+
+        await NumberUnnumberedWorkspacesAsync(db, ct);
+    }
+
+    /// <summary>
+    /// A build from before workspace numbers shares this database and stores the workspaces it adds with the column's
+    /// default 0, the Yard's own number; each such workspace gets the lowest free number, as <c>WorkspaceStore.AddAsync</c> gives it.
+    /// </summary>
+    private static async Task NumberUnnumberedWorkspacesAsync(CodeSwitchXDbContext db, CancellationToken ct)
+    {
+        var unnumbered = await db.Workspaces.Where(w => w.Number <= 0).ToListAsync(ct);
+        if (unnumbered.Count == 0)
+        {
+            return;
+        }
+
+        var used = (await db.Workspaces.Where(w => w.Number > 0).Select(w => w.Number).ToListAsync(ct)).ToHashSet();
+        var number = 1;
+        foreach (var workspace in unnumbered.OrderBy(w => w.CreatedAt))
+        {
+            while (used.Contains(number))
+            {
+                number++;
+            }
+
+            workspace.Number = number;
+            used.Add(number);
+        }
+
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>

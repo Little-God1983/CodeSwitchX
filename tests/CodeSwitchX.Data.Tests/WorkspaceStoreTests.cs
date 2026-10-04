@@ -53,6 +53,58 @@ public class WorkspaceStoreTests : IAsyncLifetime
         loaded.CreatedAt.ShouldBe(workspace.CreatedAt);
     }
 
+    /// <summary>A workspace's number is what the user says and presses for it ("chat 3"): the lowest free one from 1, freed on removal.</summary>
+    [Fact]
+    public async Task Added_workspaces_take_the_lowest_free_number_and_a_removed_one_frees_its_number()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var track = (await _store.GetTracksAsync(ct))[0];
+        Workspace Named(string name) => new() { Name = name, RootPath = @"c:\repo\" + name, TrackId = track.Id };
+        var (a, b, c) = (Named("a"), Named("b"), Named("c"));
+        foreach (var w in new[] { a, b, c })
+        {
+            await _store.AddAsync(w, ct);
+        }
+
+        await _store.RemoveAsync(b.Id, ct);
+        var d = Named("d");
+        await _store.AddAsync(d, ct);
+        var e = Named("e");
+        await _store.AddAsync(e, ct);
+
+        (a.Number, c.Number, d.Number, e.Number).ShouldBe((1, 3, 2, 4));
+        (await _store.GetAllAsync(ct)).ToDictionary(w => w.Name, w => w.Number)
+            .ShouldBe(new Dictionary<string, int> { ["a"] = 1, ["c"] = 3, ["d"] = 2, ["e"] = 4 }, ignoreOrder: true);
+    }
+
+    [Fact]
+    public async Task A_number_given_to_an_added_workspace_is_replaced_by_the_lowest_free_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var track = (await _store.GetTracksAsync(ct))[0];
+        var workspace = new Workspace { Name = "App", RootPath = @"c:\repo\app", TrackId = track.Id, Number = 7 };
+
+        await _store.AddAsync(workspace, ct);
+
+        (await _store.GetAllAsync(ct)).ShouldHaveSingleItem().Number.ShouldBe(1);
+    }
+
+    /// <summary>An edit saves a whole workspace object, which may come from anywhere: the number stays the store's.</summary>
+    [Fact]
+    public async Task An_update_never_changes_a_number()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var track = (await _store.GetTracksAsync(ct))[0];
+        var workspace = new Workspace { Name = "App", RootPath = @"c:\repo\app", TrackId = track.Id };
+        await _store.AddAsync(workspace, ct);
+
+        await _store.UpdateAsync(new Workspace { Id = workspace.Id, Name = "Renamed", RootPath = workspace.RootPath, TrackId = track.Id, Number = 5 }, ct);
+
+        var loaded = (await _store.GetAllAsync(ct)).ShouldHaveSingleItem();
+        loaded.Name.ShouldBe("Renamed");
+        loaded.Number.ShouldBe(1);
+    }
+
     [Fact]
     public async Task Replacing_the_worktrees_changes_only_the_worktree_rows()
     {

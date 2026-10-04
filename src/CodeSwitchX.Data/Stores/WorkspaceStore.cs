@@ -39,12 +39,14 @@ public sealed class WorkspaceStore : IWorkspaceStore
         // No unique index can hold the key (it is compared normalised), so the check and the insert share one transaction:
         // SQLite begins it IMMEDIATE, taking the write lock before the check reads, and a racing add waits and then sees this row.
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var targets = await db.Workspaces.Select(w => new { w.RootPath, w.WorkspaceFile }).ToListAsync(ct);
+        var targets = await db.Workspaces.Select(w => new { w.RootPath, w.WorkspaceFile, w.Number }).ToListAsync(ct);
         if (targets.Any(t => Workspace.TargetKey(t.RootPath, t.WorkspaceFile) == key))
         {
             throw new DuplicateWorkspaceException(workspace.Target);
         }
 
+        // In the same transaction, so two adds never take the same number.
+        workspace.Number = LowestFreeNumber(targets.Select(t => t.Number));
         db.Workspaces.Add(workspace);
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
@@ -56,7 +58,9 @@ public sealed class WorkspaceStore : IWorkspaceStore
         var existing = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == workspace.Id, ct)
             ?? throw new KeyNotFoundException($"Workspace {workspace.Id} not found.");
 
+        var number = existing.Number;
         db.Entry(existing).CurrentValues.SetValues(workspace);
+        existing.Number = number; // given once by AddAsync, never changed by an edit
         existing.Worktrees.RemoveAll(t => workspace.Worktrees.All(n => n.Id != t.Id));
         foreach (var worktree in workspace.Worktrees)
         {
@@ -98,6 +102,19 @@ public sealed class WorkspaceStore : IWorkspaceStore
         }
 
         await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>The lowest number from 1 not in <paramref name="taken"/> (see <see cref="Workspace.Number"/>).</summary>
+    private static int LowestFreeNumber(IEnumerable<int> taken)
+    {
+        var used = taken.ToHashSet();
+        var number = 1;
+        while (used.Contains(number))
+        {
+            number++;
+        }
+
+        return number;
     }
 
     public async Task RemoveAsync(Guid workspaceId, CancellationToken ct = default)

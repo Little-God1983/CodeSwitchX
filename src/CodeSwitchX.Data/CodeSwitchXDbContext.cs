@@ -45,6 +45,7 @@ public sealed class CodeSwitchXDbContext : DbContext
             e.Property(w => w.RootPath).IsRequired().HasMaxLength(1024);
             // Not unique: WorkspaceStore refuses a second registration of the same folder or .code-workspace file (Workspace.TargetKey).
             e.HasIndex(w => w.RootPath);
+            e.HasIndex(w => w.Number).IsUnique();
             e.Property(w => w.AccentColor).IsRequired().HasMaxLength(16);
             e.Property(w => w.HostMode).HasConversion<string>().HasMaxLength(16);
             e.HasOne<Track>().WithMany().HasForeignKey(w => w.TrackId).OnDelete(DeleteBehavior.Restrict);

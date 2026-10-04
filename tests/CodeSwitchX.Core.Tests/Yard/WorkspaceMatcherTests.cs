@@ -18,6 +18,36 @@ public sealed class WorkspaceMatcherTests
     private static readonly YardWorkspace[] Yard = [CodeSwitchX, DiffusionFull, ContentAutomatorX];
 
     [Theory]
+    [InlineData("2")]
+    [InlineData("two")]
+    [InlineData("number two")]
+    [InlineData("Chat zwei")]
+    public void A_workspace_is_found_by_its_number(string query)
+    {
+        var numbered = new[] { CodeSwitchX with { Number = 1 }, DiffusionFull with { Number = 2 }, ContentAutomatorX with { Number = 3 } };
+
+        var match = WorkspaceMatcher.Find(query, numbered).ShouldHaveSingleItem();
+
+        match.Workspace.Name.ShouldBe("Diffusion-Full");
+        match.MatchedName.ShouldBe("Diffusion-Full", "a number means the workspace itself, so a chat starts in its root");
+        match.Score.ShouldBe(1);
+    }
+
+    [Fact]
+    public void A_number_no_workspace_has_finds_nothing()
+    {
+        WorkspaceMatcher.Find("seven", [CodeSwitchX with { Number = 1 }]).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_number_no_workspace_has_is_matched_as_a_name()
+    {
+        var seven = Workspace("Seven") with { Number = 2 };
+
+        WorkspaceMatcher.Find("seven", [CodeSwitchX with { Number = 1 }, seven]).ShouldHaveSingleItem().Workspace.ShouldBe(seven);
+    }
+
+    [Theory]
     [InlineData("Diffusion Nexus")]
     [InlineData("diffusion nexus")]
     [InlineData("Diffusion-Nexus")]
