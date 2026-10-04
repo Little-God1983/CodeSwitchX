@@ -179,6 +179,16 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public void A_long_prefix_rule_still_says_it_is_a_prefix_on_its_button()
+    {
+        // Round 3: "… and anything after it" at the end was cut away, and the rule looked like one exact command.
+        const string rule = "Always allow commands starting with dotnet test tests/CodeSwitchX.Core.Tests --filter";
+        var card = new ChatAskCard(Permitting() with { Suggestions = [new ChatPermissionSuggestion("{}", rule, "in this folder, just you")] });
+
+        card.Suggestions.ShouldHaveSingleItem().Text.ShouldStartWith("Always allow commands starting with dotnet test");
+    }
+
+    [Fact]
     public async Task A_yes_after_a_proposed_allow_is_the_app_s_to_find_it_allows_and_goes_to_no_brain()
     {
         var (vm, asks) = await QuestionsVmAsync();

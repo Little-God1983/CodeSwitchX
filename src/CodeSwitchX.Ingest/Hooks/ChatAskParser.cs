@@ -168,9 +168,10 @@ public static class ChatAskParser
                         ? "Claude Code keeps the rule until this session ends, and asks again after that."
                         : "Claude Code keeps the rule and does not ask for this again.");
             case "setMode" when String(item, "mode") == "acceptEdits":
-                // Accept-edits holds only in the chat's working folders.
-                return ("Allow all edits", "The chat edits files in its folders without asking " + (session ? "until this session ends" : "from now on")
-                    + "; edits elsewhere and commands still ask.");
+                // Accept-edits holds only in the chat's working folders, and there it also runs file commands (mkdir, touch,
+                // rm, rmdir, mv, cp, sed) on its own.
+                return ("Allow all edits", "The chat edits files and runs file commands such as rm, mv and cp in its folders without asking "
+                    + (session ? "until this session ends" : "from now on") + "; other commands and edits elsewhere still ask.");
             case "addDirectories" when item.TryGetProperty("directories", out var directories) && directories.ValueKind == JsonValueKind.Array:
                 // A working folder only stops read prompts: edits there still ask unless accept-edits is on.
                 var folders = directories.EnumerateArray().Select(JsonStrings.TryRead).ToList();
@@ -182,7 +183,10 @@ public static class ChatAskParser
         }
     }
 
-    /// <summary>A rule as its button says it: a command for Bash and PowerShell, "Edit of src/**" for another tool, or the tool alone.</summary>
+    /// <summary>
+    /// A rule as its button says it: a command for Bash and PowerShell, "Edit of src/**" for another tool, or the tool alone.
+    /// A prefix rule says so first ("commands starting with npm test"), so a button that cuts a long one keeps it.
+    /// </summary>
     private static string? RuleSaid(JsonElement rule)
     {
         if (String(rule, "toolName") is not { Length: > 0 } tool)
@@ -196,9 +200,14 @@ public static class ChatAskParser
             return $"every use of {tool}";
         }
 
+        var command = tool is "Bash" or "PowerShell";
         // Claude Code's prefix rule "npm test:*" is said as people say it.
-        var said = content.EndsWith(":*", StringComparison.Ordinal) && content.Length > 2 ? $"{content[..^2]} and anything after it" : content;
-        return tool is "Bash" or "PowerShell" ? said : $"{tool} of {said}";
+        if (content.EndsWith(":*", StringComparison.Ordinal) && content.Length > 2)
+        {
+            return command ? $"commands starting with {content[..^2]}" : $"{tool} of anything starting with {content[..^2]}";
+        }
+
+        return command ? content : $"{tool} of {content}";
     }
 
     /// <summary>Where Claude Code keeps the rule, as said after the label.</summary>

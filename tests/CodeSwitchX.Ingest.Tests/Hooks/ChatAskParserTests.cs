@@ -109,10 +109,12 @@ public sealed class ChatAskParserTests
 
     [Theory]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm run build:*"}],"behavior":"allow","destination":"projectSettings"}""",
-        "Always allow npm run build and anything after it in this folder, for everyone on the project")]
+        "Always allow commands starting with npm run build in this folder, for everyone on the project")]
     // Round 2: a session rule is no "always".
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test:*"}],"behavior":"allow","destination":"session"}""",
-        "Allow npm test and anything after it for this session")]
+        "Allow commands starting with npm test for this session")]
+    [InlineData("""{"type":"addRules","rules":[{"toolName":"Read","ruleContent":"docs/:*"}],"behavior":"allow"}""",
+        "Always allow Read of anything starting with docs/")]
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Edit","ruleContent":"src/**"},{"toolName":"WebSearch"}],"behavior":"allow","destination":"userSettings"}""",
         "Always allow Edit of src/**, every use of WebSearch in every folder")]
     [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""", "Allow all edits for this session")]
@@ -151,7 +153,8 @@ public sealed class ChatAskParserTests
     [InlineData("""{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"npm test"}],"behavior":"allow","destination":"session"}""",
         "Claude Code keeps the rule until this session ends, and asks again after that.")]
     [InlineData("""{"type":"setMode","mode":"acceptEdits","destination":"session"}""",
-        "The chat edits files in its folders without asking until this session ends; edits elsewhere and commands still ask.")]
+        "The chat edits files and runs file commands such as rm, mv and cp in its folders without asking until this session ends; "
+        + "other commands and edits elsewhere still ask.")]
     [InlineData("""{"type":"addDirectories","directories":["E:\\Data"],"destination":"session"}""",
         "The chat may read files there without asking until this session ends; edits and commands can still ask.")]
     public void Each_kind_says_what_its_click_does_from_now_on(string suggestion, string effect)
