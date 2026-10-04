@@ -84,7 +84,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Cancelled when the user takes the floor: the answer or digest that holds it stops (UI thread).</summary>
     private CancellationTokenSource _floor = new();
 
-    /// <summary>The last question asked, while it may still wait behind another to go to the brain (UI thread).</summary>
     /// <summary>The questions asked and not over yet, in the order asked (UI thread).</summary>
     private readonly List<Question> _questions = [];
 

@@ -132,6 +132,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The process picked a conversation up again, and no answer of it has come through yet.</summary>
     private bool _unproven;
 
+    /// <summary>Answers that failed in a row in a conversation picked up again and not proven yet.</summary>
+    private int _unprovenFailures;
+
+    /// <summary>
+    /// After this many failed answers in a row a conversation picked up again is left: one failure may be the API's (an
+    /// overload, a dropped connection), a second right after it is taken to be the conversation's.
+    /// </summary>
+    internal const int UnprovenFailures = 2;
+
     /// <summary>This turn's conversation is to be left once the turn is over: picked up again, it could not go on.</summary>
     private bool _abandon;
 
@@ -272,10 +281,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         break;
                     case ClaudeTurnOver over:
                         finished = true;
-                        if (over.Error is { } error && _unproven)
+                        if (over.Error is { } error && _unproven && ++_unprovenFailures >= UnprovenFailures)
                         {
-                            // Picked up again and failing at once (a transcript the API now refuses, say): kept, it would
-                            // fail every question, and each try would keep it young.
+                            // Picked up again and failing each time (a transcript the API now refuses, say): kept, it
+                            // would fail every question, and each try would keep it young.
                             _logger.LogWarning("{Brain} could not answer in the conversation it picked up again; it is left: {Error}", _name, error);
                             _abandon = true;
                             yield return new BrainFailed($"Raven's brain could not answer: {error} It starts a new conversation with the next question.");
@@ -286,7 +295,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                             yield return new BrainFailed($"Raven's brain could not answer: {failed}");
                         }
 
-                        _unproven = false;
+                        if (over.Error is null)
+                        {
+                            _unproven = false; // it answered: the conversation goes on
+                        }
+
                         yield break;
                 }
             }
@@ -541,8 +554,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             mcpConfig = Path.Combine(_paths.RavenDirectory, "mcp", window.ToString("N") + ".json");
             try
             {
+                _mcpConfig = mcpConfig; // before it is written: one written but not made the user's alone still goes with the brain
                 ChatMcpConfig.Write(_paths.McpConfigFile, mcpConfig, window);
-                _mcpConfig = mcpConfig;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
             {
@@ -578,6 +591,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         {
             _resuming = resume;
             _unproven = resume;
+            _unprovenFailures = 0;
             _started = (started.Id, model);
         }
 

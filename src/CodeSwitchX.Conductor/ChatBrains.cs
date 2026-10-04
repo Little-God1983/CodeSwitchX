@@ -6,7 +6,10 @@ public interface IChatBrains
     /// <summary>The brain of a window's chat; of chat 0, the Yard, for null.</summary>
     IConductorBrain For(Guid? workspaceId);
 
-    /// <summary>The window left the Yard: its brain goes, with its process, its config and its conversation.</summary>
+    /// <summary>
+    /// The window left the Yard: its brain goes, with its process and its config, and its conversation is forgotten (its
+    /// transcript stays with Claude Code, which clears old ones itself).
+    /// </summary>
     void Retire(Guid workspaceId);
 }
 

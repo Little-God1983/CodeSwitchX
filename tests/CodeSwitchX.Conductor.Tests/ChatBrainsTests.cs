@@ -322,9 +322,12 @@ public sealed class ChatBrainsTests : IDisposable
         made.Count.ShouldBe(2, "a window back on the Yard gets a new brain");
     }
 
-    /// <summary>A conversation Claude Code picks up but cannot go on with (one the API now refuses) must not hold the chat for good.</summary>
+    /// <summary>
+    /// A conversation Claude Code picks up but cannot go on with (one the API now refuses) must not hold the chat for good;
+    /// one failed answer (an overload, a dropped connection) must not cost the conversation either: two in a row leave it.
+    /// </summary>
     [Fact]
-    public async Task A_picked_up_conversation_whose_first_answer_fails_is_left_for_a_new_one()
+    public async Task A_picked_up_conversation_is_left_after_two_failed_answers_in_a_row_not_after_one()
     {
         var brain = BrainOf(Window3);
         await AskAsync(brain, "One");
@@ -333,17 +336,45 @@ public sealed class ChatBrainsTests : IDisposable
         await WaitUntil(() => _launcher.Started[0].Process.Disposed);
         _launcher.Answer = _ => [StreamJson.Init(), StreamJson.ModelNotFoundResult];
 
-        var events = new List<BrainEvent>();
-        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        async Task<string> FailAsync(string text)
         {
-            events.Add(e);
+            var events = new List<BrainEvent>();
+            await foreach (var e in brain.AskAsync(text, TestContext.Current.CancellationToken))
+            {
+                events.Add(e);
+            }
+
+            return events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason;
         }
 
+        (await FailAsync("Two")).ShouldNotContain("new conversation");
         Value(_launcher.Started[1].Arguments, "--resume").ShouldBe(id);
-        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldContain("starts a new conversation with the next question");
+        _sessions.Load(Window3.ToString("N")).ShouldNotBeNull("one failure may be the API's, not the conversation's");
+        (await FailAsync("Three")).ShouldContain("starts a new conversation with the next question");
+        _launcher.Started.Count.ShouldBe(2, "the second try ran in the same process");
+
         _launcher.Answer = StreamJson.Reply("Hi.");
-        await AskAsync(brain, "Three");
+        await AskAsync(brain, "Four");
         Value(_launcher.Started[2].Arguments, "--resume").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_picked_up_conversation_that_answers_after_one_failure_is_kept()
+    {
+        var brain = BrainOf(Window3);
+        await AskAsync(brain, "One");
+        brain.Rest();
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.ModelNotFoundResult];
+        await AskAsync(brain, "Two");
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        await AskAsync(brain, "Three");
+        _launcher.Last.Answer = _ => [StreamJson.Init(), StreamJson.ModelNotFoundResult];
+        await AskAsync(brain, "Four");
+        await AskAsync(brain, "Five");
+
+        _launcher.Started.Count.ShouldBe(2, "it answered once: failures after that are not the picked-up conversation's");
+        _sessions.Load(Window3.ToString("N")).ShouldNotBeNull();
     }
 
     [Fact]
