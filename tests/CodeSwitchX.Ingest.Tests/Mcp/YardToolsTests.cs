@@ -174,6 +174,19 @@ public sealed class YardToolsTests
     }
 
     [Fact]
+    public async Task A_permission_prompt_waiting_in_the_panel_is_shown_with_its_ask_id()
+    {
+        var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),
+            TimeProvider.System) { Takes = _ => true };
+        _ = asks.HoldAsync(new ChatAsk("p1", new HookEvent { SessionId = "bbbbbbbb-0002", EventName = "PermissionRequest", At = DateTimeOffset.UtcNow, ToolName = "Bash" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+
+        var chat = await new YardTools(_yard, asks).GetChat("bbbbbbbb", CancellationToken.None);
+
+        chat.Asks.ShouldBe("permission to run a command: npm test (ask id p1)");
+    }
+
+    [Fact]
     public async Task Two_questions_asked_side_by_side_read_apart_from_one_ask_of_two_questions()
     {
         var asks = new ChatAsks(new Core.Messaging.EventBus(Microsoft.Extensions.Logging.Abstractions.NullLogger<Core.Messaging.EventBus>.Instance),

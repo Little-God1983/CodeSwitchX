@@ -2,6 +2,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -124,8 +125,317 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks, and waits for the "
-            + "answer here: permission to run a command: npm test. Only the user allows or denies it, on its card or in VS Code; no tool of "
-            + "yours can.]\nallow it");
+            + "answer here: permission to run a command: npm test (ask id p1). answer_permission denies it on the user's word, or proposes an allow "
+            + "that only the user's next yes, checked by the app, makes real.]\nallow it");
+    }
+
+    [Fact]
+    public async Task A_yes_after_a_proposed_allow_is_the_app_s_to_find_it_allows_and_goes_to_no_brain()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+
+        var proposal = asks.Propose("p1"); // as answer_permission does on "allow it"
+        card.AwaitsYes.ShouldBeTrue();
+        held.IsCompleted.ShouldBeFalse();
+        // The app, not the brain, reads it back and asks for the yes (review of #112).
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Run npm test in ContentAutomatorX? Say yes."));
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Say yes.", StringComparison.Ordinal));
+        await Until(() => asks.IsHeard(proposal)); // played to its end
+        Type(vm, "Yes, run it.");
+
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        (card.IsOpen, card.Outcome, card.AwaitsYes).ShouldBe((false, "Allowed.", false));
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Allowed. The chat carries on."));
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Allowed. The chat carries on.", StringComparison.Ordinal));
+        _brain.Asked.ShouldBeEmpty("the yes is the app's, not a question");
+
+        Type(vm, "what's next");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the user said yes to the "
+            + "allow you proposed, and it was allowed.]\nwhat's next");
+    }
+
+    [Fact]
+    public async Task Other_words_after_a_proposed_allow_run_nothing_and_go_to_the_brain_which_is_told()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+
+        Type(vm, "what time is it");
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse();
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        asks.Proposed.ShouldBeNull();
+        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
+            + "not confirmed by a yes, so nothing ran, and its card stays open.]\nwhat time is it");
+
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse("a yes after the proposal lapsed is only words to the brain");
+        _brain.Asked.Last().ShouldBe("yes");
+    }
+
+    [Fact]
+    public async Task Silence_after_a_proposed_allow_lapses_it_and_the_card_stays_open_for_a_click()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal)); // the user's 30 s start here (round 3)
+
+        _time.Advance(ChatAsks.ProposalLifetime);
+
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        Lines(vm).ShouldContain((RavenLogKind.Note, "No yes within 30 seconds: nothing ran. The card stays open for a click."));
+        held.IsCompleted.ShouldBeFalse();
+        vm.AllowCommand.Execute(card);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_lapsed_proposal_is_told_to_the_brain_with_the_next_question()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        _time.Advance(ChatAsks.ProposalLifetime);
+        _time.Advance(ChatAsks.ProposalLifetime); // words said after the lapse answer nothing
+
+        Type(vm, "what now");
+        await WithinAsync(vm.PendingAnswers);
+
+        // The card was read out too, once the proposal no longer held the floor (round 3): that fact goes along.
+        var asked = _brain.Asked.ShouldHaveSingleItem();
+        asked.ShouldContain("ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed got no "
+            + "yes within 30 seconds, so nothing ran, and its card stays open");
+        asked.ShouldEndWith("]\nwhat now");
+    }
+
+    [Fact]
+    public async Task Words_said_before_the_proposal_and_transcribed_after_it_answer_something_else()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var transcribed = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcribed.Task);
+
+        // "Okay." is said to something else, and still being transcribed when the brain proposes the allow.
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        var released = vm.ReleaseMicAsync(TalkInput.MicButton);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        transcribed.SetResult(new DictationResult("Okay.", TimeSpan.FromSeconds(2)));
+        await WithinAsync(released);
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse("the okay was said before Raven asked for a yes");
+        // Round 3: they take the floor from it all the same; left standing, a yes to the brain's answer to them would allow it.
+        asks.Proposed.ShouldBeNull();
+        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nOkay.");
+    }
+
+    [Fact]
+    public async Task A_yes_with_a_question_still_waiting_for_the_brain_allows_and_the_question_is_still_asked()
+    {
+        _brain.BeforeSent = new TaskCompletionSource(); // the brain has not taken the question in yet
+        _brain.Answer = _ => [new BrainText("Two.")];
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        asks.Propose("p1");
+        Type(vm, "how many chats work?");
+        await Until(() => _brain.Asked.Count == 1);
+        var again = asks.Propose("p1"); // proposed again: the question cancelled the first one
+        await Until(() => asks.IsHeard(again));
+
+        Type(vm, "yes");
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(held);
+        await WithinAsync(vm.PendingAnswers);
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        var asked = _brain.Asked.Last();
+        asked.ShouldEndWith("\nhow many chats work?", Case.Sensitive, "the waiting question is not lost with the floor the yes took");
+        asked.ShouldContain("the user said yes to the allow you proposed, and it was allowed");
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "Two."));
+    }
+
+    [Fact]
+    public async Task A_yes_said_before_the_read_back_has_played_to_its_end_allows_nothing()
+    {
+        // Round 2: the yes window opens when the user has heard the read-back, not when the brain called the tool.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        Type(vm, "yes");
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        held.IsCompleted.ShouldBeFalse();
+        asks.IsHeard(proposal).ShouldBeFalse("the yes took the floor from it, so it was never heard to its end");
+        asks.Proposed.ShouldBeNull("cut off, it can be answered by no yes any more");
+        _brain.Asked.Last().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
+    }
+
+    /// <summary>A brain steered by a chat's words: it proposes, then follows the app's read-back with its own "Say yes."</summary>
+    private static IEnumerable<BrainEvent> Steered(ChatAsks asks)
+    {
+        yield return new BrainText("Asking you now.");
+        yield return new BrainToolCall("t1", "answer_permission", "{}");
+        asks.Propose("p1");
+        yield return new BrainToolResult("t1", false);
+        yield return new BrainText("Shall I read you the summary? Say yes.");
+    }
+
+    [Fact]
+    public async Task What_the_brain_says_after_proposing_is_neither_spoken_nor_written()
+    {
+        // Round 2: not spoken; round 3: not written either, where muted the log is all the user reads.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+
+        _brain.Answer = _ => Steered(asks);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+        await Until(() => asks.Proposed is { } p && asks.IsHeard(p));
+
+        var spoken = string.Join(" ", _speech.Spoken);
+        spoken.ShouldContain("Asking you now.");
+        spoken.ShouldContain("Run npm test in ContentAutomatorX? Say yes.");
+        spoken.ShouldNotContain("summary");
+        Lines(vm).ShouldNotContain(l => l.Text.Contains("summary"));
+        Lines(vm).Last(l => l.Kind == RavenLogKind.Raven).Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.");
+        held.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Muted_the_read_back_is_only_written_and_a_yes_after_it_allows()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        vm.IsMuted = true;
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+
+        _brain.Answer = _ => Steered(asks);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+
+        asks.IsHeard(asks.Proposed.ShouldNotBeNull()).ShouldBeTrue("Raven only writes: the line shown is what the user reads");
+        Lines(vm).Last(l => l.Kind == RavenLogKind.Raven).Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.", "the brain's words after it are not shown");
+        Type(vm, "yes");
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        _speech.Spoken.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Muting_during_the_read_back_counts_it_as_heard_and_a_yes_after_it_allows()
+    {
+        // Round 4: muting to read the line gave the opposite of being muted already.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.IsMuted = true;
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingAnswers);
+
+        asks.IsHeard(proposal).ShouldBeTrue("its whole line is in the log");
+        asks.Proposed.ShouldBeSameAs(proposal);
+        Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine));
+        Type(vm, "yes");
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Another_chat_s_question_waits_while_an_allow_awaits_the_yes()
+    {
+        // Round 3: a yes to another chat's question, read out after the read-back, would allow the first chat's prompt.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await GraceAsync(vm);
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        var said = _speech.Spoken.Count;
+
+        _ = asks.HoldAsync(Asking(new ChatQuestion("Should I also update the docs?", null, [], false)), CancellationToken.None);
+        await GraceAsync(vm);
+
+        _speech.Spoken.Count.ShouldBe(said, "nothing is said between the read-back and the user's answer");
+        Type(vm, "Yes.");
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        await GraceAsync(vm);
+        await Until(() => string.Join(" ", _speech.Spoken).Contains("update the docs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_read_back_the_voice_could_not_say_ends_its_proposal_and_says_so()
+    {
+        // Round 3: it asked for a yes, but only a heard read-back takes one.
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).Single();
+        await card.Naming;
+        _speech.Fails = new InvalidOperationException("the sidecar broke");
+
+        var proposal = asks.Propose("p1");
+
+        await Until(() => asks.Proposed is null);
+        await Until(() => Lines(vm).Contains((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)));
+        (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
+        asks.IsHeard(proposal).ShouldBeFalse();
+        _speech.Fails = null;
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+        held.IsCompleted.ShouldBeFalse("a yes after it is only words to the brain");
+        _brain.Asked.Last().ShouldEndWith("not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
+    }
+
+    [Fact]
+    public async Task A_prompt_answered_on_its_card_while_an_allow_is_proposed_takes_the_proposal_with_it()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        asks.Propose("p1");
+
+        vm.DenyCommand.Execute(card);
+        await WithinAsync(held);
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
+        card.AwaitsYes.ShouldBeFalse();
+        _brain.Asked.ShouldBe(["yes"], "with nothing proposed, a yes is only words to the brain");
     }
 
     [Fact]

@@ -701,6 +701,8 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.Where(l => l.Kind == RavenLogKind.Note).Select(l => l.Text)
             .ShouldBe(["Still stopping the last recording. Press again.", "Still stopping the last recording. Press again."]);
+        // The microphone opens on the thread pool: in a busy run, the first press's start may not have run yet.
+        await Until(() => _recorder.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IMicrophoneRecorder.Start)));
         _recorder.Received(1).Start(Arg.Any<string>());
         hold.Set();
         await WithinAsync(release);

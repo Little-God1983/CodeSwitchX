@@ -61,17 +61,7 @@ public sealed record ChatAsk(string Id, HookEvent Step, IReadOnlyList<ChatQuesti
         : string.Join("; ", Questions.Select(q => $"\"{q.Text}\""
             + (q.Options.Count > 0 ? $" ({(q.MultiSelect ? "any of" : "one of")}: {string.Join(", ", q.Options.Select(o => o.Label))})" : "")));
 
-    private static string Shortened(string text)
-    {
-        var line = text.ReplaceLineEndings(" ");
-        if (line.Length <= MaxDescribedChars)
-        {
-            return line;
-        }
-
-        var length = char.IsHighSurrogate(line[MaxDescribedChars - 2]) ? MaxDescribedChars - 2 : MaxDescribedChars - 1; // never half an emoji
-        return line[..length].TrimEnd() + "… (the card shows all of it)";
-    }
+    private static string Shortened(string text) => TextCut.Cut(text.ReplaceLineEndings(" "), MaxDescribedChars, "… (the card shows all of it)");
 }
 
 /// <summary>How a held ask ended.</summary>
@@ -103,6 +93,31 @@ public enum ChatAskOutcome
 public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnlyList<string>? Answers, ChatPermit? Permit = null);
 
 /// <summary>
+/// An allow Raven's brain proposed for a held permission prompt (<see cref="ChatAsks.Propose"/>). Nothing runs on it: the
+/// prompt is allowed only when the app finds a yes in the user's next words (<see cref="ChatAsks.Confirm"/>).
+/// </summary>
+public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At);
+
+/// <summary>How a proposed allow ended.</summary>
+public enum ChatProposalEnd
+{
+    /// <summary>The user said yes: the prompt is allowed.</summary>
+    Confirmed,
+
+    /// <summary>The user said something else: nothing ran, and the card stays open.</summary>
+    Cancelled,
+
+    /// <summary>The user said nothing within <see cref="ChatAsks.ProposalLifetime"/>: nothing ran, and the card stays open.</summary>
+    Expired,
+
+    /// <summary>The prompt ended meanwhile: answered on its card or in VS Code, or its turn ended.</summary>
+    Closed,
+
+    /// <summary>Another prompt's allow was proposed: only the newest proposal stands.</summary>
+    Replaced,
+}
+
+/// <summary>
 /// What chats ask the user, held while the user answers in CodeSwitchX. A chat's hook relay hands the ask over and waits
 /// (<see cref="HoldAsync"/>): the answers given here (<see cref="Answer"/>) go back to Claude Code as the tool's input, and
 /// an ask let go (<see cref="ToVsCode"/>, or after <see cref="Lifetime"/>) leaves the chat's tab to ask it as it always
@@ -120,13 +135,39 @@ public sealed class ChatAsks : IDisposable
     /// <summary>What a chat denied here is told, unless the user said more.</summary>
     public const string DeniedMessage = "The user denied this in the Raven panel.";
 
+    /// <summary>
+    /// A proposed allow not confirmed within this of its read-back being heard lapses: nothing runs, and the card stays
+    /// open for a click. The read-back's own length is not part of it.
+    /// </summary>
+    public static readonly TimeSpan ProposalLifetime = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// A proposal whose read-back is not heard within this lapses too: the read-back is spoken, dropped or hushed well
+    /// before, so this only keeps a proposal from standing for good.
+    /// </summary>
+    public static readonly TimeSpan ReadBackLifetime = TimeSpan.FromMinutes(2);
+
     private readonly IEventBus _bus;
     private readonly TimeProvider _time;
     private readonly IDisposable _subscription;
     private readonly IDisposable _steps;
     private readonly ITimer _sweep;
+    private readonly ITimer _proposalExpiry;
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
+
+    /// <summary>The allow proposed last and not ended; one at a time, the newest.</summary>
+    private ChatAllowProposal? _proposed;
+
+    /// <summary>The proposal that lapsed last, until another is made or its prompt ends: a yes said in time may come after.</summary>
+    private ChatAllowProposal? _lapsed;
+
+    /// <summary>
+    /// When the user had heard (or been shown) the read-back of the standing proposal, and of the lapsed one: only words
+    /// said after that answer it (<see cref="MarkHeard"/>). Null until then.
+    /// </summary>
+    private DateTimeOffset? _proposedHeard;
+    private DateTimeOffset? _lapsedHeard;
 
     /// <summary>
     /// The tool uses begun lately, by their id (their PreToolUse), until they end: a permission prompt names no tool use, and
@@ -167,6 +208,7 @@ public sealed class ChatAsks : IDisposable
         _steps = bus.Subscribe<HookEventReceived>(received => Moves(received.Event));
         // Runs only while a permission prompt is held (Watch); it stops itself once none is.
         _sweep = time.CreateTimer(_ => Sweep(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _proposalExpiry = time.CreateTimer(_ => ExpireProposal(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>Whether CodeSwitchX takes this ask, or leaves it to VS Code at once. Takes none until the app says otherwise.</summary>
@@ -190,6 +232,24 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>A held ask ended, however it did. Raised on the thread that ended it.</summary>
     public event Action<ChatAskClosed>? Closed;
+
+    /// <summary>An allow was proposed (<see cref="Propose"/>): the user's next words decide. Raised on the proposer's thread.</summary>
+    public event Action<ChatAllowProposal>? ProposedAllow;
+
+    /// <summary>A proposed allow ended, however it did. Raised on the thread that ended it.</summary>
+    public event Action<ChatAllowProposal, ChatProposalEnd>? ProposalEnded;
+
+    /// <summary>The allow proposed and still open for the user's yes; null when none is.</summary>
+    public ChatAllowProposal? Proposed
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _proposed;
+            }
+        }
+    }
 
     /// <summary>
     /// Holds the ask until it ends: how it ended, with the answers (one per question in their order) when it was answered
@@ -353,6 +413,209 @@ public sealed class ChatAsks : IDisposable
         var said = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
         return Close(askId, ChatAskOutcome.Answered, null, new ChatPermit(allow, allow ? said : said ?? DeniedMessage));
     }
+
+    /// <summary>
+    /// Raven's brain proposes to allow a held permission prompt, on the user's word. Nothing runs: the prompt is allowed
+    /// only by <see cref="Confirm"/>, when the app finds a yes in the user's next words, which no brain tool can give. Any
+    /// other words (<see cref="Cancel"/>), none within <see cref="ProposalLifetime"/>, the prompt ending, or another
+    /// proposal end it, and the card stays open for a click. The app, not the brain, reads the prompt back and asks for
+    /// the yes (on <see cref="ProposedAllow"/>), so the yes answers what the app said.
+    /// </summary>
+    /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
+    public ChatAllowProposal Propose(string askId)
+    {
+        ChatAllowProposal proposal;
+        ChatAllowProposal? replaced;
+        lock (_lock)
+        {
+            var ask = _held.GetValueOrDefault(askId)?.Ask
+                ?? throw new ArgumentException("The chat no longer waits for that: it was answered, left to VS Code, or its turn ended.", nameof(askId));
+            if (ask.Kind != ChatAskKind.Permission)
+            {
+                throw new ArgumentException("The chat asks a question, not for permission: it needs answers.", nameof(askId));
+            }
+
+            replaced = _proposed;
+            _lapsed = null;
+            (_proposedHeard, _lapsedHeard) = (null, null);
+            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
+            _proposalExpiry.Change(ReadBackLifetime, Timeout.InfiniteTimeSpan); // the user's 30 s start once it is heard
+        }
+
+        if (replaced is not null)
+        {
+            ProposalEnded?.Invoke(replaced, ChatProposalEnd.Replaced);
+        }
+
+        ProposedAllow?.Invoke(proposal);
+        return proposal;
+    }
+
+    /// <summary>
+    /// The user has heard the read-back of <paramref name="proposal"/> to its end, or been shown it where Raven does not
+    /// speak, at <paramref name="at"/>: only words said after that answer it. A yes said before the app asked for it, or
+    /// to a read-back cut off midway, allows nothing. The user has <see cref="ProposalLifetime"/> from then. False when it
+    /// no longer stands.
+    /// </summary>
+    public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at)
+    {
+        lock (_lock)
+        {
+            if (!ReferenceEquals(_proposed, proposal))
+            {
+                return false;
+            }
+
+            if (_proposedHeard is null)
+            {
+                _proposedHeard = at;
+                _proposalExpiry.Change(Remaining(at + ProposalLifetime), Timeout.InfiniteTimeSpan);
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Whether the user has heard the read-back of <paramref name="proposal"/> (<see cref="MarkHeard"/>).</summary>
+    public bool IsHeard(ChatAllowProposal proposal)
+    {
+        lock (_lock)
+        {
+            return (ReferenceEquals(_proposed, proposal) && _proposedHeard is not null) || (ReferenceEquals(_lapsed, proposal) && _lapsedHeard is not null);
+        }
+    }
+
+    /// <summary>
+    /// The proposal words the user finished speaking at <paramref name="said"/> answer: the one standing, if they were said
+    /// after its read-back was heard (<see cref="MarkHeard"/>); or the one that lapsed last, if they were said after that
+    /// and within <see cref="ProposalLifetime"/> of it, and only transcribed after it lapsed (its prompt still held). Null when they
+    /// answer none: words said before the read-back ended are about something else.
+    /// </summary>
+    public ChatAllowProposal? ProposalFor(DateTimeOffset said)
+    {
+        lock (_lock)
+        {
+            if (_proposed is { } standing)
+            {
+                return _proposedHeard is { } heard && said >= heard ? standing : null;
+            }
+
+            return _lapsed is { } lapsed && _lapsedHeard is { } lapsedHeard && said >= lapsedHeard && said - lapsedHeard <= ProposalLifetime
+                && _held.ContainsKey(lapsed.Ask.Id) ? lapsed : null;
+        }
+    }
+
+    /// <summary>
+    /// The user said yes to <paramref name="proposal"/> (from <see cref="ProposalFor"/>): the prompt is allowed, and the chat
+    /// carries on. False when it no longer stands, or the prompt ended meanwhile.
+    /// </summary>
+    public bool Confirm(ChatAllowProposal proposal)
+    {
+        if (!Take(proposal, out _))
+        {
+            return false;
+        }
+
+        // A lapsed one too: the yes was said in time, and transcribed after.
+        var allowed = Permit(proposal.Ask.Id, allow: true);
+        ProposalEnded?.Invoke(proposal, allowed ? ChatProposalEnd.Confirmed : ChatProposalEnd.Closed);
+        return allowed;
+    }
+
+    /// <summary>
+    /// The user said something else to <paramref name="proposal"/>: it is dropped, and nothing runs. True only when it was
+    /// still standing, and then <see cref="ProposalEnded"/> tells it as <see cref="ChatProposalEnd.Cancelled"/>; a lapsed
+    /// one is only forgotten, as its lapse was told already.
+    /// </summary>
+    public bool Cancel(ChatAllowProposal proposal)
+    {
+        if (!Take(proposal, out var standing) || !standing)
+        {
+            return false;
+        }
+
+        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Cancelled);
+        return true;
+    }
+
+    /// <summary>Takes <paramref name="proposal"/>, standing or lapsed, so nothing else ends it too; false when it is neither.</summary>
+    private bool Take(ChatAllowProposal proposal, out bool standing)
+    {
+        lock (_lock)
+        {
+            standing = ReferenceEquals(_proposed, proposal);
+            if (standing)
+            {
+                _proposed = null;
+                _proposedHeard = null;
+                _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                return true;
+            }
+
+            if (ReferenceEquals(_lapsed, proposal))
+            {
+                _lapsed = null;
+                _lapsedHeard = null;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>The proposal for <paramref name="askId"/>, standing or lapsed, taken as its prompt ends; null when there is none.</summary>
+    private ChatAllowProposal? TakeProposal(string askId)
+    {
+        lock (_lock)
+        {
+            if (_lapsed?.Ask.Id == askId)
+            {
+                _lapsed = null;
+                _lapsedHeard = null;
+            }
+
+            if (_proposed?.Ask.Id != askId)
+            {
+                return null;
+            }
+
+            var proposal = _proposed;
+            _proposed = null;
+            _proposedHeard = null;
+            _proposalExpiry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            return proposal;
+        }
+    }
+
+    private void ExpireProposal()
+    {
+        ChatAllowProposal? proposal;
+        lock (_lock)
+        {
+            if (_proposed is null)
+            {
+                return;
+            }
+
+            // A timer can fire a little early (its tick is about 15 ms), or the clock can move: wait out the rest.
+            var left = Remaining(_proposedHeard is { } heard ? heard + ProposalLifetime : _proposed.At + ReadBackLifetime);
+            if (left > TimeSpan.Zero)
+            {
+                _proposalExpiry.Change(left, Timeout.InfiniteTimeSpan);
+                return;
+            }
+
+            proposal = _proposed;
+            _proposed = null;
+            _lapsed = proposal; // a yes said in time and transcribed after this still answers it (ProposalFor)
+            (_lapsedHeard, _proposedHeard) = (_proposedHeard, null);
+        }
+
+        ProposalEnded?.Invoke(proposal, ChatProposalEnd.Expired);
+    }
+
+    /// <summary>How long until <paramref name="end"/>; zero when it is past.</summary>
+    private TimeSpan Remaining(DateTimeOffset end) => end - _time.GetUtcNow() is { } left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 
     /// <summary>Lets a held ask go to VS Code, which asks it in the chat's tab. False when it is not held any more.</summary>
     public bool ToVsCode(string askId) => Close(askId, ChatAskOutcome.ToVsCode, null);
@@ -640,6 +903,11 @@ public sealed class ChatAsks : IDisposable
         var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
         held.Done.TrySetResult(closed);
         Closed?.Invoke(closed);
+        // An allow proposed for it waits for no yes any more (a Confirm took its proposal before it got here).
+        if (TakeProposal(held.Ask.Id) is { } proposal)
+        {
+            ProposalEnded?.Invoke(proposal, ChatProposalEnd.Closed);
+        }
     }
 
     public void Dispose()
@@ -647,6 +915,7 @@ public sealed class ChatAsks : IDisposable
         _subscription.Dispose();
         _steps.Dispose();
         _sweep.Dispose();
+        _proposalExpiry.Dispose();
     }
 
     private sealed record Held(ChatAsk Ask, TaskCompletionSource<ChatAskClosed> Done);

@@ -55,6 +55,9 @@ public sealed partial class ChatAskCard : ObservableObject
     /// <summary>The workspace whose tile shows the chat; null until named, or when it is on none.</summary>
     public Guid? WorkspaceId { get; set; }
 
+    /// <summary>The workspace's name, "ContentAutomatorX"; null until named.</summary>
+    public string? Workspace { get; set; }
+
     /// <summary>The chat as Raven says it: "ContentAutomatorX, chat "Fix the upload retry"".</summary>
     public string Said { get; set; } = "A chat";
 
@@ -69,6 +72,13 @@ public sealed partial class ChatAskCard : ObservableObject
     /// <summary>How it ended ("Answered: Banana", "Left to VS Code"); null while it is open.</summary>
     [ObservableProperty]
     private string? _outcome;
+
+    /// <summary>Raven's brain proposed to allow it on the user's word: the user's next yes, found by the app, allows it.</summary>
+    [ObservableProperty]
+    private bool _awaitsYes;
+
+    /// <summary>The card's line while it awaits the yes.</summary>
+    public static string AwaitsYesLine => "Say yes to allow it, or click.";
 
     /// <summary>Every question has an option chosen, and the card is still open.</summary>
     public bool CanSend => IsOpen && Questions.All(q => q.HasAnswer);
