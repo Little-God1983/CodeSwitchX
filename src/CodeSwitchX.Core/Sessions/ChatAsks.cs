@@ -115,7 +115,8 @@ public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnl
 /// An allow Raven's brain proposed for a held permission prompt (<see cref="ChatAsks.Propose"/>). Nothing runs on it: the
 /// prompt is allowed only when the app finds a yes in the user's next words (<see cref="ChatAsks.Confirm"/>).
 /// </summary>
-public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At);
+/// <param name="Window">The workspace of the Raven chat whose brain proposed it, which is told what came of it; null for chat 0, the Yard.</param>
+public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At, Guid? Window = null);
 
 /// <summary>How a proposed allow ended.</summary>
 public enum ChatProposalEnd
@@ -449,8 +450,9 @@ public sealed class ChatAsks : IDisposable
     /// proposal end it, and the card stays open for a click. The app, not the brain, reads the prompt back and asks for
     /// the yes (on <see cref="ProposedAllow"/>), so the yes answers what the app said.
     /// </summary>
+    /// <param name="window">The workspace of the Raven chat whose brain proposes it; null for chat 0, the Yard.</param>
     /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
-    public ChatAllowProposal Propose(string askId)
+    public ChatAllowProposal Propose(string askId, Guid? window = null)
     {
         ChatAllowProposal proposal;
         ChatAllowProposal? replaced;
@@ -466,7 +468,7 @@ public sealed class ChatAsks : IDisposable
             replaced = _proposed;
             _lapsed = null;
             (_proposedHeard, _lapsedHeard) = (null, null);
-            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow());
+            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow(), window);
             _proposalExpiry.Change(ReadBackLifetime, Timeout.InfiniteTimeSpan); // the user's 30 s start once it is heard
         }
 

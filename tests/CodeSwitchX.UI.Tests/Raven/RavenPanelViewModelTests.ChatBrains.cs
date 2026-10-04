@@ -1,0 +1,276 @@
+using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.UI.Raven;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CodeSwitchX.UI.Tests.Raven;
+
+/// <summary>Each chat keeps its own conversation (#123): a question goes to the brain of the chat it is asked in.</summary>
+public sealed partial class RavenPanelViewModelTests
+{
+    /// <summary>A brain per window; the Yard's is the panel's own <see cref="_brain"/>.</summary>
+    private sealed class FakeChatBrains(FakeBrain yard) : IChatBrains
+    {
+        public Dictionary<Guid, FakeBrain> Windows { get; } = [];
+
+        public IConductorBrain For(Guid? workspaceId) => workspaceId is { } id
+            ? Windows.TryGetValue(id, out var brain) ? brain : Windows[id] = new FakeBrain { Answer = _ => [new BrainText("Window answer.")] }
+            : yard;
+
+        public List<Guid> Retired { get; } = [];
+
+        public void Retire(Guid workspaceId) => Retired.Add(workspaceId);
+    }
+
+    private async Task<(RavenPanelViewModel Vm, FakeChatBrains Brains)> ChatBrainsVmAsync()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        return (vm, brains);
+    }
+
+    [Fact]
+    public async Task What_is_said_in_a_chat_goes_only_to_that_chat_s_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        _brain.Answer = _ => [new BrainText("Yard answer.")];
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Start a chat that fixes the retry");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "What is the branch here?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "What did I ask you before?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "What needs me?");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[ContentAutomatorX].Sent.Count.ShouldBe(2);
+        brains.Windows[ContentAutomatorX].Sent.ShouldAllBe(q => !q.Contains("branch here") && !q.Contains("needs me"));
+        brains.Windows[ContentAutomatorX].Sent[1].ShouldContain("What did I ask you before?");
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldContain("What is the branch here?");
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("What needs me?");
+        vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("Yard answer.");
+    }
+
+    [Fact]
+    public async Task An_answer_still_streams_from_the_brain_of_the_chat_it_was_asked_in()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        var three = brains.For(ContentAutomatorX) as FakeBrain;
+        three!.Gate = new TaskCompletionSource();
+
+        Type(vm, "Is the retry test green?");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        three.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.ShouldBe(ChatNumbered(vm, 3));
+        brains.Windows.ContainsKey(CodeSwitchX).ShouldBeFalse("chat 1 was not asked anything");
+    }
+
+    /// <summary>What became of an allow a brain proposed is told to that brain, not to the next chat's that is asked something.</summary>
+    [Fact]
+    public async Task The_outcome_of_a_proposed_allow_is_told_to_the_brain_that_proposed_it()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+        var three = (FakeBrain)brains.For(ContentAutomatorX);
+        IEnumerable<BrainEvent> Proposes()
+        {
+            asks.Propose("p1", ContentAutomatorX); // as answer_permission does from chat 3's brain, whose header names its window
+            yield break;
+        }
+
+        three.Answer = _ => Proposes();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Allow it");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 1); // moving away drops the proposal
+        asks.Proposed.ShouldBeNull();
+
+        Type(vm, "What is the branch here?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        three.Answer = _ => [new BrainText("Nothing ran.")];
+        Type(vm, "Did it run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        ((FakeBrain)brains.For(CodeSwitchX)).Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+        three.Sent[^1].ShouldContain("the allow you proposed was not confirmed by a yes");
+    }
+
+    /// <summary>"Stop it" said in chat 3 is chat 3's, though a question in chat 1 came before it went in: chat 1's brain acts on window 1.</summary>
+    [Fact]
+    public async Task A_waiting_question_from_another_chat_is_answered_by_its_own_chat_s_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true;
+        Type(vm, "zero");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "stop it"); // waits behind "zero"
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "open it");
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[ContentAutomatorX].Sent.ShouldBe(
+            ["[The user is in chat 3, ContentAutomatorX: \"it\" and \"this\" mean that window unless they name another.]\nstop it"]);
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("stop it");
+        vm.Log.Where(e => e.Kind == RavenLogKind.Raven).Select(e => e.Chat.Number).ShouldBe([3, 1], "each answer in its own chat");
+    }
+
+    [Fact]
+    public async Task The_yard_s_brain_is_not_told_it_is_in_the_yard_when_only_other_brains_heard_of_windows()
+    {
+        var (vm, _) = await ChatBrainsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "how far is it");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "what needs me");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldBe(["what needs me"]);
+    }
+
+    /// <summary>News the user was given is told to each chat's brain once, with its next question: "open the one that needs me" works in any chat.</summary>
+    [Fact]
+    public async Task Chat_news_is_told_to_every_chat_s_brain_once()
+    {
+        _teller.Answer = _ => [new BrainText("It is done.")];
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var news = new ChatNews(_bus, _yard, _time, _ => "Done.");
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        _time.Advance(TimeSpan.FromSeconds(1));
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "anything else?");
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "and now?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "open the one that finished");
+        await WithinAsync(vm.PendingAnswers);
+
+        var one = brains.Windows[CodeSwitchX].Sent;
+        one[0].ShouldContain("[Chat news the user was given");
+        one[1].ShouldNotContain("[Chat news", Case.Sensitive, "told once");
+        _brain.Sent[^1].ShouldContain("[Chat news the user was given");
+    }
+
+    /// <summary>
+    /// "Stop it" in chat 3 waits for its brain to start; a question in chat 1 comes, then one in chat 3 again before either
+    /// went in: nothing is lost, and each chat's words go to its own brain.
+    /// </summary>
+    [Fact]
+    public async Task Questions_waiting_on_a_cold_brain_across_chats_all_reach_their_own_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        var three = (FakeBrain)brains.For(ContentAutomatorX);
+        var one = (FakeBrain)brains.For(CodeSwitchX);
+        three.BeforeSent = new TaskCompletionSource(); // starting
+        one.BeforeSent = new TaskCompletionSource();
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "stop it");
+        await Until(() => three.Asked.Count == 1);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "what is here");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "and the tests?");
+        three.BeforeSent.SetResult();
+        one.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        three.Sent.ShouldHaveSingleItem().ShouldEndWith("stop it" + "\n" + "and the tests?");
+        one.Sent.ShouldHaveSingleItem().ShouldEndWith("what is here");
+    }
+
+    [Fact]
+    public async Task A_window_removed_from_the_yard_retires_its_brain()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        brains.Retired.ShouldBe([ContentAutomatorX]);
+    }
+
+    [Fact]
+    public async Task A_question_of_a_window_removed_before_its_turn_goes_to_the_yard_s_brain_not_a_new_one()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.IgnoresCancel = true;
+        _brain.Answer = _ => [new BrainText("Done.")];
+        Type(vm, "zero");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "hello"); // waits behind "zero"
+        vm.SelectedChat = vm.YardChat;
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows.ContainsKey(ContentAutomatorX).ShouldBeFalse("a brain for a window gone would act on nothing and stay");
+        _brain.Sent[^1].ShouldEndWith("hello");
+    }
+
+    [Fact]
+    public async Task What_became_of_an_allow_proposed_from_a_window_gone_is_told_to_no_brain()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+
+        asks.Propose("p1", Guid.NewGuid()); // from a window no longer on the Yard
+        Type(vm, "what now");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+    }
+
+    [Fact]
+    public async Task Talking_warms_up_the_brain_of_the_chat_the_user_is_in()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        await HoldAsync(vm);
+
+        ((FakeBrain)brains.For(ContentAutomatorX)).WarmUps.ShouldBe(1);
+        _brain.WarmUps.ShouldBe(0);
+    }
+}

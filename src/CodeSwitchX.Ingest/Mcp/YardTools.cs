@@ -10,11 +10,15 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// <summary>
 /// The Yard, as MCP tools for Raven's brain. They only look: nothing here changes a workspace or a chat. What they return
 /// is written for a language model to read and repeat: names and states in words, not ids and enum numbers (a chat's id
-/// is there only to ask <c>get_chat</c> about it).
+/// is there only to ask <c>get_chat</c> about it). Asked from a window's Raven chat (<see cref="ChatScope"/>), list_chats
+/// lists that window's chats unless another, or all, is named.
 /// </summary>
 [McpServerToolType]
-public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
+public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatScope? scope = null)
 {
+    /// <summary>What list_chats takes for every window's chats, in a window's chat.</summary>
+    public const string AllWorkspaces = "all";
+
     /// <summary>The filters <see cref="ListChats"/> takes.</summary>
     public static readonly IReadOnlyList<string> ChatFilters = ["needs_me", "working", "live", "all"];
 
@@ -49,20 +53,29 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
         + "terminal) and cannot be told anything from here. asks is the question the chat waits on in Raven's panel, with its "
         + "options: answer_question answers it; or the permission it asks there (\"permission to run a command: …\", with its ask "
         + "id): answer_permission denies it on the user's word, or proposes an allow that only the user's next yes, checked by the "
-        + "app, makes real.")]
+        + "app, makes real. In a window's chat it lists that window's chats unless you name another workspace, or \"all\".")]
     public async Task<IReadOnlyList<ChatView>> ListChats(
         [Description("needs_me: waiting for the user. working: busy right now. live: every chat that has not ended. all: every chat shown.")]
         string filter = "all",
-        [Description("Only the chats of the workspace this name finds best, matched like find_workspace. Leave it out for every workspace.")]
+        [Description("Only the chats of the workspace this name finds best, matched like find_workspace; \"all\" for every workspace. "
+            + "Left out: the window of the chat the user is in, or every workspace in chat 0, the Yard.")]
         string? workspace = null,
         CancellationToken cancellationToken = default)
     {
         // An argument sent as JSON null is bound as null, not as the default.
         filter ??= "all";
-        var byName = !string.IsNullOrWhiteSpace(workspace);
-        var (workspaces, chats) = byName
+        var everywhere = string.Equals(workspace?.Trim(), AllWorkspaces, StringComparison.OrdinalIgnoreCase);
+        var byName = !everywhere && !string.IsNullOrWhiteSpace(workspace);
+        var window = byName || everywhere ? null : scope?.WorkspaceId;
+        var (workspaces, chats) = byName || window is not null
             ? await ReadAsync(cancellationToken).ConfigureAwait(false)
             : ([], await yard.ChatsAsync(cancellationToken).ConfigureAwait(false));
+        if (window is { } gone && workspaces.All(w => w.Id != gone))
+        {
+            // Its chats would be none, and "nothing needs you" a wrong answer.
+            throw new McpException("The window of the chat the user is in is not on the Yard any more. Give list_chats the workspace \"all\", or one by name.");
+        }
+
         IEnumerable<YardChat> shown = filter.Trim().ToLowerInvariant() switch
         {
             "needs_me" => chats.Where(c => c.NeedsYou),
@@ -83,6 +96,10 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null)
             }
 
             shown = shown.Where(c => ids.Contains(c.WorkspaceId));
+        }
+        else if (window is { } own)
+        {
+            shown = shown.Where(c => c.WorkspaceId == own);
         }
 
         var asked = asks?.Open().ToLookup(a => a.SessionId);

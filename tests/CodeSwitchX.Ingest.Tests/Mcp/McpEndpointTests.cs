@@ -40,12 +40,31 @@ public sealed class McpEndpointTests : IAsyncLifetime
 
     private Uri Url => new($"http://127.0.0.1:{_api.Endpoint!.Port}{YardMcp.Route}");
 
-    private Task<McpClient> ConnectAsync(string token) => McpClient.CreateAsync(new HttpClientTransport(new HttpClientTransportOptions
+    /// <param name="window">The workspace a window chat's brain names in its header; none for the Yard's.</param>
+    private Task<McpClient> ConnectAsync(string token, Guid? window = null) => McpClient.CreateAsync(new HttpClientTransport(new HttpClientTransportOptions
     {
         Endpoint = Url,
         TransportMode = HttpTransportMode.StreamableHttp,
-        AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = $"Bearer {token}" },
+        AdditionalHeaders = window is { } id
+            ? new Dictionary<string, string> { ["Authorization"] = $"Bearer {token}", [YardMcp.ChatHeader] = id.ToString("D") }
+            : new Dictionary<string, string> { ["Authorization"] = $"Bearer {token}" },
     }), cancellationToken: TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task A_window_chat_s_brain_sees_its_window_s_chats_by_its_header()
+    {
+        await using var window = await ConnectAsync(_token, FakeYard.DiffusionId);
+        await using var yard = await ConnectAsync(_token);
+
+        string Text(CallToolResult result) => result.Content.OfType<TextContentBlock>().ShouldHaveSingleItem().Text;
+        var own = Text(await window.CallToolAsync("list_chats", cancellationToken: TestContext.Current.CancellationToken));
+        var all = Text(await yard.CallToolAsync("list_chats", cancellationToken: TestContext.Current.CancellationToken));
+
+        own.ShouldContain("Installer icons");
+        own.ShouldNotContain("Speech gate");
+        all.ShouldContain("Installer icons");
+        all.ShouldContain("Speech gate");
+    }
 
     [Fact]
     public async Task The_brain_sees_the_four_read_only_tools()

@@ -61,7 +61,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IDictationService _dictation;
     private readonly IWhisperModelStore _models;
     private readonly IDictationVocabularyProvider _vocabulary;
+    /// <summary>The Yard's brain; every chat's when there are no <see cref="_brains"/>.</summary>
     private readonly IConductorBrain _brain;
+
+    /// <summary>Each chat's own brain (#123): what is said in a chat is only in its conversation.</summary>
+    private readonly IChatBrains? _brains;
     private readonly ReplyVoice _voice;
     private readonly ITextToSpeech _tts;
     private readonly IUiDispatcher _dispatcher;
@@ -80,8 +84,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Cancelled when the user takes the floor: the answer or digest that holds it stops (UI thread).</summary>
     private CancellationTokenSource _floor = new();
 
-    /// <summary>The last question asked, while it may still wait behind another to go to the brain (UI thread).</summary>
-    private Question? _lastQuestion;
+    /// <summary>The questions asked and not over yet, in the order asked (UI thread).</summary>
+    private readonly List<Question> _questions = [];
+
+    /// <summary>Those that have not gone to their brain yet, and are not taken along by another: they go with the next words.</summary>
+    private List<Question> Unsent() => [.. _questions.Where(q => q is { Sent: false, Ended: false, Merged: false })];
 
     /// <summary>Cancelled by a press: the digest being told stops, before it begins speaking too (UI thread).</summary>
     private CancellationTokenSource? _digest;
@@ -94,9 +101,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// The chat news the user was given (a card written, a digest told), in facts only (workspace, title, what happened),
     /// for the brain that acts to know with the user's next question. Never what the chats said. An item goes once the
-    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread).
+    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread). News goes to each chat's brain
+    /// once, with its next question, so "open the one that finished" works in any chat; what became of an allow a brain
+    /// proposed goes to that brain only (For), and waits for a question in a chat of it.
     /// </summary>
-    private readonly List<(DateTimeOffset At, string Fact)> _toldNews = [];
+    private readonly List<ToldFact> _toldNews = [];
+
+    /// <summary>A fact the user was given, the brain it is for (any, for null), and the brains that have it.</summary>
+    private sealed record ToldFact(DateTimeOffset At, string Fact, IConductorBrain? For)
+    {
+        public HashSet<IConductorBrain> ToldTo { get; } = [];
+    }
 
     /// <summary>How long news the user was given stays worth telling the brain with a question.</summary>
     public static readonly TimeSpan ToldNewsLifetime = TimeSpan.FromMinutes(10);
@@ -212,7 +227,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
-        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null)
+        [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
+        IChatBrains? brains = null)
     {
         _catalog = catalog;
         _recorder = recorder;
@@ -220,6 +236,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _models = models;
         _vocabulary = vocabulary;
         _brain = brain;
+        _brains = brains;
         _voice = voice;
         _tts = speech;
         _dispatcher = dispatcher;
@@ -1135,8 +1152,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _digest?.Cancel();
         _voice.Hush();
         _voice.Expect();
-        _brain.WarmUp();
+        BrainOf(CurrentChat).WarmUp();
     }
+
+    /// <summary>
+    /// The chat's own brain: a window's chat talks with its window's, chat 0 with the Yard's. A window gone from the list
+    /// has its brain retired, and is not given a new one: what is left of it goes to the Yard's.
+    /// </summary>
+    private IConductorBrain BrainOf(RavenChat chat) =>
+        _brains?.For(chat.WorkspaceId is { } id && Chats.Contains(chat) ? id : null) ?? _brain;
 
     private void OnOpenSpeech(OpenMicRun run)
     {
@@ -1553,24 +1577,44 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
     private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "")
     {
-        if (_lastQuestion is { Sent: false, Ended: false } waiting)
+        var takenEarlier = "";
+        var takenText = "";
+        List<Question> own = [];
+        foreach (var waiting in Unsent())
         {
             waiting.Merged = true;
-            if (waiting.Chat == chat)
+            if (BrainOf(waiting.Chat) != BrainOf(chat))
             {
-                (earlier, text) = (waiting.Earlier, waiting.Text + "\n" + text);
+                // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
+                // own window, so "stop it" said in chat 3 would stop a chat in the window the user is in now.
+                own.Add(new Question(waiting.Text, waiting.Chat, waiting.Earlier));
+            }
+            else if (waiting.Chat == chat)
+            {
+                takenEarlier += waiting.Earlier;
+                takenText += waiting.Text + "\n";
             }
             else
             {
                 // Asked in another chat: it keeps saying where, or "stop it" there would mean the window the user is in now.
-                earlier = waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {(waiting.Chat == YardChat ? "the Yard" : waiting.Chat.Name)}:] "
+                takenEarlier += waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {(waiting.Chat == YardChat ? "the Yard" : waiting.Chat.Name)}:] "
                     + waiting.Text + "\n";
             }
         }
 
-        var question = new Question(text, chat, earlier);
-        _lastQuestion = question;
         var floor = TakeFloor();
+        foreach (var other in own)
+        {
+            Enqueue(other, ended, floor);
+        }
+
+        Enqueue(new Question(takenText + text, chat, takenEarlier + earlier), ended, floor);
+    }
+
+    /// <summary>The question goes to its chat's brain after those before it, on the floor it was given (UI thread).</summary>
+    private void Enqueue(Question question, DateTimeOffset ended, CancellationToken floor)
+    {
+        _questions.Add(question);
         _asking++;
         UpdateState();
         var asked = new StrongBox<DateTimeOffset>();
@@ -1606,7 +1650,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         public bool Ended { get; set; }
 
         /// <summary>The news facts that went with it; given once it is sent.</summary>
-        public IReadOnlyList<(DateTimeOffset At, string Fact)> Told { get; set; } = [];
+        public IReadOnlyList<ToldFact> Told { get; set; } = [];
     }
 
     /// <summary>The user takes the floor: whatever holds it stops, its speech too. Returns the new floor's token (UI thread).</summary>
@@ -1641,7 +1685,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
+            var brain = BrainOf(question.Chat);
+            await StreamAnswerAsync(brain, WithToldNews(question, brain), spoken, floor, question.Chat, question);
+
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
             // And only while the user is still in that chat: one who moved on is not answering it.
@@ -1652,6 +1698,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         finally
         {
             question.Ended = true;
+            _questions.Remove(question);
             spoken.Complete();
             _asking--;
             UpdateState();
@@ -1684,10 +1731,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 {
                     case BrainQuestionSent when question is not null:
                         question.Sent = true;
-                        _toldChat = question.Chat; // only now does the brain know where the user is
+                        _toldChats[brain] = question.Chat; // only now does the brain know where the user is
                         foreach (var told in question.Told)
                         {
-                            _toldNews.Remove(told); // the brain has it now
+                            told.ToldTo.Add(brain); // the brain has it now
                         }
 
                         break;
@@ -1952,26 +1999,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void OnProposalEnded(ChatAllowProposal proposal, ChatProposalEnd end)
     {
-        if (_askCards.TryGetValue(proposal.Ask.Id, out var card))
+        _askCards.TryGetValue(proposal.Ask.Id, out var card);
+        if (card is not null)
         {
             card.AwaitsYes = false;
         }
 
         if (end == ChatProposalEnd.Cancelled)
         {
-            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open"));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open");
         }
 
         var chat = ChatOfAsk(proposal.Ask);
         if (end == ChatProposalEnd.Expired && _asks?.IsHeard(proposal) == false)
         {
             AddEntry(RavenLogKind.Note, NotHeardLine, chat);
-            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open"));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed was never read out to the user, so nothing ran, and its card stays open");
         }
         else if (end == ChatProposalEnd.Expired)
         {
             AddEntry(RavenLogKind.Note, $"No yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds: nothing ran. The card stays open for a click.", chat);
-            _toldNews.Add((_time.GetUtcNow(), $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open"));
+            TellProposer(proposal, $"{WhoAsked(proposal.Ask)}: the allow you proposed got no yes within {ChatAsks.ProposalLifetime.TotalSeconds:0} seconds, so nothing ran, and its card stays open");
         }
 
         ScheduleNews(); // what was held while it stood
@@ -1989,11 +2037,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var allowed = _asks!.Confirm(proposal);
         var said = allowed ? "Allowed. The chat carries on." : "The chat no longer waits for that: it was answered elsewhere, or its turn ended.";
         _toldNews.RemoveAll(t => t.Fact.StartsWith(who + ": the allow you proposed got no yes", StringComparison.Ordinal));
-        _toldNews.Add((_time.GetUtcNow(), $"{who}: the user said yes to the allow you proposed, and {(allowed ? "it was allowed" : "it was gone already")}"));
-        if (_lastQuestion is { Sent: false, Ended: false } waiting)
+        TellProposer(proposal, $"{who}: the user said yes to the allow you proposed, and {(allowed ? "it was allowed" : "it was gone already")}");
+        if (Unsent() is [.., var waiting])
         {
-            _lastQuestion = null;
-            waiting.Merged = true; // its own turn ends at once; its words go again, with the news of the yes
+            // Their own turns end at once; their words go again, with the news of the yes.
+            waiting.Merged = true;
             AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier);
         }
         else
@@ -2005,6 +2053,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var spoken = _voice.Begin(silent: _openSpeech);
         spoken.Add(said);
         spoken.Complete();
+    }
+
+    /// <summary>The brain that proposed the allow: the one of the chat its tool call came from; null for a window gone, whose brain went with it.</summary>
+    private IConductorBrain? Proposer(ChatAllowProposal proposal) =>
+        proposal.Window is { } window && Chats.All(c => c.WorkspaceId != window) ? null : BrainOf(ChatOf(proposal.Window));
+
+    /// <summary>What became of a proposed allow, for the brain that proposed it, and no other.</summary>
+    private void TellProposer(ChatAllowProposal proposal, string fact)
+    {
+        if (Proposer(proposal) is { } proposer)
+        {
+            _toldNews.Add(new(_time.GetUtcNow(), fact, proposer));
+        }
     }
 
     /// <summary>The chat an ask is of, as the brain is told it: "ContentAutomatorX, chat "Fix" (chat id a)".</summary>
@@ -2133,7 +2194,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             var at = _time.GetUtcNow();
-            _toldNews.AddRange(cards.Select(c => (at, QuestionFact(c))));
+            _toldNews.AddRange(cards.Select(c => new ToldFact(at, QuestionFact(c), null)));
             if (!SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
                 return;
@@ -2314,7 +2375,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
             // facts with the next question either way, so "open it" finds what "it" is.
             var at = _time.GetUtcNow();
-            _toldNews.AddRange(lines.Select(l => (at, Fact(l))));
+            _toldNews.AddRange(lines.Select(l => new ToldFact(at, Fact(l), null)));
             var fresh = lines.Where(l => !l.Stale).ToList();
             if (fresh.Count == 0 || !SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
@@ -2391,28 +2452,29 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
     /// along is kept until the brain has it, so a question merged into the next or failed before it went loses none.
     /// </summary>
-    private string WithToldNews(Question question)
+    private string WithToldNews(Question question, IConductorBrain brain)
     {
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
-        question.Told = [.. _toldNews];
-        var text = question.Earlier + WhereTheUserIs(question.Chat, always: question.Earlier.Length > 0) + question.Text;
+        question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain))];
+        var text = question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
             ? text
             : "[Chat news the user was given since their last question: " + string.Join("; ", question.Told.Select(t => t.Fact)) + ".]\n" + text;
     }
 
-    /// <summary>The chat of the last question the brain took (<see cref="BrainQuestionSent"/>); the Yard's until one of another went in.</summary>
-    private RavenChat? _toldChat;
+    /// <summary>The chat of the last question each brain took (<see cref="BrainQuestionSent"/>); the Yard's until one of another went in.</summary>
+    private readonly Dictionary<IConductorBrain, RavenChat> _toldChats = [];
 
     /// <summary>
-    /// Which chat the user asks in, until each chat has a brain of its own (#123): a window's chat each time, so "stop it"
-    /// and "open it" mean that window; the Yard's once the user is back in it, and not before.
+    /// Which chat the user asks in: a window's chat each time, so "stop it" and "open it" mean that window, also in words
+    /// taken along from another chat; the Yard's once the user is back in it, and not before: a brain that only ever
+    /// heard the Yard's questions is told nothing.
     /// </summary>
     /// <param name="always">Words of another chat go before: the Yard is named too, or the words after them would seem to be of that chat.</param>
-    private string WhereTheUserIs(RavenChat chat, bool always = false)
+    private string WhereTheUserIs(RavenChat chat, IConductorBrain brain, bool always = false)
     {
-        var told = _toldChat;
+        var told = _toldChats.GetValueOrDefault(brain);
         if (chat.WorkspaceId is not null)
         {
             return $"[The user is in chat {chat.Number}, {chat.Name}: \"it\" and \"this\" mean that window unless they name another.]\n";
@@ -2838,6 +2900,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     open.IsUnread = false;
                     CountUnread(open); // still unread, where it is now
                 }
+            }
+
+            if (gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired))
+            {
+                _brains?.Retire(retired); // its process, config and conversation go with it
             }
 
             if (moved)

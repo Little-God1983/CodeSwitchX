@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeSwitchX.Core;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Ingest.Api;
 
@@ -28,6 +29,6 @@ public static class McpConfigFile
         };
 
         AtomicFile.Replace(file, config.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ".tmp");
-        AccessTokenStore.RestrictToCurrentUser(file);
+        SecretFile.RestrictToCurrentUser(file);
     }
 }

@@ -1,4 +1,4 @@
-namespace CodeSwitchX.Ingest;
+namespace CodeSwitchX.Core;
 
 /// <summary>
 /// Replaces a file by writing next to it and moving over it, so a reader sees the old content or the new and never a torn
@@ -6,10 +6,10 @@ namespace CodeSwitchX.Ingest;
 /// endpoint.json, an editor on settings.json), so it is retried for about half a second; a read-only target is refused at
 /// once. A failure never leaves the temporary file behind.
 /// </summary>
-internal static class AtomicFile
+public static class AtomicFile
 {
-    internal const int Attempts = 10;
-    internal static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
+    public const int Attempts = 10;
+    public static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
 
     public static void Replace(string file, string content, string tempSuffix)
     {
