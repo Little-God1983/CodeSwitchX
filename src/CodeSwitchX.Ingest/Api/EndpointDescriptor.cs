@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CodeSwitchX.Core;
 
 namespace CodeSwitchX.Ingest.Api;
 

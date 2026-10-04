@@ -30,7 +30,11 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
         var key = workspaceId ?? Guid.Empty;
         lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_disposed)
+            {
+                return ShutDown.Brain; // a press as the app closes: the turn says so, as a disposed brain's does
+            }
+
             if (!_brains.TryGetValue(key, out var brain))
             {
                 brain = new PooledBrain(this, create(workspaceId));
@@ -59,9 +63,10 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
 
             _used.AddFirst(brain.Node);
             brain.Resting = false;
-            for (var node = _used.First; node is not null; node = node.Next)
+            var position = 0;
+            for (var node = _used.First; node is not null; node = node.Next, position++)
             {
-                if (node.Value != brain && !node.Value.Resting && Position(node) >= warm)
+                if (position >= warm && !node.Value.Resting)
                 {
                     node.Value.Resting = true;
                     rest.Add(node.Value);
@@ -73,17 +78,6 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
         {
             cold.Inner.Rest(); // returns at once; the process goes once its turn is over
         }
-    }
-
-    private int Position(LinkedListNode<PooledBrain> node)
-    {
-        var position = 0;
-        for (var at = _used.First; at != node; at = at!.Next)
-        {
-            position++;
-        }
-
-        return position;
     }
 
     public void Dispose()
@@ -119,8 +113,11 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
         return ValueTask.CompletedTask;
     }
 
-    /// <summary>A chat's brain as the pool hands it out: each use marks it used; the pool disposes the brain, not its users.</summary>
-    private sealed class PooledBrain : IConductorBrain
+    /// <summary>
+    /// A chat's brain as the pool hands it out: each use marks it used; the pool disposes the brain, not its users. It
+    /// disposes synchronously too, as the app's host may dispose its singletons.
+    /// </summary>
+    private sealed class PooledBrain : IConductorBrain, IDisposable
     {
         private readonly ChatBrains _pool;
 
@@ -151,6 +148,32 @@ public sealed class ChatBrains(Func<Guid?, IConductorBrain> create, int warm = C
         }
 
         public void Rest() => Inner.Rest();
+
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>What a brain asked for after the pool was disposed answers: nothing starts.</summary>
+    private sealed class ShutDown : IConductorBrain
+    {
+        public static readonly ShutDown Brain = new();
+
+        public async IAsyncEnumerable<BrainEvent> AskAsync(string text, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.CompletedTask;
+            yield return new BrainFailed("Raven's brain has shut down with CodeSwitchX.");
+        }
+
+        public void WarmUp()
+        {
+        }
+
+        public void Rest()
+        {
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

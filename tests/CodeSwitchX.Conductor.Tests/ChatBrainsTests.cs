@@ -169,6 +169,67 @@ public sealed class ChatBrainsTests : IDisposable
         _sessions.Load(Window3.ToString("N")).ShouldNotBeNull().Id.ShouldBe(Value(_launcher.Started[2].Arguments, "--session-id"));
     }
 
+    /// <summary>Claude Code keeps a session only once a message went in: one only warmed up cannot be picked up again.</summary>
+    [Fact]
+    public async Task A_chat_brain_warmed_up_but_never_asked_starts_a_new_conversation_next_time()
+    {
+        var brain = BrainOf(Window3);
+        brain.WarmUp();
+        await WaitUntil(() => _launcher.Started.Count == 1);
+        _sessions.Load(Window3.ToString("N")).ShouldBeNull("nothing went in, so there is nothing to keep");
+
+        brain.Rest();
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+        await AskAsync(brain, "Hi");
+
+        Value(_launcher.Started[1].Arguments, "--resume").ShouldBeNull();
+        var id = Value(_launcher.Started[1].Arguments, "--session-id").ShouldNotBeNull();
+        _sessions.Load(Window3.ToString("N")).ShouldNotBeNull().Id.ShouldBe(id);
+    }
+
+    [Fact]
+    public async Task A_window_chat_s_config_with_the_token_goes_when_its_brain_is_disposed()
+    {
+        var brain = BrainOf(Window3);
+        await AskAsync(brain, "Hi");
+        var own = Value(_launcher.Started[0].Arguments, "--mcp-config").ShouldNotBeNull();
+        File.Exists(own).ShouldBeTrue();
+
+        brain.Dispose();
+
+        File.Exists(own).ShouldBeFalse("like mcp.json, which goes when the server stops");
+    }
+
+    [Fact]
+    public async Task A_brain_handed_out_disposes_synchronously_without_touching_the_pool_s()
+    {
+        var inner = new CountingBrain();
+        using var pool = new ChatBrains(_ => inner);
+
+        var handed = pool.For(null).ShouldBeAssignableTo<IDisposable>("the app's host disposes its singletons synchronously");
+        handed.Dispose();
+
+        inner.Disposed.ShouldBeFalse();
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_brain_asked_for_after_the_pool_is_disposed_says_so_instead_of_throwing()
+    {
+        var pool = new ChatBrains(_ => new CountingBrain());
+        pool.Dispose();
+
+        var brain = pool.For(Window3);
+        brain.WarmUp();
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.ShouldBe([new BrainFailed("Raven's brain has shut down with CodeSwitchX.")]);
+    }
+
     [Fact]
     public async Task A_window_chat_s_tools_name_its_window_in_a_config_of_its_own_and_the_yard_s_use_the_app_s()
     {

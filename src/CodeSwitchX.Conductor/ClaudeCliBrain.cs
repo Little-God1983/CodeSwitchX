@@ -117,6 +117,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The process was started to pick the conversation up again, and has not said a line yet.</summary>
     private bool _resuming;
 
+    /// <summary>
+    /// The conversation the running process holds, and its model. It is kept (<see cref="_session"/>) only once a question
+    /// went in: Claude Code keeps no session for a process only warmed up, and a resume of one finds nothing.
+    /// </summary>
+    private (string Id, string Model)? _started;
+
+    /// <summary>A window chat's own MCP config, written when its process started; it holds the token, so it goes with the brain.</summary>
+    private string? _mcpConfig;
+
     /// <param name="role">Raven itself, with the Yard's tools; or the teller of chat news, with none (<see cref="TellerPrompt"/>).</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
@@ -260,6 +269,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         finally
         {
+            if (_chat is not null && sent && _started is { } held)
+            {
+                _session = new BrainSession(held.Id, held.Model, _time.GetUtcNow());
+                _chat.Sessions.Save(_chat.Key, _session);
+            }
+
             // Cancelled, or left before the turn was over: it is interrupted and read to its end, so the brain keeps the
             // conversation and the rest of its lines are not read as the next turn's. One that does not end is stopped.
             // The teller keeps no conversation: it is stopped below anyway, so it is not interrupted first.
@@ -283,12 +298,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
 
             _lastTurnAt = _time.GetUtcNow();
-            if (_chat is not null && _session is not null && sent)
-            {
-                _session = _session with { LastTurnAt = _lastTurnAt };
-                _chat.Sessions.Save(_chat.Key, _session);
-            }
-
             _turns.Release();
         }
     }
@@ -351,6 +360,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         _disposed = true;
         Stop();
+        if (_mcpConfig is { } config)
+        {
+            try
+            {
+                File.Delete(config); // like mcp.json, which goes when the server stops
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Could not delete {Config}", config);
+            }
+        }
     }
 
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
@@ -470,6 +490,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             try
             {
                 ChatMcpConfig.Write(_paths.McpConfigFile, mcpConfig, window);
+                _mcpConfig = mcpConfig;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException)
             {
@@ -500,11 +521,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         _processModel = model;
         _lastTurnAt = _session?.LastTurnAt ?? _time.GetUtcNow();
-        if (_chat is not null && session is { } started)
+        if (session is { } started)
         {
             _resuming = resume;
-            _session ??= new BrainSession(started.Id, model, _lastTurnAt);
-            _chat.Sessions.Save(_chat.Key, _session);
+            _started = (started.Id, model);
         }
 
         _logger.LogInformation("Started {Brain}{Chat}: {Claude} with {Model}{Resumed}", _name, _chat is null ? "" : $" of chat {_chat.Key}", claude, model,
@@ -668,6 +688,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         var process = Interlocked.Exchange(ref _process, null);
         _processModel = null;
+        _started = null;
         process?.Dispose();
     }
 

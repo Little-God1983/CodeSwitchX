@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeSwitchX.Core;
 
 namespace CodeSwitchX.Conductor;
 
@@ -47,9 +48,7 @@ public sealed class BrainSessionFile(string file) : IBrainSessionStore
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-                var temporary = file + ".tmp";
-                File.WriteAllText(temporary, JsonSerializer.Serialize(all));
-                File.Move(temporary, file, overwrite: true);
+                AtomicFile.Replace(file, JsonSerializer.Serialize(all), ".tmp");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

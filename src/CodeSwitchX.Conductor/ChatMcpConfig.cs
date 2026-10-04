@@ -13,6 +13,7 @@ namespace CodeSwitchX.Conductor;
 public static class ChatMcpConfig
 {
     /// <summary>Writes <paramref name="target"/> from <paramref name="source"/> for the window; throws as file and JSON reading do.</summary>
+    /// <remarks>As <c>mcp.json</c> is: replaced in one step, then made the user's alone.</remarks>
     public static void Write(string source, string target, Guid workspaceId)
     {
         var config = JsonNode.Parse(File.ReadAllText(source))?.AsObject() ?? throw new JsonException($"{source} is empty.");
@@ -22,9 +23,7 @@ public static class ChatMcpConfig
         server["headers"] = headers;
 
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        var temporary = target + ".tmp";
-        File.WriteAllText(temporary, config.ToJsonString());
-        SecretFile.RestrictToCurrentUser(temporary);
-        File.Move(temporary, target, overwrite: true);
+        AtomicFile.Replace(target, config.ToJsonString(), ".tmp");
+        SecretFile.RestrictToCurrentUser(target);
     }
 }

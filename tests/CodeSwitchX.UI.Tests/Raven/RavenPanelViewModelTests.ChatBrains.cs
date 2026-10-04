@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -69,6 +70,44 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.ShouldBe(ChatNumbered(vm, 3));
         brains.Windows.ContainsKey(CodeSwitchX).ShouldBeFalse("chat 1 was not asked anything");
+    }
+
+    /// <summary>What became of an allow a brain proposed is told to that brain, not to the next chat's that is asked something.</summary>
+    [Fact]
+    public async Task The_outcome_of_a_proposed_allow_is_told_to_the_brain_that_proposed_it()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+        var three = (FakeBrain)brains.For(ContentAutomatorX);
+        IEnumerable<BrainEvent> Proposes()
+        {
+            asks.Propose("p1"); // as answer_permission does, during the turn
+            yield break;
+        }
+
+        three.Answer = _ => Proposes();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Allow it");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 1); // moving away drops the proposal
+        asks.Proposed.ShouldBeNull();
+
+        Type(vm, "What is the branch here?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        three.Answer = _ => [new BrainText("Nothing ran.")];
+        Type(vm, "Did it run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        ((FakeBrain)brains.For(CodeSwitchX)).Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+        three.Sent[^1].ShouldContain("the allow you proposed was not confirmed by a yes");
     }
 
     [Fact]
