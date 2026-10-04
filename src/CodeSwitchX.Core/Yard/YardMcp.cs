@@ -16,5 +16,6 @@ public static class YardMcp
     public const string ChatHeader = "X-CodeSwitchX-Chat";
 
     /// <summary>What chat 0, the Yard's overview, sends as <see cref="ChatHeader"/>: it sees no card's text and answers none.</summary>
-    public const string OverviewChat = "yard";
+    /// <remarks>Also chat 0's session key and config name: "yard" was its key before it was the overview, and is not picked up again.</remarks>
+    public const string OverviewChat = "overview";
 }

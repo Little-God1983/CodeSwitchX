@@ -143,6 +143,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The most of a summary chat 0 is given: the prompt asks for two short lines, and a brain may say more.</summary>
     internal const int SummaryLength = 300;
 
+    /// <summary>
+    /// How long chat 0's question waits for summaries still being made: asked right after a turn in a window's chat, it
+    /// would be answered from the summary before that turn. A summarizer that takes longer is not waited for.
+    /// </summary>
+    public static readonly TimeSpan SummaryWait = TimeSpan.FromSeconds(6);
+
     private ITimer? _warmUpTimer;
     private MicrophoneDevice? _recordingMic;
 
@@ -1711,9 +1717,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return; // a later question took it along: the floor is only taken by a question, which merges one not sent
             }
 
+            var brain = BrainOf(question.Chat);
+            if (IsOverview(brain) && !_summaries.IsCompleted)
+            {
+                await Task.WhenAny(_summaries, Task.Delay(SummaryWait, _time));
+                if (question.Merged)
+                {
+                    return; // words said meanwhile took it along
+                }
+            }
+
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            var brain = BrainOf(question.Chat);
             await StreamAnswerAsync(brain, WithToldNews(question, brain), spoken, floor, question.Chat, question);
 
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
@@ -2495,7 +2510,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
-        if (_summarizer is not null && brain == _brain)
+        if (IsOverview(brain))
         {
             // Chat 0 is the overview: it is given each window's chat by its summary, and no fact of a card or a chat's news.
             question.Told = [];
@@ -2531,6 +2546,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             ? "[There are no window chats now: no window is on the Yard.]\n"
             : "[The window chats now, as their summaries say: " + string.Join("; ", lines) + ".]\n";
     }
+
+    /// <summary>Chat 0's brain, the overview, when there is one: with no summarizer chat 0 is told what every chat is.</summary>
+    private bool IsOverview(IConductorBrain brain) => _summarizer is not null && brain == _brain;
 
     /// <summary>The cards that wait for an answer in the chat.</summary>
     private int WaitingIn(RavenChat chat) => _askCards.Values.Count(c => c.IsOpen && c.ShownIn == chat);
@@ -2614,12 +2632,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var text = new System.Text.StringBuilder($"Chat {chat.Number}, {chat.Name}.\n");
         text.Append("The summary so far: ").Append(chat.Summary ?? "none yet").Append('\n');
         text.Append("The latest in the chat, oldest first:");
-        foreach (var entry in Log.Where(e => e.Chat == chat).TakeLast(SummaryEntries))
+        // Notes and warnings about Raven itself are left out before the latest are taken: they would crowd out the conversation.
+        foreach (var line in Log.Where(e => e.Chat == chat).Select(SummaryLine).OfType<string>().Where(l => l.Length > 0).TakeLast(SummaryEntries))
         {
-            if (SummaryLine(entry) is { Length: > 0 } line)
-            {
-                text.Append("\n- ").Append(line.Length <= SummaryEntryLength ? line : line[..SummaryEntryLength] + "…");
-            }
+            text.Append("\n- ").Append(line.Length <= SummaryEntryLength ? line : line[..SummaryEntryLength] + "…");
         }
 
         return text.Append($"\nCards waiting on the user now: {WaitingIn(chat)}").ToString();
@@ -2630,7 +2646,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         RavenLogKind.You => "The user: " + entry.Text,
         RavenLogKind.Raven => "Raven: " + entry.Text,
-        RavenLogKind.Action => entry.ActivityLine + (entry.Failed ? ", which failed" : ""),
+        // Not "Looked at": the summarizer must know a chat was stopped or closed, not only looked at.
+        RavenLogKind.Action => $"Raven called {entry.Text}" + (entry.Detail is { } detail ? $" ({detail})" : "") + (entry.Failed ? ", which failed" : ""),
         RavenLogKind.News => "News: " + string.Join("; ", entry.Lines?.Select(Fact) ?? []),
         RavenLogKind.Question or RavenLogKind.Permission when entry.Ask is { } card =>
             entry.ActivityLine + (card.IsOpen ? " (waiting on the user)" : $" ({card.Outcome})"),

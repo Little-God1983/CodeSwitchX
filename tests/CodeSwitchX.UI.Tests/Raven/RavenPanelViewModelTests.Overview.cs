@@ -154,6 +154,65 @@ public sealed partial class RavenPanelViewModelTests
         sent.ShouldNotContain("npm test");
     }
 
+    /// <summary>"What's going on?" right after a turn in chat 3 must not be answered from the summary before that turn.</summary>
+    [Fact]
+    public async Task A_question_in_chat_zero_waits_for_the_summary_being_made()
+    {
+        var (vm, _, summarizer, _) = await OverviewVmAsync();
+        summarizer.Gate = new TaskCompletionSource();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Start the retry fix");
+        await Until(() => summarizer.Sent.Count == 1);
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "What's going on?");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _brain.Sent.ShouldBeEmpty("chat 3's summary is still being made");
+        summarizer.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Retry fix waits on a test run.");
+    }
+
+    [Fact]
+    public async Task A_summary_that_takes_too_long_is_not_waited_for()
+    {
+        var (vm, _, summarizer, _) = await OverviewVmAsync();
+        summarizer.Gate = new TaskCompletionSource(); // never done
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Start the retry fix");
+        await Until(() => summarizer.Sent.Count == 1);
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "What's going on?");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _time.Advance(RavenPanelViewModel.SummaryWait);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Chat 3, ContentAutomatorX (nothing waiting): no summary yet");
+    }
+
+    [Fact]
+    public async Task The_summarizer_is_told_what_raven_did_and_not_crowded_out_by_notes()
+    {
+        var (vm, brains, summarizer, _) = await OverviewVmAsync();
+        brains.For(ContentAutomatorX);
+        brains.Windows[ContentAutomatorX].Answer = _ => [new BrainToolCall("t1", "stop_chat", "{}"), new BrainText("Stopped it.")];
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "Stop it");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingSummaries);
+        summarizer.Sent.Clear();
+        brains.Windows[ContentAutomatorX].Answer = _ => Enumerable.Range(0, RavenPanelViewModel.SummaryEntries)
+            .Select(i => (BrainEvent)new BrainNotice($"Note {i}", Warning: false)).Append(new BrainText("Done."));
+
+        await TalkInAsync(vm, 3, "And now?");
+
+        var asked = summarizer.Sent.ShouldHaveSingleItem();
+        asked.ShouldContain("Raven called stop_chat");
+        asked.ShouldContain("The user: Stop it", customMessage: "the notes after it take no place of the conversation");
+    }
+
     [Fact]
     public async Task A_window_chat_brain_still_hears_the_news_chat_zero_is_not_given()
     {

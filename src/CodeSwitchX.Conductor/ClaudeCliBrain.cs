@@ -464,7 +464,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <param name="session">The conversation to keep, new or picked up again; none is saved for null.</param>
     internal IReadOnlyList<string> Arguments(string model, string? mcpConfig = null, (string Id, bool Resume)? session = null)
     {
-        var teller = Toolless;
+        var toolless = Toolless;
         List<string> arguments =
         [
             "-p",
@@ -473,9 +473,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             "--verbose",
             "--include-partial-messages",
             "--model", model,
-            "--mcp-config", teller ? NoMcpServers : mcpConfig ?? _paths.McpConfigFile,
+            "--mcp-config", toolless ? NoMcpServers : mcpConfig ?? _paths.McpConfigFile,
             "--strict-mcp-config",
-            "--tools", teller ? "" : SendTool,
+            "--tools", toolless ? "" : SendTool,
             "--permission-mode", "dontAsk",
             "--settings", NoHooks,
             "--system-prompt", _role switch
@@ -492,7 +492,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             { } fresh => ["--session-id", fresh.Id],
             null => ["--no-session-persistence"],
         });
-        if (!teller)
+        if (!toolless)
         {
             arguments.AddRange(["--allowedTools", AllowedTools]);
         }
@@ -828,7 +828,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 /// <param name="WorkspaceId">The window its tools act on when no other is named; null for chat 0, the Yard.</param>
 public sealed record BrainChat(string Key, Guid? WorkspaceId, IBrainSessionStore Sessions)
 {
-    public static BrainChat Of(Guid? workspaceId, IBrainSessionStore sessions) => new(workspaceId?.ToString("N") ?? "overview", workspaceId, sessions);
+    public static BrainChat Of(Guid? workspaceId, IBrainSessionStore sessions) => new(workspaceId?.ToString("N") ?? YardMcp.OverviewChat, workspaceId, sessions);
 }
 
 public enum BrainRole
