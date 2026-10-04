@@ -318,7 +318,7 @@ public class ShellViewModelTests
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
         forwarded.ShouldBeTrue("the window comes forward, as when the brain opens a workspace");
         IRavenShell shell = _h.Shell;
-        shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false)).ShouldBe("Chat 0, the Yard.");
+        shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false))!.Value.Said.ShouldBe("Chat 0, the Yard.");
         shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(9, false, false)).ShouldBeNull();
     }
 

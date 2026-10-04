@@ -126,13 +126,13 @@ public sealed partial class ChatHotkeys : ObservableObject
             {
                 row.Problem = "Not a key chord: click the box and press the keys.";
             }
-            else if (chord.WhyNot is { } why)
-            {
-                row.Problem = why;
-            }
             else if (fixedChords.TryGetValue((chord.Modifiers, chord.VirtualKey), out var label))
             {
                 row.Problem = $"CodeSwitchX uses {chord.Text} already ({label}).";
+            }
+            else if (chord.WhyNot is { } why)
+            {
+                row.Problem = why;
             }
             else if (seen.TryGetValue(chord, out var first))
             {

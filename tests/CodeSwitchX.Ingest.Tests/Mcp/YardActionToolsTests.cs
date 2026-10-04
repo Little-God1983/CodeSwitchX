@@ -410,4 +410,14 @@ public sealed class YardActionToolsTests
         error.Message.ShouldStartWith("The Raven brain chat asks a question, not for permission: \"Which fruit?\"");
         held.IsCompleted.ShouldBeFalse();
     }
+
+    [Theory]
+    [InlineData("Aktivitat")]
+    [InlineData("activity")]
+    public async Task Switch_chat_reads_activity_as_the_app_does(string said)
+    {
+        await Tools.SwitchChat(said, cancellationToken: Ct);
+
+        _actions.Switched.ShouldBe(new ChatSwitch(null, true, Open: false));
+    }
 }

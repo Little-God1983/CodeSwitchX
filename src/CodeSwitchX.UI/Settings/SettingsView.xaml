@@ -795,7 +795,7 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Switch chats" />
-              <TextBlock Style="{StaticResource Help}" Text="Click a box and press the keys. They work while VS Code has the focus, and never open a window. Ctrl+Alt with a digit is not offered: AltGr counts as Ctrl+Alt and would stop AltGr+2 or AltGr+7 from typing ² or {." />
+              <TextBlock Style="{StaticResource Help}" Text="Click a box and press the keys: two of Ctrl, Shift, Alt and Win, one of them Ctrl or Win, and a key. They work while VS Code has the focus, and never open a window. Ctrl+Alt with a digit or a letter is not offered: AltGr counts as Ctrl+Alt and would stop AltGr+2 or AltGr+7 from typing ² or {." />
               <ItemsControl ItemsSource="{Binding Shortcuts.Rows}" Focusable="False">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>

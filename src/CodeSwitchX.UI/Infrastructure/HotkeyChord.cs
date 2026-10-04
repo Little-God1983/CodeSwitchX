@@ -16,8 +16,11 @@ public sealed record HotkeyChord(HotkeyModifiers Modifiers, uint VirtualKey)
         ("Right", 0x27), ("Down", 0x28), ("Insert", 0x2D), ("Delete", 0x2E),
     ];
 
-    /// <summary>Keys that type a character with AltGr on German and other European layouts: @ € µ ² ³ { [ ] }.</summary>
-    private static readonly HashSet<uint> AltGrTypes = [0x51, 0x45, 0x4D, 0x30, 0x32, 0x33, 0x37, 0x38, 0x39];
+    /// <summary>
+    /// Whether AltGr types a character with the key on some layout: every digit and letter does on one or another
+    /// (German @ € µ ² { [ ] }, French { [ | on 4 5 6, Polish ą ę ł on letters).
+    /// </summary>
+    private static bool AltGrTypes(uint key) => key is >= 0x30 and <= 0x39 or >= 0x41 and <= 0x5A;
 
     private const HotkeyModifiers Chord = HotkeyModifiers.Control | HotkeyModifiers.Shift | HotkeyModifiers.Alt | HotkeyModifiers.Win;
 
@@ -105,14 +108,16 @@ public sealed record HotkeyChord(HotkeyModifiers Modifiers, uint VirtualKey)
 
     /// <summary>
     /// Why the chord cannot be a global hotkey, in words for Settings; null when it can. It needs Ctrl or Win: a key
-    /// alone, with Shift or with Alt alone (Alt+F4, Alt+Space, a menu's Alt+letter) is one every app uses. AltGr counts
-    /// as Ctrl+Alt, so Ctrl+Alt with a key AltGr types with (a digit, Q, E, M) would stop that character in every app
-    /// (see <see cref="HotkeyService"/>).
+    /// alone, with Shift or with Alt alone (Alt+F4, Alt+Space, a menu's Alt+letter) is one every app uses, and so is one
+    /// with a single modifier (Ctrl+V, Ctrl+F4): it needs two. AltGr counts as Ctrl+Alt, so Ctrl+Alt with a digit or a
+    /// letter would stop the character AltGr types with it in every app (see <see cref="HotkeyService"/>).
     /// </summary>
     public string? WhyNot =>
         (Modifiers & (HotkeyModifiers.Control | HotkeyModifiers.Win)) == 0
             ? "Use Ctrl or Win with it: without them the key is taken from every app."
-            : (Modifiers & Chord) == (HotkeyModifiers.Control | HotkeyModifiers.Alt) && AltGrTypes.Contains(VirtualKey)
-                ? $"AltGr counts as Ctrl+Alt: this would stop AltGr+{NameOf(VirtualKey)} from typing in every app. Add Shift."
-                : null;
+            : System.Numerics.BitOperations.PopCount((uint)(Modifiers & Chord)) < 2
+                ? $"Use two of Ctrl, Shift, Alt and Win, one of them Ctrl or Win: apps use {Text} and its like for themselves."
+                : (Modifiers & Chord) == (HotkeyModifiers.Control | HotkeyModifiers.Alt) && AltGrTypes(VirtualKey)
+                    ? $"AltGr counts as Ctrl+Alt: this would stop AltGr+{NameOf(VirtualKey)} from typing in every app. Add Shift."
+                    : null;
 }

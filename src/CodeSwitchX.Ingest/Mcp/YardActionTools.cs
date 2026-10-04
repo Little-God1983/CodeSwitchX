@@ -94,17 +94,14 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         ChatSwitch target;
         var said = chat.Trim();
-        if (said.Equals("activity", StringComparison.OrdinalIgnoreCase) || said.Equals("aktivität", StringComparison.OrdinalIgnoreCase))
+        // As the app reads a spoken switch: "activity", "chat 3", or the number alone.
+        if (SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read))
         {
-            target = new ChatSwitch(null, Activity: true, Open: false);
+            target = read with { Open = !read.Activity && (open || read.Open) };
         }
         else if (said.Equals("yard", StringComparison.OrdinalIgnoreCase))
         {
             target = new ChatSwitch(0, Activity: false, Open: false);
-        }
-        else if (SpokenNumber.TryRead(said, out var number))
-        {
-            target = new ChatSwitch(number, Activity: false, Open: open);
         }
         else
         {

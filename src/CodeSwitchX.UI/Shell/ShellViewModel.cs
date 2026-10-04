@@ -407,7 +407,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
-    string? IRavenShell.SwitchChat(ChatSwitch target) => Raven.SwitchChat(target) is { } chat ? RavenPanelViewModel.SwitchLine(chat) : null;
+    (string Said, Guid? WorkspaceId)? IRavenShell.SwitchChat(ChatSwitch target) =>
+        Raven.SwitchChat(target) is { } chat ? (RavenPanelViewModel.SwitchLine(chat), chat.WorkspaceId) : null;
 
     void IRavenShell.SetChatDefaults(ChatDefaults defaults) => Settings.SetChatDefaults(defaults);
 

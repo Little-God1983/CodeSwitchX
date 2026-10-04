@@ -1423,7 +1423,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             await previous;
-            // Said after "chat three" but before it was heard (transcribed): the user is in chat 3 already.
+            // Said after "chat three" but before it was heard (transcribed): the user is in chat 3 already. From the chat
+            // the clip was said in, so a second switch in the queue maps the clips behind it too.
+            var saidIn = chat;
             if (_spokenSwitch is { } switched && number > switched.At && number <= switched.Through && chat == switched.From)
             {
                 chat = switched.To;
@@ -1479,7 +1481,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (text.Length > 0 && SwitchBySaying(text))
             {
-                _spokenSwitch = (number, _clipsQueued, chat, CurrentChat);
+                _spokenSwitch = (number, _clipsQueued, saidIn, CurrentChat);
             }
             else if (text.Length > 0)
             {
@@ -1520,6 +1522,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </remarks>
     private void Ask(string text, DateTimeOffset ended, RavenChat chat)
     {
+        _brainAsked = false; // these words answer it, whatever they are
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
         // goes no further; anything else drops the proposal and is the next question. Words are judged by when they were
         // said, not when they were transcribed: said before the read-back was heard to its end, they answer something
@@ -1636,7 +1639,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             asked.Value = _time.GetUtcNow();
+            var before = Log.Count == 0 ? null : Log[^1];
             await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
+            // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
+            _brainAsked = !floor.IsCancellationRequested && Log.Count > 0 && Log[^1] != before
+                && Log.LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
+                && said.Text.TrimEnd().EndsWith('?');
         }
         finally
         {
@@ -2694,7 +2702,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
         // something in the chat shown, not for that prompt.
-        if (_asks?.Proposed is { } standing && value != ChatOfAsk(standing.Ask))
+        if (_asks?.Proposed is { } standing && !value.IsActivity && value != ChatOfAsk(standing.Ask))
         {
             _asks.Cancel(standing);
         }
@@ -2790,9 +2798,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private bool SwitchBySaying(string text)
     {
-        if (!SpokenChatSwitch.TryRead(text, out var target))
+        if (_brainAsked || !SpokenChatSwitch.TryRead(text, out var target))
         {
-            return false;
+            return false; // after Raven asked something, "chat three" may be the answer: the brain hears it, and can still switch
         }
 
         if (_asks?.Proposed is { } standing)
@@ -2824,9 +2832,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private (long At, long Through, RavenChat From, RavenChat To)? _spokenSwitch;
 
-    /// <summary>What Raven says on a switch: "Chat 3, ContentAutomatorX.", "Chat 0, the Yard.", "Activity."</summary>
+    /// <summary>The brain's last answer asked the user something, and nothing was said since (UI thread).</summary>
+    private bool _brainAsked;
+
+    /// <summary>
+    /// What Raven says on a switch: "Chat 3, ContentAutomatorX.", "Chat 0, the Yard.", "Activity is shown.". None of them
+    /// is a switch itself: heard back through speakers in Open mic, it must not switch again.
+    /// </summary>
     internal static string SwitchLine(RavenChat chat) =>
-        chat.IsActivity ? "Activity." : chat.WorkspaceId is null ? "Chat 0, the Yard." : $"Chat {chat.Number}, {chat.Name}.";
+        chat.IsActivity ? "Activity is shown." : chat.WorkspaceId is null ? "Chat 0, the Yard." : $"Chat {chat.Number}, {chat.Name}.";
 
     /// <summary>The chat with that number: 0 is the Yard's; null for a number no window has.</summary>
     public RavenChat? ChatNumbered(int number) =>
