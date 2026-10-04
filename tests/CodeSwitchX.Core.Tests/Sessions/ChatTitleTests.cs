@@ -92,6 +92,14 @@ public class ChatTitleTests
         ChatTitle.FromPrompt("Why does the title show <cross-session-message>?").ShouldBe("Why does the title show <cross-session-message>?");
     }
 
+    /// <summary>Only a prompt that is a cross-session message is one: a prompt that quotes the tag (a summary, a bug report) is the user's.</summary>
+    [Fact]
+    public void A_prompt_that_quotes_a_whole_tag_is_kept()
+    {
+        ChatTitle.FromPrompt("""Why is the title <cross-session-message from="uds:x"> shown?""", int.MaxValue)
+            .ShouldBe("""Why is the title <cross-session-message from="uds:x"> shown?""");
+    }
+
     [Fact]
     public void A_limit_of_one_gives_just_the_ellipsis()
     {

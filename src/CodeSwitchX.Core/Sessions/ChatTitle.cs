@@ -9,6 +9,7 @@ public static class ChatTitle
     /// <summary>How SendMessage wraps a message from another session: the task is between this tag's end and its closing tag.</summary>
     private const string EnvelopeOpen = "<cross-session-message ";
     private const string EnvelopeClose = "</cross-session-message>";
+    private const string EnvelopePreamble = "Another Claude session sent a message:";
 
     /// <summary>
     /// A chat's title from a prompt: one line, cut to <paramref name="maxLength"/>. A message from another session
@@ -17,9 +18,14 @@ public static class ChatTitle
     /// </summary>
     public static string? FromPrompt(string? prompt, int maxLength = DefaultMaxLength)
     {
-        if (prompt is not null && prompt.IndexOf(EnvelopeOpen, StringComparison.Ordinal) is var open and >= 0)
+        // Only a prompt that opens with the envelope (after SendMessage's line before it) is one: a prompt that quotes the
+        // tag, a bug report or a summary, is the user's own.
+        var body = prompt?.TrimStart() ?? "";
+        body = body.StartsWith(EnvelopePreamble, StringComparison.Ordinal) ? body[EnvelopePreamble.Length..].TrimStart() : body;
+        if (prompt is not null && body.StartsWith(EnvelopeOpen, StringComparison.Ordinal))
         {
-            var tagEnd = prompt.IndexOf('>', open);
+            prompt = body;
+            var tagEnd = prompt.IndexOf('>');
             if (tagEnd < 0)
             {
                 return null;
