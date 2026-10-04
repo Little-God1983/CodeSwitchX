@@ -507,7 +507,7 @@
         </Border>
         <StackPanel Grid.Column="1">
           <TextBlock FontSize="12.5" Foreground="#D1D5DB" TextWrapping="Wrap">
-            <Run Text="{Binding At, StringFormat='HH:mm', Mode=OneWay}" Foreground="#6B7280" />
+            <Run Text="{Binding At.LocalDateTime, StringFormat='HH:mm', Mode=OneWay}" Foreground="#6B7280" />
             <Run Text="{Binding ActivityLine, Mode=OneWay}" />
           </TextBlock>
           <TextBlock Text="{Binding Ask.Outcome}" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap">
