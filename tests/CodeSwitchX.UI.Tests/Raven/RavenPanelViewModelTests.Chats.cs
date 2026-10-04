@@ -1,6 +1,7 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -241,6 +242,20 @@ public sealed partial class RavenPanelViewModelTests
         chat.Tile!.GitLines.ShouldHaveSingleItem().GitStateLabel.ShouldBe("2 changed");
         chat.Subtitle.ShouldBeNull("its git lines say where it stands");
         vm.YardChat.Subtitle.ShouldNotBeNull();
+    }
+
+    /// <summary>A note that turns into a warning (the voice failed to load) is said where the user is by then, not where the note began.</summary>
+    [Fact]
+    public async Task A_progress_note_that_turns_into_a_warning_moves_to_the_chat_the_user_is_in()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Installing, "downloading Qwen3-TTS"));
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Failed, "CUDA out of memory"));
+
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("Raven cannot speak: CUDA out of memory");
+        vm.Log.ShouldHaveSingleItem("the installing note gave way to it");
     }
 
     [Fact]

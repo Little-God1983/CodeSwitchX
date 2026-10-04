@@ -2609,13 +2609,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return entry;
     }
 
-    /// <summary>Puts a new entry in the old one's place, in its chat; one already dropped from the log is added at the end instead.</summary>
+    /// <summary>
+    /// What a note about the panel turned into (a download failed, the mic is live again) takes the note's place. The note
+    /// is said where the user was; the outcome is said where the user is: a note in another chat gives way to one added
+    /// here, as does one already dropped from the log.
+    /// </summary>
     private void ReplaceEntry(RavenLogEntry old, RavenLogKind kind, string text)
     {
         var index = Log.IndexOf(old);
-        if (index < 0)
+        if (index < 0 || old.Chat != CurrentChat)
         {
-            AddEntry(kind, text, old.Chat);
+            if (index >= 0)
+            {
+                Log.RemoveAt(index);
+                Shown.Remove(old);
+            }
+
+            AddEntry(kind, text);
             return;
         }
 
