@@ -169,6 +169,33 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.YardChat.IsWaiting.ShouldBeTrue();
         vm.YardChat.IsWaitingUnseen.ShouldBeTrue("the user has not seen it in the Yard's chat");
+        vm.YardChat.Unread.ShouldBe(1, "the card is still unread, where it is now");
+
+        vm.SelectedChat = vm.YardChat;
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Unread_lines_the_log_drops_leave_the_count()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("It is green.")];
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.Unread.ShouldBe(1);
+
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.Log.ShouldNotContain(e => e.Chat == three);
+        three.Unread.ShouldBe(0, "opening it would show none of them");
     }
 
     [Fact]

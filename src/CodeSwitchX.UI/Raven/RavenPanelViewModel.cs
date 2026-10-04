@@ -2633,6 +2633,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 CountWaiting(dropped.Chat);
             }
+
+            if (dropped.IsUnread)
+            {
+                dropped.Chat.Unread -= UnreadLines(dropped); // opening the chat would not show it any more
+            }
         }
 
         Log.Add(entry);
@@ -2688,15 +2693,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        var lines = entry.Kind switch
-        {
-            RavenLogKind.News => entry.Lines?.Count ?? 0,
-            RavenLogKind.Raven or RavenLogKind.Warning or RavenLogKind.Question or RavenLogKind.Permission => 1,
-            _ => 0,
-        };
+        var lines = UnreadLines(entry);
         entry.IsUnread = lines > 0;
         entry.Chat.Unread += lines;
     }
+
+    private static int UnreadLines(RavenLogEntry entry) => entry.Kind switch
+    {
+        RavenLogKind.News => entry.Lines?.Count ?? 0,
+        RavenLogKind.Raven or RavenLogKind.Warning or RavenLogKind.Question or RavenLogKind.Permission => 1,
+        _ => 0,
+    };
 
     /// <summary>Whether a card in the chat still waits; with none, nothing blinks.</summary>
     private void CountWaiting(RavenChat chat)
@@ -2826,6 +2833,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 open.Chat = YardChat;
                 open.Ask!.ShownIn = YardChat;
                 moved = true;
+                if (open.IsUnread)
+                {
+                    open.IsUnread = false;
+                    CountUnread(open); // still unread, where it is now
+                }
             }
 
             if (moved)
