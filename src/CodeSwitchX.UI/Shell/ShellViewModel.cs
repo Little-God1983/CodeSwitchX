@@ -61,7 +61,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
-        Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles.Select(t => (t.Id, t.Workspace.Number, t.Name)));
+        Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles);
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }

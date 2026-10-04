@@ -1,3 +1,4 @@
+using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CodeSwitchX.UI.Raven;
@@ -36,6 +37,14 @@ public sealed partial class RavenChat : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Label))]
     private string _name;
+
+    /// <summary>The workspace's tile: the chat's header shows its colour and where its repositories stand. Null for the Yard and Activity.</summary>
+    [ObservableProperty]
+    private WorkspaceTileViewModel? _tile;
+
+    /// <summary>The header's line under the name, for the Yard and Activity; a window's chat shows its git lines instead.</summary>
+    public string? Subtitle => IsActivity ? "Every chat, in time order. Cards are answered in their own chat."
+        : WorkspaceId is null ? "No window in particular: start chats anywhere, ask what needs you." : null;
 
     /// <summary>"3 ContentAutomatorX", "0 Yard", "Activity": as the list and the brain name it.</summary>
     public string Label => IsActivity ? Name : $"{Number} {Name}";

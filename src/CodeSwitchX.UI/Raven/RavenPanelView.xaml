@@ -541,7 +541,8 @@
 
   <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
     <Grid>
-      <!-- Open: the chat list, then the chosen chat at 320 px. In the Cab the list folds to its numbers. -->
+      <!-- Open: Raven and the chat list on the left, the chosen chat on the right at 320 px. In the Cab the left side folds
+           to a rail of the orb, the mic and the chats' numbers, so VS Code keeps its width. -->
       <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolVisible}}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
@@ -551,46 +552,137 @@
         <Border Grid.Column="0" Background="#0B111E" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
           <Border.Style>
             <Style TargetType="Border">
-              <Setter Property="Width" Value="176" />
+              <Setter Property="Width" Value="236" />
               <Style.Triggers>
                 <DataTrigger Binding="{Binding IsListFolded}" Value="True">
-                  <Setter Property="Width" Value="46" />
+                  <Setter Property="Width" Value="58" />
                 </DataTrigger>
               </Style.Triggers>
             </Style>
           </Border.Style>
-          <!-- Selecting a chat only shows it: it never opens its VS Code. -->
-          <ListBox x:Name="ChatList" ItemsSource="{Binding Chats}" SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
-                   Background="Transparent" BorderThickness="0" Padding="4,10,4,10" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                   AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
-            <ListBox.ItemTemplate>
-              <DataTemplate DataType="{x:Type raven:RavenChat}">
-                <Grid ToolTip="{Binding Label}">
-                  <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                  </Grid.ColumnDefinitions>
-                  <Border Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
-                    <Grid>
-                      <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
-                      <!-- Activity has no number: a list of everything. -->
-                      <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                                 Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
-                    </Grid>
-                  </Border>
-                  <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
-                             VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                </Grid>
-                <DataTemplate.Triggers>
-                  <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
-                    <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
-                  </DataTrigger>
-                </DataTemplate.Triggers>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Raven itself, the same whichever chat is chosen. -->
+            <StackPanel Grid.Row="0" Margin="14,12,14,12" Visibility="{Binding IsListFolded, Converter={StaticResource BoolCollapsed}}">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Style="{StaticResource StateText}" Margin="10,1,0,0" />
+                <Button Grid.Column="2" Style="{StaticResource MuteButton}" Command="{Binding ToggleMuteCommand}" Margin="0,0,4,0" />
+                <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}"
+                        ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
+              </Grid>
+
+              <!-- Animates only while it is seen: idle breathing pauses while the window is inactive or minimised. -->
+              <raven:RavenOrb Width="120" Height="120" Margin="0,8,0,2" HorizontalAlignment="Center" IsAnimating="True"
+                              State="{Binding State}" Level="{Binding Level}" />
+
+              <TextBlock Text="{Binding Caption}" FontSize="12" Foreground="#9CA3AF" TextAlignment="Center" TextWrapping="Wrap"
+                         MinHeight="32" Margin="0,0,0,8" />
+
+              <Button x:Name="MicButton" Style="{StaticResource MicButton}" HorizontalAlignment="Center"
+                      PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
+                      PreviewKeyDown="OnMicKey" />
+              <!-- Push to talk or Open mic: two radio buttons styled as one switch. They show the mode in effect, and
+                   every click is the user's choice, one on the half already checked too (after a fallback), and so is a half
+                   checked any other way. UI Automation's Select clicks the half (MicModeRadioButton). -->
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                <raven:MicModeRadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
+                             IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}"
+                             Tag="{x:Static raven:MicMode.PushToTalk}" Checked="OnModeChecked" Click="OnModeClick" />
+                <raven:MicModeRadioButton Style="{StaticResource ModeSwitch}" Content="Open mic" AutomationProperties.Name="Open mic mode"
+                             IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}"
+                             Tag="{x:Static raven:MicMode.OpenMic}" Checked="OnModeChecked" Click="OnModeClick" />
+              </StackPanel>
+
+              <!-- What a chat Raven starts runs with: set by voice ("from now on Opus") or in Settings → Brain & chats, which a click opens. -->
+              <Button Margin="0,12,0,0" HorizontalAlignment="Center" Cursor="Hand" FocusVisualStyle="{StaticResource FocusRing}"
+                      Command="{Binding DataContext.OpenSettingsAtCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                      CommandParameter="{x:Static settings:SettingsPage.Brain}" AutomationProperties.Name="New chats: open Brain and chats settings"
+                      ToolTip="New chats Raven starts run with these. Say &quot;from now on …&quot; to change them, or click to change them in Settings.">
+                <Button.Template>
+                  <ControlTemplate TargetType="Button">
+                    <StackPanel Background="Transparent">
+                      <TextBlock Text="New chats" FontSize="11" Foreground="#9CA3AF" HorizontalAlignment="Center" Margin="0,0,0,4" />
+                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Border x:Name="ModelChip" Style="{StaticResource Chip}">
+                          <TextBlock Text="{Binding ChatModelChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat model" />
+                        </Border>
+                        <Border x:Name="EffortChip" Style="{StaticResource Chip}">
+                          <TextBlock Text="{Binding ChatEffortChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat effort" />
+                        </Border>
+                      </StackPanel>
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="ModelChip" Property="BorderBrush" Value="#62D0E8" />
+                        <Setter TargetName="EffortChip" Property="BorderBrush" Value="#62D0E8" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Button.Template>
+              </Button>
+            </StackPanel>
+
+            <!-- Folded in the Cab: the orb and the mic, as on the collapsed rail. -->
+            <StackPanel Grid.Row="0" Margin="0,14,0,6" HorizontalAlignment="Center"
+                        Visibility="{Binding IsListFolded, Converter={StaticResource BoolVisible}}">
+              <Button Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}" HorizontalAlignment="Center"
+                      ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
+              <raven:RavenOrb Width="34" Height="34" Margin="0,14,0,0" HorizontalAlignment="Center" IsAnimating="True"
+                              State="{Binding State}" Level="{Binding Level}" />
+              <Button Style="{StaticResource MicButton}" Width="38" Height="38" FontSize="16" Margin="0,14,0,0" HorizontalAlignment="Center"
+                      PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
+                      PreviewKeyDown="OnMicKey" />
+            </StackPanel>
+
+            <!-- The chats: selecting one only shows it, it never opens its VS Code. -->
+            <ListBox x:Name="ChatList" Grid.Row="1" ItemsSource="{Binding Chats}" SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
+                     Background="Transparent" BorderBrush="#1F2937" BorderThickness="0,1,0,0" Padding="6,10,6,10"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="{x:Type raven:RavenChat}">
+                  <Grid ToolTip="{Binding Label}">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
+                      <Grid>
+                        <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        <!-- Activity has no number: a list of everything. -->
+                        <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
+                      </Grid>
+                    </Border>
+                    <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  </Grid>
+                  <DataTemplate.Triggers>
+                    <!-- A window's chat wears its tile's colour. -->
+                    <DataTrigger Binding="{Binding Tile, Converter={StaticResource IsNull}}" Value="False">
+                      <Setter TargetName="Dot" Property="BorderBrush" Value="{Binding Tile.AccentColor, Converter={StaticResource HexBrush}}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                      <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </DataTemplate.Triggers>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
         </Border>
 
         <Grid Grid.Column="1">
@@ -600,77 +692,36 @@
           <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" BorderBrush="#1F2937" BorderThickness="0,0,0,1" Padding="14,12,14,14">
+        <!-- The chosen chat: its window by number and name, and where that window's repositories stand, as its tile shows them. -->
+        <Border Grid.Row="0" BorderBrush="#1F2937" BorderThickness="0,0,0,1" Padding="14,12,14,10">
           <StackPanel>
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="Raven" FontSize="16" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center" />
-              <TextBlock Grid.Column="1" Style="{StaticResource StateText}" Margin="10,1,0,0" />
-              <Button Grid.Column="2" Style="{StaticResource MuteButton}" Command="{Binding ToggleMuteCommand}" Margin="0,0,4,0" />
-              <Button Grid.Column="3" Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}"
-                      ToolTip="Collapse (Ctrl+Alt+J)" AutomationProperties.Name="Collapse Raven" />
-            </Grid>
-
-            <!-- Animates only while it is seen: idle breathing pauses while the window is inactive or minimised. -->
-            <raven:RavenOrb Width="160" Height="160" Margin="0,8,0,4" HorizontalAlignment="Center" IsAnimating="True"
-                            State="{Binding State}" Level="{Binding Level}" />
-
-            <TextBlock Text="{Binding Caption}" FontSize="13" Foreground="#9CA3AF" TextAlignment="Center" TextWrapping="Wrap"
-                       MinHeight="36" Margin="8,0,8,10" />
-
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-              </Grid.ColumnDefinitions>
-              <Button x:Name="MicButton" Style="{StaticResource MicButton}" Margin="6,0,0,0" VerticalAlignment="Center"
-                      PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
-                      PreviewKeyDown="OnMicKey" />
-              <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
-                <!-- Push to talk or Open mic: two radio buttons styled as one switch. They show the mode in effect, and
-                     every click is the user's choice, one on the half already checked too (after a fallback), and so is a half
-                     checked any other way. UI Automation's Select clicks the half (MicModeRadioButton). -->
-                <StackPanel Orientation="Horizontal">
-                  <raven:MicModeRadioButton Style="{StaticResource ModeSwitch}" Content="Push to talk" AutomationProperties.Name="Push to talk mode"
-                               IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=PushToTalk}"
-                               Tag="{x:Static raven:MicMode.PushToTalk}" Checked="OnModeChecked" Click="OnModeClick" />
-                  <raven:MicModeRadioButton Style="{StaticResource ModeSwitch}" Content="Open mic" AutomationProperties.Name="Open mic mode"
-                               IsChecked="{Binding MicMode, Mode=OneWay, Converter={StaticResource EnumIs}, ConverterParameter=OpenMic}"
-                               Tag="{x:Static raven:MicMode.OpenMic}" Checked="OnModeChecked" Click="OnModeClick" />
-                </StackPanel>
-              </StackPanel>
-            </Grid>
-
-            <!-- What a chat Raven starts runs with: set by voice ("from now on Opus") or in Settings → Brain & chats, which a click opens. -->
-            <Button Margin="6,12,0,0" HorizontalAlignment="Left" Cursor="Hand" FocusVisualStyle="{StaticResource FocusRing}"
-                    Command="{Binding DataContext.OpenSettingsAtCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                    CommandParameter="{x:Static settings:SettingsPage.Brain}" AutomationProperties.Name="New chats: open Brain and chats settings"
-                    ToolTip="New chats Raven starts run with these. Say &quot;from now on …&quot; to change them, or click to change them in Settings.">
-              <Button.Template>
-                <ControlTemplate TargetType="Button">
-                  <StackPanel Orientation="Horizontal" Background="Transparent">
-                    <TextBlock Text="New chats" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <Border x:Name="ModelChip" Style="{StaticResource Chip}">
-                      <TextBlock Text="{Binding ChatModelChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat model" />
-                    </Border>
-                    <Border x:Name="EffortChip" Style="{StaticResource Chip}">
-                      <TextBlock Text="{Binding ChatEffortChip}" FontSize="11" Foreground="#D1D5DB" AutomationProperties.Name="Chat effort" />
-                    </Border>
-                  </StackPanel>
-                  <ControlTemplate.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                      <Setter TargetName="ModelChip" Property="BorderBrush" Value="#62D0E8" />
-                      <Setter TargetName="EffortChip" Property="BorderBrush" Value="#62D0E8" />
-                    </Trigger>
-                  </ControlTemplate.Triggers>
-                </ControlTemplate>
-              </Button.Template>
-            </Button>
+            <StackPanel Orientation="Horizontal">
+              <Border Width="24" Height="24" CornerRadius="12" BorderThickness="1" VerticalAlignment="Center">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Setter Property="BorderBrush" Value="{Binding SelectedChat.Tile.AccentColor, Converter={StaticResource HexBrush}}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding SelectedChat.Tile}" Value="{x:Null}">
+                        <Setter Property="BorderBrush" Value="#4B5563" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+                <Grid>
+                  <TextBlock Text="{Binding SelectedChat.Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#E5E7EB"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                             Visibility="{Binding SelectedChat.IsActivity, Converter={StaticResource BoolVisible}}" />
+                </Grid>
+              </Border>
+              <TextBlock Text="{Binding SelectedChat.Name}" FontSize="16" FontWeight="SemiBold" Foreground="White" Margin="10,0,0,0"
+                         VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="250" />
+            </StackPanel>
+            <ItemsControl ItemsSource="{Binding SelectedChat.Tile.GitLines}" ItemTemplate="{StaticResource GitLineTemplate}"
+                          Margin="0,8,0,0" Foreground="#D1D5DB" FontSize="12" Focusable="False" />
+            <TextBlock Text="{Binding SelectedChat.Subtitle}" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="0,6,0,0"
+                       Visibility="{Binding SelectedChat.Subtitle, Converter={StaticResource NullToCollapsed}}" />
           </StackPanel>
         </Border>
 

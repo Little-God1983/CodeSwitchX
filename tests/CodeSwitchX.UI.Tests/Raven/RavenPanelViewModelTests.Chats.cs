@@ -160,6 +160,25 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.ShouldBe(vm.YardChat);
     }
 
+    /// <summary>A window's chat carries its tile: its header shows the tile's colour and where its repositories stand, as they change.</summary>
+    [Fact]
+    public void A_window_s_chat_carries_its_tile_for_the_header_s_git_lines()
+    {
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+        var yard = ShellTestHarness.CreateYardWithoutInit();
+        var tile = new CodeSwitchX.UI.Yard.WorkspaceTileViewModel(new CodeSwitchX.Core.Workspaces.Workspace { Id = CodeSwitchX, Name = "CodeSwitchX", Number = 1 }, yard);
+
+        vm.SetWorkspaces([tile]);
+        tile.ShowGit([new CodeSwitchX.UI.Yard.GitLine(null, "main", 2)]);
+
+        var chat = ChatNumbered(vm, 1);
+        chat.Tile.ShouldBeSameAs(tile);
+        chat.Tile!.GitLines.ShouldHaveSingleItem().GitStateLabel.ShouldBe("2 changed");
+        chat.Subtitle.ShouldBeNull("its git lines say where it stands");
+        vm.YardChat.Subtitle.ShouldNotBeNull();
+    }
+
     [Fact]
     public async Task What_the_panel_says_about_itself_is_said_in_the_chat_the_user_is_in()
     {

@@ -2639,7 +2639,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool _isListFolded;
 
     /// <summary>The type box's hint: where the words go.</summary>
-    public string TypePrompt => SelectedChat.IsActivity ? "Type to the Yard…" : $"Type to {CurrentChat.Name}…";
+    public string TypePrompt => CurrentChat == YardChat ? "Type to the Yard…" : $"Type to {CurrentChat.Name}…";
 
     partial void OnSelectedChatChanged(RavenChat value)
     {
@@ -2694,6 +2694,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             chat.Name = name;
+        }
+    }
+
+    /// <summary>The Yard's tiles, by number: as <see cref="SetWorkspaces(IEnumerable{ValueTuple{Guid, int, string}})"/>, and each chat keeps its tile.</summary>
+    public void SetWorkspaces(IEnumerable<CodeSwitchX.UI.Yard.WorkspaceTileViewModel> tiles)
+    {
+        var all = tiles.ToList();
+        SetWorkspaces(all.Select(t => (t.Id, t.Number, t.Name)));
+        foreach (var tile in all)
+        {
+            if (Chats.FirstOrDefault(c => c.WorkspaceId == tile.Id) is { } chat)
+            {
+                chat.Tile = tile;
+            }
         }
     }
 
