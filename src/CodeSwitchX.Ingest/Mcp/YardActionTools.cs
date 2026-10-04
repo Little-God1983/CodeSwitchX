@@ -99,7 +99,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         {
             target = read with { Open = !read.Activity && (open || read.Open) };
         }
-        else if (said.Equals("yard", StringComparison.OrdinalIgnoreCase))
+        else if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
         {
             target = new ChatSwitch(0, Activity: false, Open: false);
         }

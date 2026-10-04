@@ -536,4 +536,36 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         vm.Log.Single(e => e.Kind == RavenLogKind.You).Chat.Label.ShouldBe("1 CodeSwitchX");
     }
+
+    /// <summary>Raven asked something, and the user moved to another chat by hotkey: they moved on, "chat five" is a switch again.</summary>
+    [Fact]
+    public async Task A_switch_by_hotkey_after_raven_asked_something_makes_chat_n_a_switch_again()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Want me to start it?")];
+        Type(vm, "the release notes");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SwitchChat(new ChatSwitch(1, false, false));
+        Type(vm, "chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+    }
+
+    /// <summary>A turn that only looked something up asked nothing, whatever an earlier answer asked.</summary>
+    [Fact]
+    public async Task A_turn_without_words_asked_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Which one?")];
+        Type(vm, "open it");
+        await WithinAsync(vm.PendingAnswers);
+        _brain.Answer = _ => [new BrainToolCall("t1", "list_chats", "{}")];
+        Type(vm, "the first");
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "chat three");
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+    }
 }

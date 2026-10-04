@@ -205,7 +205,6 @@ public sealed class HotkeyService
         }
 
         _chatIds.Clear();
-        _chatHotkeys.Check();
         if (_chatHotkeys.Capturing)
         {
             // CodeSwitchX's own hotkeys too: pressed in the box, Ctrl+Alt+Y would leave Settings, and the box should say "used already".
@@ -218,6 +217,7 @@ public sealed class HotkeyService
             return;
         }
 
+        _chatHotkeys.Check(); // clears a "taken" from before: it is tried again below
         if (_fixedLetGo)
         {
             _fixedLetGo = false;
@@ -311,13 +311,13 @@ public sealed class HotkeyService
         else if (_chatIds.TryGetValue(id, out var chat))
         {
             // Like push to talk: the shell stays where it is, and VS Code keeps the focus. Switching never opens a window.
-            if (chat.Target is { } target)
-            {
-                _shell.Raven.SwitchChat(target);
-            }
-            else
+            if (chat.Target is null)
             {
                 _shell.Raven.StepChat(chat.Step);
+            }
+            else if (_shell.Raven.SwitchChat(chat.Target) is null)
+            {
+                _shell.Raven.Note($"There is no chat {chat.Target.Number}."); // a number no window has: said, not nothing
             }
 
             handled = true;

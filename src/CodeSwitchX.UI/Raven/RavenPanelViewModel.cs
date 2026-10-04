@@ -1642,8 +1642,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var before = Log.Count == 0 ? null : Log[^1];
             await StreamAnswerAsync(_brain, WithToldNews(question), spoken, floor, question.Chat, question);
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
-            _brainAsked = !floor.IsCancellationRequested && Log.Count > 0 && Log[^1] != before
-                && Log.LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
+            // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
+            _brainAsked = !floor.IsCancellationRequested
+                && Log.Skip(before is null ? 0 : Log.IndexOf(before) + 1).LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
                 && said.Text.TrimEnd().EndsWith('?');
         }
         finally
@@ -2699,6 +2700,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             SelectedChat = YardChat; // the list lets go of a chat it no longer shows
             return;
         }
+
+        _brainAsked = false; // moved to another chat: the user moved on from what Raven asked
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
         // something in the chat shown, not for that prompt.

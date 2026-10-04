@@ -493,6 +493,9 @@ public class HotkeyServiceTests
 
                 StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, HotkeyService.ChatBaseId + 12, 0); // previous
                 harness.Shell.Raven.SelectedChat.ShouldBe(harness.Shell.Raven.YardChat);
+
+                StaThread.SendMessage(hwnd, HotkeyInterop.WmHotkey, HotkeyService.ChatBaseId + 5, 0); // no window has 5
+                harness.Shell.Raven.Shown.Last().Text.ShouldBe("There is no chat 5.");
             }
             finally
             {
@@ -521,6 +524,9 @@ public class HotkeyServiceTests
                 holder.Attach(new WindowInteropHelper(first).Handle, harness.Shell);
                 late.Attach(new WindowInteropHelper(second).Handle, harness.Shell);
                 keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Capturing = true; // a box to fix one in has the keyboard: the warnings stay while it is edited
+                keys.Rows.ShouldAllBe(r => r.Problem == "Taken by another app: pick another chord.");
+                keys.Capturing = false;
 
                 theirs.Capturing = true; // the holder lets go while its chord box has the keyboard
                 keys.Rows[3].Chord = "Ctrl+Shift+Alt+F3"; // any change registers again, and tries the taken ones once more

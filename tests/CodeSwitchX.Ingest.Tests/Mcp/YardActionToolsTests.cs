@@ -129,6 +129,8 @@ public sealed class YardActionToolsTests
     [InlineData("four", 4, false)]
     [InlineData("code switch ex", 1, false)]
     [InlineData("Yard", 0, false)]
+    [InlineData("the Yard", 0, false)]
+    [InlineData("chat 0, the Yard", 0, false)]
     public async Task Switch_chat_takes_a_number_a_window_s_name_or_the_yard(string chat, int number, bool activity)
     {
         await Tools.SwitchChat(chat, cancellationToken: Ct);
