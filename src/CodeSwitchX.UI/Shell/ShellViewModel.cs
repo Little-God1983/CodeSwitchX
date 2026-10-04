@@ -61,6 +61,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
+        Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles.Select(t => (t.Id, t.Workspace.Number, t.Name)));
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
@@ -254,6 +255,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
 
         ActiveWorkspaceId = workspaceId;
+        Raven.ShowChatOf(workspaceId); // the window opened is the one the user talks about
         Cab.SetActive(tile, Yard.Tiles);
         Mode = ShellMode.Cab;
         StatusMessage = null;
@@ -344,7 +346,11 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
-    partial void OnModeChanged(ShellMode value) => TellHostWhereTheCabWaits();
+    partial void OnModeChanged(ShellMode value)
+    {
+        TellHostWhereTheCabWaits();
+        Raven.IsListFolded = value == ShellMode.Cab; // VS Code keeps its width: the list folds to its numbers
+    }
 
     /// <summary>
     /// Settings left any way (Back to Yard, a workspace opened by Raven or a jump hotkey): a sample playing stops, and the

@@ -1,0 +1,173 @@
+using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.UI.Raven;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CodeSwitchX.UI.Tests.Raven;
+
+/// <summary>
+/// One Raven chat per window (#120): each entry is in its window's chat, chat 0 (the Yard) holds what belongs to no single
+/// window, and Activity shows everything in time order.
+/// </summary>
+public sealed partial class RavenPanelViewModelTests
+{
+    private static readonly Guid ContentAutomatorX = FakeYardDirectory.WorkspaceOf("ContentAutomatorX");
+    private static readonly Guid CodeSwitchX = FakeYardDirectory.WorkspaceOf("CodeSwitchX");
+
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> ChatsVmAsync()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        _yard.Show("b", "CodeSwitchX", "Release notes");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        return (vm, asks);
+    }
+
+    private ChatAsk PermittingIn(string session, string id) => new(id,
+        new HookEvent { SessionId = session, EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", ToolInputHash = id },
+        [], new ChatPermission("Bash", "run a command", "npm test", null));
+
+    private static RavenChat ChatNumbered(RavenPanelViewModel vm, int number) => vm.Chats.Single(c => !c.IsActivity && c.Number == number);
+
+    [Fact]
+    public void The_list_is_the_yard_then_each_workspace_by_number_then_activity()
+    {
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance);
+
+        vm.SetWorkspaces([(ContentAutomatorX, 3, "ContentAutomatorX"), (CodeSwitchX, 1, "CodeSwitchX")]);
+
+        vm.Chats.Select(c => c.Label).ShouldBe(["0 Yard", "1 CodeSwitchX", "3 ContentAutomatorX", "Activity"]);
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+    }
+
+    [Fact]
+    public async Task Each_window_s_permission_card_is_in_its_own_chat_only_and_activity_lists_both()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("b", "p2"), CancellationToken.None);
+
+        vm.Shown.ShouldBeEmpty("the Yard's chat has neither");
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.Shown.ShouldHaveSingleItem().Ask!.Ask.SessionId.ShouldBe("a");
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+        vm.Shown.ShouldHaveSingleItem().Ask!.Ask.SessionId.ShouldBe("b");
+        vm.SelectChatCommand.Execute(vm.ActivityChat);
+        vm.Shown.Select(e => (e.Chat.Number, e.Ask!.Ask.SessionId)).ShouldBe([(3, "a"), (1, "b")]);
+    }
+
+    [Fact]
+    public async Task An_answer_lands_in_the_chat_it_was_asked_in_when_the_user_has_switched_meanwhile()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("Running."), new BrainToolCall("t1", "list_chats", "{}")];
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+
+        Type(vm, "Is the retry test green?");
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 1));
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Shown.ShouldBeEmpty("nothing of it is in chat 1");
+        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.You, 3), (RavenLogKind.Raven, 3), (RavenLogKind.Action, 3)]);
+    }
+
+    [Fact]
+    public async Task The_brain_is_told_the_window_chat_the_user_asks_in_and_the_yard_once_they_are_back()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        Type(vm, "one");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        Type(vm, "stop it");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectChatCommand.Execute(vm.YardChat);
+        Type(vm, "two");
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "three");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldBe([
+            "one",
+            "[The user is in chat 3, ContentAutomatorX: \"it\" and \"this\" mean that window unless they name another.]\nstop it",
+            "[The user is in chat 0, the Yard: no window in particular.]\ntwo",
+            "three",
+        ]);
+    }
+
+    [Fact]
+    public async Task Typing_in_activity_goes_to_the_yard_s_chat()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectChatCommand.Execute(vm.ActivityChat);
+
+        Type(vm, "What's waiting on me?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.ShouldHaveSingleItem().Chat.ShouldBe(vm.YardChat);
+        vm.TypePrompt.ShouldBe("Type to the Yard…");
+    }
+
+    [Fact]
+    public async Task Opening_a_window_in_the_cab_shows_its_chat_and_a_removed_window_s_chat_leaves_the_list()
+    {
+        var (vm, _) = await ChatsVmAsync();
+
+        vm.ShowChatOf(ContentAutomatorX);
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        vm.Chats.Select(c => c.Label).ShouldBe(["0 Yard", "1 CodeSwitchX", "Activity"]);
+    }
+
+    [Fact]
+    public async Task A_window_removed_and_added_back_keeps_its_chat()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+        Type(vm, "hello");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("hello");
+    }
+
+    [Fact]
+    public async Task A_window_s_news_card_is_in_its_chat_and_the_digest_of_several_windows_in_the_yard_s()
+    {
+        _teller.Answer = _ => [new BrainText("Both are done.")];
+        var (vm, _) = await NewsVmAsync();
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+
+        vm.Log.Where(e => e.Kind == RavenLogKind.News).Select(e => (e.Chat.Number, e.Lines!.Single().SessionId)).ShouldBe([(3, "a"), (1, "b")]);
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.ShouldBe(vm.YardChat);
+    }
+
+    [Fact]
+    public async Task What_the_panel_says_about_itself_is_said_in_the_chat_the_user_is_in()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.SelectChatCommand.Execute(ChatNumbered(vm, 3));
+
+        vm.Note("Using the headset again.");
+
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("Using the headset again.");
+    }
+}

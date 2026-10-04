@@ -464,6 +464,66 @@
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
+    <!-- An entry of the chat list: the selected one lit, Activity set apart at the bottom. -->
+    <Style x:Key="ChatListItem" TargetType="ListBoxItem">
+      <Setter Property="Margin" Value="0,0,0,2" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Back" Background="Transparent" CornerRadius="7" Padding="7,6">
+              <ContentPresenter />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Back" Property="Background" Value="#111A2B" />
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Back" Property="Background" Value="#16213A" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsActivity}" Value="True">
+          <Setter Property="Margin" Value="0,14,0,0" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
+    <!-- Activity: one line per entry of any chat, tagged with the chat's number, a card's outcome below it; no buttons. -->
+    <DataTemplate x:Key="ActivityEntry" DataType="{x:Type raven:RavenLogEntry}">
+      <Grid Margin="2,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Border Width="20" Height="20" CornerRadius="10" BorderThickness="1" BorderBrush="#374151" VerticalAlignment="Top" Margin="0,0,8,0"
+                ToolTip="{Binding Chat.Label}">
+          <TextBlock Text="{Binding Chat.Tag}" FontSize="11" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+        <StackPanel Grid.Column="1">
+          <TextBlock FontSize="12.5" Foreground="#D1D5DB" TextWrapping="Wrap">
+            <Run Text="{Binding At, StringFormat='HH:mm', Mode=OneWay}" Foreground="#6B7280" />
+            <Run Text="{Binding ActivityLine, Mode=OneWay}" />
+          </TextBlock>
+          <TextBlock Text="{Binding Ask.Outcome}" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding Ask.Outcome}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </StackPanel>
+      </Grid>
+    </DataTemplate>
     <DataTemplate x:Key="NoteEntry" DataType="{x:Type raven:RavenLogEntry}">
       <TextBlock FontSize="13" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="2,0" Text="{Binding Text}" />
     </DataTemplate>
@@ -481,8 +541,59 @@
 
   <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
     <Grid>
-      <!-- Open: 320 px (MainWindow sets the width). -->
+      <!-- Open: the chat list, then the chosen chat at 320 px. In the Cab the list folds to its numbers. -->
       <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolVisible}}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="320" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Background="#0B111E" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
+          <Border.Style>
+            <Style TargetType="Border">
+              <Setter Property="Width" Value="176" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsListFolded}" Value="True">
+                  <Setter Property="Width" Value="46" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+          <!-- Selecting a chat only shows it: it never opens its VS Code. -->
+          <ListBox x:Name="ChatList" ItemsSource="{Binding Chats}" SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
+                   Background="Transparent" BorderThickness="0" Padding="4,10,4,10" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                   AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="{x:Type raven:RavenChat}">
+                <Grid ToolTip="{Binding Label}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
+                    <Grid>
+                      <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      <!-- Activity has no number: a list of everything. -->
+                      <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                                 Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
+                    </Grid>
+                  </Border>
+                  <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
+                             VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </Grid>
+                <DataTemplate.Triggers>
+                  <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                    <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </DataTemplate.Triggers>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+
+        <Grid Grid.Column="1">
         <Grid.RowDefinitions>
           <RowDefinition Height="Auto" />
           <RowDefinition Height="*" />
@@ -566,7 +677,7 @@
         <Grid Grid.Row="1">
           <ScrollViewer x:Name="LogScroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False"
                         ScrollChanged="OnLogScrolled">
-            <ItemsControl ItemsSource="{Binding Log}" Margin="14,12,14,4" Focusable="False">
+            <ItemsControl ItemsSource="{Binding Shown}" Margin="14,12,14,4" Focusable="False">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="{x:Type raven:RavenLogEntry}">
                   <ContentControl Content="{Binding}" Focusable="False" Margin="0,0,0,10">
@@ -595,6 +706,10 @@
                           <DataTrigger Binding="{Binding Kind}" Value="Permission">
                             <Setter Property="ContentTemplate" Value="{StaticResource PermissionEntry}" />
                           </DataTrigger>
+                          <!-- Last, so it wins: Activity shows every entry as a line, without buttons. -->
+                          <DataTrigger Binding="{Binding DataContext.SelectedChat.IsActivity, RelativeSource={RelativeSource AncestorType=ItemsControl}}" Value="True">
+                            <Setter Property="ContentTemplate" Value="{StaticResource ActivityEntry}" />
+                          </DataTrigger>
                         </Style.Triggers>
                       </Style>
                     </ContentControl.Style>
@@ -610,7 +725,7 @@
               <Style TargetType="TextBlock">
                 <Setter Property="Visibility" Value="Collapsed" />
                 <Style.Triggers>
-                  <DataTrigger Binding="{Binding Log.Count}" Value="0">
+                  <DataTrigger Binding="{Binding Shown.Count}" Value="0">
                     <Setter Property="Visibility" Value="Visible" />
                   </DataTrigger>
                 </Style.Triggers>
@@ -627,7 +742,7 @@
                 <KeyBinding Key="Return" Command="{Binding SubmitTypedCommand}" />
               </TextBox.InputBindings>
             </TextBox>
-            <TextBlock Text="Type instead of talking…" FontSize="13" Foreground="#6B7280" IsHitTestVisible="False"
+            <TextBlock Text="{Binding TypePrompt}" FontSize="13" Foreground="#6B7280" IsHitTestVisible="False"
                        VerticalAlignment="Center" Margin="12,0,12,0">
               <TextBlock.Style>
                 <Style TargetType="TextBlock">
@@ -642,6 +757,7 @@
             </TextBlock>
           </Grid>
         </Border>
+        </Grid>
       </Grid>
 
       <!-- Collapsed: a 58 px rail that keeps the orb and the mic. -->

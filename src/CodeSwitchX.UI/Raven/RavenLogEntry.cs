@@ -31,11 +31,30 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
 
     public DateTimeOffset At { get; } = at;
 
+    /// <summary>The chat it is shown in; Activity shows it too, tagged with the chat's number.</summary>
+    public RavenChat Chat { get; set; } = null!;
+
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActivityLine))]
     private string _text = text;
+
+    /// <summary>
+    /// Its line in Activity, which shows every chat's entries without their buttons: "You: …", "Raven: …", what a chat
+    /// asks, a digest's news. A card's outcome is shown below it.
+    /// </summary>
+    public string ActivityLine => Kind switch
+    {
+        RavenLogKind.You => "You: " + Text,
+        RavenLogKind.Raven => "Raven: " + Text,
+        RavenLogKind.Action => "Looked at " + Text + (Detail is { } detail ? $" ({detail})" : ""),
+        RavenLogKind.News => string.Join("; ", Lines?.Select(l => l.Text) ?? []),
+        RavenLogKind.Question or RavenLogKind.Permission when Ask is { } card => $"{card.Chat} asks: {card.Ask.Describe()}",
+        _ => Text,
+    };
 
     /// <summary>An action card's arguments ("needs_me"); null for none and for every other kind.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ActivityLine))]
     private string? _detail;
 
     /// <summary>A digest card's lines; null for every other kind.</summary>
