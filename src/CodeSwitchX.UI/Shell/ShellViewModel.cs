@@ -418,18 +418,20 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             }
 
             window.Minimize();
-            return Raven.MicMode == MicMode.OpenMic
+            // Open mic that is paused hears nothing: the key is the way back then too.
+            return Raven.MicMode == MicMode.OpenMic && Raven.State != RavenState.AttendingPaused
                 ? "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again."
                 : $"CodeSwitchX is minimized. Hold {HotkeyService.PushToTalk.Keys} and say \"bring it back\" to see it again.";
         }
 
         // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar. Asked to come back
         // while covered, it comes to the front as it is; only asked to restore while in front, a maximized one shrinks.
+        var inFront = window.IsInFront;
         var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized")
             : window.State == ShellWindowState.Minimized ? (window.Restored, "back")
-            : !window.IsInFront ? (window.State, "back")
+            : !inFront ? (window.State, "back")
             : (ShellWindowState.Normal, "at its normal size");
-        if (window.State == state && window.IsInFront)
+        if (window.State == state && inFront)
         {
             return request == WindowRequest.Maximize ? "CodeSwitchX is already maximized." : "CodeSwitchX is already there, in front.";
         }

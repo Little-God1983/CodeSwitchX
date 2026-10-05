@@ -29,6 +29,15 @@ public sealed class ShellWindowTests
     }
 
     [Fact]
+    public void With_open_mic_paused_minimize_says_to_hold_the_key()
+    {
+        _h.Shell.Raven.MicMode = MicMode.OpenMic;
+        _h.Shell.Raven.State = RavenState.AttendingPaused;
+
+        Set(WindowRequest.Minimize).ShouldContain($"Hold {HotkeyService.PushToTalk.Keys}");
+    }
+
+    [Fact]
     public void In_open_mic_minimize_says_raven_still_listens()
     {
         _h.Shell.Raven.MicMode = MicMode.OpenMic;
