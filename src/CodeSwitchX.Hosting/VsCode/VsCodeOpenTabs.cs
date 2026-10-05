@@ -52,6 +52,16 @@ public sealed class VsCodeOpenTabs : IVsCodeOpenTabs
     /// <summary>What the last look that went through gave: a look that fails gives it again.</summary>
     private Dictionary<Guid, OpenChatTabs> _last = [];
 
+    /// <summary>The stores that name a local target, as last listed, and when (<see cref="Environment.TickCount64"/>).</summary>
+    private List<(string Target, string File)> _stores = [];
+    private long? _listedAt;
+
+    /// <summary>
+    /// How often the folder is listed for new stores: VS Code makes one the first time it opens a workspace. Between
+    /// two listings only the files of the stores known are looked at.
+    /// </summary>
+    internal TimeSpan ListEvery { get; init; } = TimeSpan.FromMinutes(1);
+
     public VsCodeOpenTabs(string directory)
     {
         _directory = directory;
@@ -73,12 +83,21 @@ public sealed class VsCodeOpenTabs : IVsCodeOpenTabs
                     return result;
                 }
 
-                // The newest store of each target: a folder made again has an older one left behind.
-                var newest = new Dictionary<string, (string File, DateTime Written)>(StringComparer.Ordinal);
-                foreach (var store in Directory.EnumerateDirectories(_directory))
+                if (_listedAt is not { } listedAt || Environment.TickCount64 - listedAt >= ListEvery.TotalMilliseconds)
                 {
-                    var file = Path.Combine(store, "state.vscdb");
-                    if (TargetOf(store) is not { } target || !File.Exists(file))
+                    _stores = [.. Directory.EnumerateDirectories(_directory)
+                        .Select(store => (Target: TargetOf(store), File: Path.Combine(store, "state.vscdb")))
+                        .Where(s => s.Target is not null)
+                        .Select(s => (s.Target!, s.File))];
+                    _listedAt = Environment.TickCount64;
+                }
+
+                // The newest store of each target asked for: a folder made again has an older one left behind.
+                var wanted = workspaces.Select(w => Normalized(w.Target)).OfType<string>().ToHashSet(StringComparer.Ordinal);
+                var newest = new Dictionary<string, (string File, DateTime Written)>(StringComparer.Ordinal);
+                foreach (var (target, file) in _stores)
+                {
+                    if (!wanted.Contains(target) || !File.Exists(file))
                     {
                         continue;
                     }
@@ -182,8 +201,9 @@ public sealed class VsCodeOpenTabs : IVsCodeOpenTabs
 
         try
         {
-            // Read only, and not kept open: VS Code writes the file while it runs.
-            var connection = new SqliteConnectionStringBuilder { DataSource = file, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString();
+            // Read only, and not kept open: VS Code writes the file while it runs. A file VS Code holds just now is not
+            // waited for longer than a second: the next look has it.
+            var connection = new SqliteConnectionStringBuilder { DataSource = file, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 1 }.ToString();
             using var db = new SqliteConnection(connection);
             db.Open();
             using var command = db.CreateCommand();

@@ -21,7 +21,7 @@ public sealed class VsCodeOpenTabsTests : IDisposable
         _storage = Path.Combine(_root, "workspaceStorage");
         Directory.CreateDirectory(_storage);
         _app = new Workspace { Name = "App", RootPath = Path.Combine(_root, "Repos", "App") };
-        _tabs = new VsCodeOpenTabs(_storage);
+        _tabs = new VsCodeOpenTabs(_storage) { ListEvery = TimeSpan.Zero };
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -165,6 +165,24 @@ public sealed class VsCodeOpenTabsTests : IDisposable
 
         _tabs.Read([_app, other]).Keys.ShouldBe([_app.Id]);
         _tabs.Read([other]).ShouldBeEmpty();
+    }
+
+    /// <summary>The folder is listed for new stores now and then, not on every look; a store known is read whenever it changed.</summary>
+    [Fact]
+    public void A_store_made_since_the_folder_was_listed_is_found_at_the_next_listing()
+    {
+        var tabs = new VsCodeOpenTabs(_storage) { ListEvery = TimeSpan.FromHours(1) };
+        var file = Store("a1", new { folder = FileUri(_app.RootPath) }, Chat(Apple, "Apple"));
+        var other = new Workspace { Name = "Other", RootPath = Path.Combine(_root, "Repos", "Other") };
+        tabs.Read([_app, other]).Keys.ShouldBe([_app.Id]);
+
+        Store("b1", new { folder = FileUri(other.RootPath) }, Chat(Banana, "Banana"));
+        Store("a1", new { folder = FileUri(_app.RootPath) });
+        File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddSeconds(5));
+        var read = tabs.Read([_app, other]);
+
+        read.Keys.ShouldBe([_app.Id], "the new store is not listed yet");
+        read[_app.Id].Tabs.ShouldBeEmpty("the store known was read again");
     }
 
     [Fact]

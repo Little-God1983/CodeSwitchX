@@ -406,11 +406,29 @@ public sealed class TileTabsTests
         _yard.Tick(Now);
         App.Chats[0].ElapsedText.ShouldBe("");
 
-        _writtenIn["a"] = Now - TimeSpan.FromMinutes(5);
+        _writtenIn["a"] = Now;
+        await _yard.RefreshTabsAsync();
+        _yard.Tick(Now);
+        App.Chats[0].ElapsedText.ShouldBe("", "not looked for on every look: the folders of every project are gone through for it");
+
+        await Pass(YardViewModel.AskAgainAfter);
         await _yard.RefreshTabsAsync();
         _yard.Tick(Now);
 
-        App.Chats[0].ElapsedText.ShouldBe("5m");
+        App.Chats[0].ElapsedText.ShouldBe("1m");
+    }
+
+    [Fact]
+    public async Task A_tile_added_while_the_app_runs_shows_its_tabs_at_once()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var extra = new Workspace { Name = "Extra", RootPath = @"c:\repo\extra", TrackId = _general.Id };
+        _tabs.Of[extra.Id] = new OpenChatTabs(Now, [Tab("x", "Restored")]);
+
+        _bus.Publish(new WorkspaceRegistered(extra));
+        await _yard.CurrentTabsRefresh;
+
+        _yard.FindTile(extra.Id)!.Chats.Select(c => c.Title).ShouldBe(["Restored"]);
     }
 
     [Fact]

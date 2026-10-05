@@ -30,9 +30,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>Every chat the engine put on this tile, shown or not: what shows changes with the tabs, the settings and the time.</summary>
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>The chats closed on purpose: their tab, still in a list VS Code has not written again, brings no row back.</summary>
-    private readonly HashSet<string> _forgotten = new(StringComparer.OrdinalIgnoreCase);
-
     /// <summary>The chat tabs of the workspace's VS Code window (#164); null when VS Code keeps no list for it.</summary>
     private OpenChatTabs? _tabs;
 
@@ -91,7 +88,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public void Upsert(SessionSnapshot snapshot, PricingTable pricing)
     {
         _pricing = pricing;
-        _forgotten.Remove(snapshot.SessionId);
         if (!_sessions.TryGetValue(snapshot.SessionId, out var known) || snapshot.Version >= known.Version)
         {
             _sessions[snapshot.SessionId] = snapshot;
@@ -112,13 +108,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         }
     }
 
-    /// <summary>The chat was closed on purpose: it leaves the tile now, and its tab brings no row back until it runs again.</summary>
-    public void Forget(string sessionId)
-    {
-        _forgotten.Add(sessionId);
-        Remove(sessionId);
-    }
-
     /// <summary>Whether the engine put this chat on this tile.</summary>
     public bool Knows(string sessionId) => _sessions.ContainsKey(sessionId);
 
@@ -130,12 +119,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     {
         _tabs = tabs;
         _tabActivity = lastActivity;
-        if (tabs is not null)
-        {
-            // A chat closed on purpose is remembered until VS Code has written its tabs without it.
-            _forgotten.RemoveWhere(id => TabOf(id) is null);
-        }
-
         Arrange(_owner.Now);
     }
 
@@ -163,7 +146,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         }
 
         var shown = _sessions.Values.Where(s => Shows(s, now)).Select(s => s.SessionId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var tabsAlone = (_tabs?.Tabs ?? []).Where(t => !_sessions.ContainsKey(t.SessionId) && !_forgotten.Contains(t.SessionId)
+        var tabsAlone = (_tabs?.Tabs ?? []).Where(t => !_sessions.ContainsKey(t.SessionId) && !_owner.ClosedOnPurpose(t.SessionId)
             && !_owner.OnAnotherTile(this, t.SessionId) && !IdleTooLong(t, now)).ToList();
         foreach (var row in Chats.Where(c => !shown.Contains(c.SessionId) && !tabsAlone.Exists(t => Same(t.SessionId, c.SessionId))).ToList())
         {

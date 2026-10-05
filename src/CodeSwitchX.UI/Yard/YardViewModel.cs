@@ -42,7 +42,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
     private readonly Dictionary<string, DateTimeOffset> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>When each such chat was last asked about: one not known yet is asked about again, a minute on.</summary>
+    private readonly Dictionary<string, DateTimeOffset> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How long until a tab whose chat was not found on disk is looked for again: a new tab's chat is written with its first message.</summary>
+    internal static readonly TimeSpan AskAgainAfter = TimeSpan.FromMinutes(1);
 
     /// <summary>How long a closed chat can be kept on its tile, in minutes; 0 is not at all.</summary>
     public static readonly IReadOnlyList<int> KeepClosedMinutesChoices = [0, 1, 5, 10, 30];
@@ -86,6 +90,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// tile's to show, by what the chat reports, and a tab of it here is not a second row.
     /// </summary>
     internal bool OnAnotherTile(WorkspaceTileViewModel tile, string sessionId) => Tiles.Any(t => t != tile && t.Knows(sessionId));
+
+    /// <summary>
+    /// Whether the chat was closed on purpose and has not run since: its tab, still in a list VS Code has not written
+    /// again, brings no row back.
+    /// </summary>
+    internal bool ClosedOnPurpose(string sessionId) => _closed.ContainsKey(sessionId);
 
     /// <summary>The read of the tabs that runs, or the last one; tests await it.</summary>
     internal Task CurrentTabsRefresh { get; private set; } = Task.CompletedTask;
@@ -290,7 +300,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _closed[sessionId] = _time.GetUtcNow();
         foreach (var tile in Tiles.ToList())
         {
-            tile.Forget(sessionId);
+            tile.Remove(sessionId);
         }
     }
 
@@ -329,7 +339,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         try
         {
             var workspaces = Tiles.Select(t => t.Workspace).ToList();
-            var asked = _tabActivityAsked.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var now = Now;
+            var asked = _tabActivityAsked.Where(a => _tabActivity.ContainsKey(a.Key) || now - a.Value < AskAgainAfter).Select(a => a.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var (tabs, activity) = await Task.Run(() =>
             {
                 var read = openTabs.Read(workspaces);
@@ -345,15 +357,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
             foreach (var (id, at) in activity)
             {
-                // One that is not known yet (a new tab has no conversation, a folder could not be read) is asked for again.
+                // One that is not known yet (a new tab has no conversation, a folder could not be read) is asked for again later.
+                _tabActivityAsked[id] = now;
                 if (at is { } known)
                 {
-                    _tabActivityAsked.Add(id);
                     _tabActivity[id] = known;
                 }
             }
 
-            foreach (var tile in Tiles.ToList())
+            // A tile added while the read ran was not asked about: it keeps what it has until the next read.
+            foreach (var tile in Tiles.Where(t => workspaces.Exists(w => w.Id == t.Id)).ToList())
             {
                 tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity);
             }
@@ -679,6 +692,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
+        CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
+    }
+
+    /// <summary>Reads the tabs once the read that runs is over: a tile added meanwhile was not in it.</summary>
+    private async Task RefreshTabsAfterAsync(Task running)
+    {
+        await running;
+        await RefreshTabsAsync();
     }
 
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
