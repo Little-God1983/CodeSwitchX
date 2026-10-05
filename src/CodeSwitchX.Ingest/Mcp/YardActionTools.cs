@@ -130,6 +130,35 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
     }
 
+    [McpServerTool(Name = "mute_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news, "
+        + "its sound and its catch-up are only written; its questions are still read out, and you still answer aloud in it. Chat 0 has no "
+        + "mute of its own: the mute button on the panel quiets everything. Returns what you say.")]
+    public async Task<string> MuteChat(
+        [Description("The chat: its number (\"2\", \"two\") or a window's name as the user said it. Left out for the chat the user is in.")]
+        string? chat = null,
+        [Description("False to unmute.")] bool muted = true,
+        CancellationToken cancellationToken = default)
+    {
+        int number;
+        var said = chat?.Trim() ?? "";
+        if (said.Length == 0)
+        {
+            number = (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number
+                ?? throw new McpException("Say which chat: the user is in chat 0, which has no mute of its own.");
+        }
+        else if ((SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read)) && read.Number is { } spoken)
+        {
+            number = spoken;
+        }
+        else
+        {
+            number = (await OneWorkspaceAsync(said, cancellationToken).ConfigureAwait(false)).Workspace.Number;
+        }
+
+        return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
+    }
+
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)

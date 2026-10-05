@@ -90,6 +90,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether other chats make their short sound; off, they are only marked in the list.</summary>
     [ObservableProperty] private bool _ravenChatSound = true;
 
+    /// <summary>The windows whose Raven chat is muted (#153), by workspace id; the panel owns it, Settings stores it.</summary>
+    [ObservableProperty] private IReadOnlyList<Guid> _ravenMutedWindows = [];
+
     /// <summary>Whether the selected chat's own news waits for the cooldown too.</summary>
     [ObservableProperty] private bool _ravenOwnNewsWaits;
 
@@ -367,6 +370,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
             RavenCooldownSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenCooldownSeconds, "the chats' cooldown", ct) is { } cooldown
                 && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
+            RavenMutedWindows = await LoadOrDefaultAsync<List<Guid>>(SettingKeys.RavenMutedWindows, "the muted Raven chats", ct) ?? [];
             RavenPauseSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenPauseSeconds, "the pause between messages", ct) is { } pause
                 && PauseChoices.Contains(pause) ? pause : (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
@@ -516,6 +520,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
 
     partial void OnRavenPauseSecondsChanged(int value) => Persist(SettingKeys.RavenPauseSeconds, value);
+
+    partial void OnRavenMutedWindowsChanged(IReadOnlyList<Guid> value) => Persist(SettingKeys.RavenMutedWindows, value);
 
     partial void OnRavenChatSoundChanged(bool value) => Persist(SettingKeys.RavenChatSound, value);
 

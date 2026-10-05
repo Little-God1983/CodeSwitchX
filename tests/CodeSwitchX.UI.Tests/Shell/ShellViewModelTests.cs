@@ -317,6 +317,22 @@ public class ShellViewModelTests
         (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
     }
 
+    /// <summary>#153: the muted chats are remembered by window: set from what was stored, stored when one is muted or unmuted.</summary>
+    [Fact]
+    public async Task Muted_chats_are_remembered_by_window()
+    {
+        _h.Settings.GetAsync<List<Guid>>(SettingKeys.RavenMutedWindows, Arg.Any<CancellationToken>()).Returns(Task.FromResult<List<Guid>?>([_h.App.Id]));
+        var other = await TwoTilesAsync();
+        var app = _h.Shell.Raven.Chats.Single(c => c.WorkspaceId == _h.App.Id);
+        var two = _h.Shell.Raven.Chats.Single(c => c.WorkspaceId == other);
+        (app.IsMuted, two.IsMuted).ShouldBe((true, false));
+
+        two.ToggleMuteCommand.Execute(null);
+        app.ToggleMuteCommand.Execute(null);
+
+        _h.Shell.Settings.RavenMutedWindows.ShouldBe([other]);
+    }
+
     [Fact]
     public void Before_the_shell_is_set_up_it_takes_no_question()
     {

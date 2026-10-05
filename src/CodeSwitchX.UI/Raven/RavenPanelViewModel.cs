@@ -1915,8 +1915,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>News waits that is told in the chat the user is in: chat 0's for a window the list does not show.</summary>
-    private bool HasNewsHere => _news is not null && _news.HasNewsFor(id => ChatOf(id) == CurrentChat);
+    /// <summary>News waits that is told aloud in the chat the user is in: chat 0's for a window the list does not show; none in a muted chat.</summary>
+    private bool HasNewsHere => !CurrentChat.IsMuted && _news is not null && _news.HasNewsFor(id => ChatOf(id) == CurrentChat);
 
     /// <summary>Warms the teller when news of the chat the user is in waits to be told (#139).</summary>
     private void WarmTellerForCurrentNews()
@@ -2561,8 +2561,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
-            var others = own.Count < fresh.Count;
-            if (own.Count == 0 || !SpeakNews || IsMuted || floor.IsCancellationRequested || !Traffic.MaySpeakOwnNews)
+            // A muted chat's news is only written, here and as another chat's sound (#153).
+            var others = fresh.Any(l => ChatOf(l.WorkspaceId) is var chat && chat != CurrentChat && !chat.IsMuted);
+            if (own.Count == 0 || CurrentChat.IsMuted || !SpeakNews || IsMuted || floor.IsCancellationRequested || !Traffic.MaySpeakOwnNews)
             {
                 if (others)
                 {
@@ -3346,7 +3347,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null;
+        var catchUp = lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null; // a muted chat's cards are still read
         if (catchUp)
         {
             _catchUpDue = (chat, lines);
@@ -3492,11 +3493,76 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (chat is null)
             {
                 chat = RavenChat.Of(id, number, name);
+                chat.IsMuted = _mutedWindows.Contains(id);
+                var made = chat;
+                made.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(RavenChat.IsMuted))
+                    {
+                        OnChatMuteChanged(made);
+                    }
+                };
                 Chats.Insert(i + 1, chat);
             }
 
             chat.Name = name;
         }
+    }
+
+    /// <summary>The windows whose Raven chat is muted (#153): kept for a window not listed yet, and stored by the shell. UI thread.</summary>
+    private readonly HashSet<Guid> _mutedWindows = [];
+
+    /// <summary>The windows whose Raven chat is muted now (#153).</summary>
+    public IReadOnlyCollection<Guid> MutedWindows => _mutedWindows;
+
+    /// <summary>A window's chat was muted or unmuted by the user (UI thread): the shell stores it.</summary>
+    public event EventHandler? MutedWindowsChanged;
+
+    /// <summary>The windows muted when the app last ran (#153): their chats, listed now or later, are muted. UI thread.</summary>
+    public void SetMutedWindows(IEnumerable<Guid> windows)
+    {
+        _mutedWindows.Clear();
+        _mutedWindows.UnionWith(windows);
+        foreach (var chat in Chats)
+        {
+            chat.IsMuted = chat.WorkspaceId is { } id && _mutedWindows.Contains(id);
+        }
+    }
+
+    /// <summary>
+    /// Mutes or unmutes the window chat with the number (#153), as its row's speaker does; null when no window's chat has it
+    /// (chat 0 has no mute of its own). UI thread.
+    /// </summary>
+    public RavenChat? MuteChat(int number, bool muted)
+    {
+        if (Chats.FirstOrDefault(c => c.CanMute && c.Number == number) is not { } chat)
+        {
+            return null;
+        }
+
+        chat.IsMuted = muted;
+        return chat;
+    }
+
+    /// <summary>What Raven says of a chat muted or unmuted: "Chat 3, ContentAutomatorX, is muted: …".</summary>
+    internal static string MuteLine(RavenChat chat) => chat.IsMuted
+        ? $"Chat {chat.Number}, {chat.Name}, is muted: its news, its sound and its catch-up are only written; its questions are still read out."
+        : $"Chat {chat.Number}, {chat.Name}, speaks again.";
+
+    /// <summary>A chat's speaker was clicked, or its mute set by voice: remembered, and a catch-up being said there stops.</summary>
+    private void OnChatMuteChanged(RavenChat chat)
+    {
+        if (chat.WorkspaceId is not { } id || !(chat.IsMuted ? _mutedWindows.Add(id) : _mutedWindows.Remove(id)))
+        {
+            return; // as remembered already (set from what was stored)
+        }
+
+        if (chat.IsMuted && chat == CurrentChat)
+        {
+            StopCatchUp(); // muted, it says no more of what came while away
+        }
+
+        MutedWindowsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>How many cards wait in the workspace's Raven chat (#135).</summary>

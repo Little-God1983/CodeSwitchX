@@ -34,6 +34,9 @@ public interface IRavenShell
 
     /// <summary>Minimizes, maximizes or restores the window, as its title bar buttons do; returns what Raven says of it.</summary>
     string SetWindow(WindowRequest request);
+
+    /// <summary>Mutes or unmutes a window's Raven chat (#153); what Raven says of it, or null when no window's chat has the number.</summary>
+    string? MuteChat(int number, bool muted);
 }
 
 /// <summary>
@@ -200,6 +203,11 @@ public sealed class RavenActions : IYardActions
 
     public Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().SetWindow(request), UiTimeout, ct);
+
+    public Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct) => _ui.InvokeAsync(() => _shell().MuteChat(number, muted)
+        ?? throw new YardActionException(number == 0
+            ? "Chat 0 has no mute of its own: Raven's mute button quiets everything. Nothing was changed."
+            : $"No window has the number {number}: list_workspaces shows each one's number. Nothing was changed."), UiTimeout, ct);
 
     /// <summary>The window is opened as open_workspace opens it, so a failure or a window that never shows is said.</summary>
     public async Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)

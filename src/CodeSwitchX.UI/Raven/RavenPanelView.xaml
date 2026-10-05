@@ -192,6 +192,32 @@
       </Style.Triggers>
     </Style>
 
+    <!--
+      A window chat's speaker (#153): dim while it speaks, crossed out and lit while muted; a click toggles it. Chat 0 and
+      Activity have none: the panel's own mute quiets everything.
+    -->
+    <Style x:Key="ChatMuteButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
+      <Setter Property="Width" Value="22" />
+      <Setter Property="Height" Value="22" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Foreground" Value="#4B5563" />
+      <Setter Property="Content" Value="&#xE767;" />
+      <Setter Property="ToolTip" Value="Raven speaks this chat's news. Click to mute it; its questions are still read out." />
+      <Setter Property="AutomationProperties.Name" Value="{Binding MuteText}" />
+      <Setter Property="Command" Value="{Binding ToggleMuteCommand}" />
+      <Style.Triggers>
+        <DataTrigger Binding="{Binding IsMuted}" Value="True">
+          <Setter Property="Content" Value="&#xE74F;" />
+          <Setter Property="Foreground" Value="#F59E0B" />
+          <Setter Property="ToolTip" Value="Muted: this chat's news, sound and catch-up are only written; its questions are still read out. Click to hear it again." />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding CanMute}" Value="False">
+          <Setter Property="Visibility" Value="Collapsed" />
+        </DataTrigger>
+      </Style.Triggers>
+    </Style>
+
     <!-- Log entries: my words in a box, Raven's replies in a box of its colour, a card per tool it looked at, notes dim,
          warnings amber with a glyph. -->
     <DataTemplate x:Key="YouEntry" DataType="{x:Type raven:RavenLogEntry}">
@@ -653,11 +679,18 @@
                      AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
               <ListBox.ItemTemplate>
                 <DataTemplate DataType="{x:Type raven:RavenChat}">
-                  <Grid ToolTip="{Binding Tip}">
+                  <Grid x:Name="Row" ToolTip="{Binding Tip}" Background="Transparent">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto" />
                       <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+                    <!-- A window chat's menu: mute or unmute it (#153). -->
+                    <Grid.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="{Binding MuteText}" Command="{Binding ToggleMuteCommand}" />
+                      </ContextMenu>
+                    </Grid.ContextMenu>
                     <!-- The number's dot and its marks: they show on the folded list in the Cab too. -->
                     <Grid VerticalAlignment="Center">
                       <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
@@ -721,6 +754,7 @@
                     </Grid>
                     <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <Button x:Name="ChatMute" Grid.Column="2" Style="{StaticResource ChatMuteButton}" Margin="4,0,0,0" VerticalAlignment="Center" />
                   </Grid>
                   <DataTemplate.Triggers>
                     <!-- A window's chat wears its tile's colour. -->
@@ -729,6 +763,11 @@
                     </DataTrigger>
                     <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
                       <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
+                      <Setter TargetName="ChatMute" Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                    <!-- Chat 0 and Activity have no mute of their own: no menu. -->
+                    <DataTrigger Binding="{Binding CanMute}" Value="False">
+                      <Setter TargetName="Row" Property="ContextMenu" Value="{x:Null}" />
                     </DataTrigger>
                   </DataTemplate.Triggers>
                 </DataTemplate>
