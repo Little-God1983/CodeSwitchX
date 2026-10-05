@@ -6,13 +6,13 @@ namespace CodeSwitchX.Voice.Audio;
 /// <summary>The short sound another chat makes instead of speaking (#125); the tests use a fake.</summary>
 public interface IChatChime
 {
-    /// <summary>Plays it once on the default output device. Any thread; never throws.</summary>
+    /// <summary>Plays it once on the default output device, off the caller's thread. Any thread; never throws.</summary>
     void Play();
 }
 
 /// <summary>
 /// Two soft rising tones, a quarter of a second in all, made here rather than shipped as a file. Each play opens the
-/// default device of the moment and closes it when done.
+/// default device of the moment and closes it when done, on the thread pool: opening a waking device can take a while.
 /// </summary>
 public sealed class ChatChime : IChatChime
 {
@@ -27,7 +27,9 @@ public sealed class ChatChime : IChatChime
         _logger = logger;
     }
 
-    public void Play()
+    public void Play() => _ = Task.Run(PlayNow);
+
+    private void PlayNow()
     {
         WaveOutEvent? output = null;
         try

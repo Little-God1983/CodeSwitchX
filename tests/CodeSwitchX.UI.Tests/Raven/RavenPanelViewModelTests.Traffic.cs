@@ -2,6 +2,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
+using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 
@@ -221,6 +222,69 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
 
         _speech.Spoken.ShouldBe(["Okay."]);
+    }
+}
+
+public sealed partial class RavenPanelViewModelTests
+{
+    /// <summary>A long command, which the teller words.</summary>
+    private ChatAsk LongCommandIn(string session, string id) => new(id,
+        new HookEvent { SessionId = session, EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", ToolInputHash = id },
+        [], new ChatPermission("Bash", "run a command",
+            "for f in $(git ls-files '*.cs'); do dotnet format --include \"$f\" --verify-no-changes || echo \"$f\" >> unformatted.txt; done && sort -u unformatted.txt",
+            null));
+
+    [Fact]
+    public async Task A_long_command_s_card_waiting_behind_another_rests_the_teller_when_it_ends_unread()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        using var second = new CancellationTokenSource();
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), CancellationToken.None);
+        _ = asks.HoldAsync(LongCommandIn("b", "p2"), second.Token);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.Permission) == 2);
+        _teller.WarmUps.ShouldBeGreaterThan(0);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        _teller.Rests.ShouldBe(0, "the long command is still to be read");
+
+        await second.CancelAsync(); // answered in VS Code
+
+        await Until(() => _teller.Rests == 1);
+    }
+
+    [Fact]
+    public async Task Every_card_of_the_chat_reaches_the_brain_before_each_is_read()
+    {
+        _brain.Answer = _ => [new BrainText("Denied.")];
+        var (vm, asks) = await TrafficVmAsync();
+        vm.IsMuted = true;
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("b", "p2"), CancellationToken.None);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.Permission) == 2);
+        await GraceAsync(vm);
+
+        Type(vm, "deny both");
+        await WithinAsync(vm.PendingAnswers);
+
+        var asked = _brain.Asked.ShouldHaveSingleItem();
+        asked.ShouldContain("(ask id p1)");
+        asked.ShouldContain("(ask id p2)");
+    }
+
+    [Fact]
+    public async Task With_no_voice_the_chat_s_own_news_is_written_and_other_chats_still_make_their_sound()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        var none = new TextToSpeechStatus(TextToSpeechState.NoEngine);
+        _speech.Report(none);
+        _speech.Fails = new TextToSpeechNotReadyException(none); // as the engines answer with none picked
+
+        Changes("b", SessionState.Working, SessionState.Idle);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => _chime.Plays == 1); // nothing was heard of chat 1's news
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }
 }
 

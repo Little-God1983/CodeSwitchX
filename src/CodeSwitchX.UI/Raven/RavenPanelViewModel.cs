@@ -1881,8 +1881,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public TrafficWatcher Traffic { get; }
 
     /// <summary>See <see cref="TrafficWatcher.IsFree"/>.</summary>
-    private bool FloorIsFree => TrafficWatcher.IsFree(new(_capturing, _heldInputs.Count > 0, _pending, _asking, _telling, _speaking, _openSpeech,
-        _asks?.Proposed is not null));
+    private bool FloorIsFree => TrafficWatcher.IsFree(Floor);
+
+    private TrafficWatcher.Floor Floor => new(Capturing: _capturing, Holding: _heldInputs.Count > 0, Pending: _pending, Asking: _asking,
+        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null);
+
+    /// <summary>The floor as a telling sees it: free but for the telling itself.</summary>
+    private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false });
 
     /// <summary>
     /// Another chat has news or a card: never spoken, it makes the short sound if the watcher lets it, and is marked in the
@@ -1942,9 +1947,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        // The brain knows it with the next question, wherever the card is: "deny both" covers a card not read out yet.
+        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), null));
         if (card.ShownIn != CurrentChat)
         {
-            _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), null));
             SoundForOtherChat(FloorIsFree);
             return;
         }
@@ -2255,9 +2261,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// Reads out the oldest ask not read yet of the chat the user is in, one at a time: the next follows once the floor
     /// is free again. Who asks, what, and the options; for a permission prompt what the chat wants to do and what is risky
-    /// in it (<see cref="PermissionLine"/>), a long command in the teller's words. The brain that acts is told it with the
-    /// user's next question, so "allow it" answers it. Asks of a chat the user left are not read: the brain is told them.
-    /// Muted, or with news not to be spoken, the card is only shown. Never faults.
+    /// in it (<see cref="PermissionLine"/>), a long command in the teller's words. The brain that acts was told it when it
+    /// came (see <see cref="Arrive"/>). Asks of a chat the user left are not read. Muted, or with news not to be spoken,
+    /// the card is only shown. Never faults.
     /// </summary>
     private async Task TellQuestionsAsync(Task previous, CancellationToken floor)
     {
@@ -2267,24 +2273,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             await previous;
-            var at = _time.GetUtcNow();
-            _untold.RemoveAll(c => !c.IsOpen);
-            foreach (var left in _untold.Where(c => c.ShownIn != CurrentChat).ToList())
-            {
-                _untold.Remove(left);
-                _toldNews.Add(new ToldFact(at, QuestionFact(left), null));
-            }
-
+            _untold.RemoveAll(c => !c.IsOpen || c.ShownIn != CurrentChat);
+            warmed = _tellerWarm;
             if (_untold.Count == 0)
             {
+                _tellerWarm = false;
                 return;
             }
 
             var card = _untold[0];
             _untold.RemoveAt(0);
-            warmed = _tellerWarm;
-            _tellerWarm = false; // a long command's card that comes while this is told warms it up again
-            _toldNews.Add(new ToldFact(at, QuestionFact(card), null));
+            // Still warm for a long command's card after this one; a card that comes while this is told warms it up again.
+            _tellerWarm = warmed && _untold.Any(PermissionLine.NeedsTeller);
             if (!SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
                 return;
@@ -2459,11 +2459,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _toldNews.AddRange(lines.Select(l => new ToldFact(at, Fact(l), null)));
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
+            var others = own.Count < fresh.Count;
             if (own.Count == 0 || !SpeakNews || IsMuted || floor.IsCancellationRequested || !Traffic.MaySpeakOwnNews)
             {
-                if (own.Count < fresh.Count)
+                if (others)
                 {
-                    SoundForOtherChat(!floor.IsCancellationRequested); // the floor was free for this telling
+                    SoundForOtherChat(FloorIsFreeButTelling);
                 }
 
                 return;
@@ -2484,6 +2485,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 var sentence = FallbackSentence(own);
                 AddEntry(RavenLogKind.Raven, sentence, chat);
                 spoken.Add(sentence);
+            }
+
+            // With no voice to say it, the remark is only written: it is no announcement, and the other chats still sound.
+            if (others && _tts.Status.State is TextToSpeechState.NoEngine or TextToSpeechState.Failed)
+            {
+                SoundForOtherChat(FloorIsFreeButTelling);
             }
 
         }

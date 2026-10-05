@@ -235,7 +235,10 @@ public sealed partial class RavenPanelViewModelTests
         held.IsCompleted.ShouldBeFalse();
         (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
         asks.Proposed.ShouldBeNull();
-        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
+        // The card itself was told with it when it came (#125): the brain knows what "it" is.
+        var asked = _brain.Asked.ShouldHaveSingleItem();
+        asked.ShouldStartWith(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks");
+        asked.ShouldEndWith("; ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
             + "not confirmed by a yes, so nothing ran, and its card stays open.]\nwhat time is it");
 
         Type(vm, "yes");
