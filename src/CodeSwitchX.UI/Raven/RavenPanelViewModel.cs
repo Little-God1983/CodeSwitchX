@@ -1996,7 +1996,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (card.WorkspaceId is { } window && _removedWindows.TryGetValue(window, out var removed))
             {
                 // Its window is gone from the Yard (it came while the remove was asked, say): VS Code asks it, not chat 0.
-                card.ShownIn = Append(entry, removed).Chat;
+                // It is written for Activity only, under a chat of its own that no list shows.
+                card.ShownIn = Append(entry, RavenChat.Of(window, removed.Number, removed.Name)).Chat;
                 _asks?.ToVsCode(card.Ask.Id);
                 return;
             }
@@ -3317,7 +3318,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public void SetWorkspaces(IEnumerable<(Guid Id, int Number, string Name)> workspaces)
     {
         var wanted = workspaces.Where(w => w.Number > 0).OrderBy(w => w.Number).ToList();
-        foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id || w.Number != c.Number)).ToList())
+        foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id)).ToList())
         {
             // From the cards themselves, not the log: an entry the log let go of still has its card waiting.
             foreach (var open in _askCards.Values.Where(c => c.IsOpen && c.ShownIn == gone).ToList())
@@ -3325,9 +3326,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _asks?.ToVsCode(open.Ask.Id);
             }
 
-            if (gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired))
+            if (gone.WorkspaceId is { } retired)
             {
-                _removedWindows[retired] = gone;
+                _removedWindows[retired] = (gone.Number, gone.Name); // not the chat: its tile goes with it
                 _brains?.Retire(retired); // its process, config and conversation go with it
             }
 
@@ -3354,7 +3355,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>The chats of windows removed from the Yard: a card that comes for one goes to VS Code, never to chat 0 (UI thread).</summary>
-    private readonly Dictionary<Guid, RavenChat> _removedWindows = [];
+    private readonly Dictionary<Guid, (int Number, string Name)> _removedWindows = [];
 
     /// <summary>How many cards wait in the workspace's Raven chat (#135).</summary>
     public int OpenCardsOf(Guid workspaceId) => Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat ? WaitingIn(chat) : 0;

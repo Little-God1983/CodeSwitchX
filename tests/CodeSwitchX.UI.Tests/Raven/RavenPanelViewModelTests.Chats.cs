@@ -265,9 +265,24 @@ public sealed partial class RavenPanelViewModelTests
         }
 
         vm.Log.ShouldNotContain(e => e.Ask != null);
+        vm.OpenCardsOf(ContentAutomatorX).ShouldBe(1, "it still waits");
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
 
         await WithinAsync(held);
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+        vm.YardChat.IsWaiting.ShouldBeFalse();
+    }
+
+    /// <summary>What Raven says of a card in a window's chat goes to that chat, as for chat 0's.</summary>
+    [Fact]
+    public async Task The_lines_about_a_window_s_card_go_to_its_chat()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+
+        asks.Propose("p1");
+
+        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.Permission, 3), (RavenLogKind.Raven, 3)]);
     }
 
     [Fact]

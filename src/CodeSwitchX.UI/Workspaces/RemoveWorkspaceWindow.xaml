@@ -6,7 +6,7 @@
   <!-- #135: a window whose Raven chat has open cards is not removed without asking what becomes of them. -->
   <StackPanel Margin="16">
     <TextBlock x:Name="Question" FontWeight="SemiBold" TextWrapping="Wrap" />
-    <TextBlock Margin="0,6,0,14" TextWrapping="Wrap" Foreground="#9CA3AF"
+    <TextBlock Margin="0,6,0,14" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"
                Text="Removed, its Raven chat goes with it. The chats in VS Code are not touched." />
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
       <Button Content="Answer them first" Click="AnswerFirst" Margin="0,0,8,0" Padding="12,4" IsDefault="True"

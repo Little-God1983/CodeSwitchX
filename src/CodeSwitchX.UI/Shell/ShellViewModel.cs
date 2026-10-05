@@ -420,7 +420,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
 
         var name = Yard.FindTile(workspaceId)?.Name ?? "This workspace";
-        var choice = AskBeforeRemove is { } ask ? await ask(name, cards) : RemoveChoice.Cancel;
+        if (AskBeforeRemove is not { } ask)
+        {
+            _logger.LogWarning("Not removing {Workspace}: {Cards} card(s) wait in its Raven chat and there is no window to ask in", name, cards);
+            return false;
+        }
+
+        var choice = await ask(name, cards);
         switch (choice)
         {
             case RemoveChoice.AnswerFirst:
