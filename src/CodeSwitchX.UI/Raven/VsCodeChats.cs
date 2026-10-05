@@ -380,5 +380,26 @@ public sealed class VsCodeChats : IVsCodeChats
         }
     }
 
+    /// <summary>
+    /// When the session's conversation on disk was last written in; null when it has none, or it cannot be read. Never throws.
+    /// </summary>
+    public static DateTimeOffset? ConversationWrittenAt(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            if (!Directory.Exists(projectsDirectory) || sessionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                return null;
+            }
+
+            var file = Directory.EnumerateDirectories(projectsDirectory).Select(project => Path.Combine(project, sessionId + ".jsonl")).FirstOrDefault(File.Exists);
+            return file is null ? null : new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private static string NameOf(string folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder;
 }

@@ -5,6 +5,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -28,10 +29,66 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
     private readonly ILogger<YardViewModel> _logger;
+    private readonly IVsCodeOpenTabs? _openTabs;
+    private readonly Func<string, DateTimeOffset?> _writtenInAt;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
     private ITimer? _gitTimer;
+    private ITimer? _tabsTimer;
+
+    /// <summary>Whether a read of the tabs runs: the next one waits for it (UI thread).</summary>
+    private bool _tabsRefreshing;
+
+    /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
+    private readonly Dictionary<string, DateTimeOffset> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How long a closed chat can be kept on its tile, in minutes; 0 is not at all.</summary>
+    public static readonly IReadOnlyList<int> KeepClosedMinutesChoices = [0, 1, 5, 10, 30];
+
+    /// <summary>How long a chat can be idle before it is hidden, in hours; 0 is never.</summary>
+    public static readonly IReadOnlyList<int> HideIdleHoursChoices = [0, 1, 4, 12, 24];
+
+    /// <summary>How often VS Code's lists of open chat tabs are looked at; a list is read again only when its file changed.</summary>
+    public static readonly TimeSpan TabsInterval = TimeSpan.FromSeconds(5);
+
+    private TimeSpan _keepClosed;
+    private TimeSpan? _hideIdleAfter;
+
+    /// <summary>How long a chat stays on its tile after its tab was closed, greyed (#164); zero for not at all. The shell sets it from Settings.</summary>
+    public TimeSpan KeepClosed
+    {
+        get => _keepClosed;
+        set
+        {
+            _keepClosed = value;
+            Rearrange();
+        }
+    }
+
+    /// <summary>How long a chat may be idle before its row is hidden, tab or not (#164); null for never. The shell sets it from Settings.</summary>
+    public TimeSpan? HideIdleAfter
+    {
+        get => _hideIdleAfter;
+        set
+        {
+            _hideIdleAfter = value;
+            Rearrange();
+        }
+    }
+
+    /// <summary>The time the tiles go by.</summary>
+    internal DateTimeOffset Now => _time.GetUtcNow();
+
+    private void Rearrange()
+    {
+        var now = Now;
+        foreach (var tile in Tiles.ToList())
+        {
+            tile.Tick(now);
+        }
+    }
     private Task _gitRefresh = Task.CompletedTask;
     private bool _gitRefreshRunning;
     private bool _gitRefreshAgain;
@@ -69,8 +126,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
-        IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger)
+        IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
+        Func<string, DateTimeOffset?>? writtenInAt = null)
     {
+        _openTabs = openTabs;
+        _writtenInAt = writtenInAt ?? (_ => null);
         _store = store;
         _registry = registry;
         _engine = engine;
@@ -130,6 +190,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         foreach (var snapshot in _engine.Snapshots)
         {
             Apply(snapshot);
+        }
+
+        if (_openTabs is not null)
+        {
+            // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
+            await RefreshTabsAsync();
+            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => _ = RefreshTabsAsync()), null, TabsInterval, TabsInterval);
         }
 
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
@@ -209,9 +276,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public void ForgetChat(string sessionId)
     {
         _closed[sessionId] = _time.GetUtcNow();
-        foreach (var tile in Tiles.Where(t => t.Chats.Any(c => c.SessionId == sessionId)).ToList())
+        foreach (var tile in Tiles.ToList())
         {
-            tile.Remove(sessionId);
+            tile.Forget(sessionId);
         }
     }
 
@@ -233,6 +300,67 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _closed.Remove(snapshot.SessionId);
         return false;
+    }
+
+    /// <summary>
+    /// Reads the chat tabs open in the workspaces' VS Code windows, off the UI thread, and shows them on the tiles (#164).
+    /// A tab of a chat another tile shows is not shown twice. Called on the UI thread; a read still running is not doubled.
+    /// </summary>
+    internal async Task RefreshTabsAsync()
+    {
+        if (_openTabs is not { } openTabs || _tabsRefreshing)
+        {
+            return;
+        }
+
+        _tabsRefreshing = true;
+        try
+        {
+            var workspaces = Tiles.Select(t => t.Workspace).ToList();
+            var asked = _tabActivityAsked.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var (tabs, activity) = await Task.Run(() =>
+            {
+                var read = openTabs.Read(workspaces);
+                // Only for tabs of chats the app has no state of: theirs is the last thing known of them.
+                var written = new Dictionary<string, DateTimeOffset?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var id in read.Values.SelectMany(t => t.Tabs).Select(t => t.SessionId).Where(id => !asked.Contains(id) && _engine.Get(id) is null))
+                {
+                    written[id] = _writtenInAt(id);
+                }
+
+                return (read, written);
+            });
+
+            foreach (var (id, at) in activity)
+            {
+                _tabActivityAsked.Add(id);
+                if (at is { } known)
+                {
+                    _tabActivity[id] = known;
+                }
+            }
+
+            foreach (var tile in Tiles.ToList())
+            {
+                var ofTile = tabs.GetValueOrDefault(tile.Id);
+                var others = Tiles.Where(t => t != tile).ToList();
+                tile.ShowTabs(ofTile is null ? null : ofTile with { Tabs = [.. ofTile.Tabs.Where(tab => !others.Exists(t => t.Knows(tab.SessionId)))] },
+                    _tabActivity);
+            }
+
+            if (NeedsMeFirst)
+            {
+                Resort();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reading VS Code's open chat tabs failed; the tiles keep the ones read before");
+        }
+        finally
+        {
+            _tabsRefreshing = false;
+        }
     }
 
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
@@ -483,7 +611,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
-        foreach (var other in Tiles.Where(t => t != tile && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
+        foreach (var other in Tiles.Where(t => t != tile && t.Knows(snapshot.SessionId)).ToList())
         {
             other.Remove(snapshot.SessionId);
         }
@@ -618,6 +746,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
+        _tabsTimer?.Dispose();
         _spotlightTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {

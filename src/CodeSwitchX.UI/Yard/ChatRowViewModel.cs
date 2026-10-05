@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -26,6 +27,20 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     [ObservableProperty] private string? _model;
 
+    /// <summary>
+    /// The chat's tab is open in VS Code, but the chat does not run: VS Code brought the tab back and it was not looked at
+    /// yet, or its Claude Code ended (#164). It starts when the row, or the tab, is clicked.
+    /// </summary>
+    [ObservableProperty] private bool _notRunning;
+
+    /// <summary>What the chat calls itself; null while it said nothing yet, and for a tab the app knows no chat of.</summary>
+    private string? _ownTitle;
+
+    /// <summary>Whether a chat's state was ever shown; a tab alone has none, and no time since.</summary>
+    private bool _hasSession;
+
+    private OpenChatTab? _tab;
+
     private readonly Action<string>? _open;
 
     /// <param name="open">Opens the chat with this session id in its workspace's VS Code (#115); null where a row opens nothing.</param>
@@ -51,7 +66,9 @@ public sealed partial class ChatRowViewModel : ObservableObject
         }
 
         Version = snapshot.Version;
-        Title = snapshot.Title ?? $"Chat {snapshot.SessionId[..Math.Min(8, snapshot.SessionId.Length)]}";
+        _hasSession = true;
+        _ownTitle = snapshot.Title;
+        ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
         Inferred = snapshot.Inferred;
@@ -67,7 +84,31 @@ public sealed partial class ChatRowViewModel : ObservableObject
     [RelayCommand]
     private void Open() => _open?.Invoke(SessionId);
 
-    public void Tick(DateTimeOffset now) => ElapsedText = FormatElapsed(now - StateSince);
+    /// <summary>
+    /// Shows the chat's VS Code tab, null for none: a chat that calls itself nothing takes the tab's title, and one the app
+    /// knows only by its tab shows as that tab, not running.
+    /// </summary>
+    /// <param name="notRunning">Whether the row is there for the tab alone: the chat does not run.</param>
+    public void ShowTab(OpenChatTab? tab, bool notRunning)
+    {
+        _tab = tab;
+        NotRunning = notRunning;
+        if (!_hasSession)
+        {
+            State = SessionState.Ended;
+            OnPropertyChanged(nameof(IsLive));
+        }
+
+        ShowTitle();
+    }
+
+    private void ShowTitle() =>
+        Title = _ownTitle ?? _tab?.Title ?? (_tab is not null ? NewChatTitle : $"Chat {SessionId[..Math.Min(8, SessionId.Length)]}");
+
+    /// <summary>What a tab nothing was said in yet is called.</summary>
+    public const string NewChatTitle = "New chat";
+
+    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession ? FormatElapsed(now - StateSince) : string.Empty;
 
     public static string FormatElapsed(TimeSpan elapsed)
     {

@@ -243,6 +243,19 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
+        // A time the Yard page offers in a box, or none: "10", "10 minutes", "off".
+        Entry Time(string name, string description, string[] aliases, string unit, string none, IReadOnlyList<int> choices, Func<int> get, Action<int> set)
+        {
+            string Text(int count) => count == 0 ? none : count == 1 ? $"1 {unit}" : $"{count} {unit}s";
+            return new(new(name, Title(SettingsPage.Yard), description, [.. choices.Select(Text)]), SettingsPage.Yard, aliases, () => Text(get()), v =>
+            {
+                set(Normal(v) is "off" or "none" or "never" ? 0
+                    : Number(v) is { } n && n > 0 && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                    : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", choices.Select(Text))}, not '{v}'. Nothing was changed."));
+                return null;
+            });
+        }
+
         return
         [
             // Voice
@@ -393,6 +406,15 @@ public sealed class AppSettings : IAppSettings
                     S.SetChatDefaults(_chats.Defaults with { Effort = ChatSettings.DefaultEffortOf(v) }); // as set_defaults takes it
                     return null;
                 }),
+
+            // Yard
+            Time("keep a closed chat", "How long a chat stays on its tile, greyed, after its tab was closed; \"off\" for not at all.",
+                ["keep closed chats", "closed chats", "closed chat", "keep ended chats"], "minute", "off", Yard.YardViewModel.KeepClosedMinutesChoices,
+                () => S.YardKeepClosedMinutes, v => S.YardKeepClosedMinutes = v),
+            Time("hide an idle chat", "How long a chat may do nothing before its tile hides it, though its tab is open; \"never\" to show "
+                    + "every open chat tab.",
+                ["hide idle chats", "idle chats", "idle chat", "hide a chat that has been idle"], "hour", "never", Yard.YardViewModel.HideIdleHoursChoices,
+                () => S.YardHideIdleHours, v => S.YardHideIdleHours = v),
 
             // Usage
             new(new("5-hour budget", Title(SettingsPage.Usage), "The tokens of the 5-hour window the bottom bar measures against; \"off\" for "

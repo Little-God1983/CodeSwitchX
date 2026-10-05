@@ -161,8 +161,9 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Ended_chats_disappear_ten_minutes_after_they_end()
+    public async Task Ended_chats_disappear_once_the_time_closed_chats_are_kept_for_is_over()
     {
+        _yard.KeepClosed = TimeSpan.FromMinutes(10);
         await _yard.InitializeAsync(CancellationToken.None);
         _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Ended)));
 
@@ -255,6 +256,7 @@ public class YardViewModelTests : IDisposable
             ghost with { SessionId = "errored", State = SessionState.Errored },
         ]);
 
+        _yard.KeepClosed = TimeSpan.FromMinutes(10);
         await _yard.InitializeAsync(CancellationToken.None);
 
         _yard.FindTile(_app.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["titled", "replied", "tooled"], ignoreOrder: true);
