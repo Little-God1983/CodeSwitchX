@@ -14,7 +14,8 @@ public sealed class SettingsTools(IAppSettings settings)
 {
     [McpServerTool(Name = "list_settings", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Lists CodeSwitchX's own settings you can read and change by voice: each with its name, Settings page, what it does and "
-        + "the values it takes. Call it when the user asks about a setting by a name you are not sure of.")]
+        + "the values it takes. Call it when the user asks about a setting by a name you are not sure of. A setting with byVoice "
+        + "false is not changed by voice: open_settings at its page, and tell the user why (notByVoice).")]
     public Task<IReadOnlyList<AppSetting>> ListSettings(CancellationToken cancellationToken = default) =>
         Act(() => settings.ListAsync(cancellationToken));
 
