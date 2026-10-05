@@ -621,6 +621,15 @@ public sealed class VsCodeChatsTests : IDisposable
 
         File.AppendAllLines(file, ["""{"type":"custom-title","customTitle":"Voice setup","sessionId":"titled"}""", """{"type":"ai-title","aiTitle":"Later guess","sessionId":"titled"}"""]);
         VsCodeChats.ConversationOf(projects, "titled")!.Title.ShouldBe("Voice setup");
+
+        // A turn longer than the end that is read first came after the user's name: the whole file is read for it.
+        File.AppendAllText(file, "{\"type\":\"assistant\",\"message\":\"" + new string('x', VsCodeChats.TitleTailBytes + 10) + "\"}\n");
+        VsCodeChats.ConversationOf(projects, "titled")!.Title.ShouldBe("Voice setup");
+
+        // An older Claude Code wrote summary lines.
+        var old = Path.Combine(projects, "e--Repos-App", "old.jsonl");
+        File.WriteAllLines(old, ["""{"type":"summary","summary":"Fix the installer","leafUuid":"x"}"""]);
+        VsCodeChats.ConversationOf(projects, "old")!.Title.ShouldBe("Fix the installer");
     }
 
     private int SkippedCount()

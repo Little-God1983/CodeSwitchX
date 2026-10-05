@@ -8,6 +8,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -31,7 +32,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly ILogger<YardViewModel> _logger;
     private readonly IVsCodeOpenTabs? _openTabs;
     private readonly Func<string, TabConversation?> _writtenInAt;
-    private readonly Func<IReadOnlyCollection<string>> _runningTabs;
+    private readonly Func<IReadOnlyDictionary<string, bool>> _runningTabs;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
@@ -43,7 +44,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
     private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>When each such chat was last asked about: one not known yet is asked about again, a minute on.</summary>
+    /// <summary>
+    /// When each such chat was last asked about: it is asked about again a minute on, as its title and last time change
+    /// while it runs, and one not known yet gets its conversation with its first message.
+    /// </summary>
     private readonly Dictionary<string, DateTimeOffset> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>How long until a tab whose chat was not found on disk is looked for again: a new tab's chat is written with its first message.</summary>
@@ -150,9 +154,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
-        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyCollection<string>>? runningTabs = null)
+        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null)
     {
-        _runningTabs = runningTabs ?? (() => []);
+        _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
         _writtenInAt = writtenInAt ?? (_ => null);
         _store = store;
@@ -342,15 +346,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             var workspaces = Tiles.Select(t => t.Workspace).ToList();
             var now = Now;
-            var asked = _tabActivityAsked.Where(a => _tabActivity.ContainsKey(a.Key) || now - a.Value < AskAgainAfter).Select(a => a.Key)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var asked = _tabActivityAsked.Where(a => now - a.Value < AskAgainAfter).Select(a => a.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var (tabs, activity, running) = await Task.Run(() =>
             {
                 var read = openTabs.Read(workspaces);
-                var runs = _runningTabs().ToHashSet(StringComparer.OrdinalIgnoreCase);
                 // Only for tabs of chats the app has no state of: theirs is the last thing known of them.
+                var unknown = read.Values.SelectMany(t => t.Tabs).Select(t => t.SessionId).Where(id => _engine.Get(id) is null).ToList();
+                var runs = unknown.Count == 0 ? new Dictionary<string, bool>() : _runningTabs();
                 var written = new Dictionary<string, TabConversation?>(StringComparer.OrdinalIgnoreCase);
-                foreach (var id in read.Values.SelectMany(t => t.Tabs).Select(t => t.SessionId).Where(id => !asked.Contains(id) && _engine.Get(id) is null))
+                foreach (var id in unknown.Where(id => !asked.Contains(id)))
                 {
                     written[id] = _writtenInAt(id);
                 }
@@ -365,6 +369,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 if (at is { } known)
                 {
                     _tabActivity[id] = known;
+                }
+                else
+                {
+                    _tabActivity.Remove(id);
                 }
             }
 

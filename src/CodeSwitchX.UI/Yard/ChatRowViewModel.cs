@@ -1,5 +1,6 @@
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Hosting.VsCode;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Telemetry;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -70,7 +71,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
         Version = snapshot.Version;
         _hasSession = true;
-        _ownTitle = snapshot.Title;
+        _ownTitle = snapshot.Title ?? _ownTitle;
         ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
@@ -94,7 +95,8 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <param name="notRunning">Whether the chat's tab is open while the chat does not run.</param>
     /// <param name="conversation">For a tab the app knows no chat of: what its conversation on disk says, null when it has none yet.</param>
     /// <param name="listedAt">For such a tab: when VS Code wrote the list it is in.</param>
-    public void ShowTab(OpenChatTab? tab, bool notRunning, TabConversation? conversation = null, DateTimeOffset listedAt = default)
+    /// <param name="waits">For such a tab whose chat runs: its tab waits on the user (a permission prompt, a question).</param>
+    public void ShowTab(OpenChatTab? tab, bool notRunning, TabConversation? conversation = null, DateTimeOffset listedAt = default, bool waits = false)
     {
         _tab = tab;
         NotRunning = notRunning;
@@ -105,11 +107,12 @@ public sealed partial class ChatRowViewModel : ObservableObject
             _ownTitle = conversation?.Title;
             StateSince = conversation?.WrittenAt ?? listedAt;
             _timed = conversation is not null;
-            var state = notRunning ? SessionState.Ended : SessionState.Idle;
+            var state = notRunning ? SessionState.Ended : waits ? SessionState.Waiting : SessionState.Idle;
             if (State != state)
             {
                 State = state;
                 OnPropertyChanged(nameof(IsLive));
+                OnPropertyChanged(nameof(NeedsUser));
             }
         }
 
@@ -149,6 +152,3 @@ public sealed partial class ChatRowViewModel : ObservableObject
         return $"{(int)elapsed.TotalDays}d {elapsed.Hours}h";
     }
 }
-
-/// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
-public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);

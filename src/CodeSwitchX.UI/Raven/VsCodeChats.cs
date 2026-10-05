@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
+using CodeSwitchX.Ingest.Transcripts;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Ingest.Live;
 using System.IO;
@@ -37,6 +39,9 @@ public interface IVsCodeChats
     /// <exception cref="YardActionException">It could not be shown; the message says why.</exception>
     Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct);
 }
+
+/// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
+public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);
 
 /// <param name="Folder">The folder it runs in.</param>
 /// <param name="SendTo">The name it is messaged by (<c>SendMessage</c>).</param>
@@ -386,7 +391,7 @@ public sealed class VsCodeChats : IVsCodeChats
     /// What the session's conversation on disk says: when it was last written in, and its title, the one the user gave
     /// it (/rename) before the one Claude Code made. Null when it has none, or it cannot be read. Never throws.
     /// </summary>
-    public static Yard.TabConversation? ConversationOf(string projectsDirectory, string sessionId)
+    public static TabConversation? ConversationOf(string projectsDirectory, string sessionId)
     {
         try
         {
@@ -395,23 +400,15 @@ public sealed class VsCodeChats : IVsCodeChats
                 return null;
             }
 
-            string? made = null, given = null;
-            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            // The end first, where the latest title is; the whole file when the end has none (a long turn came after it).
+            var (made, given) = TitlesIn(file, TitleTailBytes);
+            if (given is null)
             {
-                stream.Seek(Math.Max(0, stream.Length - TitleTailBytes), SeekOrigin.Begin);
-                using var reader = new StreamReader(stream);
-                while (reader.ReadLine() is { } line)
-                {
-                    // Cheap first: a turn's line can be megabytes, a title's is short.
-                    if (line.Length < 2000 && line.Contains("-title\"", StringComparison.Ordinal))
-                    {
-                        made = TitleIn(line, "ai-title", "aiTitle") ?? made;
-                        given = TitleIn(line, "custom-title", "customTitle") ?? given;
-                    }
-                }
+                var whole = TitlesIn(file, long.MaxValue);
+                (made, given) = (made ?? whole.Made, whole.Given);
             }
 
-            return new Yard.TabConversation(new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero), given ?? made);
+            return new TabConversation(new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero), ChatTitle.FromPrompt(given ?? made));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -419,21 +416,36 @@ public sealed class VsCodeChats : IVsCodeChats
         }
     }
 
-    private static string? TitleIn(string line, string type, string property)
+    /// <summary>
+    /// The latest generated title and the latest the user gave (/rename) in the last <paramref name="tail"/> bytes, read as
+    /// the transcript indexer reads them. The first line of a tail is cut, and a line being written is not whole: neither is read.
+    /// </summary>
+    private static (string? Made, string? Given) TitlesIn(string file, long tail)
     {
-        try
+        string? made = null, given = null;
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        stream.Seek(Math.Max(0, stream.Length - tail), SeekOrigin.Begin);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
         {
-            using var document = System.Text.Json.JsonDocument.Parse(line);
-            var root = document.RootElement;
-            return root.ValueKind == System.Text.Json.JsonValueKind.Object
-                && root.TryGetProperty("type", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String && t.GetString() == type
-                && root.TryGetProperty(property, out var title) && title.ValueKind == System.Text.Json.JsonValueKind.String
-                && title.GetString() is { Length: > 0 } text ? text : null;
+            // Cheap first: a turn's line can be megabytes, a title's is short.
+            if (line.Length >= 4000 || !(line.Contains("title\"", StringComparison.Ordinal) || line.Contains("\"summary\"", StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            switch (TranscriptLineParser.TryParse(line))
+            {
+                case SummaryLine summary:
+                    made = summary.Title;
+                    break;
+                case CustomTitleLine custom:
+                    given = custom.Title;
+                    break;
+            }
         }
-        catch (System.Text.Json.JsonException)
-        {
-            return null; // the first line of the tail is cut, and a line being written is not whole
-        }
+
+        return (made, given);
     }
 
     /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>

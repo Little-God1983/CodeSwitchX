@@ -5,6 +5,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -26,7 +27,7 @@ public sealed class TileTabsTests
     private readonly FakeTabs _tabs = new();
     private readonly Dictionary<string, DateTimeOffset> _writtenIn = [];
     private readonly Dictionary<string, string> _titles = [];
-    private readonly HashSet<string> _running = [];
+    private readonly Dictionary<string, bool> _running = new(StringComparer.OrdinalIgnoreCase);
     private readonly YardViewModel _yard;
 
     public TileTabsTests()
@@ -307,16 +308,39 @@ public sealed class TileTabsTests
     {
         _writtenIn["runs"] = _writtenIn["asleep"] = Now - TimeSpan.FromHours(4);
         _titles["runs"] = "Text-to-speech setup dialog with voice selector";
-        _running.Add("RUNS");
+        _running["RUNS"] = false;
+        _running["waits"] = true;
+        _writtenIn["waits"] = Now - TimeSpan.FromMinutes(3);
         await _yard.InitializeAsync(CancellationToken.None);
 
-        await VsCodeWrites(Tab("runs", "Text-to-speech setup dia…"), Tab("asleep", "DiffusionNexus.Installer…"));
+        await VsCodeWrites(Tab("runs", "Text-to-speech setup dia…"), Tab("asleep", "DiffusionNexus.Installer…"), Tab("waits", "Permission"));
 
         App.Chats.Select(c => (c.Title, c.State, c.NotRunning)).ShouldBe(
         [
             ("Text-to-speech setup dialog with voice selector", SessionState.Idle, false),
             ("DiffusionNexus.Installer…", SessionState.Ended, true),
+            ("Permission", SessionState.Waiting, false),
         ]);
+        App.NeedsAttention.ShouldBeTrue("its tab waits on the user");
+    }
+
+    /// <summary>A title given or made later is shown a minute on; a hook that brings no title yet does not take it away.</summary>
+    [Fact]
+    public async Task A_tab_s_title_follows_its_conversation_and_stays_when_its_chat_reports_without_one()
+    {
+        _writtenIn["a"] = Now;
+        _titles["a"] = "First guess";
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a", "First gu…"));
+        App.Chats[0].Title.ShouldBe("First guess");
+
+        _titles["a"] = "Voice setup";
+        await Pass(YardViewModel.AskAgainAfter);
+        await _yard.RefreshTabsAsync();
+        App.Chats[0].Title.ShouldBe("Voice setup");
+
+        Says(Chat("a", SessionState.Working, title: null));
+        App.Chats[0].Title.ShouldBe("Voice setup");
     }
 
     [Fact]

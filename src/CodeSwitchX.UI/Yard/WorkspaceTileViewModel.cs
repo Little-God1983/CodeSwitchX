@@ -5,6 +5,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -36,8 +37,11 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>What is on disk of the chats of tabs the app knows no chat of; one that is missing has nothing there yet.</summary>
     private IReadOnlyDictionary<string, TabConversation> _tabActivity = new Dictionary<string, TabConversation>();
 
-    /// <summary>The chats whose Claude Code runs in a VS Code tab right now: a tab the app knows no chat of is idle then, not ended.</summary>
-    private IReadOnlySet<string> _runningTabs = new HashSet<string>();
+    /// <summary>
+    /// The chats whose Claude Code runs in a VS Code tab right now, with whether the tab waits on the user: a tab the app
+    /// knows no chat of is idle or waiting then, not ended.
+    /// </summary>
+    private IReadOnlyDictionary<string, bool> _runningTabs = new Dictionary<string, bool>();
 
     private PricingTable? _pricing;
 
@@ -118,12 +122,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// The chat tabs VS Code lists for the workspace, null when it keeps no list; with when the chats of tabs the app
     /// knows no chat of were last written in.
     /// </summary>
-    /// <param name="running">The chats whose Claude Code runs in a VS Code tab right now.</param>
-    public void ShowTabs(OpenChatTabs? tabs, IReadOnlyDictionary<string, TabConversation> lastActivity, IReadOnlySet<string>? running = null)
+    /// <param name="running">The chats whose Claude Code runs in a VS Code tab right now, with whether the tab waits on the user.</param>
+    public void ShowTabs(OpenChatTabs? tabs, IReadOnlyDictionary<string, TabConversation> lastActivity, IReadOnlyDictionary<string, bool>? running = null)
     {
         _tabs = tabs;
         _tabActivity = lastActivity;
-        _runningTabs = running ?? new HashSet<string>();
+        _runningTabs = running ?? new Dictionary<string, bool>();
         Arrange(_owner.Now);
     }
 
@@ -181,7 +185,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
                 Chats.Add(row = NewRow(tab.SessionId));
             }
 
-            row.ShowTab(tab, notRunning: !_runningTabs.Contains(tab.SessionId), _tabActivity.GetValueOrDefault(tab.SessionId), _tabs!.WrittenAt);
+            var runs = _runningTabs.TryGetValue(tab.SessionId, out var waits);
+            row.ShowTab(tab, notRunning: !runs, _tabActivity.GetValueOrDefault(tab.SessionId), _tabs!.WrittenAt, waits);
         }
 
         Recompute();
