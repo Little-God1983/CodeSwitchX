@@ -253,18 +253,21 @@ public sealed partial class RavenPanelViewModelTests
         vm.Shown.ShouldBeEmpty();
     }
 
-    /// <summary>Added again, the window's cards are asked in its chat again.</summary>
+    /// <summary>A card whose entry the log let go of still waits: removing its window leaves it to VS Code too.</summary>
     [Fact]
-    public async Task A_window_added_again_has_its_cards_asked_in_its_chat()
+    public async Task A_removed_window_s_card_the_log_let_go_of_still_goes_to_vs_code()
     {
         var (vm, asks) = await ChatsVmAsync();
+        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.Log.ShouldNotContain(e => e.Ask != null);
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
 
-        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
-
-        vm.Log.Single(e => e.Kind == RavenLogKind.Permission).Ask!.IsOpen.ShouldBeTrue();
-        ChatNumbered(vm, 3).IsWaiting.ShouldBeTrue();
+        await WithinAsync(held);
     }
 
     [Fact]

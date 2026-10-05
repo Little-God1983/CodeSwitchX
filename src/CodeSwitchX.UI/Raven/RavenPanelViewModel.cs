@@ -2618,7 +2618,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }).ToList();
         if (WaitingIn(YardChat) is > 0 and var here)
         {
-            // Chats on no tile ask here, and a removed window's open cards come here: counted, as no summary has them.
+            // Chats on no tile ask here: counted, as no summary has them.
             lines.Add($"Chat 0 itself, for chats on no tile ({(here == 1 ? "1 card waiting" : $"{here} cards waiting")}, answered here with a click)");
         }
 
@@ -2999,7 +2999,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 if (e.PropertyName == nameof(ChatAskCard.IsOpen))
                 {
-                    CountWaiting(entry.Chat); // where the card is now: a removed window's card moved to the Yard
+                    CountWaiting(entry.Chat);
                 }
             };
             chat.IsWaiting = true;
@@ -3319,9 +3319,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var wanted = workspaces.Where(w => w.Number > 0).OrderBy(w => w.Number).ToList();
         foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id || w.Number != c.Number)).ToList())
         {
-            foreach (var open in Log.Where(e => e.Chat == gone && e.Ask is { IsOpen: true }).ToList())
+            // From the cards themselves, not the log: an entry the log let go of still has its card waiting.
+            foreach (var open in _askCards.Values.Where(c => c.IsOpen && c.ShownIn == gone).ToList())
             {
-                _asks?.ToVsCode(open.Ask!.Ask.Id);
+                _asks?.ToVsCode(open.Ask.Id);
             }
 
             if (gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired))
@@ -3349,7 +3350,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             chat.Name = name;
-            _removedWindows.Remove(id); // added again: its cards are asked here again
         }
     }
 
