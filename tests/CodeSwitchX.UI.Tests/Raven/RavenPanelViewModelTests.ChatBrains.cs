@@ -152,9 +152,12 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Sent.ShouldBe(["what needs me"]);
     }
 
-    /// <summary>News the user was given is told to each chat's brain once, with its next question: "open the one that needs me" works in any chat.</summary>
+    /// <summary>
+    /// #137: a news line goes to the brain of its own window's chat only, once: another window's brain would take it for its
+    /// own window's. Chat 0's brain and chat 1's do not get chat 3's news.
+    /// </summary>
     [Fact]
-    public async Task Chat_news_is_told_to_every_chat_s_brain_once()
+    public async Task Chat_news_is_told_only_to_its_own_window_s_brain_once()
     {
         _teller.Answer = _ => [new BrainText("It is done.")];
         _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
@@ -167,21 +170,51 @@ public sealed partial class RavenPanelViewModelTests
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News)); // written in chat 3, not spoken in the Yard's
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
 
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "anything else?");
         await WithinAsync(vm.PendingAnswers);
-        Type(vm, "and now?");
-        await WithinAsync(vm.PendingAnswers);
         vm.SelectedChat = vm.YardChat;
         Type(vm, "open the one that finished");
         await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "what finished?");
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "and now?");
+        await WithinAsync(vm.PendingAnswers);
 
-        var one = brains.Windows[CodeSwitchX].Sent;
-        one[0].ShouldContain("[Chat news the user was given");
-        one[1].ShouldNotContain("[Chat news", Case.Sensitive, "told once");
-        _brain.Sent[^1].ShouldContain("[Chat news the user was given");
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("[Chat news", Case.Sensitive, "another window's news");
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("[Chat news", Case.Sensitive, "chat 0 is no window of it");
+        var three = brains.Windows[ContentAutomatorX].Sent;
+        three[0].ShouldContain("[Chat news the user was given");
+        three[1].ShouldNotContain("[Chat news", Case.Sensitive, "told once");
+    }
+
+    /// <summary>#137: a card of window 3 reaches chat 3's brain, never chat 1's, even when the user is in chat 1.</summary>
+    [Fact]
+    public async Task A_card_is_told_only_to_its_own_window_s_brain()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Deploy");
+        _yard.Show("b", "CodeSwitchX", "Deploy"); // the same title in both windows, as in #124's check
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+
+        Type(vm, "which chats run in this window?");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("(ask id p1)");
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("(ask id p1)");
     }
 
     /// <summary>

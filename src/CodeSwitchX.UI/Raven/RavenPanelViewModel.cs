@@ -101,9 +101,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// The chat news the user was given (a card written, a digest told), in facts only (workspace, title, what happened),
     /// for the brain that acts to know with the user's next question. Never what the chats said. An item goes once the
-    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread). News goes to each chat's brain
-    /// once, with its next question, so "open the one that finished" works in any chat; what became of an allow a brain
-    /// proposed goes to that brain only (For), and waits for a question in a chat of it.
+    /// brain has it, or once it is older than <see cref="ToldNewsLifetime"/> (UI thread). A card's or news line's fact goes
+    /// to the brain of its own window's chat only (For, #137), with that chat's next question: another window's brain would
+    /// take it for its own window's. A window chat asks its tools about other windows. What became of an allow a brain
+    /// proposed goes to that brain only too.
     /// </summary>
     private readonly List<ToldFact> _toldNews = [];
 
@@ -1974,10 +1975,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        // The brain knows it with the next question, so "deny both" covers a card not read out yet. Another chat's card,
-        // never read out, goes to its own window's brain only: "allow it" said here is not about it.
+        // The brain knows it with the next question, so "deny both" covers a card not read out yet. It goes to the brain of
+        // the card's own chat only (#137): another window's brain would take it for its own window's ("allow it" there).
         var elsewhere = card.ShownIn != CurrentChat;
-        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), elsewhere ? BrainOf(card.ShownIn!) : null));
+        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), BrainOf(card.ShownIn!)));
         if (elsewhere)
         {
             SoundForOtherChat(FloorIsFree);
@@ -2501,7 +2502,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
             // facts with the next question either way, so "open it" finds what "it" is.
             var at = _time.GetUtcNow();
-            _toldNews.AddRange(lines.Select(l => new ToldFact(at, Fact(l), null)));
+            // Each line to the brain of its window's chat only (#137); a chat on no tile's to chat 0's.
+            _toldNews.AddRange(lines.Select(l => new ToldFact(at, Fact(l), BrainOf(ChatOf(l.WorkspaceId)))));
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
             var others = own.Count < fresh.Count;
