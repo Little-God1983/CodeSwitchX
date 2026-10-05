@@ -2275,7 +2275,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             await previous;
-            _untold.RemoveAll(c => !c.IsOpen || c.ShownIn != CurrentChat);
+            _untold.RemoveAll(c => !c.IsOpen);
             warmed = _tellerWarm;
             if (_untold.Count == 0)
             {
@@ -2294,7 +2294,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _untold.RemoveAt(0);
             // Still warm for a long command's card after this one; a card that comes while this is told warms it up again.
             _tellerWarm = warmed && _untold.Any(PermissionLine.NeedsTeller);
-            if (!SpeakNews || IsMuted || floor.IsCancellationRequested)
+            if (floor.IsCancellationRequested)
             {
                 return;
             }
@@ -3105,6 +3105,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (!value.IsActivity)
         {
             Seen(value);
+        }
+
+        // The cards of the chat left are not read out: kept, they would only hold up the news of the chat the user is in now.
+        if (_untold.RemoveAll(c => c.ShownIn != CurrentChat) > 0 && _tellerWarm && !_telling)
+        {
+            RestTellerIfIdle(); // warmed up for a long command among them
         }
 
         ShowSelected();

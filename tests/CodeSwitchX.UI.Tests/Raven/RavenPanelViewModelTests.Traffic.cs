@@ -330,6 +330,27 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.ShouldContain(e => e.Kind == RavenLogKind.News);
     }
+
+    /// <summary>A card of the chat the user left is not read out, and does not hold up the news of the chat they went to.</summary>
+    [Fact]
+    public async Task A_card_of_the_chat_the_user_left_does_not_hold_up_the_news_of_the_one_they_went_to()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var (vm, asks) = await TrafficVmAsync();
+        vm.PressMic(TalkInput.MicButton);
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingAnswers);
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task a");
+    }
 }
 
 /// <summary>Counts the chimes instead of playing them.</summary>
