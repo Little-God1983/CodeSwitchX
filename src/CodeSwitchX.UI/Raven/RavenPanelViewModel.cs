@@ -1186,6 +1186,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void UserStartsTalking()
     {
+        _catchUpDue = null; // a press stops the catch-up, also one not begun
         _digest?.Cancel();
         _voice.Hush();
         _voice.Expect();
@@ -1871,7 +1872,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void ScheduleNews()
     {
-        if ((_news is { HasNews: true } || _untold.Count > 0) && FloorIsFree)
+        if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null) && FloorIsFree)
         {
             _newsTimer.Change(TrafficWatcher.NewsGrace, Timeout.InfiniteTimeSpan);
         }
@@ -1904,7 +1905,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private void TellNewsIfFree()
     {
-        if ((_news is not { HasNews: true } && _untold.Count == 0) || !FloorIsFree)
+        if ((_news is not { HasNews: true } && _untold.Count == 0 && _catchUpDue is null) || !FloorIsFree)
         {
             return; // the next change of state schedules it again
         }
@@ -1914,10 +1915,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _digest = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
         _telling = true;
         UpdateState();
-        // A chat's question goes before the news: the chat is stopped on it. The news follows once the floor is free again.
-        _conversation = _untold.Count > 0
-            ? TellQuestionsAsync(_conversation, _digest.Token)
-            : TellNewsAsync(_conversation, _news!, _digest.Token);
+        // The catch-up of the chat just switched to goes first, then its cards; a chat's question goes before the news: the
+        // chat is stopped on it. The news follows once the floor is free again.
+        if (_catchUpDue is { } due)
+        {
+            _catchUpDue = null;
+            _catchUpTelling = _digest;
+            _conversation = TellCatchUpAsync(_conversation, due.Chat, due.Lines, _digest.Token);
+        }
+        else
+        {
+            _conversation = _untold.Count > 0
+                ? TellQuestionsAsync(_conversation, _digest.Token)
+                : TellNewsAsync(_conversation, _news!, _digest.Token);
+        }
     }
 
     /// <summary>A chat asks something: its card goes in the log, to be read out when the floor is free.</summary>
@@ -2342,7 +2353,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void RestTellerIfIdle()
     {
-        if (_untold.Any(PermissionLine.NeedsTeller) || _news is { HasNews: true })
+        if (_untold.Any(PermissionLine.NeedsTeller) || _news is { HasNews: true } || _catchUpDue is not null)
         {
             return;
         }
@@ -3127,18 +3138,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private bool _catchUp;
 
-    /// <summary>Stops the catch-up being said when the user switches on, presses or asks (UI thread).</summary>
-    private CancellationTokenSource? _catchingUp;
+    /// <summary>The catch-up waiting for the floor: the chat switched to and what to word it from (UI thread).</summary>
+    private (RavenChat Chat, List<string> Lines)? _catchUpDue;
+
+    /// <summary>The telling of the catch-up being said, and its reply; null when none is (UI thread).</summary>
+    private CancellationTokenSource? _catchUpTelling;
+
+    private ReplyVoice.SpokenReply? _catchUpReply;
 
     /// <summary>
-    /// The catch-up of the chat switched to, from its unread lines only: the news, Raven's answers and warnings that came
-    /// while the user was elsewhere. Its cards that came meanwhile are then read as usual, one at a time. Nothing is said for
-    /// a chat with nothing new, muted, inside the traffic watcher's cooldown, or while news is being told.
+    /// The catch-up of the chat switched to, from its unread lines only: the news and warnings that came while the user
+    /// was elsewhere (Raven's answers there were heard as they came). It waits for the floor like news does, so it never
+    /// talks over the user or an allow waiting for their yes; its cards that came meanwhile are read after it, one at a
+    /// time. Nothing is said for a chat with nothing new, muted, or inside the traffic watcher's cooldown.
     /// </summary>
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
-        _catchingUp?.Cancel(); // switched on: what was away in the chat left is not said any more
-        _catchingUp = null;
+        StopCatchUp(); // switched on: what was away in the chat left is not said any more
         if (away.Count == 0)
         {
             return;
@@ -3150,19 +3166,36 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        if (lines.Count == 0 || IsMuted || _teller is null || _telling || !Traffic.CooledDown)
+        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null && Traffic.CooledDown;
+        if (catchUp)
         {
-            ScheduleNews(); // the cards, when it is quiet
-            return;
+            _catchUpDue = (chat, lines);
         }
 
-        _catchingUp = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
-        _telling = true;
-        UpdateState();
-        _conversation = TellCatchUpAsync(_conversation, chat, lines, _catchingUp.Token);
+        if (_teller is not null && !IsMuted && (catchUp || (SpeakNews && _untold.Any(PermissionLine.NeedsTeller))))
+        {
+            _tellerWarm = true;
+            _teller.WarmUp(); // its start is hidden in the wait for the floor
+        }
+
+        ScheduleNews();
     }
 
-    /// <summary>The lines a catch-up is worded from, in the order they came; the cards are read out on their own.</summary>
+    /// <summary>The catch-up waiting is dropped, and the one being said stops, its words too.</summary>
+    private void StopCatchUp()
+    {
+        _catchUpDue = null;
+        _catchUpTelling?.Cancel();
+        if (_catchUpReply is { Played.IsCompleted: false })
+        {
+            _voice.Hush(); // only the catch-up speaks now: it holds the floor
+        }
+    }
+
+    /// <summary>
+    /// The lines a catch-up is worded from, in the order they came: news and warnings. Raven's answers were spoken as they
+    /// came, wherever the user was, and the cards are read out on their own.
+    /// </summary>
     internal static List<string> CatchUpLines(IEnumerable<RavenLogEntry> away)
     {
         List<string> lines = [];
@@ -3170,11 +3203,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             switch (entry.Kind)
             {
-                case RavenLogKind.News when entry.Lines is { Count: > 0 } news:
+                // A stale line is shown, never spoken, as in the news.
+                case RavenLogKind.News when entry.Lines?.Where(l => !l.Stale).ToList() is { Count: > 0 } news:
                     lines.AddRange(DigestPrompt(news).Split('\n').Skip(1)); // the header is the catch-up's own
-                    break;
-                case RavenLogKind.Raven when entry.Text.Trim() is { Length: > 0 } said:
-                    lines.Add($"- Raven answered: \"{(said.Length <= CatchUpAnswerLength ? said : said[..CatchUpAnswerLength] + "…")}\"");
                     break;
                 case RavenLogKind.Warning:
                     lines.Add($"- A warning: {entry.Text}");
@@ -3185,16 +3216,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return lines;
     }
 
-    /// <summary>The most of one of Raven's answers a catch-up is worded from: its start says what it is about.</summary>
-    internal const int CatchUpAnswerLength = 300;
-
     /// <summary>What the teller is given for a catch-up: the lines, and how to begin.</summary>
     internal static string CatchUpPrompt(IReadOnlyList<string> lines) =>
         "Catch-up: what happened in the chat the user just switched to, while they were away, in the order it came:\n"
         + string.Join("\n", lines)
         + "\nTell it in one or two short sentences that begin with \"While you were away\", the most pressing first.";
 
-    /// <summary>Says the catch-up in the chat switched to; a press, a question or another switch stops it. Never faults.</summary>
+    /// <summary>
+    /// Says the catch-up in the chat switched to, once the floor is free; a press, a question or another switch stops it.
+    /// Never faults.
+    /// </summary>
     private async Task TellCatchUpAsync(Task previous, RavenChat chat, IReadOnlyList<string> lines, CancellationToken stop)
     {
         ReplyVoice.SpokenReply? spoken = null;
@@ -3207,7 +3238,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             _voice.Expect();
-            spoken = _voice.Begin();
+            spoken = _catchUpReply = _voice.Begin();
             await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true);
         }
         catch (Exception ex)
@@ -3217,6 +3248,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         finally
         {
             spoken?.Complete();
+            _catchUpTelling = null;
             _telling = false;
             RestTellerIfIdle();
             UpdateState(); // then the chat's cards, one at a time, once it is quiet

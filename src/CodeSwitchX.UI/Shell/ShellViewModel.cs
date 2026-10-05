@@ -128,6 +128,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
         Raven.BargeIn = Settings.RavenBargeIn;
+        Raven.CatchUp = Settings.RavenCatchUp;
         ShowTraffic();
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
@@ -167,9 +168,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
                 Raven.BargeIn = Settings.RavenBargeIn;
             }
             else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
-                or nameof(SettingsViewModel.RavenOwnNewsWaits) or nameof(SettingsViewModel.RavenCatchUp))
+                or nameof(SettingsViewModel.RavenOwnNewsWaits))
             {
                 ShowTraffic();
+            }
+            else if (e.PropertyName == nameof(SettingsViewModel.RavenCatchUp))
+            {
+                Raven.CatchUp = Settings.RavenCatchUp;
             }
         };
         // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.
@@ -352,7 +357,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.Traffic.Cooldown = TimeSpan.FromSeconds(Settings.RavenCooldownSeconds);
         Raven.Traffic.SoundOn = Settings.RavenChatSound;
         Raven.Traffic.OwnNewsWaits = Settings.RavenOwnNewsWaits;
-        Raven.CatchUp = Settings.RavenCatchUp;
     }
 
     private void TrackRavenOpen()

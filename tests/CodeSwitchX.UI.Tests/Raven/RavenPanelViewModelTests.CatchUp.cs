@@ -25,13 +25,21 @@ public sealed partial class RavenPanelViewModelTests
         return vm;
     }
 
+    /// <summary>Lets the grace pass once the panel is idle, without waiting for a teller held by its gate.</summary>
+    private async Task PassGraceAsync(RavenPanelViewModel vm)
+    {
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(TrafficWatcher.NewsGrace);
+    }
+
     [Fact]
     public async Task Switching_to_a_chat_with_two_unread_news_lines_speaks_one_short_catch_up()
     {
         var vm = await AwayFromChatTwoAsync();
 
         vm.SelectedChat = ChatNumbered(vm, 2);
-        await WithinAsync(vm.PendingAnswers);
+        _teller.Asked.ShouldBeEmpty("it waits for the floor, as news does");
+        await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
 
         var asked = _teller.Asked.ShouldHaveSingleItem();
@@ -48,7 +56,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await AwayFromChatTwoAsync();
 
         vm.SelectedChat = ChatNumbered(vm, 3);
-        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
 
         _teller.Asked.ShouldBeEmpty();
         _speech.Spoken.ShouldBeEmpty();
@@ -60,7 +68,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await AwayFromChatTwoAsync(catchUp: false);
 
         vm.SelectedChat = ChatNumbered(vm, 2);
-        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
 
         _teller.Asked.ShouldBeEmpty();
         _speech.Spoken.ShouldBeEmpty();
@@ -73,7 +81,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.Traffic.Announced(); // Raven just spoke
 
         vm.SelectedChat = ChatNumbered(vm, 2);
-        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
 
         _teller.Asked.ShouldBeEmpty();
     }
@@ -85,7 +93,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.IsMuted = true;
 
         vm.SelectedChat = ChatNumbered(vm, 2);
-        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
 
         _teller.Asked.ShouldBeEmpty();
     }
@@ -102,7 +110,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(TrafficWatcher.DefaultCooldown);
 
         vm.SelectedChat = ChatNumbered(vm, 2);
-        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
@@ -119,12 +127,28 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Gate = new TaskCompletionSource();
 
         vm.SelectedChat = ChatNumbered(vm, 2);
+        await PassGraceAsync(vm);
         await Until(() => _teller.Asked.Count == 1);
         vm.PressMic(TalkInput.MicButton);
         _teller.Gate.SetResult();
         await Until(() => vm.State == RavenState.Listening);
 
         _speech.Spoken.ShouldBeEmpty();
+    }
+
+    /// <summary>A press before the catch-up began stops it too: it is not said once the user is done.</summary>
+    [Fact]
+    public async Task A_press_before_the_catch_up_began_drops_it()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var vm = await AwayFromChatTwoAsync();
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await HoldAsync(vm);
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldBeEmpty();
     }
 
     [Fact]
@@ -134,6 +158,7 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Gate = new TaskCompletionSource();
 
         vm.SelectedChat = ChatNumbered(vm, 2);
+        await PassGraceAsync(vm);
         await Until(() => _teller.Asked.Count == 1);
         vm.SelectedChat = ChatNumbered(vm, 1);
         _teller.Gate.SetResult();
@@ -141,6 +166,64 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
 
         _speech.Spoken.ShouldBeEmpty();
+    }
+
+    /// <summary>Its words already playing stop too when the user leaves: chat 2's catch-up is not heard in chat 1.</summary>
+    [Fact]
+    public async Task Leaving_while_the_catch_up_plays_hushes_it()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _speech.Gate = new TaskCompletionSource(); // its audio never comes on its own
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        await WithinAsync(_voice.WhenQuietAsync());
+    }
+
+    /// <summary>Two quick switches: the second chat still gets its catch-up once the first one's has stopped.</summary>
+    [Fact]
+    public async Task A_quick_second_switch_gets_its_own_catch_up()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        Changes("c", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _teller.Gate = new TaskCompletionSource();
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await PassGraceAsync(vm);
+        await Until(() => _teller.Asked.Count == 1);
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        _teller.Gate.SetResult();
+        await PassGraceAsync(vm);
+        await Until(() => _teller.Asked.Count == 2);
+
+        _teller.Asked[1].ShouldContain("Task c");
+    }
+
+    /// <summary>An allow waiting for the user's yes holds the floor: no catch-up talks over its read-back.</summary>
+    [Fact]
+    public async Task No_catch_up_while_an_allow_waits_for_the_yes()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        Changes("a2", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await WithinAsync(vm.PendingAnswers);
+
+        _teller.Asked.ShouldNotContain(q => q.StartsWith("Catch-up", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -154,6 +237,6 @@ public sealed partial class RavenPanelViewModelTests
             new RavenLogEntry(RavenLogKind.Permission, "asks", at),
         ]);
 
-        lines.ShouldBe(["- Raven answered: \"It is green.\"", "- A warning: The voice failed."]);
+        lines.ShouldBe(["- A warning: The voice failed."], "Raven's answers were heard as they came; cards are read on their own");
     }
 }
