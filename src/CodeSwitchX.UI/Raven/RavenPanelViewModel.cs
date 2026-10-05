@@ -2538,6 +2538,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         ReplyVoice.SpokenReply? spoken = null;
         var asked = false;
+        _newsChat = null; // the chat of the news before is done with: it is not stopped for this one
         try
         {
             await previous;
@@ -2581,6 +2582,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             var asking = default(DateTimeOffset);
+            _newsChat = CurrentChat; // muted, it stops (#153)
             spoken = _newsReply = _voice.Begin(heard => _logger.LogInformation(
                 "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
@@ -2616,16 +2618,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 RestTellerIfIdle();
             }
 
-            if (_newsReply == spoken)
-            {
-                _newsReply = null;
-            }
-
-            if (_newsTelling?.Token == floor)
-            {
-                _newsTelling = null;
-            }
-
+            _newsTelling = null; // its reply is kept: it may still be heard
             spoken?.Complete();
             _telling = false;
             UpdateState();
@@ -3559,9 +3552,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>What Raven says of a chat muted or unmuted: "Chat 3, ContentAutomatorX, is muted: …".</summary>
-    internal static string MuteLine(RavenChat chat) => chat.IsMuted
+    /// <param name="ravenMuted">Raven itself is muted: an unmuted chat speaks only once it is not.</param>
+    internal static string MuteLine(RavenChat chat, bool ravenMuted = false) => chat.IsMuted
         ? $"Chat {chat.Number}, {chat.Name}, is muted: its news and its catch-up are only written, with no sound; its questions are still read out."
-        : $"Chat {chat.Number}, {chat.Name}, speaks again.";
+        : $"Chat {chat.Number}, {chat.Name}, speaks again{(ravenMuted ? " once Raven itself is unmuted" : "")}.";
 
     private void OnChatPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -3582,10 +3576,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // as remembered already (set from what was stored)
         }
 
+        if (chat.IsMuted && chat == _newsChat)
+        {
+            StopNews(); // wherever the user is now
+        }
+
         if (chat == CurrentChat && chat.IsMuted)
         {
             StopCatchUp();
-            StopNews();
             if (_tellerWarm && !_telling)
             {
                 RestTellerIfIdle(); // warmed for its news, which is only written now
@@ -3599,10 +3597,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         MutedWindowsChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>The telling of the news, and its reply, while one is said; null when none is (UI thread).</summary>
+    /// <summary>The telling of the news while one runs; null when none does (UI thread).</summary>
     private CancellationTokenSource? _newsTelling;
 
+    /// <summary>The news last spoken and the chat it was told in: it may still be heard after its telling ended (UI thread).</summary>
     private ReplyVoice.SpokenReply? _newsReply;
+
+    private RavenChat? _newsChat;
 
     /// <summary>The news being told stops, its words too: the chat it is said in was muted (#153).</summary>
     private void StopNews()

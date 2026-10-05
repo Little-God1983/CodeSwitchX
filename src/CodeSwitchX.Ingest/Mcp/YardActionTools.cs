@@ -137,8 +137,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     /// <summary>"this chat", "this one?", "the chat I'm in": the chat the call comes from, as when none is named.</summary>
     private static bool ThisChat(string said) =>
         string.Join(" ", new string([.. said.ToLowerInvariant().Select(c => char.IsLetter(c) ? c : ' ')]).Split(' ', StringSplitOptions.RemoveEmptyEntries))
-            is "this" or "this chat" or "this one" or "here" or "it" or "current" or "current chat" or "the current chat" or "my chat"
-            or "the chat i m in" or "the chat im in" or "the one i m in";
+            is "this" or "this chat" or "this one" or "this window" or "here" or "current" or "current chat" or "the current chat"
+            or "current window" or "my chat" or "the chat i m in" or "the chat im in" or "the one i m in" or "the window i m in";
 
     [McpServerTool(Name = "mute_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news "

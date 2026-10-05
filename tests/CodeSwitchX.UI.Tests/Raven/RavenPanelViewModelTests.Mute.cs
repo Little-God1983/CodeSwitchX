@@ -117,6 +117,40 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Spoken.ShouldBeEmpty();
     }
 
+    /// <summary>Muted while its news, worded already, is still being heard: the words stop too.</summary>
+    [Fact]
+    public async Task Muting_the_chat_while_its_news_is_heard_hushes_it()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _speech.Gate = new TaskCompletionSource(); // the audio waits: the news is worded, and being heard
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await PassGraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+
+        ChatNumbered(vm, 1).ToggleMuteCommand.Execute(null);
+
+        await WithinAsync(_voice.WhenQuietAsync());
+    }
+
+    /// <summary>It is the chat the news is told in that is quieted, wherever the user is now; muting another one leaves it.</summary>
+    [Fact]
+    public async Task Muting_stops_the_news_of_the_chat_it_is_told_in_not_of_the_one_the_user_is_in()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _speech.Gate = new TaskCompletionSource();
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's
+        await PassGraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.SelectedChat = ChatNumbered(vm, 2);
+
+        ChatNumbered(vm, 2).ToggleMuteCommand.Execute(null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _voice.WhenQuietAsync().IsCompleted.ShouldBeFalse("chat 1's news goes on");
+
+        ChatNumbered(vm, 1).ToggleMuteCommand.Execute(null);
+        await WithinAsync(_voice.WhenQuietAsync());
+    }
+
     /// <summary>A removed window's mute is not kept: the stored list holds windows that are there.</summary>
     [Fact]
     public async Task A_removed_window_s_mute_is_forgotten()
@@ -189,5 +223,6 @@ public sealed partial class RavenPanelViewModelTests
             + "sound; its questions are still read out.");
         chat.IsMuted = false;
         RavenPanelViewModel.MuteLine(chat).ShouldBe("Chat 3, ContentAutomatorX, speaks again.");
+        RavenPanelViewModel.MuteLine(chat, ravenMuted: true).ShouldBe("Chat 3, ContentAutomatorX, speaks again once Raven itself is unmuted.");
     }
 }

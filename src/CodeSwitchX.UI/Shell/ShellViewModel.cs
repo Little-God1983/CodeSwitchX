@@ -544,7 +544,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
-    string? IRavenShell.MuteChat(int number, bool muted) => Raven.MuteChat(number, muted) is { } chat ? RavenPanelViewModel.MuteLine(chat) : null;
+    string? IRavenShell.MuteChat(int number, bool muted) =>
+        Raven.MuteChat(number, muted) is { } chat ? RavenPanelViewModel.MuteLine(chat, Raven.IsMuted) : null;
 
     (string Said, Guid? WorkspaceId)? IRavenShell.SwitchChat(ChatSwitch target) =>
         Raven.SwitchChat(target) is { } chat ? (RavenPanelViewModel.SwitchLine(chat), chat.WorkspaceId) : null;
