@@ -1,3 +1,5 @@
+using System.Globalization;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
@@ -19,12 +21,15 @@ public sealed class AppSettings : IAppSettings
 
     private readonly Func<ShellViewModel> _shell;
     private readonly IUiDispatcher _ui;
+    private readonly ChatSettings _chats;
     private readonly IReadOnlyList<Entry> _entries;
 
-    public AppSettings(Func<ShellViewModel> shell, IUiDispatcher ui)
+    /// <param name="chats">The model aliases, which a model is named by, as set_defaults names it.</param>
+    public AppSettings(Func<ShellViewModel> shell, IUiDispatcher ui, ChatSettings chats)
     {
         _shell = shell;
         _ui = ui;
+        _chats = chats;
         _entries = Entries();
         Settings = [.. _entries.Select(e => e.Info)];
     }
@@ -84,8 +89,7 @@ public sealed class AppSettings : IAppSettings
     internal static SettingsPage PageNamed(string said)
     {
         var words = Words(said).Where(w => w is not ("settings" or "setting" or "page" or "the" or "my")).ToList();
-        var key = string.Join(" ", words);
-        var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(t => words.Contains(t)) || Normal(p.Title) == key).ToList();
+        var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains)).ToList();
         return found switch
         {
             [var one] => one.Page,
@@ -94,20 +98,27 @@ public sealed class AppSettings : IAppSettings
         };
     }
 
-    /// <summary>A setting by its name or another way of saying it; a name that is part of only one also finds it.</summary>
+    /// <summary>
+    /// A setting by its name or another way of saying it. Otherwise by whole words: the name whose words are all in what was
+    /// said, the most of them winning ("open mic mode" is open mic, not the microphone's "mic"), or the names that hold all
+    /// the words said ("model" is any of the models: the user is asked which).
+    /// </summary>
     private Entry Find(string name)
     {
         var key = Normal(name);
-        var exact = _entries.Where(e => e.Names.Contains(key)).ToList();
-        if (exact.Count == 1)
+        if (_entries.Where(e => e.Names.Contains(key)).ToList() is [var exact])
         {
-            return exact[0];
+            return exact;
         }
 
-        var partial = _entries.Where(e => e.Names.Any(n => key.Length > 2 && (n.Contains(key) || key.Contains(n)))).ToList();
-        return partial.Count == 1 ? partial[0]
-            : throw new YardActionException(partial.Count > 1
-                ? $"'{name.Trim()}' could be {string.Join(" or ", partial.Select(e => e.Info.Name))}: ask the user which."
+        var said = Words(name).Where(w => w is not ("the" or "setting" or "settings")).ToHashSet();
+        var scored = _entries.Select(e => (Entry: e, Score: e.Names.Select(n => Words(n)).Max(n =>
+                n.All(said.Contains) ? n.Length * 2 : said.Count > 0 && said.All(n.Contains) ? said.Count * 2 - 1 : 0)))
+            .Where(x => x.Score > 0).ToList();
+        var best = scored.Count == 0 ? [] : scored.Where(x => x.Score == scored.Max(y => y.Score)).Select(x => x.Entry).ToList();
+        return best is [var one] ? one
+            : throw new YardActionException(best.Count > 1
+                ? $"'{name.Trim()}' could be {string.Join(" or ", best.Select(e => e.Info.Name))}: ask the user which."
                 : $"There is no setting '{name.Trim()}'. list_settings lists them.");
     }
 
@@ -142,17 +153,40 @@ public sealed class AppSettings : IAppSettings
         var found = values.Where(v => Normal(v) == key).ToList();
         if (found.Count == 0)
         {
-            found = [.. values.Where(v => key.Length > 1 && (Normal(v).StartsWith(key, StringComparison.Ordinal) || Normal(v).Contains(key)))];
+            found = [.. values.Where(v => key.Length > 1 && Normal(v).Contains(key))];
         }
 
         return found is [var one] ? one
             : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", values)}, not '{value}'. Nothing was changed.");
     }
 
-    /// <summary>The first whole number in what was said: "20", "20 seconds".</summary>
-    private static long? Number(string value) =>
-        new string([.. value.SkipWhile(c => !char.IsDigit(c)).TakeWhile(c => char.IsDigit(c) || c is ',' or '.').Where(char.IsDigit)]) is { Length: > 0 } digits
-            && long.TryParse(digits, out var n) ? n : null;
+    /// <summary>
+    /// The number in what was said, with its scale: "20", "20 seconds", "1.5 million", "200k", "2,000,000". A comma before
+    /// three digits groups thousands; otherwise it is the decimal point, as a point is. Null when there is none.
+    /// </summary>
+    internal static long? Number(string value)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(value.ToLowerInvariant(),
+            @"(\d{1,3}(?:,\d{3})+|\d+)(?:[.,](\d+))?\s*(k\b|thousand|m\b|million|mio)?");
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var number = decimal.Parse(match.Groups[1].Value.Replace(",", ""), CultureInfo.InvariantCulture);
+        if (match.Groups[2].Success)
+        {
+            number += decimal.Parse("0." + match.Groups[2].Value, CultureInfo.InvariantCulture);
+        }
+
+        number *= match.Groups[3].Value switch
+        {
+            "k" or "thousand" => 1_000,
+            "m" or "million" or "mio" => 1_000_000,
+            _ => 1,
+        };
+        return number <= long.MaxValue ? (long)Math.Round(number) : null;
+    }
 
     private static readonly IReadOnlyList<(WhisperModel Model, string Name)> WhisperNames =
     [
@@ -199,19 +233,22 @@ public sealed class AppSettings : IAppSettings
                 () => CurrentVoices() is { } voices ? voices.FirstOrDefault(x => x.Id == CurrentVoiceId())?.Name ?? CurrentVoiceId() : "none: Raven speaks with no engine",
                 v =>
                 {
-                    var voices = CurrentVoices() ?? throw new YardActionException("No voice engine is picked, so Raven has no voice: set the "
-                        + "voice engine to Kokoro or Qwen3-TTS first. Nothing was changed.");
-                    var name = OneOf("the voice", v, [.. voices.Select(x => x.Name)]);
-                    var id = voices.Single(x => x.Name == name).Id;
-                    if (S.RavenVoiceEngine == nameof(SpeechEngine.Kokoro))
+                    // The engine's own voices first; a voice of the other engine switches to it, as picking it on the page does.
+                    var engines = CurrentVoices() is null ? [] : new[] { CurrentEngine() };
+                    var everyVoice = engines.Concat([SpeechEngine.Kokoro, SpeechEngine.Qwen]).Distinct()
+                        .SelectMany(e => SpeechSettings.VoicesOf(e).Select(x => (Engine: e, Voice: x))).ToList();
+                    if (engines.Length == 0 && Normal(v) is var key && everyVoice.All(x => Normal(x.Voice.Name) != key))
                     {
-                        S.RavenKokoroVoice = id;
-                    }
-                    else
-                    {
-                        S.RavenQwenVoice = id;
+                        throw new YardActionException("No voice engine is picked, so Raven has no voice: set the voice engine to Kokoro or "
+                            + "Qwen3-TTS first. Nothing was changed.");
                     }
 
+                    var own = engines.Length == 0 ? [] : SpeechSettings.VoicesOf(engines[0]).Select(x => x.Name).ToList();
+                    var name = own.Count > 0 && own.Any(n => Normal(n) == Normal(v) || Normal(n).Contains(Normal(v)))
+                        ? OneOf("the voice", v, own)
+                        : OneOf("the voice", v, [.. everyVoice.Select(x => x.Voice.Name).Distinct()]);
+                    var picked = everyVoice.First(x => x.Voice.Name == name);
+                    S.PickVoice(picked.Engine, picked.Voice.Id);
                     return null;
                 },
                 () => CurrentVoices()?.Select(x => x.Name).ToList()),
@@ -229,19 +266,19 @@ public sealed class AppSettings : IAppSettings
             Toggle("sound for other chats", SettingsPage.Voice, "Other chats make a short sound, when it is quiet, instead of being spoken; "
                 + "off, they are only marked in the list.", () => S.RavenChatSound, v => S.RavenChatSound = v, "chime", "sound", "other chats"),
             new(new("cooldown", Title(SettingsPage.Voice), "Seconds other chats stay silent after Raven speaks or a chat makes its sound.",
-                    [.. S0CooldownChoices().Select(c => $"{c} seconds")]), SettingsPage.Voice, ["cool down", "quiet time"],
+                    [.. TrafficWatcher.CooldownChoices.Select(c => $"{c} seconds")]), SettingsPage.Voice, ["cool down", "quiet time"],
                 () => $"{S.RavenCooldownSeconds} seconds",
                 v =>
                 {
-                    var seconds = Number(v) is { } n && S0CooldownChoices().Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
-                        : throw new YardActionException($"The cooldown is one of {string.Join(", ", S0CooldownChoices())} seconds, not '{v}'. "
+                    var seconds = Number(v) is { } n && TrafficWatcher.CooldownChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                        : throw new YardActionException($"The cooldown is one of {string.Join(", ", TrafficWatcher.CooldownChoices)} seconds, not '{v}'. "
                             + "Nothing was changed.");
                     S.RavenCooldownSeconds = seconds;
                     return null;
                 }),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
-                "own news waits", "my chat waits", "chat i m in waits"),
+                "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
             Toggle("muted", SettingsPage.Voice, "Raven writes its answers without speaking them (the speaker button on Raven's panel).",
                 () => R.IsMuted, v => R.IsMuted = v, "mute", "silent"),
 
@@ -249,7 +286,8 @@ public sealed class AppSettings : IAppSettings
             new(new("open mic", Title(SettingsPage.Listening), "On, Raven listens all the time and hears when the user speaks; off, it is "
                     + "push to talk: the user holds a key or the mic button. Also set as \"open mic\" or \"push to talk\".", onOff),
                 SettingsPage.Listening, ["mic mode", "always listening", "listening mode"],
-                () => OnOff(R.PreferredMicMode == MicMode.OpenMic),
+                () => R.MicMode == MicMode.OpenMic ? On
+                    : R.PreferredMicMode == MicMode.OpenMic ? "off: it is switched on, but fell back to push to talk after a failure" : Off,
                 v =>
                 {
                     var open = Normal(v) switch
@@ -295,7 +333,10 @@ public sealed class AppSettings : IAppSettings
                 () => S.RavenChatModel,
                 v =>
                 {
-                    S.RavenChatModel = OneOf("the new chats' model", v, S.ChatModelChoices);
+                    // As set_defaults takes it: an alias by its name, else the model id it means.
+                    S.SetChatDefaults(_chats.Defaults with { Model = IsDefault(v) ? null
+                        : ChatModels.AliasNamed(v, _chats.Aliases)?.Name ?? ChatModels.ResolveModel(v, _chats.Aliases)
+                        ?? throw NoModel(v) });
                     return null;
                 },
                 () => S.ChatModelChoices),
@@ -304,7 +345,9 @@ public sealed class AppSettings : IAppSettings
                 () => S.RavenChatEffort,
                 v =>
                 {
-                    S.RavenChatEffort = OneOf("the new chats' effort", v, SettingsViewModel.EffortChoices);
+                    S.SetChatDefaults(_chats.Defaults with { Effort = IsDefault(v) ? null : ChatModels.ResolveEffort(v)
+                        ?? throw new YardActionException($"'{v}' is no effort level: say {string.Join(", ", SettingsViewModel.EffortChoices)}. "
+                            + "Nothing was changed.") });
                     return null;
                 }),
 
@@ -340,8 +383,6 @@ public sealed class AppSettings : IAppSettings
         ];
     }
 
-    private static IReadOnlyList<int> S0CooldownChoices() => TrafficWatcher.CooldownChoices;
-
     private IReadOnlyList<SpeechVoice>? CurrentVoices() => S.RavenVoiceEngine switch
     {
         nameof(SpeechEngine.Kokoro) => SpeechSettings.KokoroVoices,
@@ -349,19 +390,21 @@ public sealed class AppSettings : IAppSettings
         _ => null,
     };
 
+    private SpeechEngine CurrentEngine() => S.RavenVoiceEngine == nameof(SpeechEngine.Kokoro) ? SpeechEngine.Kokoro : SpeechEngine.Qwen;
+
     private string CurrentVoiceId() => S.RavenVoiceEngine == nameof(SpeechEngine.Kokoro) ? S.RavenKokoroVoice : S.RavenQwenVoice;
 
-    /// <summary>An alias the table knows, or a model id as said; never blank.</summary>
-    private static string? SetModel(string value, Action<string> set)
+    /// <summary>The model id a name means, as set_defaults reads it: an alias, an alias with its version, or a full id.</summary>
+    private string? SetModel(string value, Action<string> set)
     {
-        var known = SettingsViewModel.KnownBrainModels;
-        var model = known.FirstOrDefault(m => Normal(m) == Normal(value))
-            ?? known.Where(m => Normal(m).Contains(Normal(value))).ToList() switch { [var one] => one, _ => null }
-            ?? (value.Trim() is { Length: > 0 } id && !id.Contains(' ') ? id
-                : throw new YardActionException($"'{value}' is no model: say one of {string.Join(", ", known)}, or a full model id. Nothing was changed."));
-        set(model);
+        set(ChatModels.ResolveModel(value, _chats.Aliases) ?? throw NoModel(value));
         return null;
     }
+
+    private YardActionException NoModel(string value) => new($"'{value}' is no model: say one of "
+        + $"{string.Join(", ", _chats.Aliases.Select(a => a.Name))}, the name with its version, or a full model id. Nothing was changed.");
+
+    private static bool IsDefault(string value) => Normal(value) is "default" or "claude code s default" or "claude codes default" or "claude default";
 
     /// <param name="Aliases">Other ways the user may name it.</param>
     /// <param name="Set">Sets it from what was said and returns a note; null for a setting not changed by voice.</param>

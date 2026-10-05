@@ -19,7 +19,7 @@ public sealed class AppSettingsTests
 
     public AppSettingsTests()
     {
-        _settings = new AppSettings(() => _h.Shell, new ImmediateDispatcher());
+        _settings = new AppSettings(() => _h.Shell, new ImmediateDispatcher(), _h.Chats);
     }
 
     [Theory]
@@ -84,7 +84,7 @@ public sealed class AppSettingsTests
     public async Task Use_the_kokoro_voice_picks_the_engine_and_then_a_voice_of_it()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
-        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice", "Heart", Ct))).Message.ShouldContain("No voice engine");
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice", "Zebra", Ct))).Message.ShouldContain("No voice engine");
 
         var engine = await _settings.SetAsync("voice engine", "kokoro", Ct);
         engine.Value.ShouldBe("Kokoro");
@@ -156,6 +156,113 @@ public sealed class AppSettingsTests
 
         _h.Shell.Raven.IsMuted.ShouldBeTrue();
         (await _settings.GetAsync("muted", Ct)).Value.ShouldBe("on");
+    }
+
+    [Theory]
+    [InlineData("Claude")]
+    [InlineData("5.5")]
+    public async Task A_model_name_that_is_no_model_is_refused_not_stored(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var before = _h.Shell.Settings.RavenBrainModel;
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's model", said, Ct))).Message.ShouldContain("Nothing was changed");
+
+        _h.Shell.Settings.RavenBrainModel.ShouldBe(before);
+    }
+
+    [Theory]
+    [InlineData("fable", "claude-fable-5-1")]
+    [InlineData("Opus 5.5", "claude-opus-5-5")]
+    [InlineData("claude-sonnet-5-5", "claude-sonnet-5-5")]
+    public async Task A_model_is_an_alias_an_alias_with_its_version_or_a_full_id(string said, string id)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("chat 0's model", said, Ct);
+
+        _h.Shell.Settings.RavenOverviewModel.ShouldBe(id);
+    }
+
+    [Fact]
+    public async Task New_chats_model_and_effort_take_what_set_defaults_takes()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("new chats' model", "Opus 5.5", Ct);
+        await _settings.SetAsync("new chats' effort", "extra high", Ct);
+
+        _h.Chats.Defaults.ShouldBe(new ChatDefaults("claude-opus-5-5", "xhigh"), "an alias with its version is that model's id, as with set_defaults");
+        await _settings.SetAsync("new chats' model", "sonnet", Ct);
+        (await _settings.GetAsync("new chats' model", Ct)).Value.ShouldBe("Sonnet");
+        await _settings.SetAsync("new chats' model", "default", Ct);
+        _h.Chats.Defaults.Model.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("the chat I'm in waits for the cooldown")]
+    [InlineData("chat I'm in waits")]
+    public async Task The_chat_I_m_in_waits_is_found_by_how_it_is_said_not_taken_for_the_cooldown(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync(said, "on", Ct)).Name.ShouldBe("the chat I'm in also waits for the cooldown");
+
+        _h.Shell.Settings.RavenOwnNewsWaits.ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("open mic mode", "open mic")]
+    [InlineData("update speed", null)]
+    public async Task A_name_is_matched_by_its_words_not_by_a_short_alias_inside_another(string said, string? found)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        if (found is null)
+        {
+            await Should.ThrowAsync<YardActionException>(() => _settings.GetAsync(said, Ct));
+        }
+        else
+        {
+            (await _settings.GetAsync(said, Ct)).Name.ShouldBe(found);
+        }
+    }
+
+    [Theory]
+    [InlineData("1.5 million", 1_500_000)]
+    [InlineData("200k", 200_000)]
+    [InlineData("2,000,000", 2_000_000)]
+    [InlineData("800 thousand tokens", 800_000)]
+    public async Task The_budget_is_read_with_its_decimals_and_scale(string said, long tokens)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("5-hour budget", said, Ct);
+
+        _h.Shell.Settings.FiveHourBudgetTokens.ShouldBe(tokens);
+    }
+
+    [Fact]
+    public async Task A_voice_of_the_other_engine_switches_the_engine_as_the_voice_page_does()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _settings.SetAsync("voice engine", "Qwen3-TTS", Ct);
+        var kokoro = CodeSwitchX.Voice.Speech.SpeechSettings.KokoroVoices[1];
+
+        await _settings.SetAsync("voice", kokoro.Name, Ct);
+
+        (_h.Shell.Settings.RavenVoiceEngine, _h.Shell.Settings.RavenKokoroVoice).ShouldBe(("Kokoro", kokoro.Id));
+    }
+
+    [Fact]
+    public async Task Open_mic_that_fell_back_is_said_to_be_off()
+    {
+        _h.Settings.GetAsync<string?>(SettingKeys.RavenMicMode, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("OpenMic"));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.MicMode = MicMode.PushToTalk; // a failure dropped it back; the user's choice stays open mic
+
+        (await _settings.GetAsync("open mic", Ct)).Value.ShouldStartWith("off");
     }
 
     [Fact]
