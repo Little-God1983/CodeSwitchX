@@ -645,6 +645,9 @@ public class SettingsViewModelTests : IDisposable
         _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Listening]);
         _vm.Page.ShouldBe(SettingsPage.Listening, "the page shown is one found");
 
+        _vm.Search = "cooldown";
+        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Voice]);
+
         _vm.Search = "model";
         _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Brain]);
 

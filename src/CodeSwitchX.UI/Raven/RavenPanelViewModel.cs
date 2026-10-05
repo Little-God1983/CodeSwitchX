@@ -1897,6 +1897,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (_chime is not null && !IsMuted && Traffic.TrySound(floorFree))
         {
+            _logger.LogInformation("Raven chimes for another chat's news or card");
             _chime.Play();
         }
     }
