@@ -29,6 +29,13 @@ public interface IVsCodeChats
     /// </summary>
     /// <exception cref="YardActionException">It could not be closed; the message says why.</exception>
     Task CloseAsync(string sessionId, CancellationToken ct);
+
+    /// <summary>
+    /// Shows the chat in the workspace's VS Code window (#115): its tab comes to the front, or is opened with the chat's
+    /// history when it has none there. VS Code is started hidden when it does not run.
+    /// </summary>
+    /// <exception cref="YardActionException">It could not be shown; the message says why.</exception>
+    Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct);
 }
 
 /// <param name="Folder">The folder it runs in.</param>
@@ -70,6 +77,9 @@ public sealed class VsCodeChats : IVsCodeChats
 
     /// <summary>The first companion that can close a chat; a window still running an older one has not been reloaded since the update.</summary>
     internal static readonly Version ClosesSince = new(0, 2, 0);
+
+    /// <summary>The first companion that can show a given chat.</summary>
+    internal static readonly Version ShowsSince = new(0, 3, 0);
 
     private readonly ICompanionWindows _windows;
     private readonly ICompanionInstaller _installer;
@@ -249,6 +259,24 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         _logger.LogInformation("Closed chat {Id} ({Name}) in VS Code", chat.SessionId, chat.Name);
+    }
+
+    public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
+    {
+        var window = _windows.Find(workspace) ?? await OpenWindowAsync(workspace, ct).ConfigureAwait(false);
+        if (!Version.TryParse(window.Version, out var version) || version < ShowsSince)
+        {
+            throw new YardActionException($"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
+                + "chat. Reload that window (Developer: Reload Window) and try again.");
+        }
+
+        var answer = await _windows.SendAsync(window, CompanionWindows.OpenChat, sessionId, ct).ConfigureAwait(false);
+        if (!answer.Ok)
+        {
+            throw new YardActionException($"VS Code did not show the chat: {answer.Error}");
+        }
+
+        _logger.LogInformation("Showed chat {Id} in VS Code for {Workspace}", sessionId, workspace.Name);
     }
 
     /// <summary>

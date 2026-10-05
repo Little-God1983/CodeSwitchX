@@ -19,7 +19,7 @@ public interface ICompanionWindows
     CompanionWindow? Of(int extensionHost);
 
     /// <summary>Sends one command to the window's companion and returns its answer; an answer that says why not when it cannot be reached.</summary>
-    /// <param name="sessionId">The chat the command is about, for <see cref="CompanionWindows.CloseChat"/>; null for none.</param>
+    /// <param name="sessionId">The chat the command is about, for <see cref="CompanionWindows.CloseChat"/> and <see cref="CompanionWindows.OpenChat"/>; null for none.</param>
     Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, string? sessionId, CancellationToken ct);
 }
 
@@ -44,7 +44,7 @@ public sealed class CompanionWindows : ICompanionWindows
     internal static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// How long opening a chat may take: in a window VS Code just started, Claude Code's extension activates first, which
+    /// How long opening a chat, new or not, may take: in a window VS Code just started, Claude Code's extension activates first, which
     /// takes longer than any other request. Given up too early, the tab would open anyway, unknown to Raven.
     /// </summary>
     internal static readonly TimeSpan NewChatTimeout = TimeSpan.FromSeconds(90);
@@ -54,6 +54,9 @@ public sealed class CompanionWindows : ICompanionWindows
 
     /// <summary>The command that closes a chat's tab, found by the chat's session id.</summary>
     public const string CloseChat = "closeChat";
+
+    /// <summary>The command that shows a chat's tab, opening it when the chat has none; the chat is given by its session id.</summary>
+    public const string OpenChat = "openChat";
 
     /// <summary>A record is a few hundred bytes; anything far bigger is not one.</summary>
     private const long MaxRecordBytes = 64 * 1024;
@@ -126,7 +129,8 @@ public sealed class CompanionWindows : ICompanionWindows
 
     public async Task<CompanionAnswer> SendAsync(CompanionWindow window, string command, string? sessionId, CancellationToken ct)
     {
-        var limit = command == NewChat ? ChatTimeout : Timeout;
+        var opens = command is NewChat or OpenChat;
+        var limit = opens ? ChatTimeout : Timeout;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(limit);
         try
@@ -164,7 +168,7 @@ public sealed class CompanionWindows : ICompanionWindows
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return new CompanionAnswer(false, Error: $"The VS Code window did not answer within {limit.TotalSeconds:0} seconds."
-                + (command == NewChat ? " A chat tab may still open there." : ""));
+                + (opens ? " A chat tab may still open there." : ""));
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException or TimeoutException)
         {

@@ -24,6 +24,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 {
     private readonly HostManager _host;
     private readonly ChatSettings _chats;
+    private readonly IVsCodeChats? _vsCode;
     private readonly ILogger<ShellViewModel> _logger;
 
     [ObservableProperty]
@@ -52,8 +53,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     private int _openAttempt;
 
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
-        RavenPanelViewModel raven, ChatSettings chats, HostManager host, ILogger<ShellViewModel> logger)
+        RavenPanelViewModel raven, ChatSettings chats, HostManager host, ILogger<ShellViewModel> logger, IVsCodeChats? vsCode = null)
     {
+        _vsCode = vsCode;
         _chats = chats;
         Yard = yard;
         Cab = cab;
@@ -63,6 +65,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         _host = host;
         _logger = logger;
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
+        Yard.OpenChatRequested += (id, chat) => _ = EnterCabAsync(id, chat);
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
         Yard.TilesChanged += () =>
@@ -263,7 +266,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     [RelayCommand]
-    public async Task EnterCabAsync(Guid workspaceId)
+    public Task EnterCabAsync(Guid workspaceId) => EnterCabAsync(workspaceId, null);
+
+    /// <param name="chat">A chat's session id, to bring its tab to the front in that VS Code too (#115); null for the workspace alone.</param>
+    public async Task EnterCabAsync(Guid workspaceId, string? chat)
     {
         var tile = Yard.FindTile(workspaceId);
         if (tile is null)
@@ -298,6 +304,16 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 RaiseHostedWindow();
             }
+
+            // The workspace shows either way; a chat that cannot be shown is said on the strip.
+            if (chat is not null && _vsCode is not null && attempt == _openAttempt)
+            {
+                await _vsCode.ShowAsync(tile.Workspace, chat, CancellationToken.None);
+            }
+        }
+        catch (YardActionException ex)
+        {
+            ReportFor(attempt, ex.Message);
         }
         catch (Exception ex)
         {
@@ -517,7 +533,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>
     public void BringForward() => ForwardRequested?.Invoke();
 
-    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
+    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId, string? chat)
     {
         if (Yard.FindTile(workspaceId) is null)
         {
@@ -525,7 +541,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
 
         ForwardRequested?.Invoke();
-        await EnterCabAsync(workspaceId);
+        await EnterCabAsync(workspaceId, chat);
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 

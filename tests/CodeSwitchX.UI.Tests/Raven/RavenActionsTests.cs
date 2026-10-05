@@ -296,9 +296,23 @@ public sealed class RavenActionsTests
     [Fact]
     public async Task Opening_a_workspace_shows_it_in_the_Cab()
     {
-        (await _actions.OpenWorkspaceAsync(Diffusion, Ct)).ShouldBe("Diffusion-Full is open.");
+        (await _actions.OpenWorkspaceAsync(Diffusion, null, Ct)).ShouldBe("Diffusion-Full is open.");
 
         _shell.Opened.ShouldBe([Diffusion.Id]);
+        _shell.OpenedChats.ShouldBe([null]);
+    }
+
+    /// <summary>#115: "open that chat" shows the chat's tab, not only its workspace's VS Code.</summary>
+    [Fact]
+    public async Task Opening_a_chat_shows_its_workspace_with_the_chat_s_tab_in_front()
+    {
+        var chat = new YardChat("abc-123", "Fix the installer", Diffusion.Id, Diffusion.Name, SessionState.Idle, false, _time.GetUtcNow(), "1m", null, null, 0,
+            null, null);
+
+        (await _actions.OpenWorkspaceAsync(Diffusion, chat, Ct)).ShouldBe("Diffusion-Full is open, with the chat \"Fix the installer\" in front.");
+
+        _shell.Opened.ShouldBe([Diffusion.Id]);
+        _shell.OpenedChats.ShouldBe(["abc-123"]);
     }
 
     [Fact]
@@ -306,7 +320,7 @@ public sealed class RavenActionsTests
     {
         _shell.OpenProblem = "VS Code did not start.";
 
-        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, Ct));
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, null, Ct));
 
         error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not start.");
     }
@@ -315,7 +329,7 @@ public sealed class RavenActionsTests
     public async Task A_workspace_that_takes_too_long_to_show_is_said()
     {
         _shell.Showing = new TaskCompletionSource<string?>().Task; // VS Code never shows its window
-        var open = _actions.OpenWorkspaceAsync(Diffusion, Ct);
+        var open = _actions.OpenWorkspaceAsync(Diffusion, null, Ct);
         for (var i = 0; i < 200 && !open.IsCompleted; i++)
         {
             await Task.Delay(5, Ct);
@@ -347,9 +361,13 @@ public sealed class RavenActionsTests
         /// <summary>The showing itself, when a test holds it up; else it is done at once, with <see cref="OpenProblem"/>.</summary>
         public Task<string?>? Showing { get; set; }
 
-        public Task<string?> OpenInCabAsync(Guid workspaceId)
+        /// <summary>The chat each open was to show in front; null for the workspace alone.</summary>
+        public List<string?> OpenedChats { get; } = [];
+
+        public Task<string?> OpenInCabAsync(Guid workspaceId, string? chat = null)
         {
             Opened.Add(workspaceId);
+            OpenedChats.Add(chat);
             return Showing ?? Task.FromResult(OpenProblem);
         }
 
@@ -403,6 +421,8 @@ public sealed class RavenActionsTests
             Sequence.Add($"close {sessionId}");
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
+
+        public Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct) => Task.CompletedTask;
     }
 
     [Fact]

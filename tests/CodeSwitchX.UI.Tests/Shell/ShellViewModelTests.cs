@@ -245,6 +245,61 @@ public class ShellViewModelTests
         _h.Shell.TakesAsks(other).ShouldBeFalse("with the panel collapsed every question goes to VS Code");
     }
 
+    /// <summary>#115: a click on a tile's chat row shows the workspace's VS Code, then that chat's tab in it.</summary>
+    [Fact]
+    public async Task A_chat_row_s_click_opens_the_workspace_and_shows_that_chat()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+
+        _h.Shell.Yard.RequestOpenChat(_h.App.Id, "s1");
+        for (var i = 0; i < 200 && _h.VsCode.Shown.Count == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        _h.VsCode.Shown.ShouldBe([(_h.App.Name, "s1")]);
+        _h.Shell.StatusMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_tile_s_own_click_shows_no_chat()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+
+        _h.VsCode.Shown.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_VS_Code_does_not_show_is_said_on_the_strip_with_the_workspace_open()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.VsCode.Failure = "VS Code did not show the chat: no.";
+
+        await _h.Shell.EnterCabAsync(_h.App.Id, "s1");
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.StatusMessage.ShouldBe("VS Code did not show the chat: no.");
+    }
+
+    [Fact]
+    public async Task A_workspace_whose_VS_Code_does_not_start_is_asked_for_no_chat()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(false, null, "Code.exe was not found."));
+
+        await _h.Shell.EnterCabAsync(_h.App.Id, "s1");
+
+        _h.VsCode.Shown.ShouldBeEmpty();
+        _h.Shell.StatusMessage.ShouldNotBeNull();
+    }
+
     [Fact]
     public async Task A_question_held_lets_go_once_the_Cab_shows_its_chat_s_VS_Code_and_a_collapsed_panel_keeps_it()
     {

@@ -150,6 +150,8 @@ async function handle(line, token, version) {
             return newChat();
         case 'closeChat':
             return closeChat(request.sessionId);
+        case 'openChat':
+            return openChat(request.sessionId);
         default:
             return { ok: false, error: `No command '${request.command}'.` };
     }
@@ -163,6 +165,23 @@ async function newChat() {
 
     // Undefined, never null: the extension looks a null session id up and throws.
     await vscode.commands.executeCommand('claude-vscode.editor.open', undefined, undefined, undefined, undefined, undefined, { programmatic: true });
+    return { ok: true, pid: process.pid };
+}
+
+/**
+ * Shows the chat with this session id in this window: its tab comes to the front, or is opened with the chat's history
+ * when it has none here. A chat shown in the side bar is shown there.
+ */
+async function openChat(sessionId) {
+    if (typeof sessionId !== 'string' || !SessionId.test(sessionId)) {
+        return { ok: false, error: 'No chat id.' };
+    }
+
+    if (!await activateClaudeCode()) {
+        return { ok: false, error: "Claude Code's VS Code extension is not installed in this window." };
+    }
+
+    await vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
     return { ok: true, pid: process.pid };
 }
 

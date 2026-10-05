@@ -1,6 +1,7 @@
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Telemetry;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -25,9 +26,13 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     [ObservableProperty] private string? _model;
 
-    public ChatRowViewModel(string sessionId)
+    private readonly Action<string>? _open;
+
+    /// <param name="open">Opens the chat with this session id in its workspace's VS Code (#115); null where a row opens nothing.</param>
+    public ChatRowViewModel(string sessionId, Action<string>? open = null)
     {
         SessionId = sessionId;
+        _open = open;
     }
 
     public string SessionId { get; }
@@ -57,6 +62,10 @@ public sealed partial class ChatRowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(NeedsUser));
     }
+
+    /// <summary>The row was clicked: the workspace's VS Code comes up with this chat's tab in front.</summary>
+    [RelayCommand]
+    private void Open() => _open?.Invoke(SessionId);
 
     public void Tick(DateTimeOffset now) => ElapsedText = FormatElapsed(now - StateSince);
 

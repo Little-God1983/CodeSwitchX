@@ -433,6 +433,66 @@ public sealed class VsCodeChatsTests : IDisposable
             .ShouldBe("VS Code did not close the chat: That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.");
     }
 
+    private CompanionWindow Showing() => Window() with { Version = "0.3.0" };
+
+    /// <summary>#115: the chat's tab is asked for in the workspace's own window, by the chat's id.</summary>
+    [Fact]
+    public async Task A_chat_is_shown_by_the_window_of_its_workspace()
+    {
+        _windows.Shown = Showing();
+
+        await _chats.ShowAsync(_workspace, "old-chat", Ct);
+
+        _windows.Commands.ShouldBe([CompanionWindows.OpenChat]);
+        _windows.SessionIds.ShouldBe(["old-chat"]);
+        _opened.ShouldBeEmpty("VS Code runs already");
+    }
+
+    /// <summary>An ended chat has no process and no tab: it is asked for all the same, and VS Code opens it with its history.</summary>
+    [Fact]
+    public async Task A_chat_that_runs_nowhere_is_shown_too()
+    {
+        _windows.Shown = Showing();
+
+        await _chats.ShowAsync(_workspace, "ended-yesterday", Ct);
+
+        _windows.SessionIds.ShouldBe(["ended-yesterday"]);
+    }
+
+    [Fact]
+    public async Task Showing_a_chat_starts_VS_Code_when_it_does_not_run()
+    {
+        var show = _chats.ShowAsync(_workspace, "old-chat", Ct);
+        await Advance(() => _windows.Looks >= 3); // its companion takes a moment to start
+        _windows.Shown = Showing();
+        await Advance(() => show.IsCompleted);
+
+        await show;
+        _opened.ShouldBe(["App"]);
+        _windows.Commands.ShouldBe([CompanionWindows.OpenChat]);
+    }
+
+    [Fact]
+    public async Task A_window_still_running_a_companion_that_cannot_show_a_chat_is_told_to_reload()
+    {
+        _windows.Shown = Closing(); // 0.2.0: CodeSwitchX updated it, the window has not loaded the update yet
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "old-chat", Ct))).Message
+            .ShouldBe("The VS Code window of App still runs an older CodeSwitchX companion, which cannot show a chat. "
+                + "Reload that window (Developer: Reload Window) and try again.");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_VS_Code_does_not_show_is_said()
+    {
+        _windows.Shown = Showing();
+        _windows.Answer = new CompanionAnswer(false, Error: "Claude Code's VS Code extension is not installed in this window.");
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "old-chat", Ct))).Message
+            .ShouldBe("VS Code did not show the chat: Claude Code's VS Code extension is not installed in this window.");
+    }
+
     [Fact]
     public async Task A_chat_whose_Claude_Code_outlives_its_tab_is_said()
     {
@@ -533,7 +593,7 @@ public sealed class VsCodeChatsTests : IDisposable
 
             if (Answer.Ok)
             {
-                (command == CompanionWindows.CloseChat ? Close : NewChat)();
+                (command == CompanionWindows.CloseChat ? Close : command == CompanionWindows.NewChat ? NewChat : () => { })();
             }
 
             return Answer;

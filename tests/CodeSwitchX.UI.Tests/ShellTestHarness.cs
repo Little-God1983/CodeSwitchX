@@ -97,7 +97,29 @@ public sealed class ShellTestHarness
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic,
             asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory);
-        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
+        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance, VsCode);
+    }
+
+    /// <summary>The chats the shell asked VS Code to show (#115).</summary>
+    public ShownChats VsCode { get; } = new();
+
+    public sealed class ShownChats : IVsCodeChats
+    {
+        public List<(string Workspace, string SessionId)> Shown { get; } = [];
+
+        /// <summary>Why VS Code does not show the chat; null when it does.</summary>
+        public string? Failure { get; set; }
+
+        public Task<VsCodeChat> StartAsync(Workspace workspace, string? folder, string? model, string? effort, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task CloseAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
+        {
+            Shown.Add((workspace.Name, sessionId));
+            return Failure is { } failure ? Task.FromException(new CodeSwitchX.Core.Yard.YardActionException(failure)) : Task.CompletedTask;
+        }
     }
 
     public static YardViewModel CreateYardWithoutInit() => new ShellTestHarness().Shell.Yard;

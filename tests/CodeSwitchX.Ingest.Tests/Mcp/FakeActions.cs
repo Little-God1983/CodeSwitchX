@@ -16,6 +16,9 @@ internal sealed class FakeActions : IYardActions
 
     public YardWorkspace? Opened { get; private set; }
 
+    /// <summary>The chat the last open was to show in front; null for the workspace alone.</summary>
+    public YardChat? OpenedChat { get; private set; }
+
     public HashSet<string> Voice { get; } = [];
 
     public ChatDefaults Defaults { get; private set; } = new(null, null);
@@ -73,10 +76,11 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult($"Chat {target.Number}.");
     }
 
-    public Task<string> OpenWorkspaceAsync(YardWorkspace workspace, CancellationToken ct)
+    public Task<string> OpenWorkspaceAsync(YardWorkspace workspace, YardChat? chat, CancellationToken ct)
     {
         Act("open_workspace");
         Opened = workspace;
+        OpenedChat = chat;
         return Task.FromResult("open");
     }
 
