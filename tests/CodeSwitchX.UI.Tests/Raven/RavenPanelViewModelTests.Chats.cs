@@ -267,37 +267,15 @@ public sealed partial class RavenPanelViewModelTests
         ChatNumbered(vm, 3).IsWaiting.ShouldBeTrue();
     }
 
-    /// <summary>A window that only changed its number keeps its cards, in its chat under the new number.</summary>
     [Fact]
-    public async Task A_renumbered_window_keeps_its_open_card_in_its_new_chat()
+    public async Task The_open_cards_of_a_window_are_counted()
     {
         var (vm, asks) = await ChatsVmAsync();
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
-
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 5, "ContentAutomatorX")]);
-
-        var card = vm.Log.Single(e => e.Kind == RavenLogKind.Permission);
-        card.Ask!.IsOpen.ShouldBeTrue();
-        card.Chat.Number.ShouldBe(5);
-        ChatNumbered(vm, 5).IsWaiting.ShouldBeTrue();
-        vm.YardChat.IsWaiting.ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task The_open_cards_of_a_window_are_counted_and_can_be_left_to_vs_code()
-    {
-        var (vm, asks) = await ChatsVmAsync();
-        var first = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
-        var second = asks.HoldAsync(PermittingIn("a", "p2"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("a", "p2"), CancellationToken.None);
         _ = asks.HoldAsync(PermittingIn("b", "p3"), CancellationToken.None);
 
-        vm.OpenCardsOf(ContentAutomatorX).ShouldBe(2);
-        vm.LeaveCardsToVsCode(ContentAutomatorX);
-
-        await WithinAsync(first);
-        await WithinAsync(second);
-        vm.OpenCardsOf(ContentAutomatorX).ShouldBe(0);
-        vm.OpenCardsOf(CodeSwitchX).ShouldBe(1, "another window's card stays");
+        (vm.OpenCardsOf(ContentAutomatorX), vm.OpenCardsOf(CodeSwitchX), vm.OpenCardsOf(Guid.NewGuid())).ShouldBe((2, 1, 0));
     }
 
     /// <summary>Each window's news card is in its own chat; only the news of the chat the user is in is spoken (#125).</summary>

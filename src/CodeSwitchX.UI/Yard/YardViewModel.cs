@@ -242,13 +242,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public async Task UnregisterAsync(Guid workspaceId)
     {
-        if (BeforeRemove is { } ask && !await ask(workspaceId))
-        {
-            return;
-        }
-
         try
         {
+            if (BeforeRemove is { } ask && !await ask(workspaceId))
+            {
+                return;
+            }
+
             await _registry.UnregisterAsync(workspaceId, CancellationToken.None);
         }
         catch (Exception ex)

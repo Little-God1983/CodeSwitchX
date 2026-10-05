@@ -80,6 +80,7 @@ public sealed class RemoveWorkspaceTests
 
         (await WasRemovedAsync()).ShouldBeFalse();
         _h.Shell.Raven.SelectedChat.WorkspaceId.ShouldBe(_h.App.Id);
+        _h.Shell.Raven.IsOpen.ShouldBeTrue("a folded panel shows no cards");
         held.IsCompleted.ShouldBeFalse("the card still waits for the user");
     }
 
@@ -95,6 +96,47 @@ public sealed class RemoveWorkspaceTests
         await held.WaitAsync(TimeSpan.FromSeconds(5), Ct);
         _h.Shell.Raven.Log.Single(e => e.Ask is not null).Ask!.Outcome.ShouldBe("Left to VS Code: answer it in the chat's tab.");
         (await WasRemovedAsync()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Answer_them_first_opens_a_folded_panel()
+    {
+        await InitAsync();
+        _h.Shell.Raven.IsOpen = false;
+        _ = CardInApp();
+        _choice = RemoveChoice.AnswerFirst;
+
+        await _h.Shell.Yard.UnregisterAsync(_h.App.Id);
+
+        _h.Shell.Raven.IsOpen.ShouldBeTrue();
+    }
+
+    /// <summary>The cards go to VS Code only once the workspace is gone: a removal that fails keeps them here.</summary>
+    [Fact]
+    public async Task A_removal_that_fails_keeps_the_cards()
+    {
+        await InitAsync();
+        var held = CardInApp();
+        _choice = RemoveChoice.LeaveToVsCode;
+        _h.Workspaces.RemoveAsync(_h.App.Id, Arg.Any<CancellationToken>()).Returns(Task.FromException(new IOException("database locked")));
+
+        await _h.Shell.Yard.UnregisterAsync(_h.App.Id);
+
+        held.IsCompleted.ShouldBeFalse();
+        _h.Shell.Raven.OpenCardsOf(_h.App.Id).ShouldBe(1);
+    }
+
+    /// <summary>A question that fails to show is logged, as a failed removal is: it does not escape the tile's command.</summary>
+    [Fact]
+    public async Task A_question_that_fails_is_caught()
+    {
+        await InitAsync();
+        _ = CardInApp();
+        _h.Shell.AskBeforeRemove = (_, _) => Task.FromException<RemoveChoice>(new InvalidOperationException("owner closing"));
+
+        await Should.NotThrowAsync(() => _h.Shell.Yard.UnregisterAsync(_h.App.Id));
+
+        (await WasRemovedAsync()).ShouldBeFalse();
     }
 
     [Fact]
