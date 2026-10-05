@@ -68,7 +68,7 @@ public sealed partial class RavenPanelViewModelTests
         _yard.Gate = new TaskCompletionSource();
         vm.SelectedChat = vm.YardChat;
         Type(vm, "What's going on");
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await Until(() => vm.State == RavenState.Thinking); // its turn began: the Yard is being read
         Type(vm, "in chat three?");
         _yard.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
@@ -91,8 +91,25 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         var sent = _brain.Sent.ShouldHaveSingleItem();
-        sent.ShouldContain("Chat 3, ContentAutomatorX (its Claude Code chats unknown: the Yard could not be read)");
-        sent.ShouldNotContain("Nothing going on");
+        sent.ShouldContain("the Yard could not be read just now");
+        sent.ShouldContain("No summary or card yet in chat 1 CodeSwitchX, chat 3 ContentAutomatorX");
+        sent.ShouldNotContain("Nothing going on", customMessage: "unknown is not quiet");
+    }
+
+    /// <summary>A chat that waits on a card here is said once, as the card.</summary>
+    [Fact]
+    public async Task A_chat_waiting_on_a_card_is_counted_once()
+    {
+        var (vm, _, _, asks) = await OverviewVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+        _yard.Now("a", SessionState.Waiting, needsYou: true);
+
+        await TalkInAsync(vm, 0, "What's going on?");
+
+        var sent = _brain.Sent.ShouldHaveSingleItem();
+        sent.ShouldContain("Chat 3, ContentAutomatorX (1 card waiting)");
+        sent.ShouldNotContain("waiting on the user");
     }
 
     [Fact]
@@ -292,7 +309,8 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         var sent = _brain.Sent.ShouldHaveSingleItem();
-        sent.ShouldContain("Chat 3, ContentAutomatorX (nothing going on): no summary yet", customMessage: "talked in: its summary is still to come");
+        sent.ShouldContain("Chat 3, ContentAutomatorX (no Claude Code chat working or waiting, no card): no summary yet",
+            customMessage: "talked in: its summary is still to come");
         sent.ShouldContain("Nothing going on in chat 1 CodeSwitchX");
     }
 
