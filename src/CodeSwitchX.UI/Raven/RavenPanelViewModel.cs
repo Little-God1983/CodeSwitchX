@@ -316,12 +316,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             news.Arrived += (_, workspaceId) => _dispatcher.Post(() =>
             {
-                // Only news of the chat the user is in is spoken (#125): another window's starts no teller (#139). News of
-                // a chat whose workspace is not known yet may be the user's.
-                if (SpeakNews && !IsMuted && (workspaceId is null || ChatOf(workspaceId) == CurrentChat))
-                {
-                    _teller?.WarmUp(); // its start is hidden in the wait for the floor
-                }
+                // Only news of the chat the user is in is spoken (#125): another window's starts no teller (#139), unless
+                // the user switches to its chat before it is told.
+                _newsFrom.Add(ChatOf(workspaceId));
+                WarmTellerForNewsOf(CurrentChat);
 
                 ScheduleNews();
             });
@@ -1914,6 +1912,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>The chats the news waiting to be told is of: the teller is warmed for it in those chats only (UI thread).</summary>
+    private readonly HashSet<RavenChat> _newsFrom = [];
+
+    /// <summary>Warms the teller when news of <paramref name="chat"/>, the one the user is in, waits to be told.</summary>
+    private void WarmTellerForNewsOf(RavenChat chat)
+    {
+        if (SpeakNews && !IsMuted && _news is { HasNews: true } && _newsFrom.Contains(chat))
+        {
+            _teller?.WarmUp(); // its start is hidden in the wait for the floor
+        }
+    }
+
     /// <summary>Decides when other chats may make a sound, and whether the selected chat's news waits for the cooldown.</summary>
     public TrafficWatcher Traffic { get; }
 
@@ -2502,6 +2512,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             await previous;
             var began = _time.GetUtcNow();
+            _newsFrom.Clear(); // taken: what comes now is new
             var lines = await news.TakeAsync(CancellationToken.None);
             if (lines.Count == 0)
             {
@@ -3259,6 +3270,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         ShowSelected();
         CatchUpOn(value, away);
+        WarmTellerForNewsOf(CurrentChat); // its news, waiting, is told here now
     }
 
     /// <summary>

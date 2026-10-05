@@ -68,12 +68,36 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await TrafficVmAsync();
 
-        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News) || _teller.WarmUps > 0 || vm.State == RavenState.Idle);
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: the dispatcher runs the arrival at once
         _teller.WarmUps.ShouldBe(0);
 
         Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
         await Until(() => _teller.WarmUps > 0);
+    }
+
+    /// <summary>Switched to the news's chat before it is told, the teller is warmed there: its first word is not slower.</summary>
+    [Fact]
+    public async Task Switching_to_the_chat_whose_news_waits_warms_the_teller()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's, not told yet
+        _teller.WarmUps.ShouldBe(0);
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+
+        _teller.WarmUps.ShouldBe(1);
+    }
+
+    /// <summary>News of a chat on no workspace is never on a tile, so never told in a window's chat: it warms nothing there.</summary>
+    [Fact]
+    public async Task News_of_a_chat_on_no_workspace_does_not_warm_the_teller_in_a_window_s_chat()
+    {
+        var (vm, _) = await TrafficVmAsync();
+
+        _bus.Publish(new CodeSwitchX.Core.Messaging.SessionChanged(ChatNewsTests.Chat("loose", SessionState.Working, _time.GetUtcNow()),
+            ChatNewsTests.Chat("loose", SessionState.Idle, _time.GetUtcNow())));
+
+        _teller.WarmUps.ShouldBe(0);
     }
 
     [Fact]
