@@ -2099,9 +2099,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>"a chat in RawCutX": the folder the chat that asks works in, for a note when the Yard does not name it.</summary>
     private static string FolderOf(ChatAsk ask) =>
-        ask.Step.Cwd is { Length: > 0 } cwd && System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(cwd)) is { Length: > 0 } folder
-            ? $"a chat in {folder}"
-            : "a chat";
+        ask.Step.Cwd is { Length: > 0 } cwd ? $"a chat in {CodeSwitchX.Core.Workspaces.WorkspaceProbe.FolderName(cwd)}" : "a chat";
 
     /// <summary>A held question ended: its card shows how, and takes no more clicks.</summary>
     private void OnAskClosed(ChatAskClosed closed)
