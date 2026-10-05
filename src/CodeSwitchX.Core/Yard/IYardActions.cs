@@ -42,6 +42,12 @@ public interface IYardActions
     Task BackToYardAsync(CancellationToken ct);
 
     /// <summary>
+    /// Minimizes, maximizes or restores CodeSwitchX's own window (#117); maximize and restore also bring it to the front.
+    /// Returns what Raven says: done, already so, or that Windows kept another window in front.
+    /// </summary>
+    Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct);
+
+    /// <summary>
     /// Shows another chat in Raven's panel (and its window in the Cab when it says open); returns what Raven says of it,
     /// "Chat 3, ContentAutomatorX.". Throws when no chat has the number.
     /// </summary>
@@ -49,6 +55,14 @@ public interface IYardActions
 
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
+}
+
+/// <summary>What the user asks of CodeSwitchX's own window.</summary>
+public enum WindowRequest
+{
+    Minimize,
+    Maximize,
+    Restore,
 }
 
 /// <summary>A request the Yard cannot carry out; the message says why, in words for the user.</summary>

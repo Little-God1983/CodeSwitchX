@@ -141,6 +141,28 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return "The Yard is shown.";
     }
 
+    [McpServerTool(Name = "set_window", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Minimizes, maximizes or restores CodeSwitchX's own window (\"minimize CodeSwitchX\", \"get out of the way\", \"maximize "
+        + "it\", \"full screen\", \"bring CodeSwitchX back\"). The VS Code window shown in it goes along. You keep hearing the user while it "
+        + "is minimized. Returns what you say.")]
+    public Task<string> SetWindow(
+        [Description("minimize, maximize or restore (back to its normal size, in front).")] string state,
+        CancellationToken cancellationToken = default)
+    {
+        var request = WindowRequestOf(state)
+            ?? throw new McpException($"state is minimize, maximize or restore, not '{state}'. Nothing was changed.");
+        return Act(() => actions.SetWindowAsync(request, cancellationToken));
+    }
+
+    /// <summary>How the brain may say the state: "minimise", "hide", "full screen", "bring back".</summary>
+    internal static WindowRequest? WindowRequestOf(string? state) => new string([.. (state ?? "").ToLowerInvariant().Where(char.IsLetter)]) switch
+    {
+        "minimize" or "minimise" or "minimized" or "min" or "hide" or "hidden" => WindowRequest.Minimize,
+        "maximize" or "maximise" or "maximized" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
+        "restore" or "restored" or "normal" or "bringback" or "back" or "show" => WindowRequest.Restore,
+        _ => null,
+    };
+
     [McpServerTool(Name = "close_chat", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Closes a chat's tab in VS Code (\"close the … chat\"); its row leaves the tile. Any chat open in a VS Code tab can be closed, "
         + "not only ones you started. Its conversation is not deleted: it stays in VS Code's session list and can be opened again. Never call "

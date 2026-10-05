@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IShellWindow
 {
     private readonly ShellViewModel _shell;
     private readonly HotkeyService _hotkeys;
@@ -41,8 +41,27 @@ public partial class MainWindow : Window
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         shell.ForwardRequested += () => WindowActivation.BringUp(this);
+        shell.Window = this; // Raven minimizes and maximizes it by voice (#117)
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
+    }
+
+    ShellWindowState IShellWindow.State => WindowState switch
+    {
+        WindowState.Minimized => ShellWindowState.Minimized,
+        WindowState.Maximized => ShellWindowState.Maximized,
+        _ => ShellWindowState.Normal,
+    };
+
+    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() == new WindowInteropHelper(this).Handle;
+
+    /// <summary>As the title bar's button: StateChanged tells the shell, which hides the Cab's VS Code window with it.</summary>
+    void IShellWindow.Minimize() => WindowState = WindowState.Minimized;
+
+    void IShellWindow.Show(ShellWindowState state)
+    {
+        WindowState = state == ShellWindowState.Maximized ? WindowState.Maximized : WindowState.Normal;
+        WindowActivation.BringUp(this);
     }
 
     /// <summary>Shows the Add workspace dialog over the shell until it is closed.</summary>

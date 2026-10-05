@@ -399,6 +399,39 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
+    /// <summary>The window, set by it once it is made; null before, and in tests that do not need one.</summary>
+    public IShellWindow? Window { get; set; }
+
+    string IRavenShell.SetWindow(WindowRequest request)
+    {
+        if (Window is not { } window)
+        {
+            return "CodeSwitchX has no window to change yet.";
+        }
+
+        if (request == WindowRequest.Minimize)
+        {
+            if (window.State == ShellWindowState.Minimized)
+            {
+                return "CodeSwitchX is already minimized.";
+            }
+
+            window.Minimize();
+            return "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again.";
+        }
+
+        var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized") : (ShellWindowState.Normal, "back");
+        if (window.State == state && window.IsInFront)
+        {
+            return request == WindowRequest.Maximize ? "CodeSwitchX is already maximized." : "CodeSwitchX is already there, in front.";
+        }
+
+        window.Show(state);
+        return window.IsInFront
+            ? $"CodeSwitchX is {word}."
+            : $"CodeSwitchX is {word}, but Windows kept another window in front: click it on the taskbar to see it.";
+    }
+
     /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>
     public void BringForward() => ForwardRequested?.Invoke();
 
