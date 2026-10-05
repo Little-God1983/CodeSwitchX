@@ -8,6 +8,8 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <!-- VS Code keeps a window's open tabs in a SQLite file (VsCodeOpenTabs). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="CodeSwitchX.Hosting.Tests" />

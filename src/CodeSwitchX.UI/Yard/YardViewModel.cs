@@ -5,8 +5,10 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
@@ -28,10 +30,92 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
     private readonly ILogger<YardViewModel> _logger;
+    private readonly IVsCodeOpenTabs? _openTabs;
+    private readonly Func<string, TabConversation?> _writtenInAt;
+    private readonly Func<IReadOnlyDictionary<string, bool>> _runningTabs;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
     private ITimer? _gitTimer;
+    private ITimer? _tabsTimer;
+
+    /// <summary>The read of the tabs that runs, or the last one (UI thread).</summary>
+    private Task? _tabsRead;
+
+    /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
+    private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// When each such chat was last asked about: it is asked about again a minute on, as its title and last time change
+    /// while it runs, and one not known yet gets its conversation with its first message.
+    /// </summary>
+    private readonly Dictionary<string, DateTimeOffset> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How long until a tab whose chat was not found on disk is looked for again: a new tab's chat is written with its first message.</summary>
+    internal static readonly TimeSpan AskAgainAfter = TimeSpan.FromMinutes(1);
+
+    /// <summary>How long a closed chat can be kept on its tile, in minutes; 0 is not at all.</summary>
+    public static readonly IReadOnlyList<int> KeepClosedMinutesChoices = [0, 1, 5, 10, 30];
+
+    /// <summary>How long a chat can be idle before it is hidden, in hours; 0 is never.</summary>
+    public static readonly IReadOnlyList<int> HideIdleHoursChoices = [0, 1, 4, 12, 24];
+
+    /// <summary>How often VS Code's lists of open chat tabs are looked at; a list is read again only when its file changed.</summary>
+    public static readonly TimeSpan TabsInterval = TimeSpan.FromSeconds(5);
+
+    private TimeSpan _keepClosed;
+    private TimeSpan? _hideIdleAfter;
+
+    /// <summary>How long a chat stays on its tile after its tab was closed, greyed (#164); zero for not at all. The shell sets it from Settings.</summary>
+    public TimeSpan KeepClosed
+    {
+        get => _keepClosed;
+        set
+        {
+            _keepClosed = value;
+            Rearrange();
+        }
+    }
+
+    /// <summary>How long a chat may be idle before its row is hidden, tab or not (#164); null for never. The shell sets it from Settings.</summary>
+    public TimeSpan? HideIdleAfter
+    {
+        get => _hideIdleAfter;
+        set
+        {
+            _hideIdleAfter = value;
+            Rearrange();
+        }
+    }
+
+    /// <summary>The voice label of a chat Raven started, null for any other: a row gets it as it is made.</summary>
+    internal string? VoiceLabelOf(string sessionId) => _voiceLabels.GetValueOrDefault(sessionId);
+
+    /// <summary>
+    /// Whether the engine put the chat on another tile than this one (the folder it runs in is that tile's): it is that
+    /// tile's to show, by what the chat reports, and a tab of it here is not a second row.
+    /// </summary>
+    internal bool OnAnotherTile(WorkspaceTileViewModel tile, string sessionId) => Tiles.Any(t => t != tile && t.Knows(sessionId));
+
+    /// <summary>
+    /// Whether the chat was closed on purpose and has not run since: its tab, still in a list VS Code has not written
+    /// again, brings no row back.
+    /// </summary>
+    internal bool ClosedOnPurpose(string sessionId) => _closed.ContainsKey(sessionId);
+
+    /// <summary>The read of the tabs that runs, or the last one; tests await it.</summary>
+    internal Task CurrentTabsRefresh { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The time the tiles go by.</summary>
+    internal DateTimeOffset Now => _time.GetUtcNow();
+
+    private void Rearrange()
+    {
+        var now = Now;
+        foreach (var tile in Tiles.ToList())
+        {
+            tile.Tick(now);
+        }
+    }
     private Task _gitRefresh = Task.CompletedTask;
     private bool _gitRefreshRunning;
     private bool _gitRefreshAgain;
@@ -69,8 +153,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
-        IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger)
+        IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
+        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null)
     {
+        _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
+        _openTabs = openTabs;
+        _writtenInAt = writtenInAt ?? (_ => null);
         _store = store;
         _registry = registry;
         _engine = engine;
@@ -130,6 +218,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         foreach (var snapshot in _engine.Snapshots)
         {
             Apply(snapshot);
+        }
+
+        if (_openTabs is not null)
+        {
+            // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
+            await RefreshTabsAsync();
+            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync()), null, TabsInterval, TabsInterval);
         }
 
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
@@ -209,7 +304,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public void ForgetChat(string sessionId)
     {
         _closed[sessionId] = _time.GetUtcNow();
-        foreach (var tile in Tiles.Where(t => t.Chats.Any(c => c.SessionId == sessionId)).ToList())
+        foreach (var tile in Tiles.ToList())
         {
             tile.Remove(sessionId);
         }
@@ -233,6 +328,68 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _closed.Remove(snapshot.SessionId);
         return false;
+    }
+
+    /// <summary>
+    /// Reads the chat tabs open in the workspaces' VS Code windows, off the UI thread, and shows them on the tiles (#164).
+    /// Called on the UI thread; asked for while a read runs, it gives that read, not a second one.
+    /// </summary>
+    internal Task RefreshTabsAsync() =>
+        _openTabs is not { } openTabs ? Task.CompletedTask
+            : _tabsRead is { IsCompleted: false } running ? running
+            : _tabsRead = ReadTabsAsync(openTabs);
+
+    private async Task ReadTabsAsync(IVsCodeOpenTabs openTabs)
+    {
+        try
+        {
+            var workspaces = Tiles.Select(t => t.Workspace).ToList();
+            var now = Now;
+            var asked = _tabActivityAsked.Where(a => now - a.Value < AskAgainAfter).Select(a => a.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var (tabs, activity, running) = await Task.Run(() =>
+            {
+                var read = openTabs.Read(workspaces);
+                // Only for tabs of chats the app has no state of: theirs is the last thing known of them.
+                var unknown = read.Values.SelectMany(t => t.Tabs).Select(t => t.SessionId).Where(id => _engine.Get(id) is null).ToList();
+                var runs = unknown.Count == 0 ? new Dictionary<string, bool>() : _runningTabs();
+                var written = new Dictionary<string, TabConversation?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var id in unknown.Where(id => !asked.Contains(id)))
+                {
+                    written[id] = _writtenInAt(id);
+                }
+
+                return (read, written, runs);
+            });
+
+            foreach (var (id, at) in activity)
+            {
+                // One that is not known yet (a new tab has no conversation, a folder could not be read) is asked for again later.
+                _tabActivityAsked[id] = now;
+                if (at is { } known)
+                {
+                    _tabActivity[id] = known;
+                }
+                else
+                {
+                    _tabActivity.Remove(id);
+                }
+            }
+
+            // A tile added while the read ran was not asked about: it keeps what it has until the next read.
+            foreach (var tile in Tiles.Where(t => workspaces.Exists(w => w.Id == t.Id)).ToList())
+            {
+                tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity, running);
+            }
+
+            if (NeedsMeFirst)
+            {
+                Resort();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reading VS Code's open chat tabs failed; the tiles keep the ones read before");
+        }
     }
 
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
@@ -482,13 +639,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // On its tile first: the tile it leaves then knows the chat is another's, and keeps no row for a tab of it.
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
-        foreach (var other in Tiles.Where(t => t != tile && t.Chats.Any(c => c.SessionId == snapshot.SessionId)))
+        tile?.Upsert(snapshot, _pricing.Pricing);
+        foreach (var other in Tiles.Where(t => t != tile && t.Knows(snapshot.SessionId)).ToList())
         {
             other.Remove(snapshot.SessionId);
         }
 
-        tile?.Upsert(snapshot, _pricing.Pricing);
         if (tile?.Chats.FirstOrDefault(c => c.SessionId == snapshot.SessionId) is { } row)
         {
             row.VoiceLabel = _voiceLabels.GetValueOrDefault(snapshot.SessionId);
@@ -540,6 +698,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
+        CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
+    }
+
+    /// <summary>Reads the tabs again now, after the read that runs (UI thread): a tile's VS Code closed, and wrote its tabs.</summary>
+    internal void RefreshTabsSoon() => CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
+
+    /// <summary>Reads the tabs once the read that runs is over: a tile added meanwhile was not in it.</summary>
+    private async Task RefreshTabsAfterAsync(Task running)
+    {
+        await running;
+        await RefreshTabsAsync();
     }
 
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
@@ -618,6 +787,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
+        _tabsTimer?.Dispose();
         _spotlightTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {

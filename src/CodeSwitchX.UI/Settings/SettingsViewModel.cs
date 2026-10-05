@@ -99,6 +99,24 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether Raven says what came in a chat while the user was away when they switch to it (#127). On by default (#143).</summary>
     [ObservableProperty] private bool _ravenCatchUp = true;
 
+    /// <summary>How long, in minutes, a chat stays on its tile after its tab was closed (#164): one of <see cref="KeepClosedChoices"/>, 0 for not at all.</summary>
+    [ObservableProperty] private int _yardKeepClosedMinutes;
+
+    /// <summary>How long, in hours, a chat may be idle before its tile hides it (#164): one of <see cref="HideIdleChoices"/>, 0 for never.</summary>
+    [ObservableProperty] private int _yardHideIdleHours;
+
+    /// <summary>The times a closed chat can be kept for, as the Yard page offers them.</summary>
+    public IReadOnlyList<SettingChoice> KeepClosedChoices { get; } =
+        [.. Yard.YardViewModel.KeepClosedMinutesChoices.Select(m => new SettingChoice(m, KeepClosedText(m)))];
+
+    /// <summary>The idle times after which a chat is hidden, as the Yard page offers them.</summary>
+    public IReadOnlyList<SettingChoice> HideIdleChoices { get; } =
+        [.. Yard.YardViewModel.HideIdleHoursChoices.Select(h => new SettingChoice(h, HideIdleText(h)))];
+
+    public static string KeepClosedText(int minutes) => minutes == 0 ? "Off" : minutes == 1 ? "1 minute" : $"{minutes} minutes";
+
+    public static string HideIdleText(int hours) => hours == 0 ? "Never" : hours == 1 ? "1 hour" : $"{hours} hours";
+
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 
@@ -373,6 +391,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenMutedWindows = await LoadOrDefaultAsync<List<Guid>>(SettingKeys.RavenMutedWindows, "the muted Raven chats", ct) ?? [];
             RavenPauseSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenPauseSeconds, "the pause between messages", ct) is { } pause
                 && PauseChoices.Contains(pause) ? pause : (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
+            YardKeepClosedMinutes = await LoadOrDefaultAsync<int?>(SettingKeys.YardKeepClosedMinutes, "how long a closed chat is kept", ct) is { } keep
+                && Yard.YardViewModel.KeepClosedMinutesChoices.Contains(keep) ? keep : 0;
+            YardHideIdleHours = await LoadOrDefaultAsync<int?>(SettingKeys.YardHideIdleHours, "when an idle chat is hidden", ct) is { } hide
+                && Yard.YardViewModel.HideIdleHoursChoices.Contains(hide) ? hide : 0;
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
             RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? true;
@@ -520,6 +542,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
 
     partial void OnRavenPauseSecondsChanged(int value) => Persist(SettingKeys.RavenPauseSeconds, value);
+
+    partial void OnYardKeepClosedMinutesChanged(int value) => Persist(SettingKeys.YardKeepClosedMinutes, value);
+
+    partial void OnYardHideIdleHoursChanged(int value) => Persist(SettingKeys.YardHideIdleHours, value);
 
     partial void OnRavenMutedWindowsChanged(IReadOnlyList<Guid> value) => Persist(SettingKeys.RavenMutedWindows, value);
 

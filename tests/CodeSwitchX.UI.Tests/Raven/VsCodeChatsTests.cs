@@ -596,6 +596,42 @@ public sealed class VsCodeChatsTests : IDisposable
         VsCodeChats.HasConversation(Path.Combine(_root, "missing"), "with-one").ShouldBeFalse();
     }
 
+    /// <summary>#164: a tab the app knows no chat of takes its title and its last time from the conversation on disk.</summary>
+    [Fact]
+    public void A_conversation_on_disk_says_when_it_was_written_in_and_its_latest_title_the_user_s_own_first()
+    {
+        var projects = Path.Combine(_root, "projects");
+        Directory.CreateDirectory(Path.Combine(projects, "e--Repos-App"));
+        var file = Path.Combine(projects, "e--Repos-App", "titled.jsonl");
+        File.WriteAllLines(file,
+        [
+            """{"type":"user","message":{"content":"a prompt that mentions \"ai-title\" itself"}}""",
+            """{"type":"ai-title","aiTitle":"First guess","sessionId":"titled"}""",
+            """{"type":"assistant","message":{"content":"…"}}""",
+            """{"type":"ai-title","aiTitle":"Text-to-speech setup dialog with voice selector","sessionId":"titled"}""",
+        ]);
+        File.WriteAllText(Path.Combine(projects, "e--Repos-App", "untitled.jsonl"), "{}");
+
+        var titled = VsCodeChats.ConversationOf(projects, "titled").ShouldNotBeNull();
+        titled.Title.ShouldBe("Text-to-speech setup dialog with voice selector");
+        titled.WrittenAt.UtcDateTime.ShouldBe(File.GetLastWriteTimeUtc(file));
+        VsCodeChats.ConversationOf(projects, "untitled").ShouldNotBeNull().Title.ShouldBeNull();
+        VsCodeChats.ConversationOf(projects, "new-one").ShouldBeNull();
+        VsCodeChats.ConversationOf(Path.Combine(_root, "missing"), "titled").ShouldBeNull();
+
+        File.AppendAllLines(file, ["""{"type":"custom-title","customTitle":"Voice setup","sessionId":"titled"}""", """{"type":"ai-title","aiTitle":"Later guess","sessionId":"titled"}"""]);
+        VsCodeChats.ConversationOf(projects, "titled")!.Title.ShouldBe("Voice setup");
+
+        // A turn longer than the end that is read first came after the user's name: the whole file is read for it.
+        File.AppendAllText(file, "{\"type\":\"assistant\",\"message\":\"" + new string('x', VsCodeChats.TitleTailBytes + 10) + "\"}\n");
+        VsCodeChats.ConversationOf(projects, "titled")!.Title.ShouldBe("Voice setup");
+
+        // An older Claude Code wrote summary lines.
+        var old = Path.Combine(projects, "e--Repos-App", "old.jsonl");
+        File.WriteAllLines(old, ["""{"type":"summary","summary":"Fix the installer","leafUuid":"x"}"""]);
+        VsCodeChats.ConversationOf(projects, "old")!.Title.ShouldBe("Fix the installer");
+    }
+
     private int SkippedCount()
     {
         lock (_gate)

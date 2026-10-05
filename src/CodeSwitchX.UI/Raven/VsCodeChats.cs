@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
+using CodeSwitchX.Ingest.Transcripts;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Ingest.Live;
 using System.IO;
@@ -37,6 +39,9 @@ public interface IVsCodeChats
     /// <exception cref="YardActionException">It could not be shown; the message says why.</exception>
     Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct);
 }
+
+/// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
+public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);
 
 /// <param name="Folder">The folder it runs in.</param>
 /// <param name="SendTo">The name it is messaged by (<c>SendMessage</c>).</param>
@@ -371,14 +376,82 @@ public sealed class VsCodeChats : IVsCodeChats
     {
         try
         {
-            return Directory.Exists(projectsDirectory)
-                && Directory.EnumerateDirectories(projectsDirectory).Any(project => File.Exists(Path.Combine(project, sessionId + ".jsonl")));
+            return ConversationFile(projectsDirectory, sessionId) is not null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return true;
         }
     }
+
+    /// <summary>How much of a conversation's end is read for its title: Claude Code writes the title again after every turn.</summary>
+    internal const int TitleTailBytes = 512 * 1024;
+
+    /// <summary>
+    /// What the session's conversation on disk says: when it was last written in, and its title, the one the user gave
+    /// it (/rename) before the one Claude Code made. Null when it has none, or it cannot be read. Never throws.
+    /// </summary>
+    public static TabConversation? ConversationOf(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            if (ConversationFile(projectsDirectory, sessionId) is not { } file)
+            {
+                return null;
+            }
+
+            // The end first, where the latest title is; the whole file when the end has none (a long turn came after it).
+            var (made, given) = TitlesIn(file, TitleTailBytes);
+            if (given is null)
+            {
+                var whole = TitlesIn(file, long.MaxValue);
+                (made, given) = (made ?? whole.Made, whole.Given);
+            }
+
+            return new TabConversation(new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero), ChatTitle.FromPrompt(given ?? made));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The latest generated title and the latest the user gave (/rename) in the last <paramref name="tail"/> bytes, read as
+    /// the transcript indexer reads them. The first line of a tail is cut, and a line being written is not whole: neither is read.
+    /// </summary>
+    private static (string? Made, string? Given) TitlesIn(string file, long tail)
+    {
+        string? made = null, given = null;
+        using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        stream.Seek(Math.Max(0, stream.Length - tail), SeekOrigin.Begin);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+        {
+            // Cheap first: a turn's line can be megabytes, a title's is short.
+            if (line.Length >= 4000 || !(line.Contains("title\"", StringComparison.Ordinal) || line.Contains("\"summary\"", StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            switch (TranscriptLineParser.TryParse(line))
+            {
+                case SummaryLine summary:
+                    made = summary.Title;
+                    break;
+                case CustomTitleLine custom:
+                    given = custom.Title;
+                    break;
+            }
+        }
+
+        return (made, given);
+    }
+
+    /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>
+    private static string? ConversationFile(string projectsDirectory, string sessionId) =>
+        !Directory.Exists(projectsDirectory) || sessionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ? null
+            : Directory.EnumerateDirectories(projectsDirectory).Select(project => Path.Combine(project, sessionId + ".jsonl")).FirstOrDefault(File.Exists);
 
     private static string NameOf(string folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder;
 }

@@ -261,7 +261,16 @@ public partial class App : Application
         // The app's own settings by voice (#126): the tools read and change them as the Settings page does.
         services.AddSingleton<IAppSettings>(sp => new AppSettings(() => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             sp.GetRequiredService<ChatSettings>()));
-        services.AddSingleton<YardViewModel>();
+        // The tiles show the chat tabs open in VS Code (#164), read from what VS Code restores its windows from.
+        services.AddSingleton<IVsCodeOpenTabs>(_ => new VsCodeOpenTabs(VsCodeOpenTabs.DefaultDirectory));
+        services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
+            (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
+            (Func<IReadOnlyDictionary<string, bool>>)(() =>
+            {
+                var live = sp.GetRequiredService<ClaudeLiveSessions>();
+                return live.RunningNow().Select(c => c.SessionId).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(id => id, id => live.ShowsPrompt(id) == true, StringComparer.OrdinalIgnoreCase);
+            })));
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();

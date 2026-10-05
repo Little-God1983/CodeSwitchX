@@ -1,4 +1,6 @@
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Hosting.VsCode;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Telemetry;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -26,6 +28,23 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     [ObservableProperty] private string? _model;
 
+    /// <summary>
+    /// The chat's tab is open in VS Code, but the chat does not run: VS Code brought the tab back and it was not looked at
+    /// yet, or its Claude Code ended (#164). It starts when the row, or the tab, is clicked.
+    /// </summary>
+    [ObservableProperty] private bool _notRunning;
+
+    /// <summary>What the chat calls itself; null while it said nothing yet, and for a tab the app knows no chat of.</summary>
+    private string? _ownTitle;
+
+    /// <summary>Whether a chat's state was ever shown; a tab alone has none.</summary>
+    private bool _hasSession;
+
+    /// <summary>Whether a tab alone has a time to show: when its chat was last written in.</summary>
+    private bool _timed;
+
+    private OpenChatTab? _tab;
+
     private readonly Action<string>? _open;
 
     /// <param name="open">Opens the chat with this session id in its workspace's VS Code (#115); null where a row opens nothing.</param>
@@ -51,7 +70,9 @@ public sealed partial class ChatRowViewModel : ObservableObject
         }
 
         Version = snapshot.Version;
-        Title = snapshot.Title ?? $"Chat {snapshot.SessionId[..Math.Min(8, snapshot.SessionId.Length)]}";
+        _hasSession = true;
+        _ownTitle = snapshot.Title ?? _ownTitle;
+        ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
         Inferred = snapshot.Inferred;
@@ -67,7 +88,44 @@ public sealed partial class ChatRowViewModel : ObservableObject
     [RelayCommand]
     private void Open() => _open?.Invoke(SessionId);
 
-    public void Tick(DateTimeOffset now) => ElapsedText = FormatElapsed(now - StateSince);
+    /// <summary>
+    /// Shows the chat's VS Code tab, null for none: a chat that calls itself nothing takes the tab's title, and one the app
+    /// knows only by its tab shows as that tab, not running.
+    /// </summary>
+    /// <param name="notRunning">Whether the chat's tab is open while the chat does not run.</param>
+    /// <param name="conversation">For a tab the app knows no chat of: what its conversation on disk says, null when it has none yet.</param>
+    /// <param name="listedAt">For such a tab: when VS Code wrote the list it is in.</param>
+    /// <param name="waits">For such a tab whose chat runs: its tab waits on the user (a permission prompt, a question).</param>
+    public void ShowTab(OpenChatTab? tab, bool notRunning, TabConversation? conversation = null, DateTimeOffset listedAt = default, bool waits = false)
+    {
+        _tab = tab;
+        NotRunning = notRunning;
+        if (!_hasSession)
+        {
+            // Nothing was heard of it: idle while its Claude Code runs, ended else, since it was last written in as far
+            // as anyone knows. The time is shown only when it is known; the tab's own title is cut short, the conversation's is not.
+            _ownTitle = conversation?.Title;
+            StateSince = conversation?.WrittenAt ?? listedAt;
+            _timed = conversation is not null;
+            var state = notRunning ? SessionState.Ended : waits ? SessionState.Waiting : SessionState.Idle;
+            if (State != state)
+            {
+                State = state;
+                OnPropertyChanged(nameof(IsLive));
+                OnPropertyChanged(nameof(NeedsUser));
+            }
+        }
+
+        ShowTitle();
+    }
+
+    private void ShowTitle() =>
+        Title = _ownTitle ?? _tab?.Title ?? (_tab is not null ? NewChatTitle : $"Chat {SessionId[..Math.Min(8, SessionId.Length)]}");
+
+    /// <summary>What a tab nothing was said in yet is called.</summary>
+    public const string NewChatTitle = "New chat";
+
+    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
 
     public static string FormatElapsed(TimeSpan elapsed)
     {

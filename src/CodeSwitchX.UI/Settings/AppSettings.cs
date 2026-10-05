@@ -243,6 +243,29 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
+        // A time the Yard page offers in a box, worded as there, or none: "10", "10 minutes", "off", "0". Said with a
+        // unit, it is that long: "1 hour" is no "1 minute", and 60 minutes are one hour.
+        Entry Time(string name, string description, string[] aliases, Func<int, string> worded, int unitMinutes, IReadOnlyList<int> choices, Func<int> get,
+            Action<int> set)
+        {
+            string Text(int count) => worded(count).ToLowerInvariant();
+            return new(new(name, Title(SettingsPage.Yard), description, [.. choices.Select(Text)]), SettingsPage.Yard, aliases, () => Text(get()), v =>
+            {
+                set(Normal(v) is "off" or "none" or "never" ? 0
+                    : Minutes(Normal(v), unitMinutes) is { } minutes && minutes % unitMinutes == 0 && choices.Contains((int)(minutes / unitMinutes))
+                        ? (int)(minutes / unitMinutes)
+                    : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", choices.Select(Text))}, not '{v}'. Nothing was changed."));
+                return null;
+            });
+        }
+
+        // The minutes in "10", "10 minutes", "2 hours": a bare number is in the setting's own unit. Null for anything else.
+        static long? Minutes(string said, int unitMinutes) =>
+            System.Text.RegularExpressions.Regex.Match(said, @"^(\d{1,6})(?: (minutes?|mins?|hours?|hrs?))?$") is { Success: true } match
+                ? long.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)
+                    * (match.Groups[2].Value is { Length: > 0 } unit ? unit[0] == 'h' ? 60 : 1 : unitMinutes)
+                : null;
+
         return
         [
             // Voice
@@ -393,6 +416,15 @@ public sealed class AppSettings : IAppSettings
                     S.SetChatDefaults(_chats.Defaults with { Effort = ChatSettings.DefaultEffortOf(v) }); // as set_defaults takes it
                     return null;
                 }),
+
+            // Yard
+            Time("keep a closed chat", "How long a chat stays on its tile, greyed, after its tab was closed; \"off\" for not at all.",
+                ["keep closed chats", "closed chats", "closed chat", "keep ended chats"], SettingsViewModel.KeepClosedText, 1, Yard.YardViewModel.KeepClosedMinutesChoices,
+                () => S.YardKeepClosedMinutes, v => S.YardKeepClosedMinutes = v),
+            Time("hide an idle chat", "How long a chat may do nothing before its tile hides it, though its tab is open; \"never\" to show "
+                    + "every open chat tab.",
+                ["hide idle chats", "idle chats", "idle chat", "hide a chat that has been idle"], SettingsViewModel.HideIdleText, 60, Yard.YardViewModel.HideIdleHoursChoices,
+                () => S.YardHideIdleHours, v => S.YardHideIdleHours = v),
 
             // Usage
             new(new("5-hour budget", Title(SettingsPage.Usage), "The tokens of the 5-hour window the bottom bar measures against; \"off\" for "

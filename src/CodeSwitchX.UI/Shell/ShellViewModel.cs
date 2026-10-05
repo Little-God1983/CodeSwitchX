@@ -128,6 +128,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // The Yard owns its tile size and the settings store it. The window shows only after this method, so the tiles
         // are never drawn at the default size first.
         Yard.TileScale = Settings.TileScale;
+        ShowYardRules();
         Yard.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(YardViewModel.TileScale))
@@ -183,6 +184,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             else if (e.PropertyName == nameof(SettingsViewModel.RavenBargeIn))
             {
                 Raven.BargeIn = Settings.RavenBargeIn;
+            }
+            else if (e.PropertyName is nameof(SettingsViewModel.YardKeepClosedMinutes) or nameof(SettingsViewModel.YardHideIdleHours))
+            {
+                ShowYardRules();
             }
             else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
                 or nameof(SettingsViewModel.RavenOwnNewsWaits) or nameof(SettingsViewModel.RavenPauseSeconds))
@@ -412,6 +417,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;
+
+    /// <summary>The tiles follow the Yard page: how long a closed chat is kept, and when an idle one is hidden (#164).</summary>
+    private void ShowYardRules()
+    {
+        Yard.KeepClosed = TimeSpan.FromMinutes(Settings.YardKeepClosedMinutes);
+        Yard.HideIdleAfter = Settings.YardHideIdleHours > 0 ? TimeSpan.FromHours(Settings.YardHideIdleHours) : null;
+    }
 
     /// <summary>The traffic watcher follows the Voice page's cooldown, pause and switches.</summary>
     private void ShowTraffic()

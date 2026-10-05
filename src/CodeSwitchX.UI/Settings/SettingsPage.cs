@@ -7,6 +7,7 @@ public enum SettingsPage
     Listening,
     Brain,
     Shortcuts,
+    Yard,
     ClaudeCode,
     Usage,
     Privacy,
@@ -36,6 +37,8 @@ public sealed record SettingsPageItem(SettingsPage Page, string Group, string Ti
             ["model", "brain", "effort", "model names", "alias", "new chats", "Opus", "Sonnet", "Haiku", "Fable"]),
         new(SettingsPage.Shortcuts, "Raven", "Shortcuts", "\uE765", "Keys that switch Raven's chat from anywhere, VS Code too.",
             ["hotkey", "shortcut", "keys", "chat", "switch", "F12", "previous", "next", "taken"]),
+        new(SettingsPage.Yard, "CodeSwitchX", "Yard", "\uF0E2", "Which chats a workspace's tile shows.",
+            ["tile", "chats", "tabs", "closed chat", "keep a closed chat", "idle", "hide a chat that has been idle", "ended"]),
         new(SettingsPage.ClaudeCode, "CodeSwitchX", "Claude Code", "", "The hooks that let every Claude Code session report its state.",
             ["hooks", "install", "remove", "settings file", "relay", "csx-hook"]),
         new(SettingsPage.Usage, "CodeSwitchX", "Usage", "", "A reminder line for the tokens of the 5-hour window.",
@@ -44,3 +47,6 @@ public sealed record SettingsPageItem(SettingsPage Page, string Group, string Ti
             ["payloads", "privacy", "data folder", "logs", "database"]),
     ];
 }
+
+/// <summary>One choice of a setting picked from a list: what is stored, and how the list words it.</summary>
+public sealed record SettingChoice(int Value, string Label);

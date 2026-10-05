@@ -267,6 +267,34 @@ public sealed class AppSettingsTests
         set.Values!.ShouldBe(Enum.GetValues<WhisperModel>().Select(ModelLamp.RowNameOf));
     }
 
+    /// <summary>#164: the Yard's two times are set by voice to ones the page offers, or off; the tiles follow at once.</summary>
+    [Fact]
+    public async Task The_Yard_s_times_are_set_by_voice()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync("keep closed chats", "10 minutes", Ct)).Value.ShouldBe("10 minutes");
+        _h.Shell.Yard.KeepClosed.ShouldBe(TimeSpan.FromMinutes(10));
+        (await _settings.SetAsync("closed chats", "off", Ct)).Value.ShouldBe("off");
+        _h.Shell.Yard.KeepClosed.ShouldBe(TimeSpan.Zero);
+        await _settings.SetAsync("closed chats", "5", Ct);
+        (await _settings.SetAsync("closed chats", "0 minutes", Ct)).Value.ShouldBe("off");
+
+        (await _settings.SetAsync("hide idle chats", "1", Ct)).Value.ShouldBe("1 hour");
+        _h.Shell.Yard.HideIdleAfter.ShouldBe(TimeSpan.FromHours(1));
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("hide idle chats", "3 hours", Ct))).Message
+            .ShouldBe("Hide an idle chat is one of never, 1 hour, 4 hours, 12 hours, 24 hours, not '3 hours'. Nothing was changed.");
+        (await _settings.SetAsync("idle chats", "never", Ct)).Value.ShouldBe("never");
+        _h.Shell.Yard.HideIdleAfter.ShouldBeNull();
+
+        // The unit said counts: a minute is no hour.
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("hide idle chats", "1 minute", Ct));
+        (await _settings.SetAsync("hide idle chats", "60 minutes", Ct)).Value.ShouldBe("1 hour");
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("keep closed chats", "1 hour", Ct));
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("keep closed chats", "1.5", Ct));
+        (await _settings.SetAsync("keep closed chats", "30 mins", Ct)).Value.ShouldBe("30 minutes");
+    }
+
     /// <summary>#152: the pause is set by voice to one the page offers, and found by how it is said; another is refused.</summary>
     [Theory]
     [InlineData("pause between messages")]
@@ -378,6 +406,8 @@ public sealed class AppSettingsTests
     [InlineData("model", SettingsPage.Brain)]
     [InlineData("hooks", SettingsPage.ClaudeCode)]
     [InlineData("budget", SettingsPage.Usage)]
+    [InlineData("idle", SettingsPage.Yard)]
+    [InlineData("the yard settings", SettingsPage.Yard)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
     [Theory]

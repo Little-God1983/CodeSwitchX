@@ -890,6 +890,35 @@
           </Border>
         </StackPanel>
 
+        <!-- Yard -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Yard}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Chats on a tile" />
+              <TextBlock Style="{StaticResource Help}"
+                         Text="A tile shows the Claude Code chat tabs open in its workspace's VS Code window, idle or not, and the chats that are running. While VS Code is closed, it shows the tabs VS Code will come back with. A chat leaves the tile when its tab is closed." />
+              <DockPanel Margin="0,16,0,0">
+                <ComboBox DockPanel.Dock="Right" Width="130" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Keep a closed chat on its tile"
+                          ItemsSource="{Binding KeepClosedChoices}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding YardKeepClosedMinutes}" />
+                <StackPanel>
+                  <TextBlock Text="Keep a closed chat on its tile" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="After you close a chat's tab, its row stays this long, greyed. A click on it opens the chat again. Off, the row goes at once." />
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <ComboBox DockPanel.Dock="Right" Width="130" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Hide a chat that has been idle"
+                          ItemsSource="{Binding HideIdleChoices}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding YardHideIdleHours}" />
+                <StackPanel>
+                  <TextBlock Text="Hide a chat that has been idle" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="A chat that has done nothing for this long drops off its tile, though its tab is still open. It comes back when you write in it. Never, a tile shows every open chat tab." />
+                </StackPanel>
+              </DockPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
         <!-- Usage -->
         <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Usage}">
           <Border Style="{StaticResource Card}">

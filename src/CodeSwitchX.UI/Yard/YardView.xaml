@@ -31,8 +31,23 @@
           <RowDefinition Height="Auto" />
           <RowDefinition Height="3" />
         </Grid.RowDefinitions>
-        <Ellipse Grid.Column="0" Width="8" Height="8" VerticalAlignment="Center" Fill="{Binding State, Converter={StaticResource StateBrush}}"
-                 ToolTip="{Binding State}" />
+        <Ellipse Grid.Column="0" Width="8" Height="8" VerticalAlignment="Center">
+          <Ellipse.Style>
+            <Style TargetType="Ellipse">
+              <Setter Property="Fill" Value="{Binding State, Converter={StaticResource StateBrush}}" />
+              <Setter Property="ToolTip" Value="{Binding State}" />
+              <Style.Triggers>
+                <!-- Its tab is open in VS Code, but the chat does not run (#164): a ring, not a dot. -->
+                <DataTrigger Binding="{Binding NotRunning}" Value="True">
+                  <Setter Property="Fill" Value="Transparent" />
+                  <Setter Property="Stroke" Value="#8A94A6" />
+                  <Setter Property="StrokeThickness" Value="1.5" />
+                  <Setter Property="ToolTip" Value="Not running: its tab is open in VS Code. Click to open it." />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Ellipse.Style>
+        </Ellipse>
         <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="4,0">
           <TextBlock.ToolTip>
             <TextBlock>

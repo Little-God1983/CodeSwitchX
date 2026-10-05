@@ -276,6 +276,33 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.RavenPauseSeconds, 5, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>#164: a closed chat is not kept and an idle one never hidden until the user says so; a stored time the page does not offer is neither.</summary>
+    [Theory]
+    [InlineData(null, 0, null, 0)]
+    [InlineData(10, 10, 12, 12)]
+    [InlineData(7, 0, 5, 0)]
+    public async Task The_Yard_s_times_default_to_off_and_never_and_are_saved(int? storedKeep, int keep, int? storedHide, int hide)
+    {
+        _store.GetAsync<int?>(SettingKeys.YardKeepClosedMinutes, Arg.Any<CancellationToken>()).Returns(Task.FromResult(storedKeep));
+        _store.GetAsync<int?>(SettingKeys.YardHideIdleHours, Arg.Any<CancellationToken>()).Returns(Task.FromResult(storedHide));
+
+        await _vm.LoadAsync(CancellationToken.None);
+        (_vm.YardKeepClosedMinutes, _vm.YardHideIdleHours).ShouldBe((keep, hide));
+        _vm.YardKeepClosedMinutes = 5;
+        _vm.YardHideIdleHours = 24;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.YardKeepClosedMinutes, 5, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.YardHideIdleHours, 24, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void The_Yard_s_times_are_offered_in_words()
+    {
+        _vm.KeepClosedChoices.Select(c => c.Label).ShouldBe(["Off", "1 minute", "5 minutes", "10 minutes", "30 minutes"]);
+        _vm.HideIdleChoices.Select(c => c.Label).ShouldBe(["Never", "1 hour", "4 hours", "12 hours", "24 hours"]);
+    }
+
     [Theory]
     [InlineData(20, 20)]
     [InlineData(7, 10)]
