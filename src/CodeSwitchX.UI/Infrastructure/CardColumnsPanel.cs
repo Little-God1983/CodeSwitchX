@@ -40,24 +40,29 @@ public sealed class CardColumnsPanel : Panel
         set => SetValue(GapProperty, value);
     }
 
-    /// <summary>How many columns fit the width: one to <see cref="MaxColumns"/>, all of them when the width is not limited.</summary>
-    internal static int ColumnsFor(double width, double minColumnWidth, int maxColumns, double gap)
+    /// <summary>
+    /// How many columns fit the width: one to <see cref="MaxColumns"/>; with the width not limited, as many as there are
+    /// cards to fill, up to the most.
+    /// </summary>
+    internal static int ColumnsFor(double width, double minColumnWidth, int maxColumns, double gap, int cards)
     {
         var most = Math.Max(1, maxColumns);
-        return double.IsInfinity(width) || double.IsNaN(width) ? most
+        return double.IsInfinity(width) || double.IsNaN(width) ? Math.Clamp(cards, 1, most)
             : Math.Clamp((int)Math.Floor((width + gap) / (Math.Max(1, minColumnWidth) + gap)), 1, most);
     }
 
-    /// <summary>The columns the last measure laid out: arrange keeps them, as the cards were sized for them.</summary>
+    /// <summary>The columns and the width the last measure laid out: arrange keeps them, as the cards were sized for them.</summary>
     private int _columns = 1;
+
+    private double _measuredWidth = double.NaN;
 
     protected override Size MeasureOverride(Size availableSize)
     {
         var children = InternalChildren;
         var unlimited = double.IsInfinity(availableSize.Width);
-        // Not limited in width: as many columns as there are cards to fill, up to the most.
-        var columns = unlimited ? Math.Clamp(children.Count, 1, Math.Max(1, MaxColumns)) : ColumnsFor(availableSize.Width, MinColumnWidth, MaxColumns, Gap);
+        var columns = ColumnsFor(availableSize.Width, MinColumnWidth, MaxColumns, Gap, children.Count);
         _columns = columns;
+        _measuredWidth = availableSize.Width;
         var width = unlimited ? double.PositiveInfinity : ColumnWidth(availableSize.Width, columns);
         var widest = 0.0;
         foreach (UIElement child in children)
@@ -74,7 +79,9 @@ public sealed class CardColumnsPanel : Panel
     {
         var children = InternalChildren;
         var columns = _columns; // a hair wider or narrower from layout rounding, the cards keep the columns they were measured for
-        var width = ColumnWidth(finalSize.Width, columns);
+        // Only rounding apart, the measured width too: a card made narrower would wrap a line more than its row's height holds.
+        var basis = Math.Abs(finalSize.Width - _measuredWidth) < 1 ? _measuredWidth : finalSize.Width;
+        var width = ColumnWidth(basis, columns);
         var top = 0.0;
         for (var start = 0; start < children.Count; start += columns)
         {

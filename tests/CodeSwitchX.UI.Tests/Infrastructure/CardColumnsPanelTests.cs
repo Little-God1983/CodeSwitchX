@@ -16,9 +16,15 @@ public sealed class CardColumnsPanelTests
     [InlineData(429.0, 1)]
     [InlineData(40.0, 1)]
     [InlineData(5000.0, 3)]
-    [InlineData(double.PositiveInfinity, 3)]
     public void As_many_columns_as_fit_one_to_three(double width, int columns) =>
-        CardColumnsPanel.ColumnsFor(width, 210, 3, 10).ShouldBe(columns);
+        CardColumnsPanel.ColumnsFor(width, 210, 3, 10, cards: 3).ShouldBe(columns);
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(3, 3)]
+    [InlineData(5, 3)]
+    public void Unlimited_in_width_as_many_columns_as_cards_up_to_three(int cards, int columns) =>
+        CardColumnsPanel.ColumnsFor(double.PositiveInfinity, 210, 3, 10, cards).ShouldBe(columns);
 
     /// <summary>Two to a row at 500: equal columns with the gap between, each row as tall as its own tallest card.</summary>
     [Fact]
@@ -57,6 +63,22 @@ public sealed class CardColumnsPanelTests
         panel.Arrange(new Rect(0, 0, 650, panel.DesiredSize.Height));
 
         Slot(panel, 2).Y.ShouldBe(110, "the third card stays on the second row");
+    });
+
+    /// <summary>Arranged a hair narrower than it was measured, the cards keep the width they were measured at: no extra line to cut.</summary>
+    [Fact]
+    public Task Arranged_a_hair_narrower_the_cards_keep_their_measured_width() => StaThread.RunAsync(() =>
+    {
+        var panel = new CardColumnsPanel { MinColumnWidth = 210, MaxColumns = 3, Gap = 10 };
+        for (var i = 0; i < 2; i++)
+        {
+            panel.Children.Add(new Border { Height = 100 });
+        }
+
+        panel.Measure(new Size(649.4, double.PositiveInfinity));
+        panel.Arrange(new Rect(0, 0, 649, panel.DesiredSize.Height));
+
+        Slot(panel, 0).Width.ShouldBe((649.4 - 10) / 2, 0.001);
     });
 
     /// <summary>Not limited in width, it asks for as many columns as it has cards, up to three, and no more.</summary>
