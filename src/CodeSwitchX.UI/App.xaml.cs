@@ -257,6 +257,9 @@ public partial class App : Application
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
             sp.GetRequiredService<TurnStops>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
 
+        // The app's own settings by voice (#126): the tools read and change them as the Settings page does.
+        services.AddSingleton<IAppSettings>(sp => new AppSettings(() => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
+            sp.GetRequiredService<ChatSettings>()));
         services.AddSingleton<YardViewModel>();
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();

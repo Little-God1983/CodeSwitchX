@@ -394,6 +394,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
+    /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>
+    public void BringForward() => ForwardRequested?.Invoke();
+
     async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
     {
         if (Yard.FindTile(workspaceId) is null)

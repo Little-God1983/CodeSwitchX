@@ -58,7 +58,11 @@ public sealed class BrainSettings
         + "first, then start_chat without model and effort. Only when the user says it is for this one chat, give model and effort "
         + "to start_chat instead. Then say in one sentence what runs where, with which model and effort. "
         + "\"Open it\" means the chat you started last, or the one just talked about: call open_workspace with that chat. \"Back "
-        + "to the Yard\" is back_to_yard. ";
+        + "to the Yard\" is back_to_yard. "
+        + "CodeSwitchX's own settings (\"is open mic on?\", \"turn open mic off\", \"use the Kokoro voice\", \"open the voice "
+        + "settings\"): get_setting, set_setting and open_settings, with list_settings when you are unsure of a setting's name. Change "
+        + "one only when the user asked for it, and say what you set. One that is not changed by voice (list_settings says why): "
+        + "call open_settings at its page, so the user can do it there, and say why. ";
 
     private const string Telling =
         "Telling a chat something (\"tell the issues chat to ...\"): find it with list_chats, and call SendMessage with its "
