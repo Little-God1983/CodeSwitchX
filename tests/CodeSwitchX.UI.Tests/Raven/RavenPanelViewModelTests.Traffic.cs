@@ -88,16 +88,36 @@ public sealed partial class RavenPanelViewModelTests
         _teller.WarmUps.ShouldBe(1);
     }
 
-    /// <summary>News of a chat on no workspace is never on a tile, so never told in a window's chat: it warms nothing there.</summary>
-    [Fact]
-    public async Task News_of_a_chat_on_no_workspace_does_not_warm_the_teller_in_a_window_s_chat()
+    /// <summary>News of a chat on no workspace is on no tile, so never told: it warms the teller nowhere, chat 0 included.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task News_of_a_chat_on_no_workspace_warms_no_teller(bool inChatZero)
     {
         var (vm, _) = await TrafficVmAsync();
+        if (inChatZero)
+        {
+            vm.SelectedChat = vm.YardChat;
+        }
 
         _bus.Publish(new CodeSwitchX.Core.Messaging.SessionChanged(ChatNewsTests.Chat("loose", SessionState.Working, _time.GetUtcNow()),
             ChatNewsTests.Chat("loose", SessionState.Idle, _time.GetUtcNow())));
 
         _teller.WarmUps.ShouldBe(0);
+    }
+
+    /// <summary>Other windows' news, while the chat's own waits, warms the teller no more than the chat's own did.</summary>
+    [Fact]
+    public async Task Other_windows_news_does_not_warm_the_teller_again()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's
+        var warm = _teller.WarmUps;
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("c", SessionState.Working, SessionState.Idle);
+
+        _teller.WarmUps.ShouldBe(warm);
     }
 
     [Fact]

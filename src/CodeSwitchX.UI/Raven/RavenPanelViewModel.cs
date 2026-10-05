@@ -318,8 +318,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // Only news of the chat the user is in is spoken (#125): another window's starts no teller (#139), unless
                 // the user switches to its chat before it is told.
-                _newsFrom.Add(ChatOf(workspaceId));
-                WarmTellerForNewsOf(CurrentChat);
+                if (ChatOf(workspaceId) == CurrentChat)
+                {
+                    WarmTellerForCurrentNews();
+                }
 
                 ScheduleNews();
             });
@@ -1912,13 +1914,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>The chats the news waiting to be told is of: the teller is warmed for it in those chats only (UI thread).</summary>
-    private readonly HashSet<RavenChat> _newsFrom = [];
-
-    /// <summary>Warms the teller when news of <paramref name="chat"/>, the one the user is in, waits to be told.</summary>
-    private void WarmTellerForNewsOf(RavenChat chat)
+    /// <summary>Warms the teller when news of the chat the user is in waits to be told (#139).</summary>
+    private void WarmTellerForCurrentNews()
     {
-        if (SpeakNews && !IsMuted && _news is { HasNews: true } && _newsFrom.Contains(chat))
+        // Told where its window's chat is: chat 0 for a window the list does not show.
+        if (SpeakNews && !IsMuted && _news is not null && _news.HasNewsFor(id => ChatOf(id) == CurrentChat))
         {
             _teller?.WarmUp(); // its start is hidden in the wait for the floor
         }
@@ -2512,7 +2512,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             await previous;
             var began = _time.GetUtcNow();
-            _newsFrom.Clear(); // taken: what comes now is new
             var lines = await news.TakeAsync(CancellationToken.None);
             if (lines.Count == 0)
             {
@@ -3270,7 +3269,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         ShowSelected();
         CatchUpOn(value, away);
-        WarmTellerForNewsOf(CurrentChat); // its news, waiting, is told here now
+        WarmTellerForCurrentNews(); // its news, waiting, is told here now
     }
 
     /// <summary>

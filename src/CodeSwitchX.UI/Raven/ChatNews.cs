@@ -80,6 +80,18 @@ public sealed class ChatNews : IDisposable
     public event EventHandler<Guid?>? Arrived;
 
 
+    /// <summary>
+    /// Whether news waits of a chat whose workspace, as the engine placed it when the news came, is one <paramref name="told"/>
+    /// takes. A chat on no workspace is on no tile, and its news is not told: it never counts.
+    /// </summary>
+    public bool HasNewsFor(Func<Guid, bool> told)
+    {
+        lock (_lock)
+        {
+            return _slots.Values.Any(s => s.WorkspaceId is { } id && told(id));
+        }
+    }
+
     public bool HasNews
     {
         get
@@ -113,7 +125,7 @@ public sealed class ChatNews : IDisposable
         var current = change.Current;
         lock (_lock)
         {
-            _slots[current.SessionId] = new Slot(kind, kind == ChatNewsKind.NeedsYou ? current.LastNotification : null, current.StateSince,
+            _slots[current.SessionId] = new Slot(kind, kind == ChatNewsKind.NeedsYou ? current.LastNotification : null, current.StateSince, WorkspaceId: current.WorkspaceId, TranscriptPath:
                 current.TranscriptPath);
         }
 
@@ -181,5 +193,5 @@ public sealed class ChatNews : IDisposable
 
     public void Dispose() => _subscription.Dispose();
 
-    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath);
+    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath, Guid? WorkspaceId = null);
 }
