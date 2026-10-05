@@ -548,7 +548,33 @@
                 <StackPanel>
                   <TextBlock Text="Speak chat news" FontSize="14.5" FontWeight="SemiBold" />
                   <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
-                             Text="When chats finish, fail or need you, Raven says so in one remark once nobody is talking. Off, the news is only written in Raven's log." />
+                             Text="When the chat you're in finishes, fails or needs you, Raven says so once nobody is talking. Off, the news is only written in Raven's log." />
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding RavenChatSound}" AutomationProperties.Name="Sound for other chats" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="Sound for other chats" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="Other chats are never spoken. When it is quiet, their news or questions make a short sound. Off, they are only marked in the list." />
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <ComboBox DockPanel.Dock="Right" Width="110" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Cooldown"
+                          ItemsSource="{Binding CooldownChoices}" SelectedItem="{Binding RavenCooldownSeconds}" ItemStringFormat="{}{0} s" />
+                <StackPanel>
+                  <TextBlock Text="Cooldown" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="After Raven speaks or a chat makes its sound, other chats stay silent this long. What comes in meanwhile is only marked in the list." />
+                </StackPanel>
+              </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding RavenOwnNewsWaits}"
+                          AutomationProperties.Name="The chat I'm in also waits for the cooldown" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="The chat I'm in also waits for the cooldown" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="On, the news of the chat you're in is only shown if Raven spoke within the cooldown. Its questions and Raven's answers to you are always spoken." />
                 </StackPanel>
               </DockPanel>
             </StackPanel>

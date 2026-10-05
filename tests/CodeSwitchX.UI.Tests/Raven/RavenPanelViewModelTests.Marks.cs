@@ -81,11 +81,11 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a2", SessionState.Working, SessionState.Idle);
         Changes("a3", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
 
         var three = ChatNumbered(vm, 3);
         vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines!.Count.ShouldBe(3);
-        three.Unread.ShouldBe(4, "three news lines and what Raven said of them");
+        three.Unread.ShouldBe(3, "three news lines, and nothing said of them: chat 3 is not the one the user is in");
         ChatNumbered(vm, 1).Unread.ShouldBe(0);
 
         vm.SelectedChat = three;
@@ -101,7 +101,7 @@ public sealed partial class RavenPanelViewModelTests
 
         Changes("a", SessionState.Working, SessionState.Errored);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
 
         var three = ChatNumbered(vm, 3);
         three.HasFailed.ShouldBeTrue();
@@ -120,7 +120,7 @@ public sealed partial class RavenPanelViewModelTests
 
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
 
         ChatNumbered(vm, 3).HasFailed.ShouldBeFalse();
         ChatNumbered(vm, 3).Unread.ShouldBeGreaterThan(0);

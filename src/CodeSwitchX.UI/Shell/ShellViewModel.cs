@@ -128,6 +128,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
         Raven.BargeIn = Settings.RavenBargeIn;
+        ShowTraffic();
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
         Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
@@ -164,6 +165,11 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             else if (e.PropertyName == nameof(SettingsViewModel.RavenBargeIn))
             {
                 Raven.BargeIn = Settings.RavenBargeIn;
+            }
+            else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
+                or nameof(SettingsViewModel.RavenOwnNewsWaits))
+            {
+                ShowTraffic();
             }
         };
         // The chips show what a chat Raven starts runs with; Settings holds it, and Raven changes it there by voice.
@@ -339,6 +345,14 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;
+
+    /// <summary>The traffic watcher follows the Voice page's cooldown and switches.</summary>
+    private void ShowTraffic()
+    {
+        Raven.Traffic.Cooldown = TimeSpan.FromSeconds(Settings.RavenCooldownSeconds);
+        Raven.Traffic.SoundOn = Settings.RavenChatSound;
+        Raven.Traffic.OwnNewsWaits = Settings.RavenOwnNewsWaits;
+    }
 
     private void TrackRavenOpen()
     {

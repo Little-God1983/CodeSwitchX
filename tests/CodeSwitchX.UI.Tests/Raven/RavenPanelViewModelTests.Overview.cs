@@ -36,7 +36,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _, summarizer, asks) = await OverviewVmAsync();
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
-        _time.Advance(RavenPanelViewModel.NewsGrace); // read out: the brains that act are told it
+        _time.Advance(TrafficWatcher.NewsGrace); // read out: the brains that act are told it
         await WithinAsync(vm.PendingAnswers);
         await TalkInAsync(vm, 3, "The secret plan is Bluebird");
 
@@ -219,7 +219,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, brains, _, asks) = await OverviewVmAsync();
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
-        _time.Advance(RavenPanelViewModel.NewsGrace); // read out, and told to the brains that act
+        _time.Advance(TrafficWatcher.NewsGrace); // read out, and told to the brains that act
         await WithinAsync(vm.PendingAnswers);
 
         await TalkInAsync(vm, 3, "Deny it");

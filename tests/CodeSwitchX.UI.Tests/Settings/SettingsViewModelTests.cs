@@ -224,6 +224,36 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task The_traffic_settings_default_to_a_10_s_cooldown_with_the_sound_on_and_are_saved()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenCooldownSeconds.ShouldBe(10);
+        _vm.RavenChatSound.ShouldBeTrue();
+        _vm.RavenOwnNewsWaits.ShouldBeFalse();
+
+        _vm.RavenCooldownSeconds = 20;
+        _vm.RavenChatSound = false;
+        _vm.RavenOwnNewsWaits = true;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.RavenCooldownSeconds, 20, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenChatSound, false, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenOwnNewsWaits, true, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(20, 20)]
+    [InlineData(7, 10)]
+    public async Task A_stored_cooldown_the_page_does_not_offer_falls_back_to_10_s(int stored, int loaded)
+    {
+        _store.GetAsync<int?>(SettingKeys.RavenCooldownSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenCooldownSeconds.ShouldBe(loaded);
+    }
+
+    [Fact]
     public async Task No_stored_model_for_chat_zero_means_haiku()
     {
         await _vm.LoadAsync(CancellationToken.None);

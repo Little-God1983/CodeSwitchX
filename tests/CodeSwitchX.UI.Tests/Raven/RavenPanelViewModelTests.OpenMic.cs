@@ -472,7 +472,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingOpenMic);
         _time.Advance(TimeSpan.FromSeconds(1));
         Changes("a", SessionState.Working, SessionState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         _openMic.Speak();

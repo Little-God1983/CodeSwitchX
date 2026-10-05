@@ -236,12 +236,14 @@ public sealed partial class RavenPanelViewModelTests
         (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
     }
 
+    /// <summary>Each window's news card is in its own chat; only the news of the chat the user is in is spoken (#125).</summary>
     [Fact]
-    public async Task A_window_s_news_card_is_in_its_chat_and_the_digest_of_several_windows_in_the_yard_s()
+    public async Task A_window_s_news_card_is_in_its_chat_and_only_the_chat_the_user_is_in_is_told()
     {
-        _teller.Answer = _ => [new BrainText("Both are done.")];
+        _teller.Answer = _ => [new BrainText("Release notes are done.")];
         var (vm, _) = await NewsVmAsync();
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        vm.SelectedChat = ChatNumbered(vm, 1);
 
         Changes("a", SessionState.Working, SessionState.Idle);
         Changes("b", SessionState.Working, SessionState.Idle);
@@ -249,7 +251,10 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
 
         vm.Log.Where(e => e.Kind == RavenLogKind.News).Select(e => (e.Chat.Number, e.Lines!.Single().SessionId)).ShouldBe([(3, "a"), (1, "b")]);
-        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.ShouldBe(vm.YardChat);
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
+        var digest = _teller.Asked.ShouldHaveSingleItem();
+        digest.ShouldContain("Release notes");
+        digest.ShouldNotContain("Fix the upload retry");
     }
 
     /// <summary>A window's chat carries its tile: its header shows the tile's colour and where its repositories stand, as they change.</summary>

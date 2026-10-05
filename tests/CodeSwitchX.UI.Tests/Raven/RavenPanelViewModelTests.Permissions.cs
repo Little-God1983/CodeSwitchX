@@ -551,7 +551,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         _ = asks.HoldAsync(Permitting("p1", subject: LongCommand), CancellationToken.None);
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace); // not GraceAsync: the teller is held, and with it what the panel waits for
+        _time.Advance(TrafficWatcher.NewsGrace); // not GraceAsync: the teller is held, and with it what the panel waits for
         await Until(() => _teller.Asked.Count == 1);
 
         _ = asks.HoldAsync(Permitting("p2", subject: LongCommand + "\nexit 0"), CancellationToken.None);
@@ -583,7 +583,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await QuestionsVmAsyncWith(asks, news);
         Changes("b", SessionState.Working, SessionState.Idle);
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         _ = asks.HoldAsync(Permitting(subject: LongCommand), CancellationToken.None);

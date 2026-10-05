@@ -49,6 +49,7 @@ public static class VoiceServiceCollectionExtensions
         services.AddSingleton<IVoiceSamples, VoiceSamples>();
         services.AddSingleton<ISpeechPlayer, WaveOutSpeechPlayer>();
         services.AddSingleton<IAudioKeepAlive, AudioKeepAlive>();
+        services.AddSingleton<IChatChime, ChatChime>();
         services.AddSingleton<ReplyVoice>();
         return services;
     }
