@@ -234,11 +234,11 @@ public class SettingsViewModelTests : IDisposable
         _vm.RavenCooldownSeconds = 20;
         _vm.RavenChatSound = false;
         _vm.RavenOwnNewsWaits = true;
-        _vm.RavenCatchUp.ShouldBeFalse("the catch-up is off by default");
-        _vm.RavenCatchUp = true;
+        _vm.RavenCatchUp.ShouldBeTrue("the catch-up is on by default (#143)");
+        _vm.RavenCatchUp = false;
         await FlushAsync();
 
-        await _store.Received().SetAsync(SettingKeys.RavenCatchUp, true, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenCatchUp, false, Arg.Any<CancellationToken>());
 
         await _store.Received().SetAsync(SettingKeys.RavenCooldownSeconds, 20, Arg.Any<CancellationToken>());
         await _store.Received().SetAsync(SettingKeys.RavenChatSound, false, Arg.Any<CancellationToken>());
