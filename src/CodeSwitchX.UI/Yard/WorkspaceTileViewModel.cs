@@ -19,11 +19,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// </summary>
     public static readonly TimeSpan StaleRowLifetime = TimeSpan.FromMinutes(30);
 
-    /// <summary>
-    /// How much before a chat's end VS Code may have written its tabs and still be read as listing them after it: the end
-    /// is heard a moment after VS Code, closing, wrote the tabs it comes back with.
-    /// </summary>
-    internal static readonly TimeSpan TabListSlack = TimeSpan.FromSeconds(30);
+    /// <summary>When the workspace's VS Code was last seen to run (UI thread); null while it does not.</summary>
+    private DateTimeOffset? _runningSince;
 
     /// <summary>An ended chat that shows no more is forgotten after this long: longer than a closed chat is ever kept.</summary>
     internal static readonly TimeSpan ForgetEndedAfter = TimeSpan.FromHours(1);
@@ -227,14 +224,25 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Whether the chat's tab is open. A chat that ended while VS Code runs is in the list only if VS Code wrote the list
-    /// after: one written before still has the tab that was just closed. A VS Code that does not run wrote its last list
-    /// as it closed, and comes back with those tabs. A chat whose Claude Code went without saying it ends (it crashed)
-    /// left its tab open: closing a tab is said.
+    /// Whether the chat's tab is open. While VS Code runs, its list says nothing of tabs closed since: VS Code writes it when
+    /// idle, which a window hidden in the Cab never is (seen on screen: minutes later a closed tab was still listed). So a
+    /// chat that ended while VS Code ran had its tab closed, and only one that ended before VS Code was seen to run is a
+    /// tab it brought back. A VS Code that does not run wrote its list as it closed, and comes back with those tabs. A
+    /// chat whose Claude Code went without saying it ends (it crashed) left its tab open: closing a tab is said.
     /// </summary>
     private bool InTab(SessionSnapshot session) =>
-        _tabs is { } tabs && TabOf(session.SessionId) is not null
-        && (session.State != SessionState.Ended || HostState != HostState.Running || tabs.WrittenAt >= session.StateSince - TabListSlack);
+        _tabs is not null && TabOf(session.SessionId) is not null
+        && (session.State != SessionState.Ended || HostState != HostState.Running || session.StateSince < _runningSince);
+
+    /// <summary>
+    /// VS Code started or stopped: what its list means changes with it (<see cref="InTab"/>). Seen to run since now: a chat
+    /// that ended before is a tab VS Code brought back.
+    /// </summary>
+    partial void OnHostStateChanged(HostState value)
+    {
+        _runningSince = value == HostState.Running ? _owner.Now : null;
+        Arrange(_owner.Now);
+    }
 
     private OpenChatTab? TabOf(string sessionId) => _tabs?.Tabs.FirstOrDefault(t => Same(t.SessionId, sessionId));
 

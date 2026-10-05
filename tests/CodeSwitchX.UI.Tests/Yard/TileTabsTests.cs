@@ -115,7 +115,10 @@ public sealed class TileTabsTests
         App.Chats[0].NotRunning.ShouldBeFalse();
     }
 
-    /// <summary>VS Code runs, the tab was just closed: the list written before still has it, and brings no row back.</summary>
+    /// <summary>
+    /// VS Code runs, the tab was just closed: VS Code, hidden in the Cab, does not write its list again for minutes, and the
+    /// list it wrote just as the tab closed still has it (seen on screen). It brings no row back.
+    /// </summary>
     [Fact]
     public async Task A_chat_whose_tab_is_closed_leaves_at_once_though_VS_Code_s_list_still_has_it()
     {
@@ -126,12 +129,27 @@ public sealed class TileTabsTests
 
         await Pass(TimeSpan.FromMinutes(5));
         Says(Chat("a", SessionState.Ended) with { Version = 2 });
+        await VsCodeWrites(Tab("a"));
 
         Rows.ShouldBeEmpty();
 
-        await Pass(TimeSpan.FromSeconds(40));
-        await VsCodeWrites();
+        await Pass(TimeSpan.FromMinutes(4));
+        _yard.Tick(Now);
         Rows.ShouldBeEmpty();
+    }
+
+    /// <summary>VS Code started with the tabs it had: their chats ended before it ran, and show as tabs that do not run.</summary>
+    [Fact]
+    public async Task The_tabs_VS_Code_brings_back_stay_as_tabs_that_do_not_run_once_it_runs()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Ended));
+
+        await Pass(TimeSpan.FromMinutes(1));
+        App.HostState = HostState.Running;
+
+        App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true)]);
     }
 
     [Fact]
@@ -164,12 +182,12 @@ public sealed class TileTabsTests
         Says(Chat("a", SessionState.Idle));
         Says(Chat("b", SessionState.Idle));
 
+        // The chats' ends are heard before the window is seen gone, and the list VS Code wrote as it closed comes last.
         await Pass(TimeSpan.FromMinutes(5));
-        await VsCodeWrites(Tab("a"), Tab("b"));
-        await Pass(TimeSpan.FromSeconds(3)); // the ends are heard a moment after the list was written
         Says(Chat("a", SessionState.Ended) with { Version = 2 });
         Says(Chat("b", SessionState.Ended) with { Version = 2 });
         App.HostState = HostState.Stopped;
+        await VsCodeWrites(Tab("a"), Tab("b"));
 
         App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true), ("b", true)]);
 
