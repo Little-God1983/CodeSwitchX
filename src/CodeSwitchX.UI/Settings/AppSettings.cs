@@ -233,6 +233,16 @@ public sealed class AppSettings : IAppSettings
                 return null;
             });
 
+        // A count of seconds the Voice page offers in a box: "20", "20 seconds".
+        Entry Seconds(string name, string description, string[] aliases, IReadOnlyList<int> choices, Func<int> get, Action<int> set) =>
+            new(new(name, Title(SettingsPage.Voice), description, [.. choices.Select(c => $"{c} seconds")]), SettingsPage.Voice, aliases,
+                () => $"{get()} seconds", v =>
+                {
+                    set(Number(v) is { } n && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                        : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", choices)} seconds, not '{v}'. Nothing was changed."));
+                    return null;
+                });
+
         return
         [
             // Voice
@@ -293,29 +303,12 @@ public sealed class AppSettings : IAppSettings
                 + "only written.", () => S.RavenSpeakNews, v => S.RavenSpeakNews = v, "chat news", "news"),
             Toggle("sound for other chats", SettingsPage.Voice, "Other chats make a short sound, when it is quiet, instead of being spoken; "
                 + "off, they are only marked in the list.", () => S.RavenChatSound, v => S.RavenChatSound = v, "chime", "sound", "other chats"),
-            new(new("cooldown", Title(SettingsPage.Voice), "Seconds other chats stay silent after Raven speaks or a chat makes its sound.",
-                    [.. TrafficWatcher.CooldownChoices.Select(c => $"{c} seconds")]), SettingsPage.Voice, ["cool down", "quiet time"],
-                () => $"{S.RavenCooldownSeconds} seconds",
-                v =>
-                {
-                    var seconds = Number(v) is { } n && TrafficWatcher.CooldownChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
-                        : throw new YardActionException($"The cooldown is one of {string.Join(", ", TrafficWatcher.CooldownChoices)} seconds, not '{v}'. "
-                            + "Nothing was changed.");
-                    S.RavenCooldownSeconds = seconds;
-                    return null;
-                }),
-            new(new("pause between messages", Title(SettingsPage.Voice), "Seconds what Raven says on its own (news, a catch-up, a question "
-                    + "read out, a chat's sound) waits after Raven last spoke or made a sound. Raven's answers to the user never wait.",
-                    [.. TrafficWatcher.PauseChoices.Select(c => $"{c} seconds")]), SettingsPage.Voice,
+            Seconds("cooldown", "Seconds other chats stay silent after Raven speaks or a chat makes its sound.", ["cool down", "quiet time"],
+                TrafficWatcher.CooldownChoices, () => S.RavenCooldownSeconds, v => S.RavenCooldownSeconds = v),
+            Seconds("pause between messages", "Seconds what Raven says on its own (news, a catch-up, a question read out, a chat's sound) "
+                    + "waits after Raven last spoke or made a sound. Raven's answers to the user never wait.",
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
-                () => $"{S.RavenPauseSeconds} seconds",
-                v =>
-                {
-                    S.RavenPauseSeconds = Number(v) is { } n && TrafficWatcher.PauseChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
-                        : throw new YardActionException($"The pause between messages is one of {string.Join(", ", TrafficWatcher.PauseChoices)} "
-                            + $"seconds, not '{v}'. Nothing was changed.");
-                    return null;
-                }),
+                TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
@@ -362,8 +355,8 @@ public sealed class AppSettings : IAppSettings
                 () => [.. R.Microphones.Select(m => m.Name)]),
             Toggle("talk over Raven", SettingsPage.Listening, "In open mic, the user talking over Raven stops it; off, open mic ignores "
                 + "speech while Raven speaks (Raven heard on speakers).", () => S.RavenBargeIn, v => S.RavenBargeIn = v, "barge in", "interrupt"),
-            new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: the "
-                    + "English ones are smaller and faster, Large v3 Turbo also hears other languages.", [.. WhisperNames.Select(w => w.Name)]),
+            new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: Tiny, "
+                    + "Base and Small hear English only and are smaller and faster; Large v3 Turbo also hears other languages.", [.. WhisperNames.Select(w => w.Name)]),
                 SettingsPage.Listening, ["whisper", "whisper model", "dictation model", "speech recognition"],
                 () => ModelLamp.RowNameOf(S.RavenWhisperModel),
                 v =>

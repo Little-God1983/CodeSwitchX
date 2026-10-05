@@ -32,10 +32,26 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// How long after Raven last spoke or made a sound whatever it says on its own waits (#152): news, a catch-up, a card read
     /// out, a chat's sound. Its answers to the user never wait: the user waits for them.
     /// </summary>
-    public TimeSpan Pause { get; set; } = DefaultPause;
+    public TimeSpan Pause
+    {
+        get => _pause;
+        set
+        {
+            _pause = value;
+            PauseChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private TimeSpan _pause = DefaultPause;
+
+    /// <summary>The pause was set: what waits for it is told by the new one.</summary>
+    public event EventHandler? PauseChanged;
 
     /// <summary>How much of the pause is left; zero once it has passed, or when Raven has said nothing yet.</summary>
     public TimeSpan PauseLeft => _lastSound is { } last && Pause - time.GetElapsedTime(last) is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+
+    /// <summary>How long what Raven says on its own waits once the floor is free: the grace, or what is left of the pause if longer.</summary>
+    public TimeSpan WaitBeforeTelling => PauseLeft is var left && left > NewsGrace ? left : NewsGrace;
 
     /// <summary>Other chats get their short sound; off, they are only marked in the list.</summary>
     public bool SoundOn { get; set; } = true;

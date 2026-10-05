@@ -312,6 +312,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _news = news;
         _teller = teller;
         _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        Traffic.PauseChanged += (_, _) => _dispatcher.Post(ScheduleNews); // set shorter, what waits is told sooner
         if (news is not null)
         {
             news.Arrived += (_, workspaceId) => _dispatcher.Post(() =>
@@ -1911,8 +1912,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null) && FloorIsFree)
         {
-            var left = Traffic.PauseLeft;
-            _newsTimer.Change(left > TrafficWatcher.NewsGrace ? left : TrafficWatcher.NewsGrace, Timeout.InfiniteTimeSpan);
+            _newsTimer.Change(Traffic.WaitBeforeTelling, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -1964,7 +1964,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (Traffic.PauseLeft is var left && left > TimeSpan.Zero)
         {
-            _newsTimer.Change(left, Timeout.InfiniteTimeSpan); // a chat's sound came meanwhile: the pause runs from it
+            // A chat's sound came meanwhile: the pause runs from it. Whole milliseconds: a timer due in less fires at once.
+            _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(left.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
             return;
         }
 

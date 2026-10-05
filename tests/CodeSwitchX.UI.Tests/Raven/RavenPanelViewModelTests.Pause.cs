@@ -83,6 +83,25 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task b");
     }
 
+    /// <summary>A shorter pause set while news waits is the one it waits for: it is not held to the longer one.</summary>
+    [Fact]
+    public async Task A_shorter_pause_set_while_news_waits_tells_it_sooner()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.Traffic.Pause = TimeSpan.FromSeconds(30);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => _chime.Plays == 1);
+        Changes("b", SessionState.Working, SessionState.Idle); // waits the 30 s
+
+        vm.Traffic.Pause = TimeSpan.FromSeconds(2);
+        _time.Advance(TimeSpan.FromSeconds(2));
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task b");
+    }
+
     [Fact]
     public async Task An_answer_to_the_user_does_not_wait_for_the_pause()
     {

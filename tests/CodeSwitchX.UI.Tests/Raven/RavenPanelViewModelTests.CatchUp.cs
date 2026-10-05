@@ -29,7 +29,7 @@ public sealed partial class RavenPanelViewModelTests
     private async Task PassGraceAsync(RavenPanelViewModel vm)
     {
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(NewsWait(vm));
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
     }
 
     [Fact]
