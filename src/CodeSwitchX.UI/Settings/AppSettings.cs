@@ -361,8 +361,8 @@ public sealed class AppSettings : IAppSettings
                 () => ModelLamp.RowNameOf(S.RavenWhisperModel),
                 v =>
                 {
-                    // "Whisper Tiny", "tiny English": the row's name is the model's.
-                    var said = string.Join(" ", Words(v).Where(w => w is not ("whisper" or "english" or "model")));
+                    // "Whisper Tiny", "tiny English", "base.en": the row's name is the model's.
+                    var said = string.Join(" ", Words(v).Where(w => w is not ("whisper" or "english" or "en" or "model")));
                     var name = OneOf("the speech-to-text model", said.Length > 0 ? said : v, [.. WhisperNames.Select(w => w.Name)]);
                     S.RavenWhisperModel = WhisperNames.Single(w => w.Name == name).Model;
                     return "A model not on this PC downloads with the next dictation, or from its row on the Listening page.";

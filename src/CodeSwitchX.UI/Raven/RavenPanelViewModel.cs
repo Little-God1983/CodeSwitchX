@@ -1962,9 +1962,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // the next change of state schedules it again
         }
 
-        if (Traffic.PauseLeft > TimeSpan.Zero)
+        if (Traffic.PauseLeft is var left && left > TimeSpan.Zero)
         {
-            ScheduleNews(); // a chat's sound came meanwhile: the pause runs from it
+            // A chat's sound came meanwhile, or the timer, counting coarser than the clock, fired a little early: only what is
+            // left of the pause is waited, in whole milliseconds (a timer due in less fires at once).
+            _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(left.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
             return;
         }
 

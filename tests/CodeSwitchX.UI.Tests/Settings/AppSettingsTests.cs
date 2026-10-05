@@ -253,6 +253,8 @@ public sealed class AppSettingsTests
     [Theory]
     [InlineData("Tiny", WhisperModel.TinyEnglish)]
     [InlineData("whisper base", WhisperModel.BaseEnglish)]
+    [InlineData("base.en", WhisperModel.BaseEnglish)]
+    [InlineData("small English", WhisperModel.SmallEnglish)]
     [InlineData("large", WhisperModel.LargeV3Turbo)]
     public async Task The_speech_to_text_model_goes_by_its_row_s_name(string said, WhisperModel model)
     {
