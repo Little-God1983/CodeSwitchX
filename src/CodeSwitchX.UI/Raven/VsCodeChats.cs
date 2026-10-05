@@ -379,18 +379,60 @@ public sealed class VsCodeChats : IVsCodeChats
         }
     }
 
+    /// <summary>How much of a conversation's end is read for its title: Claude Code writes the title again after every turn.</summary>
+    internal const int TitleTailBytes = 512 * 1024;
+
     /// <summary>
-    /// When the session's conversation on disk was last written in; null when it has none, or it cannot be read. Never throws.
+    /// What the session's conversation on disk says: when it was last written in, and its title, the one the user gave
+    /// it (/rename) before the one Claude Code made. Null when it has none, or it cannot be read. Never throws.
     /// </summary>
-    public static DateTimeOffset? ConversationWrittenAt(string projectsDirectory, string sessionId)
+    public static Yard.TabConversation? ConversationOf(string projectsDirectory, string sessionId)
     {
         try
         {
-            return ConversationFile(projectsDirectory, sessionId) is { } file ? new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero) : null;
+            if (ConversationFile(projectsDirectory, sessionId) is not { } file)
+            {
+                return null;
+            }
+
+            string? made = null, given = null;
+            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.Seek(Math.Max(0, stream.Length - TitleTailBytes), SeekOrigin.Begin);
+                using var reader = new StreamReader(stream);
+                while (reader.ReadLine() is { } line)
+                {
+                    // Cheap first: a turn's line can be megabytes, a title's is short.
+                    if (line.Length < 2000 && line.Contains("-title\"", StringComparison.Ordinal))
+                    {
+                        made = TitleIn(line, "ai-title", "aiTitle") ?? made;
+                        given = TitleIn(line, "custom-title", "customTitle") ?? given;
+                    }
+                }
+            }
+
+            return new Yard.TabConversation(new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero), given ?? made);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
+        }
+    }
+
+    private static string? TitleIn(string line, string type, string property)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return root.ValueKind == System.Text.Json.JsonValueKind.Object
+                && root.TryGetProperty("type", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String && t.GetString() == type
+                && root.TryGetProperty(property, out var title) && title.ValueKind == System.Text.Json.JsonValueKind.String
+                && title.GetString() is { Length: > 0 } text ? text : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null; // the first line of the tail is cut, and a line being written is not whole
         }
     }
 

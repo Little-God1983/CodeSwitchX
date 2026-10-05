@@ -91,21 +91,24 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// Shows the chat's VS Code tab, null for none: a chat that calls itself nothing takes the tab's title, and one the app
     /// knows only by its tab shows as that tab, not running.
     /// </summary>
-    /// <param name="notRunning">Whether the row is there for the tab alone: the chat does not run.</param>
-    /// <param name="lastWrittenIn">For a tab the app knows no chat of: when its conversation was last written in, null when that is not known.</param>
+    /// <param name="notRunning">Whether the chat's tab is open while the chat does not run.</param>
+    /// <param name="conversation">For a tab the app knows no chat of: what its conversation on disk says, null when it has none yet.</param>
     /// <param name="listedAt">For such a tab: when VS Code wrote the list it is in.</param>
-    public void ShowTab(OpenChatTab? tab, bool notRunning, DateTimeOffset? lastWrittenIn = null, DateTimeOffset listedAt = default)
+    public void ShowTab(OpenChatTab? tab, bool notRunning, TabConversation? conversation = null, DateTimeOffset listedAt = default)
     {
         _tab = tab;
         NotRunning = notRunning;
         if (!_hasSession)
         {
-            // Ended since it was last written in, as far as anyone knows; the time is shown only when it is known.
-            StateSince = lastWrittenIn ?? listedAt;
-            _timed = lastWrittenIn is not null;
-            if (State != SessionState.Ended)
+            // Nothing was heard of it: idle while its Claude Code runs, ended else, since it was last written in as far
+            // as anyone knows. The time is shown only when it is known; the tab's own title is cut short, the conversation's is not.
+            _ownTitle = conversation?.Title;
+            StateSince = conversation?.WrittenAt ?? listedAt;
+            _timed = conversation is not null;
+            var state = notRunning ? SessionState.Ended : SessionState.Idle;
+            if (State != state)
             {
-                State = SessionState.Ended;
+                State = state;
                 OnPropertyChanged(nameof(IsLive));
             }
         }
@@ -146,3 +149,6 @@ public sealed partial class ChatRowViewModel : ObservableObject
         return $"{(int)elapsed.TotalDays}d {elapsed.Hours}h";
     }
 }
+
+/// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
+public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);

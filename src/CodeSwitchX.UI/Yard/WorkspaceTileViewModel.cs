@@ -33,8 +33,11 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The chat tabs of the workspace's VS Code window (#164); null when VS Code keeps no list for it.</summary>
     private OpenChatTabs? _tabs;
 
-    /// <summary>When the chats of tabs the app knows no chat of were last written in; one that is missing is not known.</summary>
-    private IReadOnlyDictionary<string, DateTimeOffset> _tabActivity = new Dictionary<string, DateTimeOffset>();
+    /// <summary>What is on disk of the chats of tabs the app knows no chat of; one that is missing has nothing there yet.</summary>
+    private IReadOnlyDictionary<string, TabConversation> _tabActivity = new Dictionary<string, TabConversation>();
+
+    /// <summary>The chats whose Claude Code runs in a VS Code tab right now: a tab the app knows no chat of is idle then, not ended.</summary>
+    private IReadOnlySet<string> _runningTabs = new HashSet<string>();
 
     private PricingTable? _pricing;
 
@@ -115,10 +118,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// The chat tabs VS Code lists for the workspace, null when it keeps no list; with when the chats of tabs the app
     /// knows no chat of were last written in.
     /// </summary>
-    public void ShowTabs(OpenChatTabs? tabs, IReadOnlyDictionary<string, DateTimeOffset> lastActivity)
+    /// <param name="running">The chats whose Claude Code runs in a VS Code tab right now.</param>
+    public void ShowTabs(OpenChatTabs? tabs, IReadOnlyDictionary<string, TabConversation> lastActivity, IReadOnlySet<string>? running = null)
     {
         _tabs = tabs;
         _tabActivity = lastActivity;
+        _runningTabs = running ?? new HashSet<string>();
         Arrange(_owner.Now);
     }
 
@@ -176,7 +181,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
                 Chats.Add(row = NewRow(tab.SessionId));
             }
 
-            row.ShowTab(tab, notRunning: true, _tabActivity.TryGetValue(tab.SessionId, out var last) ? last : null, _tabs!.WrittenAt);
+            row.ShowTab(tab, notRunning: !_runningTabs.Contains(tab.SessionId), _tabActivity.GetValueOrDefault(tab.SessionId), _tabs!.WrittenAt);
         }
 
         Recompute();
@@ -229,7 +234,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private OpenChatTab? TabOf(string sessionId) => _tabs?.Tabs.FirstOrDefault(t => Same(t.SessionId, sessionId));
 
     private bool IdleTooLong(OpenChatTab tab, DateTimeOffset now) =>
-        _owner.HideIdleAfter is { } idle && _tabActivity.TryGetValue(tab.SessionId, out var last) && now - last >= idle;
+        _owner.HideIdleAfter is { } idle && _tabActivity.TryGetValue(tab.SessionId, out var last) && now - last.WrittenAt >= idle;
 
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 

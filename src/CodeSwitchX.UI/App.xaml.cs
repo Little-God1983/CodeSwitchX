@@ -264,7 +264,8 @@ public partial class App : Application
         // The tiles show the chat tabs open in VS Code (#164), read from what VS Code restores its windows from.
         services.AddSingleton<IVsCodeOpenTabs>(_ => new VsCodeOpenTabs(VsCodeOpenTabs.DefaultDirectory));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
-            (Func<string, DateTimeOffset?>)(id => VsCodeChats.ConversationWrittenAt(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id))));
+            (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
+            (Func<IReadOnlyCollection<string>>)(() => [.. sp.GetRequiredService<ClaudeLiveSessions>().RunningNow().Select(c => c.SessionId)])));
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();

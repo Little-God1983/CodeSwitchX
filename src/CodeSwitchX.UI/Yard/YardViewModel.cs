@@ -30,7 +30,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly TimeProvider _time;
     private readonly ILogger<YardViewModel> _logger;
     private readonly IVsCodeOpenTabs? _openTabs;
-    private readonly Func<string, DateTimeOffset?> _writtenInAt;
+    private readonly Func<string, TabConversation?> _writtenInAt;
+    private readonly Func<IReadOnlyCollection<string>> _runningTabs;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
@@ -41,7 +42,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private bool _tabsRefreshing;
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
-    private readonly Dictionary<string, DateTimeOffset> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>When each such chat was last asked about: one not known yet is asked about again, a minute on.</summary>
     private readonly Dictionary<string, DateTimeOffset> _tabActivityAsked = new(StringComparer.OrdinalIgnoreCase);
 
@@ -149,8 +150,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
-        Func<string, DateTimeOffset?>? writtenInAt = null)
+        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyCollection<string>>? runningTabs = null)
     {
+        _runningTabs = runningTabs ?? (() => []);
         _openTabs = openTabs;
         _writtenInAt = writtenInAt ?? (_ => null);
         _store = store;
@@ -342,17 +344,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             var now = Now;
             var asked = _tabActivityAsked.Where(a => _tabActivity.ContainsKey(a.Key) || now - a.Value < AskAgainAfter).Select(a => a.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var (tabs, activity) = await Task.Run(() =>
+            var (tabs, activity, running) = await Task.Run(() =>
             {
                 var read = openTabs.Read(workspaces);
+                var runs = _runningTabs().ToHashSet(StringComparer.OrdinalIgnoreCase);
                 // Only for tabs of chats the app has no state of: theirs is the last thing known of them.
-                var written = new Dictionary<string, DateTimeOffset?>(StringComparer.OrdinalIgnoreCase);
+                var written = new Dictionary<string, TabConversation?>(StringComparer.OrdinalIgnoreCase);
                 foreach (var id in read.Values.SelectMany(t => t.Tabs).Select(t => t.SessionId).Where(id => !asked.Contains(id) && _engine.Get(id) is null))
                 {
                     written[id] = _writtenInAt(id);
                 }
 
-                return (read, written);
+                return (read, written, runs);
             });
 
             foreach (var (id, at) in activity)
@@ -368,7 +371,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             // A tile added while the read ran was not asked about: it keeps what it has until the next read.
             foreach (var tile in Tiles.Where(t => workspaces.Exists(w => w.Id == t.Id)).ToList())
             {
-                tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity);
+                tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity, running);
             }
 
             if (NeedsMeFirst)

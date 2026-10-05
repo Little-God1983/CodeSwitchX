@@ -25,6 +25,8 @@ public sealed class TileTabsTests
     private readonly SessionEngine _engine;
     private readonly FakeTabs _tabs = new();
     private readonly Dictionary<string, DateTimeOffset> _writtenIn = [];
+    private readonly Dictionary<string, string> _titles = [];
+    private readonly HashSet<string> _running = [];
     private readonly YardViewModel _yard;
 
     public TileTabsTests()
@@ -37,7 +39,8 @@ public sealed class TileTabsTests
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
         _yard = new YardViewModel(_store, new WorkspaceRegistry(_store, _resolver, _bus), _engine, pricing, new GitInspector((_, _, _) => Task.FromResult<string?>(null)),
-            _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance, _tabs, id => _writtenIn.TryGetValue(id, out var at) ? at : null);
+            _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance, _tabs,
+            id => _writtenIn.TryGetValue(id, out var at) ? new TabConversation(at, _titles.GetValueOrDefault(id)) : null, () => _running);
     }
 
     private DateTimeOffset Now => _time.GetUtcNow();
@@ -293,6 +296,27 @@ public sealed class TileTabsTests
         _yard.Tick(Now);
 
         App.Chats.Select(c => (c.SessionId, c.StateSince, c.ElapsedText)).ShouldBe([("known", Now - TimeSpan.FromHours(2), "2h 00m"), ("unknown", Now, "")]);
+    }
+
+    /// <summary>
+    /// The app was not running when the chat started: nothing was heard of it. Its Claude Code runs in its tab, so it is
+    /// idle, not ended; and its conversation has the whole title where the tab's is cut short.
+    /// </summary>
+    [Fact]
+    public async Task A_tab_nothing_was_heard_of_is_idle_while_its_Claude_Code_runs_and_has_its_conversation_s_title()
+    {
+        _writtenIn["runs"] = _writtenIn["asleep"] = Now - TimeSpan.FromHours(4);
+        _titles["runs"] = "Text-to-speech setup dialog with voice selector";
+        _running.Add("RUNS");
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        await VsCodeWrites(Tab("runs", "Text-to-speech setup dia…"), Tab("asleep", "DiffusionNexus.Installer…"));
+
+        App.Chats.Select(c => (c.Title, c.State, c.NotRunning)).ShouldBe(
+        [
+            ("Text-to-speech setup dialog with voice selector", SessionState.Idle, false),
+            ("DiffusionNexus.Installer…", SessionState.Ended, true),
+        ]);
     }
 
     [Fact]
