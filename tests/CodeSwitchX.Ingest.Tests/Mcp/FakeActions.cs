@@ -77,6 +77,15 @@ internal sealed class FakeActions : IYardActions
         return Task.CompletedTask;
     }
 
+    public WindowRequest? Window { get; private set; }
+
+    public Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct)
+    {
+        Act("set_window");
+        Window = request;
+        return Task.FromResult($"CodeSwitchX: {request}.");
+    }
+
     private void Act(string call)
     {
         Calls.Add(call);

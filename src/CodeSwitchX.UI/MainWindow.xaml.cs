@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Window, IShellWindow
 {
     private readonly ShellViewModel _shell;
     private readonly HotkeyService _hotkeys;
@@ -45,6 +45,31 @@ public partial class MainWindow : Window
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
     }
 
+    ShellWindowState IShellWindow.State => WindowState switch
+    {
+        WindowState.Minimized => ShellWindowState.Minimized,
+        WindowState.Maximized => ShellWindowState.Maximized,
+        _ => ShellWindowState.Normal,
+    };
+
+    ShellWindowState IShellWindow.Restored => _restored;
+
+    /// <summary>The state before the last minimize, kept as the window changes: "bring it back" returns a maximized window maximized.</summary>
+    private ShellWindowState _restored = ShellWindowState.Normal;
+
+    /// <summary>It, a dialog of it (Add workspace), or the VS Code window its Cab shows, which holds the focus there.</summary>
+    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0
+        && (front == _host.ShownInCab || Application.Current.Windows.OfType<Window>().Any(w => new WindowInteropHelper(w).Handle == front));
+
+    /// <summary>As the title bar's button: StateChanged tells the shell, which hides the Cab's VS Code window with it.</summary>
+    void IShellWindow.Minimize() => WindowState = WindowState.Minimized;
+
+    void IShellWindow.Show(ShellWindowState state)
+    {
+        WindowState = state == ShellWindowState.Maximized ? WindowState.Maximized : WindowState.Normal;
+        WindowActivation.BringUp(this);
+    }
+
     /// <summary>Shows the Add workspace dialog over the shell until it is closed.</summary>
     private Task ShowAddWorkspaceDialog(AddWorkspaceViewModel viewModel)
     {
@@ -76,6 +101,7 @@ public partial class MainWindow : Window
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
         _hwnd = hwnd;
+        _shell.Window = this; // Raven minimizes and maximizes it by voice (#117), once it is a window
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         HwndSource.FromHwnd(hwnd)?.AddHook(StayUnderHostedWindow);
         _hotkeys.Attach(hwnd, _shell);
@@ -101,7 +127,15 @@ public partial class MainWindow : Window
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();
         Activated += OnActivated;
-        StateChanged += (_, _) => _shell.SetShellMinimized(WindowState == WindowState.Minimized);
+        StateChanged += (_, _) =>
+        {
+            if (WindowState != WindowState.Minimized)
+            {
+                _restored = ((IShellWindow)this).State;
+            }
+
+            _shell.SetShellMinimized(WindowState == WindowState.Minimized);
+        };
     }
 
     /// <summary>

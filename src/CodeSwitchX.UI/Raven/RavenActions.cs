@@ -31,6 +31,9 @@ public interface IRavenShell
 
     /// <summary>Takes a chat that was closed on purpose off its tile at once; it shows again only if it is opened again.</summary>
     void ForgetChat(string sessionId);
+
+    /// <summary>Minimizes, maximizes or restores the window, as its title bar buttons do; returns what Raven says of it.</summary>
+    string SetWindow(WindowRequest request);
 }
 
 /// <summary>
@@ -194,6 +197,9 @@ public sealed class RavenActions : IYardActions
     }
 
     public Task BackToYardAsync(CancellationToken ct) => OnUiAsync(() => _shell().ShowYard(), ct);
+
+    public Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct) =>
+        _ui.InvokeAsync(() => _shell().SetWindow(request), UiTimeout, ct);
 
     /// <summary>The window is opened as open_workspace opens it, so a failure or a window that never shows is said.</summary>
     public async Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)

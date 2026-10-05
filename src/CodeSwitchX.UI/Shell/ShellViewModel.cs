@@ -5,6 +5,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Telemetry;
@@ -397,6 +398,48 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         {
             StatusMessage = message;
         }
+    }
+
+    /// <summary>The window, set by it once it is made; null before, and in tests that do not need one.</summary>
+    public IShellWindow? Window { get; set; }
+
+    string IRavenShell.SetWindow(WindowRequest request)
+    {
+        if (Window is not { } window)
+        {
+            throw new YardActionException("CodeSwitchX has no window to change yet: it is still starting.");
+        }
+
+        if (request == WindowRequest.Minimize)
+        {
+            if (window.State == ShellWindowState.Minimized)
+            {
+                return "CodeSwitchX is already minimized.";
+            }
+
+            window.Minimize();
+            // Open mic that is paused hears nothing: the key is the way back then too.
+            return Raven.MicMode == MicMode.OpenMic && Raven.State != RavenState.AttendingPaused
+                ? "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again."
+                : $"CodeSwitchX is minimized. Hold {HotkeyService.PushToTalk.Keys} and say \"bring it back\" to see it again.";
+        }
+
+        // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar. Asked to come back
+        // while covered, it comes to the front as it is; only asked to restore while in front, a maximized one shrinks.
+        var inFront = window.IsInFront;
+        var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized")
+            : window.State == ShellWindowState.Minimized ? (window.Restored, "back")
+            : !inFront ? (window.State, "back")
+            : (ShellWindowState.Normal, "at its normal size");
+        if (window.State == state && inFront)
+        {
+            return request == WindowRequest.Maximize ? "CodeSwitchX is already maximized." : "CodeSwitchX is already there, in front.";
+        }
+
+        window.Show(state);
+        return window.IsInFront
+            ? $"CodeSwitchX is {word}."
+            : $"CodeSwitchX is {word}, but Windows kept another window in front: click it on the taskbar to see it.";
     }
 
     /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>

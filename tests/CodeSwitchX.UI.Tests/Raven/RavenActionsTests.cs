@@ -268,6 +268,15 @@ public sealed class RavenActionsTests
         _chats.DefaultModelId.ShouldBe("claude-opus-5-5");
     }
 
+    /// <summary>set_window (#117) reaches the shell on the UI thread, and what the shell says comes back.</summary>
+    [Fact]
+    public async Task The_window_request_reaches_the_shell_and_its_words_come_back()
+    {
+        (await _actions.SetWindowAsync(WindowRequest.Minimize, Ct)).ShouldBe("CodeSwitchX: Minimize.");
+
+        _shell.Windows.ShouldBe([WindowRequest.Minimize]);
+    }
+
     [Fact]
     public async Task An_effort_alone_keeps_the_model()
     {
@@ -352,6 +361,14 @@ public sealed class RavenActionsTests
         public List<string> Forgotten { get; } = [];
 
         public void ForgetChat(string sessionId) => Forgotten.Add(sessionId);
+
+        public List<WindowRequest> Windows { get; } = [];
+
+        public string SetWindow(WindowRequest request)
+        {
+            Windows.Add(request);
+            return $"CodeSwitchX: {request}.";
+        }
     }
 
     private sealed class FakeVsCode : IVsCodeChats
