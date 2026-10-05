@@ -110,24 +110,61 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True when the user also asked to open the window (\"open the audio one\").")] bool open = false,
         CancellationToken cancellationToken = default)
     {
-        ChatSwitch target;
-        var said = chat.Trim();
-        // As the app reads a spoken switch: "activity", "chat 3", or the number alone.
+        var target = await NamedChatAsync(chat.Trim(), open, cancellationToken).ConfigureAwait(false);
+        return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The chat the user named, as the app reads a spoken switch: "activity", "chat 3", the number alone, the Yard, or a
+    /// window by its name; opened only when asked, and Activity never.
+    /// </summary>
+    private async Task<ChatSwitch> NamedChatAsync(string said, bool open, CancellationToken ct)
+    {
         if (SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read))
         {
-            target = read with { Open = !read.Activity && (open || read.Open) };
+            return read with { Open = !read.Activity && (open || read.Open) };
         }
-        else if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
+
+        if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
         {
-            target = new ChatSwitch(0, Activity: false, Open: false);
+            return new ChatSwitch(0, Activity: false, Open: false);
+        }
+
+        var match = await OneWorkspaceAsync(said, ct).ConfigureAwait(false);
+        return new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
+    }
+
+    /// <summary>"this chat", "this one?", "the chat I'm in": the chat the call comes from, as when none is named.</summary>
+    private static bool ThisChat(string said) =>
+        string.Join(" ", new string([.. said.ToLowerInvariant().Select(c => char.IsLetter(c) ? c : ' ')]).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            is "this" or "this chat" or "this one" or "this window" or "here" or "current" or "current chat" or "the current chat"
+            or "current window" or "my chat" or "the chat i m in" or "the chat im in" or "the one i m in" or "the window i m in";
+
+    [McpServerTool(Name = "mute_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news "
+        + "and its catch-up are only written, with no sound; its questions are still read out, and still sound from elsewhere, and you still "
+        + "answer aloud in it. Chat 0 has no "
+        + "mute of its own: the mute button on the panel quiets everything. Returns what you say.")]
+    public async Task<string> MuteChat(
+        [Description("The chat: its number (\"2\", \"two\") or a window's name as the user said it. Left out for the chat the user is in.")]
+        string? chat = null,
+        [Description("False to unmute.")] bool muted = true,
+        CancellationToken cancellationToken = default)
+    {
+        int number;
+        var said = chat?.Trim() ?? "";
+        if (said.Length == 0 || ThisChat(said))
+        {
+            number = (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number
+                ?? throw new McpException("Say which chat: the user is in chat 0, which has no mute of its own.");
         }
         else
         {
-            var match = await OneWorkspaceAsync(said, cancellationToken).ConfigureAwait(false);
-            target = new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
+            number = (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
+                ?? throw new McpException("Activity has no mute of its own: it only lists every chat's lines. Say which window's chat.");
         }
 
-        return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
+        return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]

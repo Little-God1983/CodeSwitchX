@@ -1,5 +1,6 @@
 using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace CodeSwitchX.UI.Raven;
 
@@ -83,12 +84,33 @@ public sealed partial class RavenChat : ObservableObject
     [NotifyPropertyChangedFor(nameof(Tip))]
     private bool _hasFailed;
 
-    /// <summary>The marks in words, for the tooltip and screen readers: "waits for you, not seen yet, 3 unread, failed"; "" for none.</summary>
+    /// <summary>A window's chat can be muted (#153); chat 0 and Activity cannot: Raven's own mute quiets everything.</summary>
+    public bool CanMute => WorkspaceId is not null;
+
+    /// <summary>
+    /// Muted (#153): its news, with the sound it makes while the user is elsewhere, and its catch-up are only written. Its
+    /// cards are still read out, and sound from elsewhere: the chat waits on them. Raven still answers aloud in it. The panel
+    /// remembers it by the window.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    [NotifyPropertyChangedFor(nameof(MuteText))]
+    private bool _isMuted;
+
+    /// <summary>The row's speaker and its menu: "Mute chat", "Unmute chat".</summary>
+    public string MuteText => IsMuted ? "Unmute chat" : "Mute chat";
+
+    [RelayCommand(CanExecute = nameof(CanMute))]
+    private void ToggleMute() => IsMuted = !IsMuted;
+
+    /// <summary>The marks in words, for the tooltip and screen readers: "waits for you, not seen yet, 3 unread, failed, muted"; "" for none.</summary>
     public string Status => string.Join(", ", new[]
     {
         IsWaitingUnseen ? "waits for you, not seen yet" : IsWaiting ? "waits for you" : null,
         Unread > 0 ? $"{Unread} unread" : null,
         HasFailed ? "failed" : null,
+        IsMuted ? "muted" : null,
     }.Where(s => s is not null));
 
     /// <summary>

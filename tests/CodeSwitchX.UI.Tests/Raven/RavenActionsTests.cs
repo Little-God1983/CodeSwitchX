@@ -327,6 +327,16 @@ public sealed class RavenActionsTests
         error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not show its window within 90 seconds.");
     }
 
+    /// <summary>#153: a window's chat is muted by its number; chat 0 has no mute, and a number no window has is said so.</summary>
+    [Fact]
+    public async Task A_chat_is_muted_by_number_and_chat_zero_or_an_unknown_one_is_refused_in_words()
+    {
+        (await _actions.MuteChatAsync(4, true, Ct)).ShouldBe("Chat 4, Diffusion-Full, muted: True.");
+
+        (await Should.ThrowAsync<YardActionException>(() => _actions.MuteChatAsync(0, true, Ct))).Message.ShouldStartWith("Chat 0 has no mute");
+        (await Should.ThrowAsync<YardActionException>(() => _actions.MuteChatAsync(9, true, Ct))).Message.ShouldStartWith("No window has the number 9");
+    }
+
     private sealed class FakeShell(ChatSettings chats) : IRavenShell
     {
         public List<Guid> Opened { get; } = [];
@@ -349,6 +359,8 @@ public sealed class RavenActionsTests
 
         public (string Said, Guid? WorkspaceId)? SwitchChat(ChatSwitch target) =>
             target.Number == 4 ? ("Chat 4, Diffusion-Full.", Diffusion.Id) : null;
+
+        public string? MuteChat(int number, bool muted) => number == 4 ? $"Chat 4, Diffusion-Full, muted: {muted}." : null;
 
         public void SetChatDefaults(ChatDefaults defaults)
         {

@@ -57,6 +57,15 @@ internal sealed class FakeActions : IYardActions
 
     public ChatSwitch? Switched { get; private set; }
 
+    public (int Number, bool Muted)? MuteSet { get; private set; }
+
+    public Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct)
+    {
+        Act("mute_chat");
+        MuteSet = (number, muted);
+        return Task.FromResult($"Chat {number} muted: {muted}.");
+    }
+
     public Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)
     {
         Act("switch_chat");

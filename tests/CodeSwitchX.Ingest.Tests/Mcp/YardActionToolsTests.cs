@@ -138,6 +138,45 @@ public sealed class YardActionToolsTests
         _actions.Switched.ShouldBe(new ChatSwitch(number, activity, Open: false));
     }
 
+    /// <summary>#153: a chat is muted by its number or its window's name, as switch_chat finds it.</summary>
+    [Theory]
+    [InlineData("4", 4)]
+    [InlineData("four", 4)]
+    [InlineData("chat 4", 4)]
+    [InlineData("code switch ex", 1)]
+    public async Task Mute_chat_takes_a_number_or_a_window_s_name(string chat, int number)
+    {
+        await Tools.MuteChat(chat, cancellationToken: Ct);
+
+        _actions.MuteSet.ShouldBe((number, true));
+    }
+
+    /// <summary>#153: "mute this chat" in a window's chat mutes that one; in chat 0, with none named, it asks which.</summary>
+    [Fact]
+    public async Task Mute_chat_left_out_is_the_chat_the_user_is_in()
+    {
+        await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).MuteChat(muted: false, cancellationToken: Ct);
+        _actions.MuteSet.ShouldBe((4, false));
+
+        var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: ChatScope.Yard).MuteChat(cancellationToken: Ct));
+        error.Message.ShouldContain("chat 0");
+    }
+
+    /// <summary>#153: "this chat" is the chat the user is in, "the Yard" chat 0 (which the app refuses), never a window with a like name.</summary>
+    [Theory]
+    [InlineData("this chat", 4)]
+    [InlineData("This one.", 4)]
+    [InlineData("this chat?", 4)]
+    [InlineData("the chat I'm in", 4)]
+    [InlineData("this window", 4)]
+    [InlineData("the Yard", 0)]
+    public async Task Mute_chat_reads_this_chat_and_the_yard_before_any_window_name(string said, int number)
+    {
+        await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).MuteChat(said, cancellationToken: Ct);
+
+        _actions.MuteSet.ShouldBe((number, true));
+    }
+
     [Fact]
     public async Task Switch_chat_opens_the_window_only_when_asked_and_activity_never()
     {
