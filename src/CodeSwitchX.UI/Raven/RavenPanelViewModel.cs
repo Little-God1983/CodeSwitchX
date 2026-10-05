@@ -314,11 +314,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         if (news is not null)
         {
-            news.Arrived += (_, _) => _dispatcher.Post(() =>
+            news.Arrived += (_, workspaceId) => _dispatcher.Post(() =>
             {
-                if (SpeakNews && !IsMuted)
+                // Only news of the chat the user is in is spoken (#125): another window's starts no teller (#139), unless
+                // the user switches to its chat before it is told.
+                if (workspaceId is not null && ChatOf(workspaceId) == CurrentChat)
                 {
-                    _teller?.WarmUp(); // its start is hidden in the wait for the floor
+                    WarmTellerForCurrentNews();
                 }
 
                 ScheduleNews();
@@ -1912,6 +1914,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>News waits that is told in the chat the user is in: chat 0's for a window the list does not show.</summary>
+    private bool HasNewsHere => _news is not null && _news.HasNewsFor(id => ChatOf(id) == CurrentChat);
+
+    /// <summary>Warms the teller when news of the chat the user is in waits to be told (#139).</summary>
+    private void WarmTellerForCurrentNews()
+    {
+        // Told where its window's chat is: chat 0 for a window the list does not show.
+        if (SpeakNews && !IsMuted && _teller is not null && HasNewsHere)
+        {
+            _tellerWarm = true; // switched away before it is told, the teller is rested
+            _teller.WarmUp(); // its start is hidden in the wait for the floor
+        }
+    }
+
     /// <summary>Decides when other chats may make a sound, and whether the selected chat's news waits for the cooldown.</summary>
     public TrafficWatcher Traffic { get; }
 
@@ -2396,7 +2412,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void RestTellerIfIdle()
     {
-        if (_untold.Any(PermissionLine.NeedsTeller) || _news is { HasNews: true } || _catchUpDue is not null)
+        // Only news told here keeps it: another window's is never spoken (#125).
+        if (_untold.Any(PermissionLine.NeedsTeller) || HasNewsHere || _catchUpDue is not null)
         {
             return;
         }
@@ -3257,6 +3274,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         ShowSelected();
         CatchUpOn(value, away);
+        WarmTellerForCurrentNews(); // its news, waiting, is told here now
+        if (_tellerWarm && !_telling)
+        {
+            RestTellerIfIdle(); // warmed for the chat left: nothing waits for it here
+        }
     }
 
     /// <summary>

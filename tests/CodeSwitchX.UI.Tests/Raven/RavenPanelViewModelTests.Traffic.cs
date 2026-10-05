@@ -62,6 +62,78 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }
 
+    /// <summary>#139: another window's news is never spoken, so it starts no teller; the chat the user is in has it warm.</summary>
+    [Fact]
+    public async Task Only_news_of_the_chat_the_user_is_in_warms_the_teller()
+    {
+        await TrafficVmAsync();
+
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: the dispatcher runs the arrival at once
+        _teller.WarmUps.ShouldBe(0);
+
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
+        _teller.WarmUps.ShouldBe(1);
+    }
+
+    /// <summary>Switched away before the chat's news is told, the teller warmed for it rests: nothing waits for it there.</summary>
+    [Fact]
+    public async Task Switching_away_before_the_news_is_told_rests_the_teller()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.PressMic(TalkInput.MicButton); // the floor is busy: the news waits
+        Changes("b", SessionState.Working, SessionState.Idle);
+        _teller.WarmUps.ShouldBe(1);
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        _teller.Rests.ShouldBe(1);
+    }
+
+    /// <summary>Switched to the news's chat before it is told, the teller is warmed there: its first word is not slower.</summary>
+    [Fact]
+    public async Task Switching_to_the_chat_whose_news_waits_warms_the_teller()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's, not told yet
+        _teller.WarmUps.ShouldBe(0);
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+
+        _teller.WarmUps.ShouldBe(1);
+    }
+
+    /// <summary>News of a chat on no workspace is on no tile, so never told: it warms the teller nowhere, chat 0 included.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task News_of_a_chat_on_no_workspace_warms_no_teller(bool inChatZero)
+    {
+        var (vm, _) = await TrafficVmAsync();
+        if (inChatZero)
+        {
+            vm.SelectedChat = vm.YardChat;
+        }
+
+        _bus.Publish(new CodeSwitchX.Core.Messaging.SessionChanged(ChatNewsTests.Chat("loose", SessionState.Working, _time.GetUtcNow()),
+            ChatNewsTests.Chat("loose", SessionState.Idle, _time.GetUtcNow())));
+
+        _teller.WarmUps.ShouldBe(0);
+    }
+
+    /// <summary>Other windows' news, while the chat's own waits, warms the teller no more than the chat's own did.</summary>
+    [Fact]
+    public async Task Other_windows_news_does_not_warm_the_teller_again()
+    {
+        await TrafficVmAsync();
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's
+        var warm = _teller.WarmUps;
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("c", SessionState.Working, SessionState.Idle);
+
+        _teller.WarmUps.ShouldBe(warm);
+    }
+
     [Fact]
     public async Task Other_chats_returning_while_the_user_s_chat_is_quiet_make_one_sound()
     {

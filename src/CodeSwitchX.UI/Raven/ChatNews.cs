@@ -76,9 +76,24 @@ public sealed class ChatNews : IDisposable
         _subscription = bus.Subscribe<SessionChanged>(Offer);
     }
 
-    /// <summary>Raised on any thread when a chat has news.</summary>
-    public event EventHandler? Arrived;
+    /// <summary>Raised on any thread when a chat has news, with the workspace of the chat when it is known.</summary>
+    public event EventHandler<Guid?>? Arrived;
 
+
+    /// <summary>
+    /// Whether news waits of a chat whose workspace, as the engine placed it when the news came, is one <paramref name="told"/>
+    /// takes. A chat on no workspace is on no tile, and its news is not told: it never counts.
+    /// </summary>
+    public bool HasNewsFor(Func<Guid, bool> told)
+    {
+        List<Guid> waiting;
+        lock (_lock)
+        {
+            waiting = [.. _slots.Values.Select(s => s.WorkspaceId).OfType<Guid>()];
+        }
+
+        return waiting.Any(told); // the caller's check, outside the lock the bus threads take
+    }
 
     public bool HasNews
     {
@@ -114,10 +129,10 @@ public sealed class ChatNews : IDisposable
         lock (_lock)
         {
             _slots[current.SessionId] = new Slot(kind, kind == ChatNewsKind.NeedsYou ? current.LastNotification : null, current.StateSince,
-                current.TranscriptPath);
+                current.TranscriptPath, current.WorkspaceId);
         }
 
-        Arrived?.Invoke(this, EventArgs.Empty);
+        Arrived?.Invoke(this, current.WorkspaceId);
     }
 
     private static ChatNewsKind? KindOf(SessionChanged change)
@@ -181,5 +196,6 @@ public sealed class ChatNews : IDisposable
 
     public void Dispose() => _subscription.Dispose();
 
-    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath);
+    /// <param name="WorkspaceId">Where the engine placed the chat when the news came; null for a chat on no workspace.</param>
+    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath, Guid? WorkspaceId);
 }

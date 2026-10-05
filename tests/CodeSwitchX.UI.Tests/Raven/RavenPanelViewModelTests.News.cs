@@ -32,7 +32,10 @@ public sealed partial class RavenPanelViewModelTests
     private void Changes(string id, SessionState from, SessionState to, string? notification = null)
     {
         _yard.Now(id, to, needsYou: to == SessionState.Waiting);
-        _bus.Publish(new SessionChanged(ChatNewsTests.Chat(id, from, _time.GetUtcNow()), ChatNewsTests.Chat(id, to, _time.GetUtcNow(), notification)));
+        // The engine knows the chat's workspace, as the Yard does.
+        var workspace = _yard.WorkspaceIdOf(id);
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat(id, from, _time.GetUtcNow()) with { WorkspaceId = workspace },
+            ChatNewsTests.Chat(id, to, _time.GetUtcNow(), notification) with { WorkspaceId = workspace }));
     }
 
     /// <summary>Waits until the panel is idle and has said all it says, then lets the grace pass, so the news is told.</summary>
