@@ -108,6 +108,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private readonly List<ToldFact> _toldNews = [];
 
+    /// <summary>
+    /// A fact the user was given about a card or news of <paramref name="chat"/>, for the brain of that chat only (#137). A
+    /// fact of chat 0 is kept for no brain when chat 0 is the overview: it is given no card or news fact, and a chat on no
+    /// tile's card there is answered with a click.
+    /// </summary>
+    private void Tell(string fact, RavenChat chat, DateTimeOffset? at = null)
+    {
+        var brain = BrainOf(chat);
+        if (!IsOverview(brain))
+        {
+            _toldNews.Add(new ToldFact(at ?? _time.GetUtcNow(), fact, brain));
+        }
+    }
+
     /// <summary>A fact the user was given, the brain it is for (any, for null), and the brains that have it.</summary>
     private sealed record ToldFact(DateTimeOffset At, string Fact, IConductorBrain? For)
     {
@@ -1978,7 +1992,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // The brain knows it with the next question, so "deny both" covers a card not read out yet. It goes to the brain of
         // the card's own chat only (#137): another window's brain would take it for its own window's ("allow it" there).
         var elsewhere = card.ShownIn != CurrentChat;
-        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), BrainOf(card.ShownIn!)));
+        Tell(QuestionFact(card), card.ShownIn!);
         if (elsewhere)
         {
             SoundForOtherChat(FloorIsFree);
@@ -2502,8 +2516,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
             // facts with the next question either way, so "open it" finds what "it" is.
             var at = _time.GetUtcNow();
-            // Each line to the brain of its window's chat only (#137); a chat on no tile's to chat 0's.
-            _toldNews.AddRange(lines.Select(l => new ToldFact(at, Fact(l), BrainOf(ChatOf(l.WorkspaceId)))));
+            // Each line to the brain of its window's chat only (#137).
+            foreach (var line in lines)
+            {
+                Tell(Fact(line), ChatOf(line.WorkspaceId), at);
+            }
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
             var others = own.Count < fresh.Count;
@@ -2610,7 +2627,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return Overview(busy) + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         }
 
-        question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain))];
+        // Without a summarizer chat 0 is no overview: it is told every window's facts, as before #124.
+        var all = _summarizer is null && brain == _brain;
+        question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain || all))];
         var text = question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
             ? text

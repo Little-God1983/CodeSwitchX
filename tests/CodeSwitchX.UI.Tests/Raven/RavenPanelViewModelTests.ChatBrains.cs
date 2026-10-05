@@ -175,9 +175,6 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "anything else?");
         await WithinAsync(vm.PendingAnswers);
-        vm.SelectedChat = vm.YardChat;
-        Type(vm, "open the one that finished");
-        await WithinAsync(vm.PendingAnswers);
         vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "what finished?");
         await WithinAsync(vm.PendingAnswers);
@@ -185,10 +182,54 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("[Chat news", Case.Sensitive, "another window's news");
-        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("[Chat news", Case.Sensitive, "chat 0 is no window of it");
         var three = brains.Windows[ContentAutomatorX].Sent;
         three[0].ShouldContain("[Chat news the user was given");
         three[1].ShouldNotContain("[Chat news", Case.Sensitive, "told once");
+    }
+
+    /// <summary>#137: a card that comes in the chat the user is in reaches that chat's brain only, also after they move on.</summary>
+    [Fact]
+    public async Task A_card_in_the_chat_the_user_is_in_is_told_only_to_that_chat_s_brain()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Deploy");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "anything for me here?");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("(ask id p1)");
+    }
+
+    /// <summary>Without a summarizer, chat 0 is no overview: it still hears every window's news, as before #124.</summary>
+    [Fact]
+    public async Task Without_a_summarizer_chat_zero_hears_every_window_s_news()
+    {
+        _teller.Answer = _ => [new BrainText("It is done.")];
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var news = new ChatNews(_bus, _yard, _time, _ => "Done.");
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, brains: new FakeChatBrains(_brain));
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        _time.Advance(TimeSpan.FromSeconds(1));
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "open the one that finished");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Fix the upload retry");
     }
 
     /// <summary>#137: a card of window 3 reaches chat 3's brain, never chat 1's, even when the user is in chat 1.</summary>
