@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
+using static CodeSwitchX.Ingest.Mcp.ToolActs;
 
 namespace CodeSwitchX.Ingest.Mcp;
 
@@ -425,23 +426,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             [] => throw new McpException($"No workspace matches '{name}'. list_workspaces lists them all."),
             _ => throw new McpException($"'{name}' fits {string.Join(" and ", best.Select(m => m.Workspace.Name))} equally. Ask the user which one."),
         };
-    }
-
-    private static async Task<T> Act<T>(Func<Task<T>> action)
-    {
-        try
-        {
-            return await action().ConfigureAwait(false);
-        }
-        catch (YardActionException ex)
-        {
-            throw new McpException(ex.Message);
-        }
-        catch (TimeoutException)
-        {
-            // The app's window was busy past the wait: the brain gets something to tell the user, not a raw error.
-            throw new McpException("CodeSwitchX's window did not respond in time, so that was not done. Say it again in a moment.");
-        }
     }
 
     private static bool SamePath(string a, string b) =>

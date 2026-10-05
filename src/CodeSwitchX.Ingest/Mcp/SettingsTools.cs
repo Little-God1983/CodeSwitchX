@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using CodeSwitchX.Core.Yard;
-using ModelContextProtocol;
 using ModelContextProtocol.Server;
+using static CodeSwitchX.Ingest.Mcp.ToolActs;
 
 namespace CodeSwitchX.Ingest.Mcp;
 
@@ -43,21 +43,4 @@ public sealed class SettingsTools(IAppSettings settings)
         [Description("The page as the user said it: Voice, Listening, Brain & chats, Shortcuts, Claude Code, Usage, Privacy & data. Left "
             + "out: Settings as it was last shown.")] string? page = null,
         CancellationToken cancellationToken = default) => Act(async () => $"Settings is open at {await settings.OpenAsync(page, cancellationToken).ConfigureAwait(false)}.");
-
-    private static async Task<T> Act<T>(Func<Task<T>> act)
-    {
-        try
-        {
-            return await act().ConfigureAwait(false);
-        }
-        catch (YardActionException ex)
-        {
-            throw new McpException(ex.Message);
-        }
-        catch (TimeoutException)
-        {
-            // The app's window was busy past the wait: the brain gets something to tell the user, not a raw error.
-            throw new McpException("CodeSwitchX's window did not respond in time, so that was not done. Say it again in a moment.");
-        }
-    }
 }

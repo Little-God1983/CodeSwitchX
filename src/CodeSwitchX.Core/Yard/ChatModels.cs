@@ -131,6 +131,10 @@ public static class ChatModels
         return (version, []);
     }
 
+    /// <summary>Whether the user means Claude Code's own default, for a model or an effort: "default", "Claude Code's default".</summary>
+    public static bool IsDefault(string? said) =>
+        WorkspaceMatcher.Squash(said ?? "") is "default" or "claudecodesdefault" or "claudecodedefault" or "claudedefault";
+
     /// <summary>
     /// The effort level a spoken or typed word means: the level itself, or how it is said out loud ("extra high",
     /// "maximum", "mid"). Null when it is none.

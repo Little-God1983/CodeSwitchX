@@ -19,17 +19,18 @@ public interface IAppSettings
 
     /// <summary>Opens Settings at the page (by its name, as the sidebar lists it; null for the first); returns the page's name.</summary>
     Task<string> OpenAsync(string? page, CancellationToken ct);
-
-    /// <summary>The pages, as the sidebar lists them.</summary>
-    IReadOnlyList<string> Pages { get; }
 }
 
 /// <param name="Name">What the user calls it: "open mic", "cooldown".</param>
 /// <param name="Page">The Settings page it is on.</param>
 /// <param name="Description">What it does, for the brain.</param>
 /// <param name="Values">The values it may take; null when free (a model id, a number in a range).</param>
-/// <param name="ByVoice">False for a setting that is only read, never changed, by voice; <see cref="NotByVoice"/> says why.</param>
-public sealed record AppSetting(string Name, string Page, string Description, IReadOnlyList<string>? Values, bool ByVoice = true, string? NotByVoice = null);
+/// <param name="NotByVoice">Why the setting is only read, never changed, by voice; null for one that is changed by voice.</param>
+public sealed record AppSetting(string Name, string Page, string Description, IReadOnlyList<string>? Values, string? NotByVoice = null)
+{
+    /// <summary>Whether it is changed by voice: the brain reads it in list_settings.</summary>
+    public bool ByVoice => NotByVoice is null;
+}
 
 /// <param name="Value">The value now, as the user would say it.</param>
 /// <param name="Note">What else happens: a download, a restart of the voice. Null when nothing.</param>
