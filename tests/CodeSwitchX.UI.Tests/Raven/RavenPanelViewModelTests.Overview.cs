@@ -112,6 +112,21 @@ public sealed partial class RavenPanelViewModelTests
         sent.ShouldNotContain("waiting on the user");
     }
 
+    /// <summary>#137 with chat 0 as the overview: a window's card still reaches that window's brain, and chat 0's none.</summary>
+    [Fact]
+    public async Task With_the_overview_a_window_s_card_reaches_its_own_brain_only()
+    {
+        var (vm, brains, _, asks) = await OverviewVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+
+        await TalkInAsync(vm, 0, "What's going on?");
+        await TalkInAsync(vm, 3, "allow it");
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("(ask id p1)");
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("(ask id p1)");
+    }
+
     [Fact]
     public async Task A_starting_chat_counts_as_working()
     {

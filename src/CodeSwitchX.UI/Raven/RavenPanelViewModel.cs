@@ -125,6 +125,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>A fact the user was given, the brain it is for (any, for null), and the brains that have it.</summary>
     private sealed record ToldFact(DateTimeOffset At, string Fact, IConductorBrain? For)
     {
+        /// <summary>What became of an allow its brain proposed: for that brain alone, whatever else hears every window.</summary>
+        public bool ProposerOnly { get; init; }
+
         public HashSet<IConductorBrain> ToldTo { get; } = [];
     }
 
@@ -2211,7 +2214,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (Proposer(proposal) is { } proposer)
         {
-            _toldNews.Add(new(_time.GetUtcNow(), fact, proposer));
+            _toldNews.Add(new(_time.GetUtcNow(), fact, proposer) { ProposerOnly = true });
         }
     }
 
@@ -2505,21 +2508,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var taken = _time.GetUtcNow();
 
             // A card per window, in that window's chat: the news of a chat is read where its window's other cards are.
+            // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
+            // facts with the next question either way, so "open it" finds what "it" is; each line the brain of its own
+            // window's chat only (#137).
+            var at = _time.GetUtcNow();
             foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
             {
                 var ofWindow = group.ToList();
                 var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
                 Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
                 Summarize(group.Key);
-            }
-
-            // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
-            // facts with the next question either way, so "open it" finds what "it" is.
-            var at = _time.GetUtcNow();
-            // Each line to the brain of its window's chat only (#137).
-            foreach (var line in lines)
-            {
-                Tell(Fact(line), ChatOf(line.WorkspaceId), at);
+                foreach (var line in ofWindow)
+                {
+                    Tell(Fact(line), group.Key, at);
+                }
             }
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
@@ -2629,7 +2631,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // Without a summarizer chat 0 is no overview: it is told every window's facts, as before #124.
         var all = _summarizer is null && brain == _brain;
-        question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain || all))];
+        question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain || (all && !t.ProposerOnly)))];
         var text = question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         return question.Told.Count == 0
             ? text

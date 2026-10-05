@@ -154,7 +154,7 @@ public sealed partial class RavenPanelViewModelTests
 
     /// <summary>
     /// #137: a news line goes to the brain of its own window's chat only, once: another window's brain would take it for its
-    /// own window's. Chat 0's brain and chat 1's do not get chat 3's news.
+    /// own window's. Chat 1's brain does not get chat 3's news.
     /// </summary>
     [Fact]
     public async Task Chat_news_is_told_only_to_its_own_window_s_brain_once()
@@ -205,8 +205,12 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "anything for me here?");
         await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
 
         brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("(ask id p1)");
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("(ask id p1)");
     }
 
     /// <summary>Without a summarizer, chat 0 is no overview: it still hears every window's news, as before #124.</summary>
@@ -230,6 +234,30 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldHaveSingleItem().ShouldContain("Fix the upload retry");
+    }
+
+    /// <summary>Chat 0 without a summarizer hears every window's facts, but never what became of another brain's allow.</summary>
+    [Fact]
+    public async Task Without_a_summarizer_chat_zero_is_not_told_another_brain_s_allow()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Deploy");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+        var proposal = asks.Propose("p1", ContentAutomatorX); // chat 3's brain proposed it
+        await Until(() => asks.IsHeard(proposal));
+
+        vm.SelectedChat = vm.YardChat; // moving away lets the proposal go: its brain is told
+        Type(vm, "anything new?");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
     }
 
     /// <summary>#137: a card of window 3 reaches chat 3's brain, never chat 1's, even when the user is in chat 1.</summary>
