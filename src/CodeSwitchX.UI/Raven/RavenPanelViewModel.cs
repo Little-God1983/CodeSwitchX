@@ -3293,8 +3293,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Speaks a short catch-up on switching to a chat (#127): what came there while the user was away, in one or two
-    /// sentences worded by the teller. The shell keeps it in step with Settings; on by default (#143). It is a switch of its
-    /// own: with chat news only written, it is still said.
+    /// sentences worded by the teller. The shell keeps it in step with Settings, where it is on by default (#143). It is a
+    /// switch of its own: with chat news only written, it is still said.
     /// </summary>
     [ObservableProperty]
     private bool _catchUp;
@@ -3325,6 +3325,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// talks over the user or an allow waiting for their yes; its cards that came meanwhile are read after it, one at a
     /// time. Nothing is said for a chat with nothing new, or muted. The cooldown does not hold it (#143): the user switched,
     /// most often right after the chat's sound, and asked for it so; it waits the pause after that sound (#152) instead.
+    /// Only when the chat the user is in waits for the cooldown too (<see cref="TrafficWatcher.OwnNewsWaits"/>) is it not
+    /// said inside it, as that chat's news is not.
     /// </summary>
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
@@ -3341,7 +3343,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null;
+        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null && Traffic.MaySpeakOwnNews;
         if (catchUp)
         {
             _catchUpDue = (chat, lines);

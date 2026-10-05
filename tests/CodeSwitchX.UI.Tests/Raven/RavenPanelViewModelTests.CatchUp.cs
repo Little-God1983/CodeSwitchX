@@ -110,10 +110,27 @@ public sealed partial class RavenPanelViewModelTests
         vm.Traffic.Announced(); // Raven just spoke
 
         vm.SelectedChat = ChatNumbered(vm, 2);
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        _teller.Asked.ShouldBeEmpty("the pause after Raven spoke has not passed");
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
 
         _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+    }
+
+    /// <summary>#143: "the chat I'm in also waits for the cooldown" holds the catch-up too: it is that chat's news.</summary>
+    [Fact]
+    public async Task With_own_news_waiting_for_the_cooldown_a_switch_inside_it_is_not_caught_up()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        vm.Traffic.OwnNewsWaits = true;
+        vm.Traffic.Announced(); // Raven just spoke
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldBeEmpty();
     }
 
     /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>

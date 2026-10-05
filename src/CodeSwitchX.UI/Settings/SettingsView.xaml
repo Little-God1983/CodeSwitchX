@@ -592,7 +592,7 @@
                 <StackPanel>
                   <TextBlock Text="Catch-up when I switch chats" FontSize="14.5" FontWeight="SemiBold" />
                   <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
-                             Text="On, switching to a chat with something new makes Raven say in a sentence or two what happened there while you were away, then read its questions. Also right after the chat's sound: it waits the pause between messages." />
+                             Text="On, switching to a chat with something new makes Raven say in a sentence or two what happened there while you were away, then read its questions if chat news is spoken. Also right after the chat's sound: it waits the pause between messages." />
                 </StackPanel>
               </DockPanel>
             </StackPanel>
