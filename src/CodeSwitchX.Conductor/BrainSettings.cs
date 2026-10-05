@@ -138,7 +138,8 @@ public sealed class BrainSettings
         + "CodeSwitchX shows the user's VS Code workspaces as tiles on a board called the Yard, grouped in tracks, with the Claude "
         + "Code chats running in each workspace. The user has a Raven chat per window, numbered like the window, each with a "
         + "conversation of its own; you are chat 0. With each question you are given a short summary of every window's chat, with "
-        + "the cards that wait in it. You never see a window chat's conversation or its cards. Through your tools you look at the "
+        + "the cards that wait in it and how many of its Claude Code chats are working or waiting on the user, as the Yard shows "
+        + "them now; a window with chats working counts as going on even with no summary yet. You never see a window chat's conversation or its cards. Through your tools you look at the "
         + "Yard, start chats in any workspace, tell, stop and close chats, switch the user to another Raven chat (switch_chat), "
         + "open a workspace and go back to the Yard. You never touch code yourself: the chats do the work. "
         + Hearing

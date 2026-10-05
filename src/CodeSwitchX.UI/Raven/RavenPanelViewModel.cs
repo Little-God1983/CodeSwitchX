@@ -1727,18 +1727,28 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             var brain = BrainOf(question.Chat);
+            // Chat 0 is told how busy each window is, from the Yard as it is now (#136): a window never talked about has no
+            // summary. Read alongside the wait for summaries, not after it.
+            var reading = IsOverview(brain) ? BusyWindowsAsync() : null;
             if (IsOverview(brain) && !_summaries.IsCompleted)
             {
+                var waitedFrom = _time.GetTimestamp();
                 await Task.WhenAny(_summaries, Task.Delay(SummaryWait, _time));
-                if (question.Merged)
+                if (_time.GetElapsedTime(waitedFrom) > TimeSpan.FromSeconds(1))
                 {
-                    return; // words said meanwhile took it along
+                    reading = BusyWindowsAsync(); // waited long for a summary: the Yard as it is now, not as it was
                 }
+            }
+
+            var busy = reading is null ? null : await reading;
+            if (question.Merged)
+            {
+                return; // words said meanwhile took it along
             }
 
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            await StreamAnswerAsync(brain, WithToldNews(question, brain), spoken, floor, question.Chat, question);
+            await StreamAnswerAsync(brain, WithToldNews(question, brain, busy), spoken, floor, question.Chat, question);
 
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
@@ -2587,7 +2597,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
     /// along is kept until the brain has it, so a question merged into the next or failed before it went loses none.
     /// </summary>
-    private string WithToldNews(Question question, IConductorBrain brain)
+    private string WithToldNews(Question question, IConductorBrain brain, IReadOnlyDictionary<Guid, Busy>? busy)
     {
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
@@ -2595,7 +2605,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Chat 0 is the overview: it is given each window's chat by its summary, and no fact of a card or a chat's news.
             question.Told = [];
-            return Overview() + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
+            return Overview(busy) + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         }
 
         question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain))];
@@ -2609,23 +2619,94 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What chat 0 is told of the window chats with each question: each one's number, name, the cards waiting in it, and
     /// its summary. Never the chat's words or a card's text: those reach the summarizer only.
     /// </summary>
-    private string Overview()
+    /// <param name="busy">Each window's chats from the Yard; null when it could not be read: then said once, not per window.</param>
+    private string Overview(IReadOnlyDictionary<Guid, Busy>? busy)
     {
-        var lines = Chats.Where(c => c.WorkspaceId is not null).Select(chat =>
+        List<string> lines = [];
+        List<string> quiet = [];
+        foreach (var chat in Chats.Where(c => c.WorkspaceId is not null))
         {
-            var waiting = WaitingIn(chat);
-            var cards = waiting switch { 0 => "nothing waiting", 1 => "1 card waiting", _ => $"{waiting} cards waiting" };
-            return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "no summary yet"}";
-        }).ToList();
+            var now = busy is not null && busy.TryGetValue(chat.WorkspaceId!.Value, out var counted) ? counted : new Busy(0, []);
+            var cards = WaitingIn(chat);
+            // A chat that waits on a card here is said once, as the card: not also as waiting on the user.
+            var carded = _askCards.Values.Where(c => c.IsOpen && c.ShownIn == chat).Select(c => c.Ask.SessionId).ToHashSet();
+            var waiting = now.Waiting.Count(id => !carded.Contains(id));
+            // Counts only, never a chat's title or words: chat 0 knows a window's chats by its summary and these numbers.
+            List<string> parts = [];
+            if (now.Working > 0)
+            {
+                parts.Add(now.Working == 1 ? "1 Claude Code chat working" : $"{now.Working} Claude Code chats working");
+            }
+
+            if (waiting > 0)
+            {
+                parts.Add(waiting == 1 ? "1 waiting on the user" : $"{waiting} waiting on the user");
+            }
+
+            if (cards > 0)
+            {
+                parts.Add(cards == 1 ? "1 card waiting" : $"{cards} cards waiting");
+            }
+
+            // A window never talked in and with nothing going on is folded into one line, by number and name, so many idle
+            // windows keep it short; one talked in whose summary has not come yet is not idle: "no summary yet".
+            if (parts.Count == 0 && chat.Summary is null && !Log.Any(e => e.Chat == chat && e.Kind is not (RavenLogKind.Note or RavenLogKind.Warning)))
+            {
+                quiet.Add($"{chat.Number} {chat.Name}");
+                continue;
+            }
+
+            // What the Yard shows, apart from what the summary says: no chat working or waiting is not "nothing going on".
+            var state = parts.Count > 0 ? string.Join(", ", parts)
+                : busy is null ? "no card waiting" : "no Claude Code chat working or waiting, no card";
+            lines.Add($"Chat {chat.Number}, {chat.Name} ({state}): " + (chat.Summary ?? "no summary yet"));
+        }
+
+        if (quiet.Count > 0)
+        {
+            lines.Add((busy is null ? "No summary or card yet in chat " : "Nothing going on in chat ") + string.Join(", chat ", quiet));
+        }
+
         if (WaitingIn(YardChat) is > 0 and var here)
         {
             // Chats on no tile ask here: counted, as no summary has them.
             lines.Add($"Chat 0 itself, for chats on no tile ({(here == 1 ? "1 card waiting" : $"{here} cards waiting")}, answered here with a click)");
         }
 
+        var unknown = busy is null ? " (the Yard could not be read just now: which Claude Code chats work or wait is unknown; list_chats can tell)" : "";
         return lines.Count == 0
             ? "[There are no window chats now: no window is on the Yard.]\n"
-            : "[The window chats now, as their summaries say: " + string.Join("; ", lines) + ".]\n";
+            : $"[The window chats now, as their summaries and the Yard say{unknown}: " + string.Join("; ", lines) + ".]\n";
+    }
+
+    /// <summary>How many of a window's Claude Code chats work, and how many wait on the user.</summary>
+    /// <param name="Waiting">The ids of the chats that wait on the user.</param>
+    internal readonly record struct Busy(int Working, IReadOnlyList<string> Waiting);
+
+    /// <summary>How long chat 0's question waits for the Yard's chats before it goes without their counts.</summary>
+    private static readonly TimeSpan BusyWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>Each window's working and waiting chats, as the Yard shows them now; null when it cannot say. Never faults.</summary>
+    private async Task<IReadOnlyDictionary<Guid, Busy>?> BusyWindowsAsync()
+    {
+        if (_yard is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var wait = new CancellationTokenSource(BusyWait, _time);
+            // The token bounds the wait itself too: a Yard that does not watch it must not hold chat 0's question.
+            var chats = await _yard.ChatsAsync(wait.Token).WaitAsync(wait.Token);
+            return chats.GroupBy(c => c.WorkspaceId).ToDictionary(g => g.Key, g => new Busy(
+                g.Count(c => c.State is SessionState.Working or SessionState.Starting), [.. g.Where(c => c.NeedsYou).Select(c => c.Id)]));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(ex, "Chat 0 goes without the windows' chat counts");
+            return null;
+        }
     }
 
     /// <summary>Chat 0's brain, the overview, when there is one: with no summarizer chat 0 is told what every chat is.</summary>
