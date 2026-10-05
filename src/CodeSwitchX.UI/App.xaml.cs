@@ -251,6 +251,7 @@ public partial class App : Application
             },
             sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.Snapshot,
             id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
+            sp.GetRequiredService<ClaudeLiveSessions>().RunsOutsideVsCode,
             sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),

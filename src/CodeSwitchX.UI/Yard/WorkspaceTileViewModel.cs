@@ -75,7 +75,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         var row = Chats.FirstOrDefault(c => c.SessionId == snapshot.SessionId);
         if (row is null)
         {
-            row = new ChatRowViewModel(snapshot.SessionId);
+            row = new ChatRowViewModel(snapshot.SessionId, id => _owner.RequestOpenChat(Id, id));
             Chats.Add(row);
         }
 

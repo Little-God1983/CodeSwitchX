@@ -87,6 +87,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public IEnumerable<WorkspaceTileViewModel> Tiles => Tracks.SelectMany(t => t.Tiles);
 
     public event Action<Guid>? OpenRequested;
+
+    /// <summary>A chat's row on a tile was clicked (#115): the workspace opens with that chat, given by its session id, in front.</summary>
+    public event Action<Guid, string>? OpenChatRequested;
     /// <summary>Open the Add workspace dialog; with a path (a file or folder dropped on the Yard), detect that path at once.</summary>
     public event Action<string?>? AddWorkspaceRequested;
 
@@ -233,6 +236,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
+
+    public void RequestOpenChat(Guid workspaceId, string sessionId) => OpenChatRequested?.Invoke(workspaceId, sessionId);
 
     /// <summary>
     /// Asked before a workspace is removed, with its id: false keeps it (#135: the shell asks what becomes of the cards in

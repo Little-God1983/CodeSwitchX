@@ -35,8 +35,8 @@ public interface IYardActions
     /// <summary>Changes the defaults; a null leaves that one as it is.</summary>
     Task<ChatDefaults> SetDefaultsAsync(string? model, string? effort, CancellationToken ct);
 
-    /// <summary>Shows the workspace in the Cab.</summary>
-    Task<string> OpenWorkspaceAsync(YardWorkspace workspace, CancellationToken ct);
+    /// <summary>Shows the workspace in the Cab, with the chat's tab in front in its VS Code when one is given.</summary>
+    Task<string> OpenWorkspaceAsync(YardWorkspace workspace, YardChat? chat, CancellationToken ct);
 
     /// <summary>Shows the Yard.</summary>
     Task BackToYardAsync(CancellationToken ct);

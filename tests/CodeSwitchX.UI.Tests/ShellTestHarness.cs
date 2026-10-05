@@ -97,7 +97,51 @@ public sealed class ShellTestHarness
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic,
             asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory);
-        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
+        Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance, VsCode);
+    }
+
+    /// <summary>The chats the shell asked VS Code to show (#115).</summary>
+    public ShownChats VsCode { get; } = new();
+
+    public sealed class ShownChats : IVsCodeChats
+    {
+        public List<(string Workspace, string SessionId)> Shown { get; } = [];
+
+        /// <summary>Why VS Code does not show the chat; null when it does.</summary>
+        public string? Failure { get; set; }
+
+        public Task<VsCodeChat> StartAsync(Workspace workspace, string? folder, string? model, string? effort, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task CloseAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
+
+        /// <summary>When set, a show waits until it is ended: VS Code is slow to start.</summary>
+        public bool Hangs { get; set; }
+
+        /// <summary>The shows that were ended while they waited.</summary>
+        public int Ended;
+
+        public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
+        {
+            Shown.Add((workspace.Name, sessionId));
+            if (Hangs)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref Ended);
+                    throw;
+                }
+            }
+
+            if (Failure is { } failure)
+            {
+                throw new CodeSwitchX.Core.Yard.YardActionException(failure);
+            }
+        }
     }
 
     public static YardViewModel CreateYardWithoutInit() => new ShellTestHarness().Shell.Yard;

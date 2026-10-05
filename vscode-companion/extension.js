@@ -150,6 +150,8 @@ async function handle(line, token, version) {
             return newChat();
         case 'closeChat':
             return closeChat(request.sessionId);
+        case 'openChat':
+            return openChat(request.sessionId);
         default:
             return { ok: false, error: `No command '${request.command}'.` };
     }
@@ -167,18 +169,47 @@ async function newChat() {
 }
 
 /**
- * Closes the tab of the chat with this session id; its claude.exe ends with it, and the conversation stays in Claude Code's
- * session list. Tabs show titles, not ids, so the tab is found by asking Claude Code to bring the chat to the front: the
- * Claude tab that becomes the active one is it. A Claude tab active already could be it, or the chat could be shown in
- * the side bar, so a blank editor is put in front first, and taken away again after.
+ * Shows the chat with this session id in this window: its tab comes to the front, or is opened with the chat's history
+ * when it has none here. A chat shown in the side bar is shown there.
  */
-async function closeChat(sessionId) {
+async function openChat(sessionId) {
+    const refused = await cannotReveal(sessionId);
+    if (refused) {
+        return refused;
+    }
+
+    await reveal(sessionId);
+    return { ok: true, pid: process.pid };
+}
+
+/** Why a chat cannot be asked for here, as an answer; undefined when it can. */
+async function cannotReveal(sessionId) {
     if (typeof sessionId !== 'string' || !SessionId.test(sessionId)) {
         return { ok: false, error: 'No chat id.' };
     }
 
     if (!await activateClaudeCode()) {
         return { ok: false, error: "Claude Code's VS Code extension is not installed in this window." };
+    }
+
+    return undefined;
+}
+
+/** Asks Claude Code to bring the chat to the front: its tab if it has one here, else a tab opened with its history. */
+function reveal(sessionId) {
+    return vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
+}
+
+/**
+ * Closes the tab of the chat with this session id; its claude.exe ends with it, and the conversation stays in Claude Code's
+ * session list. Tabs show titles, not ids, so the tab is found by asking Claude Code to bring the chat to the front: the
+ * Claude tab that becomes the active one is it. A Claude tab active already could be it, or the chat could be shown in
+ * the side bar, so a blank editor is put in front first, and taken away again after.
+ */
+async function closeChat(sessionId) {
+    const refused = await cannotReveal(sessionId);
+    if (refused) {
+        return refused;
     }
 
     const before = new Set(claudeTabs());
@@ -189,7 +220,7 @@ async function closeChat(sessionId) {
     }
 
     try {
-        await vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
+        await reveal(sessionId);
         const tab = await waitFor(() => isClaudeTab(activeTab()) ? activeTab() : undefined, RevealMs);
         if (!tab) {
             return { ok: false, error: NoTab };

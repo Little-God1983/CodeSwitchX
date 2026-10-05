@@ -75,29 +75,41 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
     [McpServerTool(Name = "open_workspace", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows a workspace's VS Code in CodeSwitchX (\"open it\", \"take me to …\"). Given a chat, it shows the workspace the chat "
-        + "runs in, where the chat is a tab of VS Code's Claude Code. In a window's chat, give neither to open that window.")]
+        + "runs in with that chat's tab in front (\"open that chat\"), whatever workspace is named with it. In a window's chat, give neither to open that window.")]
     public async Task<string> OpenWorkspace(
         [Description("The workspace as the user named it; may be left out when a chat is given.")] string? workspace = null,
-        [Description("A chat's id from start_chat or list_chats, to show the workspace it runs in.")] string? chat = null,
+        [Description("A chat's id from start_chat or list_chats, to show it in the workspace it runs in.")] string? chat = null,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(workspace) && string.IsNullOrWhiteSpace(chat))
         {
             var window = await WindowAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new McpException("Say which workspace or chat to open.");
-            return await Act(() => actions.OpenWorkspaceAsync(window, cancellationToken)).ConfigureAwait(false);
+            return await Act(() => actions.OpenWorkspaceAsync(window, null, cancellationToken)).ConfigureAwait(false);
         }
 
-        if (!string.IsNullOrWhiteSpace(workspace))
+        if (string.IsNullOrWhiteSpace(chat))
+        {
+            var named = (await OneWorkspaceAsync(workspace!, cancellationToken).ConfigureAwait(false)).Workspace;
+            return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false);
+        }
+
+        // A chat is in one workspace only, so it says which. A workspace named with it still opens when the chat is not found.
+        YardChat one;
+        try
+        {
+            one = await OneChatAsync(chat, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
+        }
+        catch (McpException ex) when (!string.IsNullOrWhiteSpace(workspace))
         {
             var named = (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
-            return await Act(() => actions.OpenWorkspaceAsync(named, cancellationToken)).ConfigureAwait(false);
+            return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false)
+                + $" No chat was brought to the front: {ex.Message}";
         }
 
-        var one = await OneChatAsync(chat!, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)
             ?? throw new McpException($"The workspace of chat '{chat}' is not on the Yard any more.");
-        return await Act(() => actions.OpenWorkspaceAsync(target, cancellationToken)).ConfigureAwait(false);
+        return await Act(() => actions.OpenWorkspaceAsync(target, one, cancellationToken)).ConfigureAwait(false);
     }
 
     [McpServerTool(Name = "switch_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]

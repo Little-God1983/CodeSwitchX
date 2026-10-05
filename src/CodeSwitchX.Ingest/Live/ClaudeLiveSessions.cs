@@ -112,6 +112,36 @@ public sealed class ClaudeLiveSessions
     public IReadOnlyList<LiveChat> RunningNow(IReadOnlySet<int>? skip = null) =>
         Read(skip).Values.SelectMany(r => r).Where(Runs).Select(r => new LiveChat(r.Pid, r.SessionId, r.Name, r.ProcessStart)).ToList();
 
+    /// <summary>
+    /// Whether the chat runs right now outside a VS Code tab: in a terminal, or by <c>claude -p</c>. Opened in a tab too,
+    /// two Claude Codes would write one conversation (#115). Read afresh. Any thread; never throws.
+    /// </summary>
+    public bool RunsOutsideVsCode(string sessionId)
+    {
+        try
+        {
+            if (!Directory.Exists(_directory))
+            {
+                return false;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(_directory, "*.json"))
+            {
+                if (int.TryParse(Path.GetFileNameWithoutExtension(file), out var pid) && ReadRecord(file, inTab: false) is { } record && record.Pid == pid
+                    && string.Equals(record.SessionId, sessionId, StringComparison.OrdinalIgnoreCase) && Runs(record))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The folder went, or may not be listed: nothing is known to run there.
+        }
+
+        return false;
+    }
+
     /// <summary>Reads the records again when the last read is <see cref="MaxAge"/> old. Under the lock.</summary>
     private void Refresh()
     {
@@ -167,7 +197,8 @@ public sealed class ClaudeLiveSessions
     }
 
     /// <summary>The record of a chat in a VS Code tab; null for anything else, or one that cannot be read.</summary>
-    private Record? ReadRecord(string file)
+    /// <param name="inTab">False for the opposite: the record of a chat run anywhere but in a VS Code tab.</param>
+    private Record? ReadRecord(string file, bool inTab = true)
     {
         try
         {
@@ -196,7 +227,7 @@ public sealed class ClaudeLiveSessions
                 return null;
             }
 
-            if (entrypoint != VsCodeEntrypoint || kind != InteractiveKind)
+            if ((entrypoint == VsCodeEntrypoint && kind == InteractiveKind) != inTab)
             {
                 return null;
             }

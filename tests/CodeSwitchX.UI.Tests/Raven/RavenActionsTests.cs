@@ -296,17 +296,54 @@ public sealed class RavenActionsTests
     [Fact]
     public async Task Opening_a_workspace_shows_it_in_the_Cab()
     {
-        (await _actions.OpenWorkspaceAsync(Diffusion, Ct)).ShouldBe("Diffusion-Full is open.");
+        (await _actions.OpenWorkspaceAsync(Diffusion, null, Ct)).ShouldBe("Diffusion-Full is open.");
 
         _shell.Opened.ShouldBe([Diffusion.Id]);
+        _sequence.ShouldBeEmpty("no chat is asked for");
     }
+
+    /// <summary>#115: "open that chat" shows the chat's tab, not only its workspace's VS Code.</summary>
+    [Fact]
+    public async Task Opening_a_chat_shows_its_workspace_with_the_chat_s_tab_in_front()
+    {
+        (await _actions.OpenWorkspaceAsync(Diffusion, AChat, Ct)).ShouldBe("Diffusion-Full is open, with the chat \"Fix the installer\" in front.");
+
+        _shell.Opened.ShouldBe([Diffusion.Id]);
+        _sequence.ShouldBe(["show Diffusion-Full abc-123"]);
+    }
+
+    /// <summary>The workspace did open: what failed is the chat, and that is what Raven says.</summary>
+    [Fact]
+    public async Task A_chat_that_cannot_be_shown_is_said_with_the_workspace_open()
+    {
+        _vsCode.Failure = "VS Code did not show the chat: no.";
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, AChat, Ct));
+
+        error.Message.ShouldBe("Diffusion-Full is open, but the chat \"Fix the installer\" is not in front: VS Code did not show the chat: no.");
+        _shell.Opened.ShouldBe([Diffusion.Id]);
+    }
+
+    [Fact]
+    public async Task A_workspace_that_does_not_open_is_asked_for_no_chat()
+    {
+        _shell.OpenProblem = "VS Code did not start.";
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, AChat, Ct));
+
+        error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not start.");
+        _sequence.ShouldBeEmpty();
+    }
+
+    private YardChat AChat => new("abc-123", "Fix the installer", Diffusion.Id, Diffusion.Name, SessionState.Idle, false, _time.GetUtcNow(), "1m", null, null, 0,
+        null, null);
 
     [Fact]
     public async Task A_workspace_that_does_not_open_is_said()
     {
         _shell.OpenProblem = "VS Code did not start.";
 
-        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, Ct));
+        var error = await Should.ThrowAsync<YardActionException>(() => _actions.OpenWorkspaceAsync(Diffusion, null, Ct));
 
         error.Message.ShouldBe("Diffusion-Full could not be opened: VS Code did not start.");
     }
@@ -315,7 +352,7 @@ public sealed class RavenActionsTests
     public async Task A_workspace_that_takes_too_long_to_show_is_said()
     {
         _shell.Showing = new TaskCompletionSource<string?>().Task; // VS Code never shows its window
-        var open = _actions.OpenWorkspaceAsync(Diffusion, Ct);
+        var open = _actions.OpenWorkspaceAsync(Diffusion, null, Ct);
         for (var i = 0; i < 200 && !open.IsCompleted; i++)
         {
             await Task.Delay(5, Ct);
@@ -401,6 +438,12 @@ public sealed class RavenActionsTests
         public Task CloseAsync(string sessionId, CancellationToken ct)
         {
             Sequence.Add($"close {sessionId}");
+            return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
+        }
+
+        public Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
+        {
+            Sequence.Add($"show {workspace.Name} {sessionId}");
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
     }

@@ -109,11 +109,32 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
-    public async Task Opening_a_chat_opens_its_workspace()
+    public async Task Opening_a_chat_opens_its_workspace_with_that_chat_in_front()
     {
         await Tools.OpenWorkspace(chat: "cccccccc", cancellationToken: Ct);
 
         _actions.Opened.ShouldNotBeNull().Name.ShouldBe("Diffusion-Full");
+        _actions.OpenedChat.ShouldNotBeNull().Id.ShouldStartWith("cccccccc");
+    }
+
+    [Fact]
+    public async Task A_chat_given_with_a_workspace_is_still_shown_in_front()
+    {
+        await Tools.OpenWorkspace("Diffusion-Full", "cccccccc", Ct);
+
+        _actions.Opened.ShouldNotBeNull().Name.ShouldBe("Diffusion-Full");
+        _actions.OpenedChat.ShouldNotBeNull().Id.ShouldStartWith("cccccccc");
+    }
+
+    [Fact]
+    public async Task A_workspace_named_with_a_chat_that_is_not_found_still_opens()
+    {
+        var said = await Tools.OpenWorkspace("code switch ex", "zzzz", Ct);
+
+        _actions.Opened!.Name.ShouldBe("CodeSwitchX");
+        _actions.OpenedChat.ShouldBeNull();
+        said.ShouldContain("No chat was brought to the front: ");
+        said.ShouldContain("no chat 'zzzz'");
     }
 
     [Fact]
@@ -122,6 +143,7 @@ public sealed class YardActionToolsTests
         await Tools.OpenWorkspace("code switch ex", cancellationToken: Ct);
 
         _actions.Opened!.Name.ShouldBe("CodeSwitchX");
+        _actions.OpenedChat.ShouldBeNull("a workspace opened by name shows as VS Code left it");
     }
 
     [Theory]

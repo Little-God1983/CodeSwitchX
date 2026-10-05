@@ -114,6 +114,23 @@ public class YardViewModelTests : IDisposable
         _yard.Tiles.Select(t => t.Name).ShouldBe(["App", "Shop"]);
     }
 
+    /// <summary>#115: a chat's row asks for its own chat; the tile's click still asks for the workspace alone.</summary>
+    [Fact]
+    public async Task A_chat_row_asks_to_open_its_chat_in_its_workspace()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle)));
+        var chats = new List<(Guid, string)>();
+        var workspaces = new List<Guid>();
+        _yard.OpenChatRequested += (id, chat) => chats.Add((id, chat));
+        _yard.OpenRequested += workspaces.Add;
+
+        _yard.FindTile(_shop.Id)!.Chats.ShouldHaveSingleItem().OpenCommand.Execute(null);
+
+        chats.ShouldBe([(_shop.Id, "s1")]);
+        workspaces.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Session_changes_land_on_the_owning_tile_and_raise_attention()
     {

@@ -247,6 +247,27 @@ public sealed class CompanionWindowsTests : IDisposable
         result.Error.ShouldBe("The VS Code window did not answer within 0 seconds. A chat tab may still open there.");
     }
 
+    /// <summary>#115: showing a chat may open its tab, in a window that just started: it gets the long wait of a new chat, not the short one.</summary>
+    [Fact]
+    public async Task Showing_a_chat_is_waited_for_as_long_as_a_new_chat()
+    {
+        var name = "csx-test-" + Guid.NewGuid().ToString("N");
+        await using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var serving = Task.Run(async () =>
+        {
+            await server.WaitForConnectionAsync(Ct);
+            await new StreamReader(server, Encoding.UTF8).ReadLineAsync(Ct);
+            await Task.Delay(600, Ct); // longer than any other request may take here
+            await server.WriteAsync(Encoding.UTF8.GetBytes("{\"ok\":true,\"pid\":4000}\n"), Ct);
+        }, Ct);
+        var windows = new CompanionWindows(_directory, _processes.StartOf) { Timeout = TimeSpan.FromMilliseconds(300), ChatTimeout = TimeSpan.FromMinutes(5) };
+
+        var result = await windows.SendAsync(new CompanionWindow(4000, name, "t", [], null, null), CompanionWindows.OpenChat, "abc", Ct);
+        await serving;
+
+        result.Ok.ShouldBeTrue();
+    }
+
     [Fact]
     public void Opening_a_chat_may_take_far_longer_than_any_other_request()
     {
