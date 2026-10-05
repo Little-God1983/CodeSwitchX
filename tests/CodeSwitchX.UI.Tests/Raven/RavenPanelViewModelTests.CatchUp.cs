@@ -294,7 +294,7 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void The_catch_up_is_worded_from_news_answers_and_warnings_not_cards()
+    public void The_catch_up_is_worded_from_news_and_warnings_not_answers_or_cards()
     {
         var at = DateTimeOffset.UnixEpoch;
         var lines = RavenPanelViewModel.CatchUpLines([
@@ -305,5 +305,40 @@ public sealed partial class RavenPanelViewModelTests
         ]);
 
         lines.ShouldBe(["- A warning: The voice failed."], "Raven's answers were heard as they came; cards are read on their own");
+    }
+
+    /// <summary>Two chats of one title in two news cards are told apart, as in one card.</summary>
+    [Fact]
+    public void Twin_chats_in_two_news_cards_are_numbered()
+    {
+        var at = DateTimeOffset.UnixEpoch;
+        var workspace = Guid.NewGuid();
+        RavenLogEntry News(string session) => new(RavenLogKind.News, "Chat news", at)
+        {
+            Lines = [new ChatNewsLine(session, workspace, "CodeSwitchX", "Weather discussion", ChatNewsKind.Finished, null, null, false)],
+        };
+
+        var lines = RavenPanelViewModel.CatchUpLines([News("s1"), News("s2")]);
+
+        lines.ShouldBe(["- CodeSwitchX, chat \"Weather discussion\" (1 of 2): finished", "- CodeSwitchX, chat \"Weather discussion\" (2 of 2): finished"]);
+    }
+
+    [Fact]
+    public async Task Turning_the_catch_up_off_also_leaves_the_cards_it_found_unread_out()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        vm.CatchUp = false;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _speech.Spoken.ShouldBeEmpty();
     }
 }

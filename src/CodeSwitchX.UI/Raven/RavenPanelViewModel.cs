@@ -639,8 +639,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             StopCatchUp(); // nothing is said muted
         }
-
-        if (!value)
+        else
         {
             _tts.Prepare(install: false);
         }
@@ -3156,8 +3155,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (!value)
         {
             StopCatchUp();
+            _untold.RemoveAll(_catchUpCards.Contains); // read out only because of it
         }
     }
+
+    /// <summary>The cards the last catch-up put up to be read: they came while the user was away (UI thread).</summary>
+    private readonly List<ChatAskCard> _catchUpCards = [];
 
     /// <summary>The catch-up waiting for the floor: the chat switched to and what to word it from (UI thread).</summary>
     private (RavenChat Chat, List<string> Lines)? _catchUpDue;
@@ -3180,9 +3183,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        _catchUpCards.Clear();
         foreach (var card in away.Select(e => e.Ask).OfType<ChatAskCard>().Where(c => c.IsOpen && c.ShownIn == chat && !_untold.Contains(c)))
         {
             _untold.Add(card);
+            _catchUpCards.Add(card);
         }
 
         var lines = CatchUpLines(away);
@@ -3228,27 +3233,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The lines a catch-up is worded from, in the order they came: news and warnings. Raven's answers were spoken as they
+    /// The lines a catch-up is worded from, the news in the order it came, then the warnings. Raven's answers were spoken as they
     /// came, wherever the user was, and the cards are read out on their own.
     /// </summary>
-    internal static List<string> CatchUpLines(IEnumerable<RavenLogEntry> away)
+    internal static List<string> CatchUpLines(IReadOnlyList<RavenLogEntry> away)
     {
-        List<string> lines = [];
-        foreach (var entry in away)
-        {
-            switch (entry.Kind)
-            {
-                // A stale line is shown, never spoken, as in the news.
-                case RavenLogKind.News when entry.Lines?.Where(l => !l.Stale).ToList() is { Count: > 0 } news:
-                    lines.AddRange(DigestLines(news));
-                    break;
-                case RavenLogKind.Warning:
-                    lines.Add($"- A warning: {entry.Text}");
-                    break;
-            }
-        }
-
-        return lines;
+        // The news of all its cards at once, so two chats of one title in two cards are numbered apart. A stale line is
+        // shown, never spoken, as in the news.
+        var news = away.Where(e => e.Kind == RavenLogKind.News).SelectMany(e => e.Lines ?? []).Where(l => !l.Stale).ToList();
+        return [.. DigestLines(news), .. away.Where(e => e.Kind == RavenLogKind.Warning).Select(e => $"- A warning: {e.Text}")];
     }
 
     /// <summary>What the teller is given for a catch-up: the lines, and how to begin.</summary>
