@@ -41,7 +41,6 @@ public partial class MainWindow : Window, IShellWindow
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         shell.ForwardRequested += () => WindowActivation.BringUp(this);
-        shell.Window = this; // Raven minimizes and maximizes it by voice (#117)
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
     }
@@ -58,8 +57,9 @@ public partial class MainWindow : Window, IShellWindow
     /// <summary>The state before the last minimize, kept as the window changes: "bring it back" returns a maximized window maximized.</summary>
     private ShellWindowState _restored = ShellWindowState.Normal;
 
+    /// <summary>It, a dialog of it (Add workspace), or the VS Code window its Cab shows, which holds the focus there.</summary>
     bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0
-        && (front == _hwnd || front == _host.ShownInCab);
+        && (front == _host.ShownInCab || Application.Current.Windows.OfType<Window>().Any(w => new WindowInteropHelper(w).Handle == front));
 
     /// <summary>As the title bar's button: StateChanged tells the shell, which hides the Cab's VS Code window with it.</summary>
     void IShellWindow.Minimize() => WindowState = WindowState.Minimized;
@@ -101,6 +101,7 @@ public partial class MainWindow : Window, IShellWindow
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
         _hwnd = hwnd;
+        _shell.Window = this; // Raven minimizes and maximizes it by voice (#117), once it is a window
         HwndSource.FromHwnd(hwnd)?.AddHook(TimeZoneRefresh.WndProc);
         HwndSource.FromHwnd(hwnd)?.AddHook(StayUnderHostedWindow);
         _hotkeys.Attach(hwnd, _shell);
@@ -130,7 +131,7 @@ public partial class MainWindow : Window, IShellWindow
         {
             if (WindowState != WindowState.Minimized)
             {
-                _restored = WindowState == WindowState.Maximized ? ShellWindowState.Maximized : ShellWindowState.Normal;
+                _restored = ((IShellWindow)this).State;
             }
 
             _shell.SetShellMinimized(WindowState == WindowState.Minimized);

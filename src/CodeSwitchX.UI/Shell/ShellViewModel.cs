@@ -5,6 +5,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Telemetry;
@@ -417,12 +418,17 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             }
 
             window.Minimize();
-            return "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again.";
+            return Raven.MicMode == MicMode.OpenMic
+                ? "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again."
+                : $"CodeSwitchX is minimized. Hold {HotkeyService.PushToTalk.Keys} and say \"bring it back\" to see it again.";
         }
 
-        // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar.
+        // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar. Asked to come back
+        // while covered, it comes to the front as it is; only asked to restore while in front, a maximized one shrinks.
         var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized")
-            : window.State == ShellWindowState.Minimized ? (window.Restored, "back") : (ShellWindowState.Normal, "back");
+            : window.State == ShellWindowState.Minimized ? (window.Restored, "back")
+            : !window.IsInFront ? (window.State, "back")
+            : (ShellWindowState.Normal, "at its normal size");
         if (window.State == state && window.IsInFront)
         {
             return request == WindowRequest.Maximize ? "CodeSwitchX is already maximized." : "CodeSwitchX is already there, in front.";

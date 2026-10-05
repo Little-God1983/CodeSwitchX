@@ -155,9 +155,11 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     }
 
     /// <summary>How the brain may say the state: "minimise", "hide", "full screen", "bring back".</summary>
-    internal static WindowRequest? WindowRequestOf(string? state) => new string([.. (state ?? "").ToLowerInvariant().Where(char.IsLetter)]) switch
+    internal static WindowRequest? WindowRequestOf(string? state) => string.Concat((state ?? "").ToLowerInvariant()
+            .Split([' ', ',', '.', '-', '!'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w is not ("it" or "the" or "codeswitchx" or "window" or "please"))) switch
     {
-        "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutoftheway" => WindowRequest.Minimize,
+        "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutofway" => WindowRequest.Minimize,
         "maximize" or "maximise" or "maximized" or "maximised" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
         "restore" or "restored" or "normal" or "bringback" or "bringitback" or "back" or "show" or "showit" => WindowRequest.Restore,
         _ => null,

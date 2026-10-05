@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Yard;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
 using Shouldly;
@@ -19,12 +20,32 @@ public sealed class ShellWindowTests
     private string Set(WindowRequest request) => ((IRavenShell)_h.Shell).SetWindow(request);
 
     [Fact]
-    public void Minimize_minimizes_through_the_window_and_says_raven_still_listens()
+    public void Minimize_minimizes_through_the_window_and_says_how_to_bring_it_back()
     {
-        Set(WindowRequest.Minimize).ShouldContain("still listening");
+        Set(WindowRequest.Minimize).ShouldContain($"Hold {HotkeyService.PushToTalk.Keys}", customMessage: "push to talk: the key is needed");
 
         _window.Calls.ShouldBe(["minimize"]);
         _window.State.ShouldBe(ShellWindowState.Minimized);
+    }
+
+    [Fact]
+    public void In_open_mic_minimize_says_raven_still_listens()
+    {
+        _h.Shell.Raven.MicMode = MicMode.OpenMic;
+
+        Set(WindowRequest.Minimize).ShouldContain("still listening");
+    }
+
+    /// <summary>"Bring it back" while another app covers a maximized window: to the front as it is, not shrunk.</summary>
+    [Fact]
+    public void Restore_of_a_covered_maximized_window_brings_it_forward_as_it_is()
+    {
+        _window.State = ShellWindowState.Maximized;
+        _window.IsInFront = false;
+
+        Set(WindowRequest.Restore).ShouldBe("CodeSwitchX is back.");
+
+        _window.Calls.ShouldBe(["show Maximized"]);
     }
 
     [Fact]
@@ -71,11 +92,11 @@ public sealed class ShellWindowTests
     }
 
     [Fact]
-    public void Restore_brings_it_back_to_its_normal_size()
+    public void Restore_of_a_maximized_window_in_front_gives_it_its_normal_size_and_says_so()
     {
         _window.State = ShellWindowState.Maximized;
 
-        Set(WindowRequest.Restore).ShouldBe("CodeSwitchX is back.");
+        Set(WindowRequest.Restore).ShouldBe("CodeSwitchX is at its normal size.");
 
         _window.State.ShouldBe(ShellWindowState.Normal);
     }

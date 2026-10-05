@@ -16,12 +16,16 @@ internal static class WindowActivation
     public static bool AnyMouseButtonDown() =>
         HotkeyInterop.IsKeyDown(VkLButton) || HotkeyInterop.IsKeyDown(VkRButton) || HotkeyInterop.IsKeyDown(VkMButton);
 
-    /// <summary>Brings the window back to the user: out of the minimised state, and to the front.</summary>
+    /// <summary>
+    /// Brings the window back to the user: out of the minimised state, as it was before (maximized too, as from the
+    /// taskbar), and to the front.
+    /// </summary>
     public static void BringUp(Window window)
     {
         if (window.WindowState == WindowState.Minimized)
         {
-            window.WindowState = WindowState.Normal;
+            // At once, not by a posted SC_RESTORE: what follows (a hotkey's workspace, Activate) needs it restored now.
+            window.WindowState = window is Shell.IShellWindow { Restored: Shell.ShellWindowState.Maximized } ? WindowState.Maximized : WindowState.Normal;
         }
 
         window.Show();
