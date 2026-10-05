@@ -6,21 +6,24 @@
              AllowDrop="True" Background="Transparent" DragEnter="OnDragOver" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
   <UserControl.Resources>
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
-      <!-- A click on the row opens that chat (#115); it is handled here, so the tile's own click does not fire too. -->
-      <Border Padding="0,2" CornerRadius="4">
-        <Border.InputBindings>
-          <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
-        </Border.InputBindings>
-        <Border.Style>
-          <Style TargetType="Border">
-            <Setter Property="Background" Value="Transparent" />
-            <Style.Triggers>
+      <!-- A click on the row opens that chat (#115). A button takes the click, so the tile's own click does not fire too. -->
+      <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand"
+              AutomationProperties.Name="{Binding Title, StringFormat='Open chat {0}'}">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Row" Padding="0,2" CornerRadius="4" Background="Transparent">
+              <ContentPresenter />
+            </Border>
+            <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="#1AFFFFFF" />
+                <Setter TargetName="Row" Property="Background" Value="#1AFFFFFF" />
               </Trigger>
-            </Style.Triggers>
-          </Style>
-        </Border.Style>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="Row" Property="Background" Value="#1AFFFFFF" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
       <Grid>
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="14" />
@@ -59,7 +62,7 @@
                      Value="{Binding ContextFill, Mode=OneWay}" Foreground="{Binding Pressure, Converter={StaticResource PressureBrush}}"
                      BorderThickness="0" Background="#22FFFFFF" ToolTip="Context window fill" />
       </Grid>
-      </Border>
+      </Button>
     </DataTemplate>
 
     <!-- one repository's line: branch (named after its folder when a tile has several), then the git state pill:
