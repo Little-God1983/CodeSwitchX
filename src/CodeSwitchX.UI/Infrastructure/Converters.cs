@@ -140,28 +140,3 @@ public sealed class IsNullConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
 }
-/// <summary>
-/// How many columns of cards fit a width: as many as fit the first number of the parameter wide, at least one and at most
-/// its second ("210,3"); for a double target, the width of each column. On a narrow page the cards go under each other
-/// instead of being cut (#155).
-/// </summary>
-public sealed class WidthToColumnsConverter : IValueConverter
-{
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        var parts = (parameter as string ?? "").Split(',');
-        var each = parts.Length > 0 && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var w) && w > 0 ? w : 200;
-        var most = parts.Length > 1 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var m) && m > 0 ? m : 3;
-        // Not measured yet: as many as there may be, as before the first layout.
-        var columns = value is double width && width > 0 ? Math.Clamp((int)(width / each), 1, most) : most;
-        if (targetType != typeof(double))
-        {
-            return columns;
-        }
-
-        // A hair under the share, or rounding wraps the last card of a row onto the next.
-        return value is double measured && measured > 0 ? Math.Max(1, Math.Floor(measured / columns) - 1) : double.NaN;
-    }
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
-}

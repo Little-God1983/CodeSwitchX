@@ -17,7 +17,6 @@
     <infra:ModelDotToBrushConverter x:Key="DotBrush" />
     <infra:InvertBoolConverter x:Key="InvertBool" />
     <infra:IsNullConverter x:Key="IsNull" />
-    <infra:WidthToColumnsConverter x:Key="WidthToColumns" />
     <!-- A repository's line: on a tile, and in the header of its Raven chat. -->
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
       <!-- the pill sits at the line's right edge, so the pills of every line and every tile line up; a long branch is
