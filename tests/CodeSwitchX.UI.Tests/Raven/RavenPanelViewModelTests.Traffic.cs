@@ -66,13 +66,27 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Only_news_of_the_chat_the_user_is_in_warms_the_teller()
     {
-        var (vm, _) = await TrafficVmAsync();
+        await TrafficVmAsync();
 
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: the dispatcher runs the arrival at once
         _teller.WarmUps.ShouldBe(0);
 
         Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
-        await Until(() => _teller.WarmUps > 0);
+        _teller.WarmUps.ShouldBe(1);
+    }
+
+    /// <summary>Switched away before the chat's news is told, the teller warmed for it rests: nothing waits for it there.</summary>
+    [Fact]
+    public async Task Switching_away_before_the_news_is_told_rests_the_teller()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.PressMic(TalkInput.MicButton); // the floor is busy: the news waits
+        Changes("b", SessionState.Working, SessionState.Idle);
+        _teller.WarmUps.ShouldBe(1);
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        _teller.Rests.ShouldBe(1);
     }
 
     /// <summary>Switched to the news's chat before it is told, the teller is warmed there: its first word is not slower.</summary>
@@ -110,7 +124,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task Other_windows_news_does_not_warm_the_teller_again()
     {
-        var (vm, _) = await TrafficVmAsync();
+        await TrafficVmAsync();
         Changes("b", SessionState.Working, SessionState.Idle); // chat 1's
         var warm = _teller.WarmUps;
 

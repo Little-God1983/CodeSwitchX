@@ -25,6 +25,19 @@ public sealed class ChatNewsTests : IDisposable
 
     public void Dispose() => _news.Dispose();
 
+    /// <summary>#139: which windows have news waiting, by the workspace the engine placed the chat in; none for no workspace.</summary>
+    [Fact]
+    public void Has_news_for_says_which_workspaces_have_news_waiting()
+    {
+        var mine = Guid.NewGuid();
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { WorkspaceId = mine },
+            Chat("a", SessionState.Idle, _time.GetUtcNow()) with { WorkspaceId = mine }));
+        _bus.Publish(new SessionChanged(Chat("c", SessionState.Working, _time.GetUtcNow()), Chat("c", SessionState.Idle, _time.GetUtcNow())));
+
+        _news.HasNewsFor(id => id == mine).ShouldBeTrue();
+        _news.HasNewsFor(id => id != mine).ShouldBeFalse("the chat on no workspace counts for none");
+    }
+
     internal static SessionSnapshot Chat(string id, SessionState state, DateTimeOffset since, string? notification = null) => new()
     {
         SessionId = id,

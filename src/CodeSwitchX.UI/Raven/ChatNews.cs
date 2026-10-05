@@ -86,10 +86,13 @@ public sealed class ChatNews : IDisposable
     /// </summary>
     public bool HasNewsFor(Func<Guid, bool> told)
     {
+        List<Guid> waiting;
         lock (_lock)
         {
-            return _slots.Values.Any(s => s.WorkspaceId is { } id && told(id));
+            waiting = [.. _slots.Values.Select(s => s.WorkspaceId).OfType<Guid>()];
         }
+
+        return waiting.Any(told); // the caller's check, outside the lock the bus threads take
     }
 
     public bool HasNews
@@ -125,8 +128,8 @@ public sealed class ChatNews : IDisposable
         var current = change.Current;
         lock (_lock)
         {
-            _slots[current.SessionId] = new Slot(kind, kind == ChatNewsKind.NeedsYou ? current.LastNotification : null, current.StateSince, WorkspaceId: current.WorkspaceId, TranscriptPath:
-                current.TranscriptPath);
+            _slots[current.SessionId] = new Slot(kind, kind == ChatNewsKind.NeedsYou ? current.LastNotification : null, current.StateSince,
+                current.TranscriptPath, current.WorkspaceId);
         }
 
         Arrived?.Invoke(this, current.WorkspaceId);
@@ -193,5 +196,6 @@ public sealed class ChatNews : IDisposable
 
     public void Dispose() => _subscription.Dispose();
 
-    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath, Guid? WorkspaceId = null);
+    /// <param name="WorkspaceId">Where the engine placed the chat when the news came; null for a chat on no workspace.</param>
+    private sealed record Slot(ChatNewsKind Kind, string? Detail, DateTimeOffset At, string? TranscriptPath, Guid? WorkspaceId);
 }
