@@ -8,8 +8,8 @@ namespace CodeSwitchX.Core.Yard;
 /// </summary>
 public interface IAppSettings
 {
-    /// <summary>Every setting the brain may ask about, in the order of the Settings pages.</summary>
-    IReadOnlyList<AppSetting> Settings { get; }
+    /// <summary>Every setting the brain may ask about, in the order of the Settings pages, with the values each takes now. Any thread.</summary>
+    Task<IReadOnlyList<AppSetting>> ListAsync(CancellationToken ct);
 
     /// <summary>The setting's value now. Any thread.</summary>
     Task<AppSettingValue> GetAsync(string name, CancellationToken ct);

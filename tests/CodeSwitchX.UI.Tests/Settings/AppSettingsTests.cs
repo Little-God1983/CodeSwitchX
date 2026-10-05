@@ -134,7 +134,7 @@ public sealed class AppSettingsTests
         error.Message.ShouldContain("not changed by voice");
         error.Message.ShouldContain("Settings is open at Claude Code");
         (_h.Shell.Mode, _h.Shell.Settings.Page).ShouldBe((ShellMode.Settings, SettingsPage.ClaudeCode));
-        _settings.Settings.Single(s => s.Name == "data").ByVoice.ShouldBeFalse();
+        (await _settings.ListAsync(Ct)).Single(s => s.Name == "data").ByVoice.ShouldBeFalse();
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("delete data", "yes", Ct))).Message.ShouldContain("never deletes");
     }
 
@@ -266,10 +266,85 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
-    public void Every_setting_has_a_page_the_sidebar_lists_and_a_description()
+    public async Task Every_setting_has_a_page_the_sidebar_lists_and_a_description()
     {
-        _settings.Settings.ShouldAllBe(s => _settings.Pages.Contains(s.Page) && s.Description.Length > 0);
-        _settings.Settings.Where(s => !s.ByVoice).ShouldAllBe(s => s.NotByVoice != null);
-        _settings.Settings.Select(s => s.Name).ShouldBeUnique();
+        var list = await _settings.ListAsync(Ct);
+
+        list.ShouldAllBe(s => _settings.Pages.Contains(s.Page) && s.Description.Length > 0);
+        list.Where(s => !s.ByVoice).ShouldAllBe(s => s.NotByVoice != null);
+        list.Select(s => s.Name).ShouldBeUnique();
+    }
+
+    /// <summary>"Which voices do you have?": the list carries the voices and microphones there are now.</summary>
+    [Fact]
+    public async Task The_list_carries_the_voices_and_microphones_there_are_now()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _settings.SetAsync("voice engine", "Kokoro", Ct);
+        _h.Shell.Raven.Microphones.Add(new MicrophoneDevice("m1", "Desk mic"));
+
+        var list = await _settings.ListAsync(Ct);
+
+        list.Single(s => s.Name == "voice").Values.ShouldBe(CodeSwitchX.Voice.Speech.SpeechSettings.KokoroVoices.Select(v => v.Name));
+        list.Single(s => s.Name == "microphone").Values!.ShouldContain("Desk mic");
+    }
+
+    [Theory]
+    [InlineData("the microphone settings", SettingsPage.Listening)]
+    [InlineData("model", SettingsPage.Brain)]
+    [InlineData("hooks", SettingsPage.ClaudeCode)]
+    [InlineData("budget", SettingsPage.Usage)]
+    public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
+
+    [Fact]
+    public async Task Opening_settings_brings_the_window_forward()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var forward = 0;
+        _h.Shell.ForwardRequested += () => forward++;
+
+        await _settings.OpenAsync("voice", Ct);
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("hooks", "off", Ct));
+
+        forward.ShouldBe(2);
+    }
+
+    [Theory]
+    [InlineData("claude-sonnet-5")]
+    [InlineData("claude-made-up-9")]
+    public async Task An_id_no_alias_or_known_model_has_is_refused_for_raven_s_own_brain(string id)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var before = _h.Shell.Settings.RavenBrainModel;
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's model", id, Ct))).Message.ShouldContain("Brain & chats");
+
+        _h.Shell.Settings.RavenBrainModel.ShouldBe(before);
+    }
+
+    [Theory]
+    [InlineData("1.500.000", 1_500_000L)]
+    [InlineData("-200k", null)]
+    [InlineData("99999999999999999999999999999 million", null)]
+    public void Numbers_read_european_grouping_and_refuse_what_is_no_count(string said, long? number) => AppSettings.Number(said).ShouldBe(number);
+
+    [Fact]
+    public async Task The_budget_reads_back_the_same_whatever_the_culture()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+        try
+        {
+            await _settings.SetAsync("5-hour budget", "2000000", Ct);
+            var said = (await _settings.GetAsync("5-hour budget", Ct)).Value;
+            await _settings.SetAsync("5-hour budget", said, Ct);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = culture;
+        }
+
+        _h.Shell.Settings.FiveHourBudgetTokens.ShouldBe(2_000_000);
     }
 }

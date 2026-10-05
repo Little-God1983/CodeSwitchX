@@ -20,13 +20,19 @@ public sealed class SettingsToolsTests
     {
         public List<string> Calls { get; } = [];
 
-        public IReadOnlyList<AppSetting> Settings { get; } = [new("open mic", "Listening", "Listens all the time.", ["on", "off"])];
+        public Task<IReadOnlyList<AppSetting>> ListAsync(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<AppSetting>>([new("open mic", "Listening", "Listens all the time.", ["on", "off"])]);
 
         public IReadOnlyList<string> Pages { get; } = ["Voice", "Listening"];
 
         public Task<AppSettingValue> GetAsync(string name, CancellationToken ct)
         {
             Calls.Add($"get {name}");
+            if (name == "slow")
+            {
+                throw new TimeoutException();
+            }
+
             return name == "open mic" ? Task.FromResult(new AppSettingValue("open mic", "Listening", "on", ["on", "off"]))
                 : throw new YardActionException($"There is no setting '{name}'.");
         }
@@ -56,8 +62,9 @@ public sealed class SettingsToolsTests
         (await tools.OpenSettings("Listening", Ct)).ShouldBe("Settings is open at Listening.");
         (await Should.ThrowAsync<McpException>(() => tools.SetSetting("hooks", "off", Ct))).Message.ShouldContain("not changed by voice");
         (await Should.ThrowAsync<McpException>(() => tools.GetSetting("colour", Ct))).Message.ShouldContain("no setting 'colour'");
-        tools.ListSettings().ShouldHaveSingleItem().Name.ShouldBe("open mic");
-        settings.Calls.ShouldBe(["get open mic", "set open mic=off", "open Listening", "set hooks=off", "get colour"]);
+        (await tools.ListSettings(Ct)).ShouldHaveSingleItem().Name.ShouldBe("open mic");
+        (await Should.ThrowAsync<McpException>(() => tools.GetSetting("slow", Ct))).Message.ShouldContain("did not respond in time");
+        settings.Calls.ShouldBe(["get open mic", "set open mic=off", "open Listening", "set hooks=off", "get colour", "get slow"]);
     }
 
     [Fact]

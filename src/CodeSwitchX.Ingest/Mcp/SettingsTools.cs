@@ -15,7 +15,8 @@ public sealed class SettingsTools(IAppSettings settings)
     [McpServerTool(Name = "list_settings", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Lists CodeSwitchX's own settings you can read and change by voice: each with its name, Settings page, what it does and "
         + "the values it takes. Call it when the user asks about a setting by a name you are not sure of.")]
-    public IReadOnlyList<AppSetting> ListSettings() => settings.Settings;
+    public Task<IReadOnlyList<AppSetting>> ListSettings(CancellationToken cancellationToken = default) =>
+        Act(() => settings.ListAsync(cancellationToken));
 
     [McpServerTool(Name = "get_setting", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Says what one of CodeSwitchX's settings is set to now (\"is open mic on?\", \"what voice are you using?\", \"what model "
@@ -51,6 +52,11 @@ public sealed class SettingsTools(IAppSettings settings)
         catch (YardActionException ex)
         {
             throw new McpException(ex.Message);
+        }
+        catch (TimeoutException)
+        {
+            // The app's window was busy past the wait: the brain gets something to tell the user, not a raw error.
+            throw new McpException("CodeSwitchX's window did not respond in time, so that was not done. Say it again in a moment.");
         }
     }
 }

@@ -31,10 +31,11 @@ public sealed class AppSettings : IAppSettings
         _ui = ui;
         _chats = chats;
         _entries = Entries();
-        Settings = [.. _entries.Select(e => e.Info)];
     }
 
-    public IReadOnlyList<AppSetting> Settings { get; }
+    /// <summary>The list, with the values that change (voices, microphones, model names) as they are now.</summary>
+    public Task<IReadOnlyList<AppSetting>> ListAsync(CancellationToken ct) => _ui.InvokeAsync<IReadOnlyList<AppSetting>>(
+        () => [.. _entries.Select(e => e.Values?.Invoke() is { } values ? e.Info with { Values = values } : e.Info)], RavenActions.UiTimeout, ct);
 
     public IReadOnlyList<string> Pages { get; } = [.. SettingsPageItem.All.Select(p => p.Title)];
 
@@ -55,6 +56,7 @@ public sealed class AppSettings : IAppSettings
         {
             if (entry.Set is null)
             {
+                _shell().BringForward();
                 _shell().OpenSettingsAt(entry.Page); // the user does it there
                 throw new YardActionException($"{Capital(entry.Info.Name)} is not changed by voice: {entry.Info.NotByVoice} "
                     + $"Settings is open at {Title(entry.Page)}.");
@@ -70,6 +72,7 @@ public sealed class AppSettings : IAppSettings
         SettingsPage? target = string.IsNullOrWhiteSpace(page) ? null : PageNamed(page);
         return _ui.InvokeAsync(() =>
         {
+            _shell().BringForward();
             if (target is { } named)
             {
                 _shell().OpenSettingsAt(named);
@@ -85,11 +88,19 @@ public sealed class AppSettings : IAppSettings
 
     private AppSettingValue ValueOf(Entry entry) => new(entry.Info.Name, entry.Info.Page, entry.Get(), entry.Values?.Invoke() ?? entry.Info.Values);
 
-    /// <summary>A page by how the user says it: "voice", "the listening settings", "brain", "privacy".</summary>
+    /// <summary>
+    /// A page by how the user says it: by a word of its title ("voice", "the listening settings", "privacy"), else by a
+    /// setting on it, as the sidebar's search finds it ("the microphone settings" is Listening, "hooks" Claude Code).
+    /// </summary>
     internal static SettingsPage PageNamed(string said)
     {
-        var words = Words(said).Where(w => w is not ("settings" or "setting" or "page" or "the" or "my")).ToList();
+        var words = Words(said).Where(w => w is not ("settings" or "setting" or "page" or "the" or "my" or "open" or "show")).ToList();
         var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains)).ToList();
+        if (found.Count == 0)
+        {
+            found = [.. SettingsPageItem.All.Where(p => words.Any(w => w.Length > 2 && p.Keywords.Any(k => Words(k).Contains(w))))];
+        }
+
         return found switch
         {
             [var one] => one.Page,
@@ -161,25 +172,26 @@ public sealed class AppSettings : IAppSettings
     }
 
     /// <summary>
-    /// The number in what was said, with its scale: "20", "20 seconds", "1.5 million", "200k", "2,000,000". A comma before
-    /// three digits groups thousands; otherwise it is the decimal point, as a point is. Null when there is none.
+    /// The count in what was said, with its scale: "20", "20 seconds", "1.5 million", "200k", "2,000,000", "1.500.000".
+    /// Groups of three digits after a comma, or after more than one point, are thousands; otherwise the comma or point is
+    /// the decimal point. Null when there is none, it is negative, or it is too large.
     /// </summary>
     internal static long? Number(string value)
     {
         var match = System.Text.RegularExpressions.Regex.Match(value.ToLowerInvariant(),
-            @"(\d{1,3}(?:,\d{3})+|\d+)(?:[.,](\d+))?\s*(k\b|thousand|m\b|million|mio)?");
-        if (!match.Success)
+            @"(-)?(\d{1,3}(?:,\d{3})+|\d{1,3}(?:\.\d{3}){2,}|\d+)(?:[.,](\d+))?\s*(k\b|thousand|m\b|million|mio)?");
+        if (!match.Success || match.Groups[1].Success || match.Groups[2].Value.Length > 24)
         {
             return null;
         }
 
-        var number = decimal.Parse(match.Groups[1].Value.Replace(",", ""), CultureInfo.InvariantCulture);
-        if (match.Groups[2].Success)
+        var number = decimal.Parse(match.Groups[2].Value.Replace(",", "").Replace(".", ""), CultureInfo.InvariantCulture);
+        if (match.Groups[3].Success)
         {
-            number += decimal.Parse("0." + match.Groups[2].Value, CultureInfo.InvariantCulture);
+            number += decimal.Parse("0." + match.Groups[3].Value, CultureInfo.InvariantCulture);
         }
 
-        number *= match.Groups[3].Value switch
+        number *= match.Groups[4].Value switch
         {
             "k" or "thousand" => 1_000,
             "m" or "million" or "mio" => 1_000_000,
@@ -354,7 +366,7 @@ public sealed class AppSettings : IAppSettings
             // Usage
             new(new("5-hour budget", Title(SettingsPage.Usage), "The tokens of the 5-hour window the bottom bar measures against; \"off\" for "
                     + "none.", null), SettingsPage.Usage, ["budget", "token budget", "five hour budget"],
-                () => S.FiveHourBudgetTokens is { } tokens ? $"{tokens:N0} tokens" : Off,
+                () => S.FiveHourBudgetTokens is { } tokens ? tokens.ToString("N0", CultureInfo.InvariantCulture) + " tokens" : Off,
                 v =>
                 {
                     S.FiveHourBudgetTokens = Normal(v) is "off" or "none" ? null
@@ -394,10 +406,21 @@ public sealed class AppSettings : IAppSettings
 
     private string CurrentVoiceId() => S.RavenVoiceEngine == nameof(SpeechEngine.Kokoro) ? S.RavenKokoroVoice : S.RavenQwenVoice;
 
-    /// <summary>The model id a name means, as set_defaults reads it: an alias, an alias with its version, or a full id.</summary>
+    /// <summary>
+    /// The model id a name means for Raven's own brain: an alias, an alias with its version, or the id of one of them or of a
+    /// model the Brain page offers. Another id is refused: one Claude does not know would leave Raven unable to answer, and so
+    /// unable to set it back by voice; it is typed on the page.
+    /// </summary>
     private string? SetModel(string value, Action<string> set)
     {
-        set(ChatModels.ResolveModel(value, _chats.Aliases) ?? throw NoModel(value));
+        var id = ChatModels.ResolveModel(value, _chats.Aliases) ?? throw NoModel(value);
+        if (!_chats.Aliases.Any(a => a.Id == id) && !SettingsViewModel.KnownBrainModels.Contains(id))
+        {
+            throw new YardActionException($"{id} is not a model Raven knows, and Raven could not answer at all with a wrong one: type it on "
+                + $"the {Title(SettingsPage.Brain)} page if it is right. Nothing was changed.");
+        }
+
+        set(id);
         return null;
     }
 
