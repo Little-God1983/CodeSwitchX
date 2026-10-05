@@ -18,6 +18,9 @@ public sealed class WindowToolTests
     [InlineData("full screen", WindowRequest.Maximize)]
     [InlineData("restore", WindowRequest.Restore)]
     [InlineData("bring back", WindowRequest.Restore)]
+    [InlineData("bring it back", WindowRequest.Restore)]
+    [InlineData("minimised", WindowRequest.Minimize)]
+    [InlineData("maximised", WindowRequest.Maximize)]
     public async Task The_state_as_the_brain_says_it_reaches_the_app(string said, WindowRequest request)
     {
         var actions = new FakeActions();

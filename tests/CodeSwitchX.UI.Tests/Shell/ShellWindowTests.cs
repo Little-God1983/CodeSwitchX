@@ -91,16 +91,39 @@ public sealed class ShellWindowTests
     }
 
     [Fact]
-    public void No_window_yet_is_said_not_thrown()
+    public void No_window_yet_is_refused_in_words()
     {
         _h.Shell.Window = null;
 
-        Set(WindowRequest.Maximize).ShouldContain("no window");
+        Should.Throw<YardActionException>(() => Set(WindowRequest.Maximize)).Message.ShouldContain("no window");
+    }
+
+    /// <summary>"Bring it back", as Raven says after minimizing: a window maximized before comes back maximized.</summary>
+    [Fact]
+    public void Restore_from_minimized_returns_to_the_state_before()
+    {
+        _window.State = ShellWindowState.Minimized;
+        _window.Restored = ShellWindowState.Maximized;
+        _window.IsInFront = false;
+
+        Set(WindowRequest.Restore).ShouldBe("CodeSwitchX is back.");
+
+        _window.Calls.ShouldBe(["show Maximized"]);
+    }
+
+    [Fact]
+    public void Restore_when_normal_and_in_front_says_so()
+    {
+        Set(WindowRequest.Restore).ShouldBe("CodeSwitchX is already there, in front.");
+
+        _window.Calls.ShouldBeEmpty();
     }
 
     private sealed class FakeShellWindow : IShellWindow
     {
         public ShellWindowState State { get; set; } = ShellWindowState.Normal;
+
+        public ShellWindowState Restored { get; set; } = ShellWindowState.Normal;
 
         public bool IsInFront { get; set; } = true;
 

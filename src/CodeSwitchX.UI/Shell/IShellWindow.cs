@@ -16,7 +16,10 @@ public interface IShellWindow
 {
     ShellWindowState State { get; }
 
-    /// <summary>Whether it is the window in front now.</summary>
+    /// <summary>The state it was in before it was last minimized, normal or maximized: what restoring it goes back to.</summary>
+    ShellWindowState Restored { get; }
+
+    /// <summary>Whether it is in front now: it, or the VS Code window its Cab shows, which holds the focus there.</summary>
     bool IsInFront { get; }
 
     void Minimize();

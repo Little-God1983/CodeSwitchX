@@ -406,7 +406,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     {
         if (Window is not { } window)
         {
-            return "CodeSwitchX has no window to change yet.";
+            throw new YardActionException("CodeSwitchX has no window to change yet: it is still starting.");
         }
 
         if (request == WindowRequest.Minimize)
@@ -420,7 +420,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             return "CodeSwitchX is minimized. I'm still listening: say \"bring it back\" to see it again.";
         }
 
-        var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized") : (ShellWindowState.Normal, "back");
+        // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar.
+        var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized")
+            : window.State == ShellWindowState.Minimized ? (window.Restored, "back") : (ShellWindowState.Normal, "back");
         if (window.State == state && window.IsInFront)
         {
             return request == WindowRequest.Maximize ? "CodeSwitchX is already maximized." : "CodeSwitchX is already there, in front.";

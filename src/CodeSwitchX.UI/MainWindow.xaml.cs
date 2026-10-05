@@ -53,7 +53,13 @@ public partial class MainWindow : Window, IShellWindow
         _ => ShellWindowState.Normal,
     };
 
-    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() == new WindowInteropHelper(this).Handle;
+    ShellWindowState IShellWindow.Restored => _restored;
+
+    /// <summary>The state before the last minimize, kept as the window changes: "bring it back" returns a maximized window maximized.</summary>
+    private ShellWindowState _restored = ShellWindowState.Normal;
+
+    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0
+        && (front == _hwnd || front == _host.ShownInCab);
 
     /// <summary>As the title bar's button: StateChanged tells the shell, which hides the Cab's VS Code window with it.</summary>
     void IShellWindow.Minimize() => WindowState = WindowState.Minimized;
@@ -120,7 +126,15 @@ public partial class MainWindow : Window, IShellWindow
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();
         Activated += OnActivated;
-        StateChanged += (_, _) => _shell.SetShellMinimized(WindowState == WindowState.Minimized);
+        StateChanged += (_, _) =>
+        {
+            if (WindowState != WindowState.Minimized)
+            {
+                _restored = WindowState == WindowState.Maximized ? ShellWindowState.Maximized : ShellWindowState.Normal;
+            }
+
+            _shell.SetShellMinimized(WindowState == WindowState.Minimized);
+        };
     }
 
     /// <summary>
