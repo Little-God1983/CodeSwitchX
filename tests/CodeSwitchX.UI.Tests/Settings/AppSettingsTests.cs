@@ -265,6 +265,22 @@ public sealed class AppSettingsTests
         set.Values!.ShouldBe(Enum.GetValues<WhisperModel>().Select(ModelLamp.RowNameOf));
     }
 
+    /// <summary>#152: the pause is set by voice to one the page offers, and found by how it is said; another is refused.</summary>
+    [Theory]
+    [InlineData("pause between messages")]
+    [InlineData("the pause")]
+    [InlineData("gap")]
+    public async Task The_pause_between_messages_is_set_by_voice(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync(said, "5 seconds", Ct)).Value.ShouldBe("5 seconds");
+        _h.Shell.Raven.Traffic.Pause.ShouldBe(TimeSpan.FromSeconds(5));
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync(said, "4", Ct))).Message.ShouldContain("Nothing was changed");
+        _h.Shell.Settings.RavenPauseSeconds.ShouldBe(5);
+    }
+
     [Theory]
     [InlineData("the chat I'm in waits for the cooldown")]
     [InlineData("chat I'm in waits")]

@@ -245,6 +245,23 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.RavenOwnNewsWaits, true, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>#152: the pause between messages is 3 s until changed, saved, and a stored one the page does not offer is 3 s.</summary>
+    [Theory]
+    [InlineData(null, 3)]
+    [InlineData(10, 10)]
+    [InlineData(4, 3)]
+    public async Task The_pause_between_messages_defaults_to_3_s_and_is_saved(int? stored, int loaded)
+    {
+        _store.GetAsync<int?>(SettingKeys.RavenPauseSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenPauseSeconds.ShouldBe(loaded);
+        _vm.RavenPauseSeconds = 5;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.RavenPauseSeconds, 5, Arg.Any<CancellationToken>());
+    }
+
     [Theory]
     [InlineData(20, 20)]
     [InlineData(7, 10)]
@@ -650,6 +667,9 @@ public class SettingsViewModelTests : IDisposable
         _vm.Page.ShouldBe(SettingsPage.Listening, "the page shown is one found");
 
         _vm.Search = "cooldown";
+        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Voice]);
+
+        _vm.Search = "pause";
         _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Voice]);
 
         _vm.Search = "model";

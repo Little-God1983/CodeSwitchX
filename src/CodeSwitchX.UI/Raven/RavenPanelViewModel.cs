@@ -1903,14 +1903,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Waits <see cref="TrafficWatcher.NewsGrace"/> for the floor to stay free, then tells the news. Called when news
-    /// arrives and whenever the panel's state changes (UI thread): each call starts the wait again.
+    /// Waits <see cref="TrafficWatcher.NewsGrace"/> for the floor to stay free, and the pause (#152) since Raven last spoke
+    /// or made a sound, then tells the news. Called when news arrives and whenever the panel's state changes (UI thread):
+    /// each call starts the wait again.
     /// </summary>
     private void ScheduleNews()
     {
         if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null) && FloorIsFree)
         {
-            _newsTimer.Change(TrafficWatcher.NewsGrace, Timeout.InfiniteTimeSpan);
+            var left = Traffic.PauseLeft;
+            _newsTimer.Change(left > TrafficWatcher.NewsGrace ? left : TrafficWatcher.NewsGrace, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -1958,6 +1960,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if ((_news is not { HasNews: true } && _untold.Count == 0 && _catchUpDue is null) || !FloorIsFree)
         {
             return; // the next change of state schedules it again
+        }
+
+        if (Traffic.PauseLeft is var left && left > TimeSpan.Zero)
+        {
+            _newsTimer.Change(left, Timeout.InfiniteTimeSpan); // a chat's sound came meanwhile: the pause runs from it
+            return;
         }
 
         // A question takes the floor from it, and a press stops it too.

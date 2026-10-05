@@ -45,9 +45,13 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.State == RavenState.Idle);
         await WithinAsync(_voice.WhenQuietAsync());
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(TrafficWatcher.NewsGrace);
+        _time.Advance(NewsWait(vm));
         await WithinAsync(vm.PendingAnswers);
     }
+
+    /// <summary>How long the panel waits before it tells what waits: the grace, or the pause since Raven last spoke if longer (#152).</summary>
+    private static TimeSpan NewsWait(RavenPanelViewModel vm) =>
+        vm.Traffic.PauseLeft > TrafficWatcher.NewsGrace ? vm.Traffic.PauseLeft : TrafficWatcher.NewsGrace;
 
     [Fact]
     public async Task Three_chats_that_finish_while_the_user_talks_are_told_in_one_digest_after_the_answer()

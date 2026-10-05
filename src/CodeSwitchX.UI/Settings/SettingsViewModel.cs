@@ -84,6 +84,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>How long, in seconds, other chats stay silent after an announcement or a sound (#125): one of <see cref="CooldownChoices"/>.</summary>
     [ObservableProperty] private int _ravenCooldownSeconds = (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
 
+    /// <summary>How long, in seconds, whatever Raven says on its own waits after it last spoke or made a sound (#152): one of <see cref="PauseChoices"/>.</summary>
+    [ObservableProperty] private int _ravenPauseSeconds = (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
+
     /// <summary>Whether other chats make their short sound; off, they are only marked in the list.</summary>
     [ObservableProperty] private bool _ravenChatSound = true;
 
@@ -95,6 +98,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
+
+    /// <summary>The pauses between messages the Voice page offers, in seconds.</summary>
+    public IReadOnlyList<int> PauseChoices => Raven.TrafficWatcher.PauseChoices;
 
     /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
     [ObservableProperty]
@@ -361,6 +367,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
             RavenCooldownSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenCooldownSeconds, "the chats' cooldown", ct) is { } cooldown
                 && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
+            RavenPauseSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenPauseSeconds, "the pause between messages", ct) is { } pause
+                && PauseChoices.Contains(pause) ? pause : (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
             RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? false;
@@ -506,6 +514,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenBargeInChanged(bool value) => Persist(SettingKeys.RavenBargeIn, value);
 
     partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
+
+    partial void OnRavenPauseSecondsChanged(int value) => Persist(SettingKeys.RavenPauseSeconds, value);
 
     partial void OnRavenChatSoundChanged(bool value) => Persist(SettingKeys.RavenChatSound, value);
 

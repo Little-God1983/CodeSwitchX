@@ -304,6 +304,18 @@ public sealed class AppSettings : IAppSettings
                     S.RavenCooldownSeconds = seconds;
                     return null;
                 }),
+            new(new("pause between messages", Title(SettingsPage.Voice), "Seconds what Raven says on its own (news, a catch-up, a question "
+                    + "read out, a chat's sound) waits after Raven last spoke or made a sound. Raven's answers to the user never wait.",
+                    [.. TrafficWatcher.PauseChoices.Select(c => $"{c} seconds")]), SettingsPage.Voice,
+                ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
+                () => $"{S.RavenPauseSeconds} seconds",
+                v =>
+                {
+                    S.RavenPauseSeconds = Number(v) is { } n && TrafficWatcher.PauseChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                        : throw new YardActionException($"The pause between messages is one of {string.Join(", ", TrafficWatcher.PauseChoices)} "
+                            + $"seconds, not '{v}'. Nothing was changed.");
+                    return null;
+                }),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
