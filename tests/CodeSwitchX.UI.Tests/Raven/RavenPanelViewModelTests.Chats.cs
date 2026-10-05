@@ -238,22 +238,39 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     /// <summary>
-    /// #148: a chat on no tile, its window removed (while the remove was asked, say) or its folder never added, is asked in its
-    /// VS Code tab: no card of it is in chat 0, or anywhere in the panel.
+    /// #148: a card whose window is removed while it is named (the remove asked meanwhile, say) is asked in its VS Code tab:
+    /// no card of it is in chat 0, or anywhere in the panel; the user removed the window, so nothing is said of it.
     /// </summary>
-    [Theory]
-    [InlineData("a")] // its window removed
-    [InlineData("zz")] // its folder on no tile
-    public async Task A_card_of_a_chat_on_no_tile_goes_to_vs_code_and_is_shown_nowhere(string session)
+    [Fact]
+    public async Task A_card_whose_window_goes_while_it_is_named_goes_to_vs_code_unshown()
     {
         var (vm, asks) = await ChatsVmAsync();
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _yard.Gate = new TaskCompletionSource();
+        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None); // chat 3's, being named
+        vm.OpenQuestions.ShouldBe(1);
 
-        var held = asks.HoldAsync(PermittingIn(session, "p1"), CancellationToken.None);
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        _yard.Gate.SetResult();
 
         await WithinAsync(held);
         asks.IsHeld("p1").ShouldBeFalse("its tab asks it");
+        vm.Log.ShouldBeEmpty();
+        (vm.OpenQuestions, vm.YardChat.IsWaiting).ShouldBe((0, false));
+    }
+
+    /// <summary>#148: a card the naming finds on no tile goes to VS Code with a note where the user is: they learn where it waits.</summary>
+    [Fact]
+    public async Task A_card_found_on_no_tile_goes_to_vs_code_with_a_note()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        var held = asks.HoldAsync(PermittingIn("zz", "p1"), CancellationToken.None);
+
+        await WithinAsync(held);
+        asks.IsHeld("p1").ShouldBeFalse();
         vm.Log.ShouldNotContain(e => e.Ask != null);
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("A permission prompt went to its chat's VS Code tab: Raven found no window's chat for it.");
         (vm.OpenQuestions, vm.YardChat.IsWaiting).ShouldBe((0, false));
     }
 

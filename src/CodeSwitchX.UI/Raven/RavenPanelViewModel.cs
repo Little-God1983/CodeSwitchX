@@ -2041,7 +2041,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// The card goes in its window's chat, and only there: it is answered where that window's other cards are. Which
     /// window that is the naming finds. A chat on no tile is asked in its VS Code tab (#148): its question is not taken,
-    /// and one whose window went while it was named goes there too, unshown. Chat 0 never has a card. Never faults.
+    /// and one whose window went while it was named goes there too, unshown. One the naming found on no tile at all (the
+    /// Yard too slow to read, say) goes there with a note, so the user knows where it waits. Chat 0 never has a card.
+    /// Never faults.
     /// </summary>
     private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
     {
@@ -2052,7 +2054,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 _askCards.Remove(card.Ask.Id);
                 OpenQuestions = _askCards.Count;
-                _asks?.ToVsCode(card.Ask.Id);
+                if (_asks?.IsHeld(card.Ask.Id) == true)
+                {
+                    _asks.ToVsCode(card.Ask.Id);
+                    if (card.Workspace is null)
+                    {
+                        AddEntry(RavenLogKind.Note, $"{card.Ask.Kind switch { ChatAskKind.Permission => "A permission prompt", _ => "A question" }} "
+                            + "went to its chat's VS Code tab: Raven found no window's chat for it.");
+                    }
+                }
+
                 return;
             }
 

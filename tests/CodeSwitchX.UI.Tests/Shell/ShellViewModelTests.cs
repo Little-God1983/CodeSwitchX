@@ -296,6 +296,27 @@ public class ShellViewModelTests
         _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue("App is still on the Yard");
     }
 
+    /// <summary>#148: a question held for a chat of a workspace that is removed is let go to its VS Code tab with the tile.</summary>
+    [Fact]
+    public async Task A_question_held_lets_go_when_its_workspace_is_removed()
+    {
+        var other = await TwoTilesAsync();
+        // As the app wires them (App.xaml.cs), the chat in Other as the engine has it; its card shown in App's chat, so the
+        // remove asks nothing and only the rule lets it go.
+        _h.Asks.Takes = _ => _h.Shell.TakesAsks(other);
+        _h.Asks.Keeps = _ => _h.Shell.KeepsAsks(other);
+        _h.Shell.AskRulesChanged += (_, _) => _h.Asks.Recheck();
+        _h.YardDirectory.Show("s1", "App", "Fix the upload");
+        var held = _h.Asks.HoldAsync(new ChatAsk("p1",
+            new HookEvent { SessionId = "s1", EventName = "PermissionRequest", At = _h.Time.GetUtcNow(), ToolName = "Bash", ToolInputHash = "p1" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+        _h.Asks.IsHeld("p1").ShouldBeTrue();
+
+        await _h.Shell.Yard.UnregisterAsync(other);
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+    }
+
     [Fact]
     public void Before_the_shell_is_set_up_it_takes_no_question()
     {
