@@ -376,8 +376,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         if (scope?.Overview == true)
         {
             throw new McpException("Chat 0, the Yard, does not answer a chat's cards: the user answers them in the window's Raven chat, "
-                + "where the card is read out, or with a click on the card. Say which chat that is; switch_chat takes the user there. "
-                + "A chat on no tile asks in chat 0 itself: its card is answered there with a click.");
+                + "where the card is read out, or with a click on the card. Say which chat that is; switch_chat takes the user there.");
         }
     }
 

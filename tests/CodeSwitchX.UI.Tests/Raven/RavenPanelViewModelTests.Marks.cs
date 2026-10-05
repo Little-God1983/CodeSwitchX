@@ -238,22 +238,23 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Activity_reads_every_chat_s_lines_and_opens_no_chat()
     {
         var (vm, asks) = await ChatsVmAsync();
-        vm.SelectedChat = ChatNumbered(vm, 1);
-        _ = asks.HoldAsync(PermittingIn("zz", "p0"), CancellationToken.None); // a chat on no tile asks in the Yard's chat
-        await Until(() => vm.YardChat.IsWaitingUnseen);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        var one = ChatNumbered(vm, 1);
+        _ = asks.HoldAsync(PermittingIn("b", "p0"), CancellationToken.None); // chat 1's
+        await Until(() => one.IsWaitingUnseen);
 
         vm.SelectedChat = vm.ActivityChat;
-        vm.YardChat.IsWaitingUnseen.ShouldBeTrue("Activity is not the Yard's chat: the card cannot be answered there");
-        vm.YardChat.Unread.ShouldBe(1);
+        one.IsWaitingUnseen.ShouldBeTrue("Activity is not chat 1: the card cannot be answered there");
+        one.Unread.ShouldBe(1);
 
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         var three = ChatNumbered(vm, 3);
         three.IsWaitingUnseen.ShouldBeTrue();
         three.Unread.ShouldBe(0, "the card came before the user's eyes, in Activity");
 
-        vm.SelectedChat = vm.YardChat;
-        vm.YardChat.IsWaitingUnseen.ShouldBeFalse();
-        vm.YardChat.Unread.ShouldBe(0);
+        vm.SelectedChat = one;
+        one.IsWaitingUnseen.ShouldBeFalse();
+        one.Unread.ShouldBe(0);
     }
 
     [Fact]
