@@ -39,8 +39,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _tabsTimer;
 
-    /// <summary>Whether a read of the tabs runs: the next one waits for it (UI thread).</summary>
-    private bool _tabsRefreshing;
+    /// <summary>The read of the tabs that runs, or the last one (UI thread).</summary>
+    private Task? _tabsRead;
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
     private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
@@ -332,16 +332,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Reads the chat tabs open in the workspaces' VS Code windows, off the UI thread, and shows them on the tiles (#164).
-    /// A tab of a chat another tile shows is not shown twice. Called on the UI thread; a read still running is not doubled.
+    /// Called on the UI thread; asked for while a read runs, it gives that read, not a second one.
     /// </summary>
-    internal async Task RefreshTabsAsync()
-    {
-        if (_openTabs is not { } openTabs || _tabsRefreshing)
-        {
-            return;
-        }
+    internal Task RefreshTabsAsync() =>
+        _openTabs is not { } openTabs ? Task.CompletedTask
+            : _tabsRead is { IsCompleted: false } running ? running
+            : _tabsRead = ReadTabsAsync(openTabs);
 
-        _tabsRefreshing = true;
+    private async Task ReadTabsAsync(IVsCodeOpenTabs openTabs)
+    {
         try
         {
             var workspaces = Tiles.Select(t => t.Workspace).ToList();
@@ -390,10 +389,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Reading VS Code's open chat tabs failed; the tiles keep the ones read before");
-        }
-        finally
-        {
-            _tabsRefreshing = false;
         }
     }
 
@@ -705,6 +700,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ = RefreshGitAsync(CancellationToken.None);
         CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
     }
+
+    /// <summary>Reads the tabs again now, after the read that runs (UI thread): a tile's VS Code closed, and wrote its tabs.</summary>
+    internal void RefreshTabsSoon() => CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
 
     /// <summary>Reads the tabs once the read that runs is over: a tile added meanwhile was not in it.</summary>
     private async Task RefreshTabsAfterAsync(Task running)

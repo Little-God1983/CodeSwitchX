@@ -19,11 +19,18 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// </summary>
     public static readonly TimeSpan StaleRowLifetime = TimeSpan.FromMinutes(30);
 
-    /// <summary>When the workspace's VS Code was last seen to run (UI thread); null while it does not.</summary>
-    private DateTimeOffset? _runningSince;
+    /// <summary>
+    /// How long after a chat's end VS Code must have written its tabs for a tab still in them to be open: as a tab closes,
+    /// VS Code may write a list that still has it (seen on screen, a third of a second after). One written well after is
+    /// VS Code's own, after a Reload Window ended every chat and brought their tabs back.
+    /// </summary>
+    internal static readonly TimeSpan ListedAfterEnd = TimeSpan.FromSeconds(5);
 
     /// <summary>An ended chat that shows no more is forgotten after this long: longer than a closed chat is ever kept.</summary>
     internal static readonly TimeSpan ForgetEndedAfter = TimeSpan.FromHours(1);
+
+    /// <summary>When the workspace's VS Code was last seen to run (UI thread); null while it does not.</summary>
+    private DateTimeOffset? _runningSince;
 
     /// <summary>Every chat the engine put on this tile, shown or not: what shows changes with the tabs, the settings and the time.</summary>
     private readonly Dictionary<string, SessionSnapshot> _sessions = new(StringComparer.OrdinalIgnoreCase);
@@ -171,7 +178,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             }
 
             // Ended with its tab open: the tab does not run. One that crashed keeps its red dot.
-            row.ShowTab(TabOf(id), notRunning: session.State == SessionState.Ended && InTab(session));
+            // A closed chat kept a while (Keep a closed chat) holds no tab: the one still listed was closed.
+            var inTab = InTab(session);
+            row.ShowTab(inTab ? TabOf(id) : null, notRunning: session.State == SessionState.Ended && inTab);
         }
 
         foreach (var tab in tabsAlone)
@@ -226,13 +235,15 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>
     /// Whether the chat's tab is open. While VS Code runs, its list says nothing of tabs closed since: VS Code writes it when
     /// idle, which a window hidden in the Cab never is (seen on screen: minutes later a closed tab was still listed). So a
-    /// chat that ended while VS Code ran had its tab closed, and only one that ended before VS Code was seen to run is a
-    /// tab it brought back. A VS Code that does not run wrote its list as it closed, and comes back with those tabs. A
+    /// chat that ended while VS Code ran had its tab closed, unless VS Code wrote it down again well after (a Reload Window
+    /// ends every chat and brings their tabs back); one that ended before VS Code was seen to run is a tab it brought
+    /// back. A VS Code that does not run wrote its list as it closed, and comes back with those tabs. A
     /// chat whose Claude Code went without saying it ends (it crashed) left its tab open: closing a tab is said.
     /// </summary>
     private bool InTab(SessionSnapshot session) =>
-        _tabs is not null && TabOf(session.SessionId) is not null
-        && (session.State != SessionState.Ended || HostState != HostState.Running || session.StateSince < _runningSince);
+        _tabs is { } tabs && TabOf(session.SessionId) is not null
+        && (session.State != SessionState.Ended || HostState != HostState.Running || session.StateSince < _runningSince
+            || tabs.WrittenAt >= session.StateSince + ListedAfterEnd);
 
     /// <summary>
     /// VS Code started or stopped: what its list means changes with it (<see cref="InTab"/>). Seen to run since now: a chat
@@ -241,7 +252,16 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     partial void OnHostStateChanged(HostState value)
     {
         _runningSince = value == HostState.Running ? _owner.Now : null;
-        Arrange(_owner.Now);
+        if (value == HostState.Running)
+        {
+            Arrange(_owner.Now);
+        }
+        else
+        {
+            // Closed, VS Code wrote the tabs it comes back with: read before the tile changes, or a tab closed earlier,
+            // still in the list read before, would show again for a moment.
+            _owner.RefreshTabsSoon();
+        }
     }
 
     private OpenChatTab? TabOf(string sessionId) => _tabs?.Tabs.FirstOrDefault(t => Same(t.SessionId, sessionId));

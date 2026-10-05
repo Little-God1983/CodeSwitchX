@@ -138,6 +138,55 @@ public sealed class TileTabsTests
         Rows.ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// Reload Window: every chat ends while VS Code runs, and VS Code, reloaded, writes its tabs down again with them. Those
+    /// are open; a list written as the tab closed (within <see cref="WorkspaceTileViewModel.ListedAfterEnd"/>) is not.
+    /// </summary>
+    [Fact]
+    public async Task Tabs_VS_Code_writes_down_again_well_after_their_chats_ended_are_open()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        Says(Chat("a", SessionState.Idle));
+        Says(Chat("b", SessionState.Idle));
+
+        await Pass(TimeSpan.FromMinutes(5));
+        Says(Chat("a", SessionState.Ended) with { Version = 2 });
+        Says(Chat("b", SessionState.Ended) with { Version = 2 });
+        await Pass(TimeSpan.FromSeconds(1));
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        Rows.ShouldBeEmpty("written as they ended");
+
+        await Pass(TimeSpan.FromSeconds(6));
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true), ("b", true)]);
+    }
+
+    /// <summary>VS Code closes: the tile waits for the tabs it wrote as it closed, and a tab closed earlier does not flash back.</summary>
+    [Fact]
+    public async Task A_VS_Code_that_closes_shows_the_tabs_it_wrote_as_it_closed_not_the_ones_read_before()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        Says(Chat("a", SessionState.Idle));
+        Says(Chat("b", SessionState.Idle));
+        await Pass(TimeSpan.FromMinutes(1));
+        Says(Chat("a", SessionState.Ended) with { Version = 2 }); // its tab closed; the list read still has it
+
+        await Pass(TimeSpan.FromMinutes(1));
+        Says(Chat("b", SessionState.Ended) with { Version = 2 });
+        _tabs.Of[_app.Id] = new OpenChatTabs(Now, [Tab("b")]); // what VS Code wrote as it closed
+        var seen = new List<string[]>();
+        App.Chats.CollectionChanged += (_, _) => seen.Add(Rows);
+        App.HostState = HostState.Stopped;
+        await _yard.CurrentTabsRefresh;
+
+        Rows.ShouldBe(["b"]);
+        seen.ShouldAllBe(rows => !rows.Contains("a"), "the tab closed earlier never shows again");
+    }
+
     /// <summary>VS Code started with the tabs it had: their chats ended before it ran, and show as tabs that do not run.</summary>
     [Fact]
     public async Task The_tabs_VS_Code_brings_back_stay_as_tabs_that_do_not_run_once_it_runs()
@@ -158,8 +207,9 @@ public sealed class TileTabsTests
         _yard.KeepClosed = TimeSpan.FromMinutes(5);
         await _yard.InitializeAsync(CancellationToken.None);
         App.HostState = HostState.Running;
-        await VsCodeWrites();
-        Says(Chat("a", SessionState.Ended));
+        await VsCodeWrites(Tab("a", "Closed tab's title"));
+        Says(Chat("a", SessionState.Ended, title: null) with { LastToolName = "Bash" }); // a chat that never got a title
+        App.Chats.ShouldHaveSingleItem().Title.ShouldNotBe("Closed tab's title", "the tab still listed was closed");
 
         await Pass(TimeSpan.FromMinutes(4));
         _yard.Tick(Now);
