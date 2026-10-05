@@ -724,13 +724,16 @@
                 <ListBox.ItemTemplate>
                   <DataTemplate DataType="settings:SpeechToTextRow">
                     <Border Style="{StaticResource PickRow}" Padding="14,10" Margin="0,0,0,6" AutomationProperties.Name="{Binding Name}">
+                      <!-- The name and what it is, then its size, where it stands and its download on a line of their own: in one row
+                           they left the name no room on a narrow page (#162). -->
                       <Grid>
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="32" />
                           <ColumnDefinition Width="*" />
-                          <ColumnDefinition Width="Auto" MinWidth="62" />
-                          <ColumnDefinition Width="Auto" MaxWidth="150" />
-                          <ColumnDefinition Width="Auto" MinWidth="90" />
                         </Grid.ColumnDefinitions>
                         <Grid Width="18" Height="18" HorizontalAlignment="Left">
                           <Ellipse Style="{StaticResource RadioRing}" />
@@ -740,13 +743,16 @@
                           <TextBlock Text="{Binding Name}" FontSize="14.5" FontWeight="SemiBold" />
                           <TextBlock Text="{Binding Description}" FontSize="13" Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
                         </StackPanel>
-                        <TextBlock Grid.Column="2" Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
-                        <voice:ModelLampView Grid.Column="3" DataContext="{Binding Lamp}" Foreground="#C7D2E2" />
-                        <Button Grid.Column="4" Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" HorizontalAlignment="Right"
-                                AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
-                                Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
-                        <ProgressBar Grid.Column="4" Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}" VerticalAlignment="Center"
-                                     Foreground="#FBBF24" Visibility="{Binding Progress, Converter={StaticResource NullToCollapsed}}" />
+                        <WrapPanel Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
+                          <TextBlock Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                     Margin="0,0,16,0" />
+                          <voice:ModelLampView DataContext="{Binding Lamp}" Foreground="#C7D2E2" VerticalAlignment="Center" Margin="0,0,16,0" />
+                          <Button Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" VerticalAlignment="Center"
+                                  AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
+                                  Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
+                          <ProgressBar Width="104" Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}" VerticalAlignment="Center"
+                                       Foreground="#FBBF24" Visibility="{Binding Progress, Converter={StaticResource NullToCollapsed}}" />
+                        </WrapPanel>
                       </Grid>
                     </Border>
                   </DataTemplate>
@@ -809,7 +815,8 @@
                        AutomationProperties.Name="Chat effort" />
 
               <TextBlock Style="{StaticResource Label}" Text="Model names" Margin="0,22,0,2" />
-              <TextBlock Text="The name you say, and the model it starts. Edit a row when a new model comes out." FontSize="13" Foreground="{StaticResource Muted}" Margin="0,0,0,10" />
+              <TextBlock Text="The name you say, and the model it starts. Edit a row when a new model comes out." FontSize="13" Foreground="{StaticResource Muted}" Margin="0,0,0,10"
+                         TextWrapping="Wrap" />
               <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
                 <StackPanel>
                   <!-- The same columns as the rows, padded alike, so they line up at any width (#162). -->
@@ -947,8 +954,8 @@
                         <RowDefinition Height="Auto" />
                       </Grid.RowDefinitions>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" MinWidth="80" MaxWidth="170" />
-                        <ColumnDefinition Width="*" MinWidth="120" MaxWidth="210" />
+                        <ColumnDefinition Width="*" MinWidth="60" MaxWidth="170" />
+                        <ColumnDefinition Width="*" MinWidth="150" MaxWidth="210" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="0.0001*" />
@@ -1030,7 +1037,8 @@
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Data folder" />
               <TextBlock Style="{StaticResource Help}" Text="The database, the logs and the downloaded models." />
-              <TextBlock Text="{Binding DataFolder}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" Margin="0,0,0,14" />
+              <TextBlock Text="{Binding DataFolder}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" Margin="0,0,0,14"
+                         ToolTip="{Binding DataFolder}" />
               <StackPanel Orientation="Horizontal">
                 <Button Style="{StaticResource Secondary}" Content="Open folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" AutomationProperties.Name="Open data folder" />
                 <Button Style="{StaticResource Secondary}" Content="Open logs" Command="{Binding OpenLogsFolderCommand}" />
