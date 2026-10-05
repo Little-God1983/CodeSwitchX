@@ -207,10 +207,11 @@
           </ControlTemplate>
         </Setter.Value>
       </Setter>
+      <!-- Side by side; in a narrow place the last ones wrap rather than being cut off (#155). -->
       <Setter Property="ItemsPanel">
         <Setter.Value>
           <ItemsPanelTemplate>
-            <StackPanel Orientation="Horizontal" />
+            <WrapPanel />
           </ItemsPanelTemplate>
         </Setter.Value>
       </Setter>
@@ -403,27 +404,41 @@
               <TextBlock Style="{StaticResource H3}" Text="Engine" />
               <TextBlock Style="{StaticResource Help}" Text="Each engine shows where its model stands. Picking another one stops the old engine and frees its memory." />
               <ListBox Style="{StaticResource PlainList}" ItemsSource="{Binding Cards}" SelectedItem="{Binding SelectedCard}" AutomationProperties.Name="Voice engine">
+                <!-- Three side by side where they fit; on a narrower page two, then one under the other, never cut (#155). -->
                 <ListBox.ItemsPanel>
                   <ItemsPanelTemplate>
-                    <UniformGrid Columns="3" />
+                    <infra:CardColumnsPanel MinColumnWidth="210" MaxColumns="3" Gap="10" />
                   </ItemsPanelTemplate>
                 </ListBox.ItemsPanel>
                 <ListBox.ItemTemplate>
                   <DataTemplate DataType="settings:EngineCard">
                     <Border x:Name="Card" CornerRadius="12" BorderThickness="1.5" BorderBrush="{StaticResource Line}" Background="{StaticResource CardBg}"
-                            Padding="16,14" Margin="0,0,10,0" AutomationProperties.Name="{Binding Name}">
+                            Padding="16,14" AutomationProperties.Name="{Binding Name}">
                       <StackPanel>
                         <DockPanel>
                           <Grid Width="18" Height="18" Margin="0,0,10,0" VerticalAlignment="Center">
                             <Ellipse Style="{StaticResource RadioRing}" />
                             <Ellipse Style="{StaticResource RadioDot}" />
                           </Grid>
-                          <Border DockPanel.Dock="Right" CornerRadius="9" Background="{StaticResource AccentDim}" Padding="8,2" VerticalAlignment="Center"
-                                  Visibility="{Binding Recommended, Converter={StaticResource BoolVisible}}">
-                            <TextBlock Text="Recommended" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource AccentText}" />
-                          </Border>
-                          <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" />
+                          <TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                         </DockPanel>
+                        <!--
+                          Under the name, not beside it: on a narrow window the badge squeezed the name out (#155). Its line is kept
+                          in every card, so the cards of a row line up.
+                        -->
+                        <Border CornerRadius="9" Background="{StaticResource AccentDim}" Padding="8,2" Margin="0,8,0,0" HorizontalAlignment="Left">
+                          <Border.Style>
+                            <Style TargetType="Border">
+                              <Setter Property="Visibility" Value="Hidden" />
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding Recommended}" Value="True">
+                                  <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </Border.Style>
+                          <TextBlock Text="Recommended" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource AccentText}" />
+                        </Border>
                         <TextBlock Text="{Binding Pitch}" TextWrapping="Wrap" FontSize="13.5" Foreground="{StaticResource Muted}" LineHeight="19" Margin="0,8,0,10" />
                         <ItemsControl ItemsSource="{Binding Tags}">
                           <ItemsControl.ItemsPanel>
@@ -439,11 +454,12 @@
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0" Visibility="{Binding Lamp, Converter={StaticResource NullToCollapsed}}"
-                                    ToolTip="{Binding Lamp.Detail}" AutomationProperties.Name="{Binding StatusText}">
+                        <!-- Docked, not stacked: in a narrow card a long status ends in an ellipsis instead of being cut (#155). -->
+                        <DockPanel Margin="0,6,0,0" Visibility="{Binding Lamp, Converter={StaticResource NullToCollapsed}}"
+                                   ToolTip="{Binding Lamp.Detail}" AutomationProperties.Name="{Binding StatusText}">
                           <Ellipse Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" Fill="{Binding Lamp.Dot, Converter={StaticResource DotBrush}}" />
                           <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
+                        </DockPanel>
                         <!-- Qwen3-TTS's model, while it is the engine picked. -->
                         <StackPanel x:Name="Model" Margin="0,14,0,0" Visibility="Collapsed">
                           <TextBlock Style="{StaticResource Label}" Text="Model" />
