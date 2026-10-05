@@ -63,7 +63,10 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>Other chats get their short sound; off, they are only marked in the list.</summary>
     public bool SoundOn { get; set; } = true;
 
-    /// <summary>The selected chat's own news waits for the cooldown too; its cards and Raven's answers never do.</summary>
+    /// <summary>
+    /// The selected chat's own news waits for the cooldown too; its cards, Raven's answers and the catch-up on switching to it
+    /// never do (the catch-up dropped would never be said: the switch marked its lines seen, #143).
+    /// </summary>
     public bool OwnNewsWaits { get; set; }
 
     /// <summary>

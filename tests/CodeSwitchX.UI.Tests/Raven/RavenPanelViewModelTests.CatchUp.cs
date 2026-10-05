@@ -92,8 +92,8 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(TimeSpan.FromSeconds(1));
-        _teller.Asked.ShouldBeEmpty("the pause after the sound has not passed");
+        _time.Advance(TrafficWatcher.NewsGrace); // 2.5 s after the sound
+        _teller.Asked.ShouldBeEmpty("the grace has passed, the pause after the sound has not");
         _time.Advance(vm.Traffic.WaitBeforeTelling);
         await WithinAsync(vm.PendingAnswers);
         await WithinAsync(_voice.WhenQuietAsync());

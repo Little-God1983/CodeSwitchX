@@ -93,11 +93,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether the selected chat's own news waits for the cooldown too.</summary>
     [ObservableProperty] private bool _ravenOwnNewsWaits;
 
-    /// <summary>
-    /// Whether Raven says what came in a chat while the user was away when they switch to it (#127). On by default (#143), as
-    /// the load sets it: off until then, so a stored "off" is never overridden at startup.
-    /// </summary>
-    [ObservableProperty] private bool _ravenCatchUp;
+    /// <summary>Whether Raven says what came in a chat while the user was away when they switch to it (#127). On by default (#143).</summary>
+    [ObservableProperty] private bool _ravenCatchUp = true;
 
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
