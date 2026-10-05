@@ -577,6 +577,15 @@
                              Text="On, the news of the chat you're in is only shown if Raven spoke or a chat made its sound within the cooldown. Its questions and Raven's answers to you are always spoken." />
                 </StackPanel>
               </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <CheckBox DockPanel.Dock="Right" Style="{StaticResource Switch}" IsChecked="{Binding RavenCatchUp}"
+                          AutomationProperties.Name="Catch-up when I switch chats" Margin="16,0,0,0" />
+                <StackPanel>
+                  <TextBlock Text="Catch-up when I switch chats" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="On, switching to a chat with something new makes Raven say in a sentence or two what happened there while you were away, then read its questions. Not within the cooldown." />
+                </StackPanel>
+              </DockPanel>
             </StackPanel>
           </Border>
         </StackPanel>

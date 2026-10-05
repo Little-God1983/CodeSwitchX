@@ -167,7 +167,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
                 Raven.BargeIn = Settings.RavenBargeIn;
             }
             else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
-                or nameof(SettingsViewModel.RavenOwnNewsWaits))
+                or nameof(SettingsViewModel.RavenOwnNewsWaits) or nameof(SettingsViewModel.RavenCatchUp))
             {
                 ShowTraffic();
             }
@@ -352,6 +352,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.Traffic.Cooldown = TimeSpan.FromSeconds(Settings.RavenCooldownSeconds);
         Raven.Traffic.SoundOn = Settings.RavenChatSound;
         Raven.Traffic.OwnNewsWaits = Settings.RavenOwnNewsWaits;
+        Raven.CatchUp = Settings.RavenCatchUp;
     }
 
     private void TrackRavenOpen()

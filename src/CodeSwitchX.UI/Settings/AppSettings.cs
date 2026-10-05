@@ -315,6 +315,9 @@ public sealed class AppSettings : IAppSettings
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
+            Toggle("catch-up when I switch chats", SettingsPage.Voice, "On, switching to a chat with something new makes Raven say in a "
+                + "sentence or two what happened there while the user was away.", () => S.RavenCatchUp, v => S.RavenCatchUp = v,
+                "catch-up", "catch up", "catchup"),
             Toggle("muted", SettingsPage.Voice, "Raven writes its answers without speaking them (the speaker button on Raven's panel).",
                 () => R.IsMuted, v => R.IsMuted = v, "mute", "silent"),
 

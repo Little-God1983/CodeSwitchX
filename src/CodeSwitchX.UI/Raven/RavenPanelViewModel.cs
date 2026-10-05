@@ -3103,6 +3103,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
+        // What came while the user was away, before Seen forgets which lines those were.
+        List<RavenLogEntry> away = CatchUp && !value.IsActivity ? [.. Log.Where(e => e.IsUnread && e.Chat == value)] : [];
         if (!value.IsActivity)
         {
             Seen(value);
@@ -3115,6 +3117,110 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         ShowSelected();
+        CatchUpOn(value, away);
+    }
+
+    /// <summary>
+    /// Speaks a short catch-up on switching to a chat (#127): what came there while the user was away, in one or two
+    /// sentences worded by the teller. The shell keeps it in step with Settings; off by default.
+    /// </summary>
+    [ObservableProperty]
+    private bool _catchUp;
+
+    /// <summary>Stops the catch-up being said when the user switches on, presses or asks (UI thread).</summary>
+    private CancellationTokenSource? _catchingUp;
+
+    /// <summary>
+    /// The catch-up of the chat switched to, from its unread lines only: the news, Raven's answers and warnings that came
+    /// while the user was elsewhere. Its cards that came meanwhile are then read as usual, one at a time. Nothing is said for
+    /// a chat with nothing new, muted, inside the traffic watcher's cooldown, or while news is being told.
+    /// </summary>
+    private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
+    {
+        _catchingUp?.Cancel(); // switched on: what was away in the chat left is not said any more
+        _catchingUp = null;
+        if (away.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var card in away.Select(e => e.Ask).OfType<ChatAskCard>().Where(c => c.IsOpen && c.ShownIn == chat && !_untold.Contains(c)))
+        {
+            _untold.Add(card);
+        }
+
+        var lines = CatchUpLines(away);
+        if (lines.Count == 0 || IsMuted || _teller is null || _telling || !Traffic.CooledDown)
+        {
+            ScheduleNews(); // the cards, when it is quiet
+            return;
+        }
+
+        _catchingUp = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
+        _telling = true;
+        UpdateState();
+        _conversation = TellCatchUpAsync(_conversation, chat, lines, _catchingUp.Token);
+    }
+
+    /// <summary>The lines a catch-up is worded from, in the order they came; the cards are read out on their own.</summary>
+    internal static List<string> CatchUpLines(IEnumerable<RavenLogEntry> away)
+    {
+        List<string> lines = [];
+        foreach (var entry in away)
+        {
+            switch (entry.Kind)
+            {
+                case RavenLogKind.News when entry.Lines is { Count: > 0 } news:
+                    lines.AddRange(DigestPrompt(news).Split('\n').Skip(1)); // the header is the catch-up's own
+                    break;
+                case RavenLogKind.Raven when entry.Text.Trim() is { Length: > 0 } said:
+                    lines.Add($"- Raven answered: \"{(said.Length <= CatchUpAnswerLength ? said : said[..CatchUpAnswerLength] + "…")}\"");
+                    break;
+                case RavenLogKind.Warning:
+                    lines.Add($"- A warning: {entry.Text}");
+                    break;
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>The most of one of Raven's answers a catch-up is worded from: its start says what it is about.</summary>
+    internal const int CatchUpAnswerLength = 300;
+
+    /// <summary>What the teller is given for a catch-up: the lines, and how to begin.</summary>
+    internal static string CatchUpPrompt(IReadOnlyList<string> lines) =>
+        "Catch-up: what happened in the chat the user just switched to, while they were away, in the order it came:\n"
+        + string.Join("\n", lines)
+        + "\nTell it in one or two short sentences that begin with \"While you were away\", the most pressing first.";
+
+    /// <summary>Says the catch-up in the chat switched to; a press, a question or another switch stops it. Never faults.</summary>
+    private async Task TellCatchUpAsync(Task previous, RavenChat chat, IReadOnlyList<string> lines, CancellationToken stop)
+    {
+        ReplyVoice.SpokenReply? spoken = null;
+        try
+        {
+            await previous;
+            if (stop.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _voice.Expect();
+            spoken = _voice.Begin();
+            await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Raven's catch-up failed");
+        }
+        finally
+        {
+            spoken?.Complete();
+            _telling = false;
+            RestTellerIfIdle();
+            UpdateState(); // then the chat's cards, one at a time, once it is quiet
+        }
     }
 
     /// <summary>Fills <see cref="Shown"/> anew with the selected chat's entries.</summary>
