@@ -449,8 +449,14 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Fold();
     }
 
-    /// <summary>The width of a scroll bar, as the system draws it; set otherwise in tests.</summary>
-    internal double ScrollBar { get; set; } = System.Windows.SystemParameters.VerticalScrollBarWidth;
+    private double? _scrollBar;
+
+    /// <summary>The width of a scroll bar, as the system draws it now (it follows the user's settings); set otherwise in tests.</summary>
+    internal double ScrollBar
+    {
+        get => _scrollBar ?? System.Windows.SystemParameters.VerticalScrollBarWidth;
+        set => _scrollBar = value;
+    }
 
     /// <summary>The width of the window's content, as the window last reported it; NaN before it did.</summary>
     private double _width = double.NaN;

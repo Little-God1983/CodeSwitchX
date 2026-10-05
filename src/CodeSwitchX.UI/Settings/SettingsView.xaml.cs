@@ -21,7 +21,15 @@ public partial class SettingsView : UserControl
     {
         if (e.NewValue is false && SearchBox.IsKeyboardFocusWithin)
         {
-            PagesList.Focus();
+            // The page shown, so the arrow keys go on from it.
+            if (PagesList.ItemContainerGenerator.ContainerFromItem(PagesList.SelectedItem) is ListBoxItem selected)
+            {
+                selected.Focus();
+            }
+            else
+            {
+                PagesList.Focus();
+            }
         }
     }
 

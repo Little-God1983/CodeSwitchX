@@ -398,18 +398,33 @@
             </TextBlock.Style>
           </TextBlock>
         </Grid>
-        <StackPanel DockPanel.Dock="Bottom" Margin="6,12,0,0">
+        <StackPanel DockPanel.Dock="Bottom">
           <StackPanel.Style>
             <Style TargetType="StackPanel">
+              <Setter Property="Margin" Value="6,12,0,0" />
               <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
                   <Setter Property="ToolTip" Value="Changes save as you make them" />
+                  <Setter Property="Margin" Value="0,12,0,0" />
+                  <Setter Property="HorizontalAlignment" Value="Center" />
                 </DataTrigger>
               </Style.Triggers>
             </Style>
           </StackPanel.Style>
           <StackPanel Orientation="Horizontal">
-            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Margin" Value="0,0,8,0" />
+                  <Style.Triggers>
+                    <!-- Folded: centred in the rail, as the icons above it. -->
+                    <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                      <Setter Property="Margin" Value="0" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
             <TextBlock Text="Changes save as you make them" FontSize="12.5" Foreground="{StaticResource Muted}"
                        Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
           </StackPanel>
