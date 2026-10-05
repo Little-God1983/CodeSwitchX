@@ -81,6 +81,18 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private bool _ravenBargeIn = true;
 
+    /// <summary>How long, in seconds, other chats stay silent after an announcement or a sound (#125): one of <see cref="CooldownChoices"/>.</summary>
+    [ObservableProperty] private int _ravenCooldownSeconds = (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
+
+    /// <summary>Whether other chats make their short sound; off, they are only marked in the list.</summary>
+    [ObservableProperty] private bool _ravenChatSound = true;
+
+    /// <summary>Whether the selected chat's own news waits for the cooldown too.</summary>
+    [ObservableProperty] private bool _ravenOwnNewsWaits;
+
+    /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
+    public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
+
     /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsQwen), nameof(IsKokoro))]
@@ -344,6 +356,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenSpeakNews = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenSpeakNews, "whether Raven speaks chat news", ct) ?? true;
             RavenMicMode = await LoadOrDefaultAsync<string?>(SettingKeys.RavenMicMode, "Raven's mic mode", ct) ?? nameof(Raven.MicMode.PushToTalk);
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
+            RavenCooldownSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenCooldownSeconds, "the chats' cooldown", ct) is { } cooldown
+                && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
+            RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
+            RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             _speech.QwenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultQwenVoice;
             RavenQwenVoice = _speech.QwenVoice; // the setter keeps a known voice, or the default
             _speech.KokoroVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenKokoroVoice, "Raven's Kokoro voice", ct) ?? SpeechSettings.DefaultKokoroVoice;
@@ -484,6 +500,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenMicModeChanged(string value) => Persist(SettingKeys.RavenMicMode, value);
 
     partial void OnRavenBargeInChanged(bool value) => Persist(SettingKeys.RavenBargeIn, value);
+
+    partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
+
+    partial void OnRavenChatSoundChanged(bool value) => Persist(SettingKeys.RavenChatSound, value);
+
+    partial void OnRavenOwnNewsWaitsChanged(bool value) => Persist(SettingKeys.RavenOwnNewsWaits, value);
 
     partial void OnRavenQwenVoiceChanged(string value)
     {

@@ -17,6 +17,9 @@ public static class SettingKeys
     public const string RavenSpeakNews = "raven.speakNews";
     public const string RavenMicMode = "raven.micMode";
     public const string RavenBargeIn = "raven.bargeIn";
+    public const string RavenCooldownSeconds = "raven.cooldownSeconds";
+    public const string RavenChatSound = "raven.chatSound";
+    public const string RavenOwnNewsWaits = "raven.ownNewsWaits";
     /// <summary>Qwen3-TTS's voice: the key is older than the second engine.</summary>
     public const string RavenVoice = "raven.voice";
     public const string RavenKokoroVoice = "raven.kokoroVoice";

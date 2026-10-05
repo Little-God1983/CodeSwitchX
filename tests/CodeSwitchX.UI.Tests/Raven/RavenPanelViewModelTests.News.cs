@@ -42,7 +42,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.State == RavenState.Idle);
         await WithinAsync(_voice.WhenQuietAsync());
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await WithinAsync(vm.PendingAnswers);
     }
 
@@ -111,7 +111,7 @@ public sealed partial class RavenPanelViewModelTests
         Transcribes(Task.FromResult(new CodeSwitchX.Voice.Dictation.DictationResult("open it", TimeSpan.FromSeconds(1))));
         var (vm, _) = await NewsVmAsync();
         Changes("b", SessionState.Working, SessionState.Waiting);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         await HoldAsync(vm);
@@ -187,7 +187,7 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Gate = new TaskCompletionSource();
         var (vm, _) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         vm.Caption.ShouldBe("Telling chat news…");
@@ -232,7 +232,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, news) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
         Changes("b", SessionState.Working, SessionState.Waiting);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _speech.Spoken.Count == 1);
 
         await HoldAsync(vm);
@@ -253,7 +253,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
         _yard.Gate = new TaskCompletionSource(); // the board is read on the UI thread: slow now
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
 
         vm.PressMic(TalkInput.MicButton);
         _yard.Gate.SetResult();
@@ -292,7 +292,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
 
-        _time.Advance(RavenPanelViewModel.NewsGrace - TimeSpan.FromMilliseconds(100));
+        _time.Advance(TrafficWatcher.NewsGrace - TimeSpan.FromMilliseconds(100));
         _teller.Asked.ShouldBeEmpty();
         _time.Advance(TimeSpan.FromMilliseconds(100));
         await WithinAsync(vm.PendingAnswers);

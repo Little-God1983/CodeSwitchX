@@ -167,7 +167,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News)); // written in chat 3, not spoken in the Yard's
 
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "anything else?");

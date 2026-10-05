@@ -235,7 +235,10 @@ public sealed partial class RavenPanelViewModelTests
         held.IsCompleted.ShouldBeFalse();
         (card.IsOpen, card.AwaitsYes).ShouldBe((true, false));
         asks.Proposed.ShouldBeNull();
-        _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
+        // The card itself was told with it when it came (#125): the brain knows what "it" is.
+        var asked = _brain.Asked.ShouldHaveSingleItem();
+        asked.ShouldStartWith(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks");
+        asked.ShouldEndWith("; ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
             + "not confirmed by a yes, so nothing ran, and its card stays open.]\nwhat time is it");
 
         Type(vm, "yes");
@@ -551,7 +554,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         _ = asks.HoldAsync(Permitting("p1", subject: LongCommand), CancellationToken.None);
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace); // not GraceAsync: the teller is held, and with it what the panel waits for
+        _time.Advance(TrafficWatcher.NewsGrace); // not GraceAsync: the teller is held, and with it what the panel waits for
         await Until(() => _teller.Asked.Count == 1);
 
         _ = asks.HoldAsync(Permitting("p2", subject: LongCommand + "\nexit 0"), CancellationToken.None);
@@ -583,7 +586,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await QuestionsVmAsyncWith(asks, news);
         Changes("b", SessionState.Working, SessionState.Idle);
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(RavenPanelViewModel.NewsGrace);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         _ = asks.HoldAsync(Permitting(subject: LongCommand), CancellationToken.None);
