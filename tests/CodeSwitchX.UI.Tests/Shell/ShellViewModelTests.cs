@@ -855,10 +855,10 @@ public class ShellViewModelTests
         _h.Shell.Settings.RavenChatSound = true;
         _h.Shell.Settings.RavenOwnNewsWaits = true;
         _h.Shell.Settings.RavenPauseSeconds = 10;
-        _h.Shell.Raven.CatchUp.ShouldBeFalse("off by default");
-        _h.Shell.Settings.RavenCatchUp = true;
+        _h.Shell.Raven.CatchUp.ShouldBeTrue("on by default (#143)");
+        _h.Shell.Settings.RavenCatchUp = false;
 
-        _h.Shell.Raven.CatchUp.ShouldBeTrue();
+        _h.Shell.Raven.CatchUp.ShouldBeFalse();
         _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(30));
         _h.Shell.Raven.Traffic.SoundOn.ShouldBeTrue();
         _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeTrue();

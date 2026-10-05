@@ -7,7 +7,8 @@ namespace CodeSwitchX.UI.Tests.Raven;
 
 /// <summary>
 /// The catch-up on switching chats (#127): what came in a chat while the user was away, said in a sentence or two when
-/// they switch to it, if the setting is on and the traffic watcher's cooldown is over; its cards are then read as usual.
+/// they switch to it, if the setting is on, a pause (#152) after Raven last spoke or a chat made its sound, the cooldown
+/// notwithstanding (#143); its cards are then read as usual.
 /// </summary>
 public sealed partial class RavenPanelViewModelTests
 {
@@ -74,16 +75,81 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Spoken.ShouldBeEmpty();
     }
 
+    /// <summary>
+    /// #143: the user hears a chat's sound and switches to it inside the cooldown: the switch asks for the catch-up, which is
+    /// said once the pause after the sound has passed, not dropped.
+    /// </summary>
     [Fact]
-    public async Task Inside_the_cooldown_no_catch_up_is_spoken()
+    public async Task A_switch_right_after_the_chat_s_sound_is_caught_up_a_pause_later()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: told as a sound
+        await GraceAsync(vm);
+        await Until(() => _chime.Plays == 1);
+        _time.Advance(TimeSpan.FromSeconds(1)); // heard, and clicked
+        vm.Traffic.CooledDown.ShouldBeFalse();
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(TrafficWatcher.NewsGrace); // 2.5 s after the sound
+        _teller.Asked.ShouldBeEmpty("the grace has passed, the pause after the sound has not");
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+        _speech.Spoken.ShouldNotBeEmpty();
+    }
+
+    /// <summary>#143: a switch right after Raven spoke is caught up too, a pause later.</summary>
+    [Fact]
+    public async Task A_switch_right_after_Raven_spoke_is_caught_up_a_pause_later()
     {
         var vm = await AwayFromChatTwoAsync();
         vm.Traffic.Announced(); // Raven just spoke
 
         vm.SelectedChat = ChatNumbered(vm, 2);
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        _teller.Asked.ShouldBeEmpty("the pause after Raven spoke has not passed");
         await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
 
-        _teller.Asked.ShouldBeEmpty();
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+    }
+
+    /// <summary>
+    /// #143: "the chat I'm in also waits for the cooldown" does not hold the catch-up: the switch asked for it, and dropped it
+    /// would never be said (the switch marked its lines seen).
+    /// </summary>
+    [Fact]
+    public async Task With_own_news_waiting_for_the_cooldown_a_switch_inside_it_is_still_caught_up()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        vm.Traffic.OwnNewsWaits = true;
+        vm.Traffic.Announced(); // Raven just spoke
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+    }
+
+    /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>
+    [Fact]
+    public async Task With_chat_news_only_written_the_catch_up_is_still_said()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        vm.SpeakNews = false;
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+        _speech.Spoken.ShouldNotBeEmpty();
     }
 
     [Fact]

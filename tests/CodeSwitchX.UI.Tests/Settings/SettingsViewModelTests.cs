@@ -234,15 +234,29 @@ public class SettingsViewModelTests : IDisposable
         _vm.RavenCooldownSeconds = 20;
         _vm.RavenChatSound = false;
         _vm.RavenOwnNewsWaits = true;
-        _vm.RavenCatchUp.ShouldBeFalse("the catch-up is off by default");
-        _vm.RavenCatchUp = true;
+        _vm.RavenCatchUp.ShouldBeTrue("the catch-up is on by default (#143)");
+        _vm.RavenCatchUp = false;
         await FlushAsync();
 
-        await _store.Received().SetAsync(SettingKeys.RavenCatchUp, true, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenCatchUp, false, Arg.Any<CancellationToken>());
 
         await _store.Received().SetAsync(SettingKeys.RavenCooldownSeconds, 20, Arg.Any<CancellationToken>());
         await _store.Received().SetAsync(SettingKeys.RavenChatSound, false, Arg.Any<CancellationToken>());
         await _store.Received().SetAsync(SettingKeys.RavenOwnNewsWaits, true, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>#143: the catch-up is on unless the user stored it off; a stored "off" stays off.</summary>
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task The_catch_up_is_on_unless_stored_off(bool? stored, bool loaded)
+    {
+        _store.GetAsync<bool?>(SettingKeys.RavenCatchUp, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenCatchUp.ShouldBe(loaded);
     }
 
     /// <summary>#152: the pause between messages is 3 s until changed, saved, and a stored one the page does not offer is 3 s.</summary>

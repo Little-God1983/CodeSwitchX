@@ -2,8 +2,9 @@ namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
 /// Who may make a sound (#125): the chat the user is in speaks, other chats get a short sound at most, and only when it is
-/// quiet. A sound or announcement starts the cooldown, and whatever comes inside it is only marked in the list: nothing
-/// is saved up to be said later.
+/// quiet. A sound or announcement starts the cooldown, and what other chats bring inside it is only marked in the list:
+/// nothing is saved up to be said later. The catch-up of a chat the user switches to is theirs, asked for by the switch:
+/// the cooldown does not hold it (#143), the pause does (#152).
 /// </summary>
 public sealed class TrafficWatcher(TimeProvider time)
 {
@@ -62,7 +63,10 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>Other chats get their short sound; off, they are only marked in the list.</summary>
     public bool SoundOn { get; set; } = true;
 
-    /// <summary>The selected chat's own news waits for the cooldown too; its cards and Raven's answers never do.</summary>
+    /// <summary>
+    /// The selected chat's own news waits for the cooldown too; its cards, Raven's answers and the catch-up on switching to it
+    /// never do (the catch-up dropped would never be said: the switch marked its lines seen, #143).
+    /// </summary>
     public bool OwnNewsWaits { get; set; }
 
     /// <summary>
