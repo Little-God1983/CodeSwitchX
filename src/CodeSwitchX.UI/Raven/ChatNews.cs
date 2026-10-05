@@ -76,8 +76,8 @@ public sealed class ChatNews : IDisposable
         _subscription = bus.Subscribe<SessionChanged>(Offer);
     }
 
-    /// <summary>Raised on any thread when a chat has news.</summary>
-    public event EventHandler? Arrived;
+    /// <summary>Raised on any thread when a chat has news, with the workspace of the chat when it is known.</summary>
+    public event EventHandler<Guid?>? Arrived;
 
 
     public bool HasNews
@@ -117,7 +117,7 @@ public sealed class ChatNews : IDisposable
                 current.TranscriptPath);
         }
 
-        Arrived?.Invoke(this, EventArgs.Empty);
+        Arrived?.Invoke(this, current.WorkspaceId);
     }
 
     private static ChatNewsKind? KindOf(SessionChanged change)

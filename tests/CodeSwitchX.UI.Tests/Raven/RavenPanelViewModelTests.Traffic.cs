@@ -62,6 +62,20 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }
 
+    /// <summary>#139: another window's news is never spoken, so it starts no teller; the chat the user is in has it warm.</summary>
+    [Fact]
+    public async Task Only_news_of_the_chat_the_user_is_in_warms_the_teller()
+    {
+        var (vm, _) = await TrafficVmAsync();
+
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News) || _teller.WarmUps > 0 || vm.State == RavenState.Idle);
+        _teller.WarmUps.ShouldBe(0);
+
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
+        await Until(() => _teller.WarmUps > 0);
+    }
+
     [Fact]
     public async Task Other_chats_returning_while_the_user_s_chat_is_quiet_make_one_sound()
     {

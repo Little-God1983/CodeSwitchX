@@ -253,6 +253,9 @@ internal sealed class FakeYardDirectory : IYardDirectory
         }
     }
 
+    /// <summary>The workspace of the chat shown with this id; null for one not shown.</summary>
+    public Guid? WorkspaceIdOf(string id) => _chats.FirstOrDefault(c => c.Id == id)?.WorkspaceId;
+
     public static Guid WorkspaceOf(string workspace) => new(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(workspace)));
 
     public Task<IReadOnlyList<YardWorkspace>> WorkspacesAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<YardWorkspace>>([]);

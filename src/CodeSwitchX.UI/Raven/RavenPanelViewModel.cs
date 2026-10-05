@@ -314,9 +314,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         if (news is not null)
         {
-            news.Arrived += (_, _) => _dispatcher.Post(() =>
+            news.Arrived += (_, workspaceId) => _dispatcher.Post(() =>
             {
-                if (SpeakNews && !IsMuted)
+                // Only news of the chat the user is in is spoken (#125): another window's starts no teller (#139). News of
+                // a chat whose workspace is not known yet may be the user's.
+                if (SpeakNews && !IsMuted && (workspaceId is null || ChatOf(workspaceId) == CurrentChat))
                 {
                     _teller?.WarmUp(); // its start is hidden in the wait for the floor
                 }
