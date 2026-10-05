@@ -34,17 +34,19 @@ public sealed class UiDispatcherExtensionsTests
     [Fact]
     public async Task A_read_that_began_before_the_wait_ran_out_is_waited_for()
     {
-        using var began = new ManualResetEventSlim();
-        using var go = new ManualResetEventSlim();
+        // Not disposed: on a failure the read's thread may still wait on them.
+        var began = new ManualResetEventSlim();
+        var go = new ManualResetEventSlim();
+        var ct = TestContext.Current.CancellationToken;
         // The read has begun by the time the wait starts: a thread pool slow to start it cannot let the wait run out first
         // (#144: the read was then withdrawn, never began, and the test waited for good).
         var ui = new BeginningDispatcher(began);
         var read = ui.InvokeAsync(() =>
         {
             began.Set();
-            go.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-            return 7;
-        }, Short, TestContext.Current.CancellationToken);
+            return go.Wait(TimeSpan.FromSeconds(10), ct) ? 7 : -1; // -1: never let go
+        }, Short, ct);
+        began.IsSet.ShouldBeTrue("the posted read began");
 
         await Task.Delay(Short * 5, TestContext.Current.CancellationToken);
         read.IsCompleted.ShouldBeFalse();
@@ -53,7 +55,10 @@ public sealed class UiDispatcherExtensionsTests
         (await read.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldBe(7);
     }
 
-    /// <summary>A UI thread of its own for each post, which returns from the post only once the work has begun.</summary>
+    /// <summary>
+    /// For the test above only: a UI thread of its own for the one read posted, returning from the post once the read has
+    /// signalled <paramref name="began"/> (at most 10 s; the test checks it did).
+    /// </summary>
     private sealed class BeginningDispatcher(ManualResetEventSlim began) : IUiDispatcher
     {
         public void Post<T>(Action<T> action, T state) => Post(() => action(state));
@@ -61,7 +66,7 @@ public sealed class UiDispatcherExtensionsTests
         public void Post(Action action)
         {
             new Thread(() => action()) { IsBackground = true }.Start();
-            began.Wait(TimeSpan.FromSeconds(10)).ShouldBeTrue("the posted work began");
+            began.Wait(TimeSpan.FromSeconds(10));
         }
     }
 
