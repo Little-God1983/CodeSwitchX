@@ -90,6 +90,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>Whether the selected chat's own news waits for the cooldown too.</summary>
     [ObservableProperty] private bool _ravenOwnNewsWaits;
 
+    /// <summary>Whether Raven says what came in a chat while the user was away when they switch to it (#127). Off by default.</summary>
+    [ObservableProperty] private bool _ravenCatchUp;
+
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 
@@ -360,6 +363,7 @@ public sealed partial class SettingsViewModel : ObservableObject
                 && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
             RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
+            RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? false;
             _speech.QwenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultQwenVoice;
             RavenQwenVoice = _speech.QwenVoice; // the setter keeps a known voice, or the default
             _speech.KokoroVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenKokoroVoice, "Raven's Kokoro voice", ct) ?? SpeechSettings.DefaultKokoroVoice;
@@ -506,6 +510,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenChatSoundChanged(bool value) => Persist(SettingKeys.RavenChatSound, value);
 
     partial void OnRavenOwnNewsWaitsChanged(bool value) => Persist(SettingKeys.RavenOwnNewsWaits, value);
+
+    partial void OnRavenCatchUpChanged(bool value) => Persist(SettingKeys.RavenCatchUp, value);
 
     partial void OnRavenQwenVoiceChanged(string value)
     {
