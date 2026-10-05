@@ -69,7 +69,8 @@ public sealed class AppSettings : IAppSettings
 
     public Task<string> OpenAsync(string? page, CancellationToken ct)
     {
-        SettingsPage? target = string.IsNullOrWhiteSpace(page) ? null : PageNamed(page);
+        // "Settings", "the settings": no page named, as none given.
+        SettingsPage? target = string.IsNullOrWhiteSpace(page) || PageWords(page).Count == 0 ? null : PageNamed(page);
         return _ui.InvokeAsync(() =>
         {
             _shell().BringForward();
@@ -94,7 +95,7 @@ public sealed class AppSettings : IAppSettings
     /// </summary>
     internal static SettingsPage PageNamed(string said)
     {
-        var words = Words(said).Where(w => w is not ("settings" or "setting" or "page" or "the" or "my" or "open" or "show")).ToList();
+        var words = PageWords(said);
         var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains)).ToList();
         if (found.Count == 0)
         {
@@ -104,10 +105,16 @@ public sealed class AppSettings : IAppSettings
         return found switch
         {
             [var one] => one.Page,
-            _ => throw new YardActionException($"Settings has no page '{said.Trim()}'. Its pages: "
+            [] => throw new YardActionException($"Settings has no page '{said.Trim()}'. Its pages: "
                 + string.Join(", ", SettingsPageItem.All.Select(p => p.Title)) + "."),
+            _ => throw new YardActionException($"'{said.Trim()}' could be the {string.Join(" or the ", found.Select(p => p.Title))} page: "
+                + "ask the user which."),
         };
     }
+
+    /// <summary>The words of a page as said, without "open", "the", "settings" and the like.</summary>
+    private static List<string> PageWords(string said) =>
+        [.. Words(said).Where(w => w is not ("settings" or "setting" or "page" or "the" or "my" or "open" or "show" or "raven" or "codeswitchx"))];
 
     /// <summary>
     /// A setting by its name or another way of saying it. Otherwise by whole words: the name whose words are all in what was
@@ -185,19 +192,26 @@ public sealed class AppSettings : IAppSettings
             return null;
         }
 
-        var number = decimal.Parse(match.Groups[2].Value.Replace(",", "").Replace(".", ""), CultureInfo.InvariantCulture);
-        if (match.Groups[3].Success)
+        try
         {
-            number += decimal.Parse("0." + match.Groups[3].Value, CultureInfo.InvariantCulture);
-        }
+            var number = decimal.Parse(match.Groups[2].Value.Replace(",", "").Replace(".", ""), CultureInfo.InvariantCulture);
+            if (match.Groups[3].Success)
+            {
+                number += decimal.Parse("0." + match.Groups[3].Value, CultureInfo.InvariantCulture);
+            }
 
-        number *= match.Groups[4].Value switch
+            number *= match.Groups[4].Value switch
+            {
+                "k" or "thousand" => 1_000,
+                "m" or "million" or "mio" => 1_000_000,
+                _ => 1,
+            };
+            return number <= long.MaxValue ? (long)Math.Round(number) : null;
+        }
+        catch (OverflowException)
         {
-            "k" or "thousand" => 1_000,
-            "m" or "million" or "mio" => 1_000_000,
-            _ => 1,
-        };
-        return number <= long.MaxValue ? (long)Math.Round(number) : null;
+            return null; // more than any count
+        }
     }
 
     private static readonly IReadOnlyList<(WhisperModel Model, string Name)> WhisperNames =
@@ -237,7 +251,13 @@ public sealed class AppSettings : IAppSettings
                 v =>
                 {
                     var name = OneOf("the voice engine", v, [.. EngineNames.Select(e => e.Name)]);
-                    S.RavenVoiceEngine = EngineNames.Single(e => e.Name == name).Stored;
+                    var stored = EngineNames.Single(e => e.Name == name).Stored;
+                    if (S.RavenVoiceEngine == stored)
+                    {
+                        return null; // nothing changes
+                    }
+
+                    S.RavenVoiceEngine = stored;
                     return name == "None" ? "Raven answers in text only now." : "A voice not on this PC yet is installed the first time Raven speaks.";
                 }),
             new(new("voice", Title(SettingsPage.Voice), "The voice Raven speaks with, one of the engine's voices.", null), SettingsPage.Voice,
@@ -270,8 +290,12 @@ public sealed class AppSettings : IAppSettings
                 v =>
                 {
                     var name = OneOf("the voice model", v, [.. VoiceModelNames.Select(m => m.Name)]);
-                    S.RavenVoiceModel = VoiceModelNames.Single(m => m.Name == name).Model;
-                    return "The voice restarts with it; 1.7B downloads (3.5 GB) the first time Raven speaks with it.";
+                    var model = VoiceModelNames.Single(m => m.Name == name).Model;
+                    var changed = S.RavenVoiceModel != model;
+                    S.RavenVoiceModel = model;
+                    // Only Qwen3-TTS speaks with it: with Kokoro, or none, it waits for Qwen3-TTS to be picked.
+                    return !changed || S.RavenVoiceEngine != nameof(SpeechEngine.Qwen) ? null
+                        : "The voice restarts with it; 1.7B downloads (3.5 GB) the first time Raven speaks with it.";
                 }),
             Toggle("speak chat news", SettingsPage.Voice, "Raven says when the chat the user is in finishes, fails or needs them; off, it is "
                 + "only written.", () => S.RavenSpeakNews, v => S.RavenSpeakNews = v, "chat news", "news"),
@@ -296,7 +320,8 @@ public sealed class AppSettings : IAppSettings
 
             // Listening
             new(new("open mic", Title(SettingsPage.Listening), "On, Raven listens all the time and hears when the user speaks; off, it is "
-                    + "push to talk: the user holds a key or the mic button. Also set as \"open mic\" or \"push to talk\".", onOff),
+                    + "push to talk: the user holds a key or the mic button. Also set as \"open mic\" or \"push to talk\"; \"push to talk\" "
+                    + "is also a setting of its own, the other way round.", onOff),
                 SettingsPage.Listening, ["mic mode", "always listening", "listening mode"],
                 () => R.MicMode == MicMode.OpenMic ? On
                     : R.PreferredMicMode == MicMode.OpenMic ? "off: it is switched on, but fell back to push to talk after a failure" : Off,
@@ -311,10 +336,18 @@ public sealed class AppSettings : IAppSettings
                     R.ChooseMicModeCommand.Execute(open ? MicMode.OpenMic : MicMode.PushToTalk);
                     return null;
                 }),
+            Toggle("push to talk", SettingsPage.Listening, "On, the user holds a key or the mic button to talk; off, open mic: Raven "
+                    + "listens all the time.", () => R.MicMode != MicMode.OpenMic,
+                v => R.ChooseMicModeCommand.Execute(v ? MicMode.PushToTalk : MicMode.OpenMic), "push-to-talk"),
             new(new("microphone", Title(SettingsPage.Listening), "The microphone Raven hears.", null), SettingsPage.Listening, ["mic", "input"],
                 () => R.SelectedMicrophone?.Name ?? "none",
                 v =>
                 {
+                    if (R.Microphones.Count == 0)
+                    {
+                        throw new YardActionException("No microphone is listed right now: Windows reports none. Nothing was changed.");
+                    }
+
                     var name = OneOf("the microphone", v, [.. R.Microphones.Select(m => m.Name)]);
                     R.SelectedMicrophone = R.Microphones.First(m => m.Name == name);
                     return null;

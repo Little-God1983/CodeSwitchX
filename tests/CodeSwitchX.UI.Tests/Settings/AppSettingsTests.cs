@@ -296,6 +296,59 @@ public sealed class AppSettingsTests
     [InlineData("budget", SettingsPage.Usage)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
+    [Theory]
+    [InlineData("settings")]
+    [InlineData("the settings")]
+    public async Task Open_settings_said_as_the_page_opens_settings(string page)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.OpenAsync(page, Ct);
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Settings);
+    }
+
+    [Fact]
+    public void A_page_name_two_pages_fit_asks_which()
+    {
+        var error = Should.Throw<YardActionException>(() => AppSettings.PageNamed("install"));
+
+        error.Message.ShouldContain("ask the user which");
+    }
+
+    [Fact]
+    public void A_count_too_large_for_any_number_is_none() => AppSettings.Number("999999999999999999999999 million").ShouldBeNull();
+
+    [Fact]
+    public async Task The_voice_model_note_is_only_given_when_qwen_speaks_and_it_changed()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _settings.SetAsync("voice engine", "Kokoro", Ct);
+
+        (await _settings.SetAsync("voice model", "1.7B", Ct)).Note.ShouldBeNull("Kokoro does not speak with it");
+        (await _settings.SetAsync("voice engine", "Kokoro", Ct)).Note.ShouldBeNull("nothing changed");
+    }
+
+    [Fact]
+    public async Task Push_to_talk_is_a_name_of_its_own_the_other_way_round()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.GetAsync("push to talk", Ct)).Value.ShouldBe("on");
+        await _settings.SetAsync("push to talk", "off", Ct);
+
+        _h.Shell.Raven.PreferredMicMode.ShouldBe(MicMode.OpenMic);
+    }
+
+    [Fact]
+    public async Task With_no_microphone_listed_the_refusal_says_so()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.Microphones.Clear();
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("microphone", "Blue Yeti", Ct))).Message.ShouldContain("No microphone");
+    }
+
     [Fact]
     public async Task Opening_settings_brings_the_window_forward()
     {
