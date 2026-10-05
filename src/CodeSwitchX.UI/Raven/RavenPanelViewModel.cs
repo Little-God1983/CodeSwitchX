@@ -1727,6 +1727,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             var brain = BrainOf(question.Chat);
+            // Chat 0 is told how busy each window is, from the Yard as it is now (#136): a window never talked about has no
+            // summary. Read alongside the wait for summaries, not after it.
+            var reading = IsOverview(brain) ? BusyWindowsAsync() : null;
             if (IsOverview(brain) && !_summaries.IsCompleted)
             {
                 await Task.WhenAny(_summaries, Task.Delay(SummaryWait, _time));
@@ -1736,8 +1739,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
             }
 
-            // Chat 0 is told how busy each window is, from the Yard as it is now (#136): a window never talked about has no summary.
-            var busy = IsOverview(brain) ? await BusyWindowsAsync() : null;
+            var busy = reading is null ? null : await reading;
+            if (question.Merged)
+            {
+                return; // words said meanwhile took it along
+            }
+
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
             await StreamAnswerAsync(brain, WithToldNews(question, brain, busy), spoken, floor, question.Chat, question);
@@ -2614,7 +2621,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private string Overview(IReadOnlyDictionary<Guid, Busy>? busy = null)
     {
         List<string> lines = [];
-        List<int> quiet = [];
+        List<string> quiet = [];
         foreach (var chat in Chats.Where(c => c.WorkspaceId is not null))
         {
             var now = busy?.GetValueOrDefault(chat.WorkspaceId!.Value) ?? default;
@@ -2636,9 +2643,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 parts.Add(cards == 1 ? "1 card waiting" : $"{cards} cards waiting");
             }
 
-            if (parts.Count == 0 && chat.Summary is null)
+            // A window never talked in and with nothing going on is folded into one line, by number and name, so many idle
+            // windows keep it short; one talked in whose summary has not come yet is not idle: "no summary yet".
+            if (parts.Count == 0 && chat.Summary is null && !Log.Any(e => e.Chat == chat))
             {
-                quiet.Add(chat.Number); // folded into one line: many idle windows keep it short
+                quiet.Add($"{chat.Number} {chat.Name}");
                 continue;
             }
 
@@ -2648,7 +2657,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (quiet.Count > 0)
         {
-            lines.Add((quiet.Count == 1 ? $"Chat {quiet[0]}" : "Chats " + string.Join(", ", quiet)) + ": nothing going on");
+            lines.Add("Nothing going on in chat " + string.Join(", chat ", quiet));
         }
 
         if (WaitingIn(YardChat) is > 0 and var here)
@@ -2678,11 +2687,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         try
         {
-            using var wait = new CancellationTokenSource(BusyWait);
+            using var wait = new CancellationTokenSource(BusyWait, _time);
             var chats = await _yard.ChatsAsync(wait.Token);
             return chats.GroupBy(c => c.WorkspaceId).ToDictionary(g => g.Key, g => new Busy(
-                g.Count(c => c.State == SessionState.Working && !c.NeedsYou),
-                g.Count(c => c.NeedsYou || c.State == SessionState.Waiting)));
+                g.Count(c => c.State == SessionState.Working), g.Count(c => c.NeedsYou)));
         }
         catch (Exception ex)
         {
