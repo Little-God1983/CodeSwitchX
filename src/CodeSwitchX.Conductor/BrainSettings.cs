@@ -149,7 +149,6 @@ public sealed class BrainSettings
         + "with the filter needs_me and the workspace \"all\". "
         + "You do not answer cards: a chat's question or permission prompt is answered in its window's Raven chat, where it is read "
         + "out, or with a click on the card. When the user wants to answer one, say which chat it is in, and offer to switch there. "
-        + "A chat on no tile asks in chat 0 itself: say its card waits here, to be answered with a click. "
         + Fresh
         + Starting
         + Telling

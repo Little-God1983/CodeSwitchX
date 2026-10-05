@@ -111,8 +111,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// A fact the user was given about a card or news of <paramref name="chat"/>, for that window's chat only (#137), kept by
     /// the window and not its brain: a brain made anew for the window still gets it. A fact of chat 0 is kept for no one
-    /// when chat 0 is the overview: it is given no card or news fact, and a chat on no tile's card there is answered with a
-    /// click.
+    /// when chat 0 is the overview: it is given no card or news fact, and has no card of its own (#148).
     /// </summary>
     private void Tell(string fact, RavenChat chat, DateTimeOffset? at = null)
     {
@@ -2041,18 +2040,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The card goes in its window's chat, and only there: it is answered where that window's other cards are. Which
-    /// window that is the naming finds; a chat the Yard shows on no tile asks in the Yard's chat. Never faults.
+    /// window that is the naming finds. A chat on no tile is asked in its VS Code tab (#148): its question is not taken,
+    /// and one whose window went while it was named goes there too, unshown. Chat 0 never has a card. Never faults.
     /// </summary>
     private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
     {
         await card.Naming;
         _dispatcher.Post(() =>
         {
-            if (card.WorkspaceId is { } window && _removedWindows.TryGetValue(window, out var removed))
+            if (ChatOf(card.WorkspaceId) == YardChat)
             {
-                // Its window is gone from the Yard (it came while the remove was asked, say): VS Code asks it, not chat 0.
-                // It is written for Activity only, under a chat of its own that no list shows.
-                card.ShownIn = Append(entry, RavenChat.Of(window, removed.Number, removed.Name)).Chat;
+                _askCards.Remove(card.Ask.Id);
+                OpenQuestions = _askCards.Count;
                 _asks?.ToVsCode(card.Ask.Id);
                 return;
             }
@@ -2718,12 +2717,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (quiet.Count > 0)
         {
             lines.Add((busy is null ? "No summary or card yet in chat " : "Nothing going on in chat ") + string.Join(", chat ", quiet));
-        }
-
-        if (WaitingIn(YardChat) is > 0 and var here)
-        {
-            // Chats on no tile ask here: counted, as no summary has them.
-            lines.Add($"Chat 0 itself, for chats on no tile ({(here == 1 ? "1 card waiting" : $"{here} cards waiting")}, answered here with a click)");
         }
 
         var unknown = busy is null ? " (the Yard could not be read just now: which Claude Code chats work or wait is unknown; list_chats can tell)" : "";
@@ -3471,7 +3464,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (gone.WorkspaceId is { } retired)
             {
-                _removedWindows[retired] = (gone.Number, gone.Name); // not the chat: its tile goes with it
                 _brains?.Retire(retired); // its process, config and conversation go with it
             }
 
@@ -3496,9 +3488,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             chat.Name = name;
         }
     }
-
-    /// <summary>The chats of windows removed from the Yard: a card that comes for one goes to VS Code, never to chat 0 (UI thread).</summary>
-    private readonly Dictionary<Guid, (int Number, string Name)> _removedWindows = [];
 
     /// <summary>How many cards wait in the workspace's Raven chat (#135).</summary>
     public int OpenCardsOf(Guid workspaceId) => Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat ? WaitingIn(chat) : 0;

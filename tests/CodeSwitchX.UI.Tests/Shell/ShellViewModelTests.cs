@@ -1,5 +1,6 @@
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
@@ -208,13 +209,23 @@ public class ShellViewModelTests
         _h.Shell.Title.Length.ShouldBeGreaterThan("CodeSwitchX ".Length, "the version follows");
     }
 
+    /// <summary>App and Other, each with a Raven chat (a number); the shell set up.</summary>
+    private async Task<Guid> TwoTilesAsync()
+    {
+        _h.App.Number = 1;
+        var other = new Workspace { Id = Guid.NewGuid(), Name = "Other", RootPath = @"c:\repo\other", TrackId = _h.App.TrackId, Number = 2 };
+        _h.Workspaces.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_h.App, other]));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        return other.Id;
+    }
+
     [Fact]
     public async Task Raven_takes_a_chat_s_question_while_its_panel_is_open_unless_the_Cab_shows_that_chat_s_VS_Code()
     {
-        var other = Guid.NewGuid();
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var other = await TwoTilesAsync();
         _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue();
-        _h.Shell.TakesAsks(null).ShouldBeTrue("a chat on no tile is shown in no Cab");
+        _h.Shell.TakesAsks(null).ShouldBeFalse("a chat on no tile is asked in its VS Code tab (#148)");
+        _h.Shell.TakesAsks(Guid.NewGuid()).ShouldBeFalse("nor is a workspace with no tile");
 
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
@@ -237,8 +248,7 @@ public class ShellViewModelTests
     [Fact]
     public async Task A_question_held_lets_go_once_the_Cab_shows_its_chat_s_VS_Code_and_a_collapsed_panel_keeps_it()
     {
-        var other = Guid.NewGuid();
-        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var other = await TwoTilesAsync();
         var changes = 0;
         _h.Shell.AskRulesChanged += (_, _) => changes++;
         _h.Shell.Raven.TogglePanelCommand.Execute(null);
@@ -251,12 +261,39 @@ public class ShellViewModelTests
         changes.ShouldBeGreaterThan(0);
         _h.Shell.KeepsAsks(_h.App.Id).ShouldBeFalse("the user is looking at that chat's tab");
         _h.Shell.KeepsAsks(other).ShouldBeTrue();
-        _h.Shell.KeepsAsks(null).ShouldBeTrue();
+        _h.Shell.KeepsAsks(null).ShouldBeFalse("a chat on no tile is asked in its VS Code tab (#148)");
 
         var seen = changes;
         _h.Shell.SetShellMinimized(true);
         _h.Shell.KeepsAsks(_h.App.Id).ShouldBeTrue("push-to-talk answers what Raven reads out");
         changes.ShouldBe(seen + 1);
+    }
+
+    /// <summary>
+    /// #148: once its workspace is removed, a chat in its folder is on no tile: what it asks a minute later is not taken but
+    /// asked in its VS Code tab, and what it held then goes there too.
+    /// </summary>
+    [Fact]
+    public async Task A_removed_workspace_s_chats_are_asked_in_vs_code()
+    {
+        var other = await TwoTilesAsync();
+        var changes = 0;
+        _h.Shell.AskRulesChanged += (_, _) => changes++;
+        // As the app asks it (App.xaml.cs): by the chat's workspace as the engine last had it, Other's.
+        _h.Asks.Takes = _ => _h.Shell.TakesAsks(other);
+
+        await _h.Shell.Yard.UnregisterAsync(other);
+        changes.ShouldBe(1, "a tile went: the questions held are looked at again");
+        _h.Time.Advance(TimeSpan.FromMinutes(1));
+        _h.YardDirectory.Show("s1", "Other", "Fix the upload");
+        var asked = await _h.Asks.HoldAsync(new ChatAsk("p1",
+            new HookEvent { SessionId = "s1", EventName = "PermissionRequest", At = _h.Time.GetUtcNow(), ToolName = "Bash", ToolInputHash = "p1" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null)), CancellationToken.None);
+
+        asked.ShouldBeNull("not taken: its VS Code tab asks it");
+        _h.Shell.KeepsAsks(other).ShouldBeFalse();
+        _h.Shell.Raven.Log.ShouldNotContain(e => e.Ask != null, "no card of it, in chat 0 or anywhere");
+        _h.Shell.TakesAsks(_h.App.Id).ShouldBeTrue("App is still on the Yard");
     }
 
     [Fact]

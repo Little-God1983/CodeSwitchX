@@ -18,8 +18,19 @@ public sealed partial class RavenPanelViewModelTests
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard);
         await WithinAsync(vm.RefreshMicrophonesAsync());
+        InContentAutomatorX(vm);
         return (vm, asks);
     }
+
+    /// <summary>ContentAutomatorX, where "a" runs, is window 1, and the user is in its chat: a chat on no tile asks in VS Code (#148).</summary>
+    private static void InContentAutomatorX(RavenPanelViewModel vm)
+    {
+        vm.SetWorkspaces([(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"), 1, "ContentAutomatorX")]);
+        vm.SelectedChat = vm.Chats.Single(c => c.Number == 1);
+    }
+
+    /// <summary>What the brain of chat 1, where the user is, is told before their words.</summary>
+    private const string InChatOne = "[The user is in chat 1, ContentAutomatorX: \"it\" and \"this\" mean that window unless they name another.]\n";
 
     private ChatAsk Asking(params ChatQuestion[] questions) => new("toolu_1",
         new HookEvent { SessionId = "a", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = "toolu_1" },
@@ -121,7 +132,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks, and waits for the "
-            + "answer here: \"Which fruit?\" (one of: Apple, Banana). answer_question answers it.]\nthe first one");
+            + "answer here: \"Which fruit?\" (one of: Apple, Banana). answer_question answers it.]\n" + InChatOne + "the first one");
     }
 
     [Fact]
@@ -195,7 +206,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_question_goes_before_the_news_and_its_waiting_is_no_news()
     {
         _teller.Answer = _ => [new BrainText("Release notes is done.")];
-        _yard.Show("b", "CodeSwitchX", "Release notes");
+        _yard.Show("b", "ContentAutomatorX", "Release notes"); // in the window the user is in: its news is spoken
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Explains);
         _time.Advance(TimeSpan.FromSeconds(1));
@@ -220,6 +231,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard);
         await WithinAsync(vm.RefreshMicrophonesAsync());
+        InContentAutomatorX(vm);
         return (vm, asks);
     }
 

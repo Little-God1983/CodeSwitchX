@@ -126,7 +126,7 @@ public sealed partial class RavenPanelViewModelTests
 
         _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks, and waits for the "
             + "answer here: permission to run a command: npm test (ask id p1). answer_permission denies it on the user's word, or proposes an allow "
-            + "that only the user's next yes, checked by the app, makes real.]\nallow it");
+            + "that only the user's next yes, checked by the app, makes real.]\n" + InChatOne + "allow it");
     }
 
     private static readonly ChatPermissionSuggestion AlwaysNpmTest = new(
@@ -216,7 +216,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldBe(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the user said yes to the "
-            + "allow you proposed, and it was allowed.]\nwhat's next");
+            + "allow you proposed, and it was allowed.]\n" + InChatOne + "what's next");
     }
 
     [Fact]
@@ -239,13 +239,13 @@ public sealed partial class RavenPanelViewModelTests
         var asked = _brain.Asked.ShouldHaveSingleItem();
         asked.ShouldStartWith(Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a) asks");
         asked.ShouldEndWith("; ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): the allow you proposed was "
-            + "not confirmed by a yes, so nothing ran, and its card stays open.]\nwhat time is it");
+            + "not confirmed by a yes, so nothing ran, and its card stays open.]\n" + InChatOne + "what time is it");
 
         Type(vm, "yes");
         await WithinAsync(vm.PendingAnswers);
 
         held.IsCompleted.ShouldBeFalse("a yes after the proposal lapsed is only words to the brain");
-        _brain.Asked.Last().ShouldBe("yes");
+        _brain.Asked.Last().ShouldBe(InChatOne + "yes");
     }
 
     [Fact]
@@ -311,7 +311,8 @@ public sealed partial class RavenPanelViewModelTests
         held.IsCompleted.ShouldBeFalse("the okay was said before Raven asked for a yes");
         // Round 3: they take the floor from it all the same; left standing, a yes to the brain's answer to them would allow it.
         asks.Proposed.ShouldBeNull();
-        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nOkay.");
+        _brain.Asked.ShouldHaveSingleItem().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\n"
+            + InChatOne + "Okay.");
     }
 
     [Fact]
@@ -358,7 +359,7 @@ public sealed partial class RavenPanelViewModelTests
         held.IsCompleted.ShouldBeFalse();
         asks.IsHeard(proposal).ShouldBeFalse("the yes took the floor from it, so it was never heard to its end");
         asks.Proposed.ShouldBeNull("cut off, it can be answered by no yes any more");
-        _brain.Asked.Last().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
+        _brain.Asked.Last().ShouldEndWith("the allow you proposed was not confirmed by a yes, so nothing ran, and its card stays open.]\n" + InChatOne + "yes");
     }
 
     /// <summary>A brain steered by a chat's words: it proposes, then follows the app's read-back with its own "Say yes."</summary>
@@ -479,7 +480,7 @@ public sealed partial class RavenPanelViewModelTests
         Type(vm, "yes");
         await WithinAsync(vm.PendingAnswers);
         held.IsCompleted.ShouldBeFalse("a yes after it is only words to the brain");
-        _brain.Asked.Last().ShouldEndWith("not confirmed by a yes, so nothing ran, and its card stays open.]\nyes");
+        _brain.Asked.Last().ShouldEndWith("not confirmed by a yes, so nothing ran, and its card stays open.]\n" + InChatOne + "yes");
     }
 
     [Fact]
@@ -497,7 +498,7 @@ public sealed partial class RavenPanelViewModelTests
 
         (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeFalse();
         card.AwaitsYes.ShouldBeFalse();
-        _brain.Asked.ShouldBe(["yes"], "with nothing proposed, a yes is only words to the brain");
+        _brain.Asked.ShouldBe([InChatOne + "yes"], "with nothing proposed, a yes is only words to the brain");
     }
 
     [Fact]
@@ -579,7 +580,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         _teller.Gate = new TaskCompletionSource();
         _teller.Answer = _ => [new BrainText("Release notes is done.")];
-        _yard.Show("b", "CodeSwitchX", "Release notes");
+        _yard.Show("b", "ContentAutomatorX", "Release notes"); // in the window the user is in: its news is told
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Explains);
         _time.Advance(TimeSpan.FromSeconds(1));

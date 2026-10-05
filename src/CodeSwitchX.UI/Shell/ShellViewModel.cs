@@ -45,6 +45,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     private bool _ravenOpen;
     private Guid? _cabShowing;
 
+    /// <summary>The workspaces with a tile, and so a Raven chat (#148): only their chats' questions are taken. Under <see cref="_askGate"/>.</summary>
+    private HashSet<Guid> _tiled = [];
+
     /// <summary>Counts the opens; the status strip belongs to the latest one (see <see cref="ReportFor"/>).</summary>
     private int _openAttempt;
 
@@ -62,7 +65,11 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Yard.OpenRequested += id => _ = EnterCabAsync(id);
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
-        Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles);
+        Yard.TilesChanged += () =>
+        {
+            Raven.SetWorkspaces(Yard.Tiles);
+            TrackTiles();
+        };
         Yard.BeforeRemove = MayRemoveAsync;
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
@@ -322,6 +329,26 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     /// <summary>
+    /// The tiles changed: a chat of a workspace removed is on no tile now, and its questions held go to VS Code (#148).
+    /// UI thread.
+    /// </summary>
+    private void TrackTiles()
+    {
+        HashSet<Guid> tiled = [.. Yard.Tiles.Where(t => t.Number > 0).Select(t => t.Id)];
+        bool changed;
+        lock (_askGate)
+        {
+            changed = !tiled.SetEquals(_tiled);
+            _tiled = tiled;
+        }
+
+        if (changed)
+        {
+            AskRulesChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
     /// Whether Raven takes a chat's question (<c>ChatAsks.Takes</c>): while its panel is open and it is kept
     /// (<see cref="KeepsAsks"/>). Asked on the hook's thread.
     /// </summary>
@@ -335,9 +362,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     /// <summary>
-    /// Whether Raven keeps a question it holds (<c>ChatAsks.Keeps</c>): not once the Cab shows the chat's own VS Code,
-    /// where the user answers it in the tab. A collapsed panel keeps it: the rail counts it. A minimised window keeps it
-    /// too: push-to-talk answers what Raven reads out.
+    /// Whether Raven keeps a question it holds (<c>ChatAsks.Keeps</c>): only a chat's on a tile, which has a Raven chat to
+    /// read it in; a chat on no tile, its folder never added or its workspace removed, is asked in its VS Code tab (#148).
+    /// Not once the Cab shows the chat's own VS Code either, where the user answers it in the tab. A collapsed panel keeps
+    /// it: the rail counts it. A minimised window keeps it too: push-to-talk answers what Raven reads out.
     /// </summary>
     public bool KeepsAsks(Guid? workspaceId)
     {
@@ -348,7 +376,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     /// <summary>Under <see cref="_askGate"/>.</summary>
-    private bool Keeps(Guid? workspaceId) => workspaceId is null || workspaceId != _cabShowing;
+    private bool Keeps(Guid? workspaceId) => workspaceId is { } id && _tiled.Contains(id) && id != _cabShowing;
 
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;

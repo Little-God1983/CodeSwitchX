@@ -237,20 +237,24 @@ public sealed partial class RavenPanelViewModelTests
         vm.YardChat.IsWaiting.ShouldBeFalse();
     }
 
-    /// <summary>A card that comes for a window already removed (while the remove was asked, say) goes to VS Code too.</summary>
-    [Fact]
-    public async Task A_card_that_comes_for_a_removed_window_goes_to_vs_code()
+    /// <summary>
+    /// #148: a chat on no tile, its window removed (while the remove was asked, say) or its folder never added, is asked in its
+    /// VS Code tab: no card of it is in chat 0, or anywhere in the panel.
+    /// </summary>
+    [Theory]
+    [InlineData("a")] // its window removed
+    [InlineData("zz")] // its folder on no tile
+    public async Task A_card_of_a_chat_on_no_tile_goes_to_vs_code_and_is_shown_nowhere(string session)
     {
         var (vm, asks) = await ChatsVmAsync();
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
 
-        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        var held = asks.HoldAsync(PermittingIn(session, "p1"), CancellationToken.None);
 
         await WithinAsync(held);
-        vm.Log.Single(e => e.Kind == RavenLogKind.Permission).Ask!.Outcome.ShouldBe("Left to VS Code: answer it in the chat's tab.");
-        vm.YardChat.IsWaiting.ShouldBeFalse();
-        vm.SelectedChat = vm.YardChat;
-        vm.Shown.ShouldBeEmpty();
+        asks.IsHeld("p1").ShouldBeFalse("its tab asks it");
+        vm.Log.ShouldNotContain(e => e.Ask != null);
+        (vm.OpenQuestions, vm.YardChat.IsWaiting).ShouldBe((0, false));
     }
 
     /// <summary>A card whose entry the log let go of still waits: removing its window leaves it to VS Code too.</summary>
@@ -350,20 +354,17 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.ShouldHaveSingleItem("the installing note gave way to it");
     }
 
-    /// <summary>
-    /// A card asked before its window's chat was in the list stays in the Yard's chat; the read-back of an allow for it is
-    /// said beside it there, not in the window's chat added since.
-    /// </summary>
+    /// <summary>The read-back of an allow is said beside its card, in the card's chat, not in the chat the user is in.</summary>
     [Fact]
     public async Task The_lines_about_a_card_go_to_the_chat_the_card_is_in()
     {
         var (vm, asks) = await ChatsVmAsync();
-        _yard.Show("z", "Elsewhere", "A chat on no tile"); // its card is in chat 0
-        _ = asks.HoldAsync(PermittingIn("z", "p1"), CancellationToken.None);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None); // chat 3's
 
         asks.Propose("p1");
 
-        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.Permission, 0), (RavenLogKind.Raven, 0)]);
+        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.Permission, 3), (RavenLogKind.Raven, 3)]);
     }
 
     [Fact]

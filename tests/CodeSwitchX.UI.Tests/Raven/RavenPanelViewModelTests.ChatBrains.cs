@@ -379,7 +379,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
         await WithinAsync(vm.RefreshMicrophonesAsync());
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Ask is not null));
 

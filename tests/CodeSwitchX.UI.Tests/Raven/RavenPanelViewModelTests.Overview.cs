@@ -273,19 +273,20 @@ public sealed partial class RavenPanelViewModelTests
         frame.Count(ch => ch == ']').ShouldBe(1);
     }
 
-    /// <summary>A chat on no tile asks in chat 0 itself: "which chat needs me?" must find it, though its text stays out.</summary>
+    /// <summary>#148: a chat on no tile is asked in its VS Code tab: chat 0 has no card of its own to tell its brain of.</summary>
     [Fact]
-    public async Task Cards_waiting_in_chat_zero_itself_are_counted_for_its_brain()
+    public async Task A_chat_on_no_tile_puts_no_card_in_chat_zero()
     {
         var (vm, _, _, asks) = await OverviewVmAsync();
-        _ = asks.HoldAsync(PermittingIn("terminal-chat", "p9"), CancellationToken.None); // on no tile
-        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+        var held = asks.HoldAsync(PermittingIn("terminal-chat", "p9"), CancellationToken.None); // on no tile
+        await WithinAsync(held);
 
         await TalkInAsync(vm, 0, "Which chat needs me?");
 
         var sent = _brain.Sent.ShouldHaveSingleItem();
-        sent.ShouldContain("Chat 0 itself, for chats on no tile (1 card waiting");
+        sent.ShouldNotContain("Chat 0 itself");
         sent.ShouldNotContain("npm test");
+        vm.YardChat.IsWaiting.ShouldBeFalse();
     }
 
     /// <summary>"What's going on?" right after a turn in chat 3 must not be answered from the summary before that turn.</summary>
