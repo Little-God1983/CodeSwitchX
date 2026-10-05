@@ -1,10 +1,12 @@
+using System.Windows;
+
 namespace CodeSwitchX.UI.Shell;
 
 /// <summary>
 /// What folds on a narrow window so the Settings page keeps room to read (#162): first Raven's chat list to its numbers,
 /// as in the Cab, then the Settings sidebar to its icons, each only when the page would be short of
-/// <see cref="PageNeeds"/> without it. A wide window folds nothing. The widths are those of the views: RavenPanelView's
-/// list and chat columns, SettingsView's sidebar column.
+/// <see cref="PageNeeds"/> without it. A wide window folds nothing. The views take their widths from here: RavenPanelView's
+/// list and chat, MainWindow's closed panel, SettingsView's sidebar.
 /// </summary>
 public static class NarrowLayout
 {
@@ -24,6 +26,15 @@ public static class NarrowLayout
     /// <summary>The least a Settings page reads well in, its margins included.</summary>
     public const double PageNeeds = 480;
 
+    /// <summary>What else takes room beside the page: the panel's 1 px edge, and the page's scroll bar when it scrolls.</summary>
+    public const double Chrome = 18;
+
+    public static GridLength RavenChatColumn { get; } = new(RavenChat);
+
+    public static GridLength SidebarColumn { get; } = new(Sidebar);
+
+    public static GridLength SidebarFoldedColumn { get; } = new(SidebarFolded);
+
     /// <summary>
     /// What folds for a window this wide (its content, in device-independent pixels), with Raven's panel open or not. An
     /// unknown width (not laid out yet) folds nothing.
@@ -35,14 +46,15 @@ public static class NarrowLayout
             return (false, false);
         }
 
+        var page = width - Chrome;
         var raven = ravenOpen ? RavenChat + RavenList : RavenListFolded;
-        if (width - raven - Sidebar >= PageNeeds)
+        if (page - raven - Sidebar >= PageNeeds)
         {
             return (false, false);
         }
 
         // A closed panel has no list to fold: only the sidebar can give way.
         var ravenFolded = ravenOpen ? RavenChat + RavenListFolded : RavenListFolded;
-        return width - ravenFolded - Sidebar >= PageNeeds ? (ravenOpen, false) : (ravenOpen, true);
+        return page - ravenFolded - Sidebar >= PageNeeds ? (ravenOpen, false) : (ravenOpen, true);
     }
 }

@@ -138,6 +138,12 @@ public partial class MainWindow : Window, IShellWindow
                     _shell.SetWidth(e.NewSize.Width);
                 }
             };
+
+            // Laid out already, its first change is past.
+            if (content.ActualWidth > 0)
+            {
+                _shell.SetWidth(content.ActualWidth);
+            }
         }
 
         StateChanged += (_, _) =>

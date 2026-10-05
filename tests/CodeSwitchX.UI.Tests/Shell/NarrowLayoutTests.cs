@@ -6,14 +6,14 @@ namespace CodeSwitchX.UI.Tests.Shell;
 public sealed class NarrowLayoutTests
 {
     [Theory]
-    [InlineData(1400, true, false, false)] // the window as it opens: room for all
-    [InlineData(1296, true, false, false)] // 556 + 260 + 480
-    [InlineData(1295, true, true, false)]
-    [InlineData(1118, true, true, false)] // 378 + 260 + 480
-    [InlineData(1117, true, true, true)]
-    [InlineData(900, true, true, true)] // the narrowest the window may be
-    [InlineData(900, false, false, false)] // a closed panel leaves the page 582
-    [InlineData(797, false, false, true)]
+    [InlineData(1384, true, false, false)] // the window as it opens: room for all
+    [InlineData(1314, true, false, false)] // 556 + 260 + 480 + 18 of edge and scroll bar
+    [InlineData(1313, true, true, false)]
+    [InlineData(1136, true, true, false)] // 378 + 260 + 480 + 18
+    [InlineData(1135, true, true, true)]
+    [InlineData(884, true, true, true)] // the narrowest window's content
+    [InlineData(884, false, false, false)] // a closed panel leaves the page room
+    [InlineData(815, false, false, true)]
     public void What_folds_for_a_window_this_wide(double width, bool ravenOpen, bool list, bool sidebar) =>
         NarrowLayout.Folds(width, ravenOpen).ShouldBe((list, sidebar));
 

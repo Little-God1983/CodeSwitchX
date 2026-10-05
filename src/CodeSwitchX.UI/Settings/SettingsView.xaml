@@ -4,6 +4,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:shell="clr-namespace:CodeSwitchX.UI.Shell"
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              mc:Ignorable="d"
@@ -319,14 +320,14 @@
 
   <Grid Background="{StaticResource Bg}" TextElement.Foreground="{StaticResource Text}">
     <Grid.ColumnDefinitions>
-      <!-- On a narrow window the sidebar folds to the pages' icons (#162); the widths are NarrowLayout's. -->
+      <!-- On a narrow window the sidebar folds to the pages' icons (#162). -->
       <ColumnDefinition>
         <ColumnDefinition.Style>
           <Style TargetType="ColumnDefinition">
-            <Setter Property="Width" Value="260" />
+            <Setter Property="Width" Value="{x:Static shell:NarrowLayout.SidebarColumn}" />
             <Style.Triggers>
               <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
-                <Setter Property="Width" Value="64" />
+                <Setter Property="Width" Value="{x:Static shell:NarrowLayout.SidebarFoldedColumn}" />
               </DataTrigger>
             </Style.Triggers>
           </Style>
@@ -351,7 +352,18 @@
         <Button DockPanel.Dock="Top" Style="{StaticResource Ghost}" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                 AutomationProperties.Name="Back to Yard" ToolTip="Back to Yard" Padding="6,4">
           <StackPanel Orientation="Horizontal">
-            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Margin" Value="0,0,8,0" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                      <Setter Property="Margin" Value="0" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
             <TextBlock Text="Back to Yard" Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
           </StackPanel>
         </Button>
@@ -405,7 +417,27 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="settings:SettingsPageItem">
                 <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}">
-                  <TextBlock FontFamily="{StaticResource Icons}" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Center" Margin="0,0,12,0" />
+                  <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                          <Setter Property="HorizontalAlignment" Value="Center" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </StackPanel.Style>
+                  <TextBlock FontFamily="{StaticResource Icons}" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Margin" Value="0,0,12,0" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                            <Setter Property="Margin" Value="0" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
                   <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
                              Visibility="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolCollapsed}}" />
                 </StackPanel>
@@ -436,7 +468,7 @@
             <Style.Triggers>
               <!-- Narrow: the margins give some of their room to the page too. -->
               <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
-                <Setter Property="Margin" Value="24,24,24,32" />
+                <Setter Property="Margin" Value="16,24,16,32" />
               </DataTrigger>
             </Style.Triggers>
           </Style>
@@ -745,8 +777,8 @@
                         </StackPanel>
                         <WrapPanel Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
                           <TextBlock Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
-                                     Margin="0,0,16,0" />
-                          <voice:ModelLampView DataContext="{Binding Lamp}" Foreground="#C7D2E2" VerticalAlignment="Center" Margin="0,0,16,0" />
+                                     MinWidth="62" Margin="0,0,10,0" />
+                          <voice:ModelLampView DataContext="{Binding Lamp}" Foreground="#C7D2E2" VerticalAlignment="Center" MinWidth="140" Margin="0,0,10,0" />
                           <Button Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" VerticalAlignment="Center"
                                   AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
                                   Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
@@ -954,8 +986,8 @@
                         <RowDefinition Height="Auto" />
                       </Grid.RowDefinitions>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" MinWidth="60" MaxWidth="170" />
-                        <ColumnDefinition Width="*" MinWidth="150" MaxWidth="210" />
+                        <ColumnDefinition Width="*" MinWidth="56" MaxWidth="170" />
+                        <ColumnDefinition Width="*" MinWidth="146" MaxWidth="210" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="0.0001*" />
@@ -964,9 +996,9 @@
                       <TextBox Grid.Column="1" Text="{Binding Chord, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource Mono}" FontSize="13.5"
                                AutomationProperties.Name="{Binding Label, StringFormat='Hotkey for {0}'}" PreviewKeyDown="OnChordKeyDown"
                                GotKeyboardFocus="OnChordFocus" LostKeyboardFocus="OnChordFocusLost" />
-                      <Button Grid.Column="2" Style="{StaticResource Small}" Content="Default" Command="{Binding ResetCommand}" Margin="8,0,0,0"
+                      <Button Grid.Column="2" Style="{StaticResource Small}" Content="Default" Command="{Binding ResetCommand}" Margin="6,0,0,0"
                               AutomationProperties.Name="{Binding Label, StringFormat='Default hotkey for {0}'}" />
-                      <Button Grid.Column="3" Style="{StaticResource Small}" Content="None" Command="{Binding ClearCommand}" Margin="6,0,0,0"
+                      <Button Grid.Column="3" Style="{StaticResource Small}" Content="None" Command="{Binding ClearCommand}" Margin="4,0,0,0"
                               AutomationProperties.Name="{Binding Label, StringFormat='No hotkey for {0}'}" />
                       <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="4" Text="{Binding Problem}" Foreground="#F59E0B" FontSize="12.5" TextWrapping="Wrap"
                                  Margin="2,4,0,0" Visibility="{Binding Problem, Converter={StaticResource NullToCollapsed}}" />

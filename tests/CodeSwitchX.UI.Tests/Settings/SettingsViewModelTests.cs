@@ -296,6 +296,19 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.YardHideIdleHours, 24, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages for good.</summary>
+    [Fact]
+    public void A_search_is_cleared_when_the_sidebar_folds()
+    {
+        _vm.Search = "zzz";
+        _vm.Pages.ShouldBeEmpty();
+
+        _vm.IsSidebarFolded = true;
+
+        _vm.Search.ShouldBe("");
+        _vm.Pages.Count.ShouldBe(SettingsPageItem.All.Count);
+    }
+
     [Fact]
     public void The_Yard_s_times_are_offered_in_words()
     {

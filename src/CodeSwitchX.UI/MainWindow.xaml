@@ -29,7 +29,7 @@
           <!-- Open, it takes the width it needs: the chat list (folded in the Cab) and the chat. -->
           <Style.Triggers>
             <DataTrigger Binding="{Binding IsOpen}" Value="False">
-              <Setter Property="Width" Value="58" />
+              <Setter Property="Width" Value="{x:Static shell:NarrowLayout.RavenListFolded}" />
             </DataTrigger>
           </Style.Triggers>
         </Style>

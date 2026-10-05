@@ -123,6 +123,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// </summary>
     [ObservableProperty] private bool _isSidebarFolded;
 
+    /// <summary>Folded, the search box is gone: a search left in it would filter the pages with no way to see or clear it.</summary>
+    partial void OnIsSidebarFoldedChanged(bool value)
+    {
+        if (value)
+        {
+            Search = "";
+        }
+    }
+
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 
