@@ -78,6 +78,47 @@ public sealed partial class RavenPanelViewModelTests
         sent.ShouldContain("in chat three?");
     }
 
+    /// <summary>The Yard cannot be read in time: chat 0 is told the counts are unknown, not that the windows are quiet.</summary>
+    [Fact]
+    public async Task A_yard_that_cannot_be_read_leaves_the_counts_unknown_not_quiet()
+    {
+        var (vm, _, _, _) = await OverviewVmAsync();
+        _yard.Gate = new TaskCompletionSource(); // never answers
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "What's going on?");
+        await Until(() => vm.State == RavenState.Thinking);
+        _time.Advance(TimeSpan.FromSeconds(2));
+        await WithinAsync(vm.PendingAnswers);
+
+        var sent = _brain.Sent.ShouldHaveSingleItem();
+        sent.ShouldContain("Chat 3, ContentAutomatorX (its Claude Code chats unknown: the Yard could not be read)");
+        sent.ShouldNotContain("Nothing going on");
+    }
+
+    [Fact]
+    public async Task A_starting_chat_counts_as_working()
+    {
+        var (vm, _, _, _) = await OverviewVmAsync();
+        _yard.Now("a", SessionState.Starting);
+
+        await TalkInAsync(vm, 0, "What's going on?");
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Chat 3, ContentAutomatorX (1 Claude Code chat working)");
+    }
+
+    /// <summary>A note about Raven itself in a window's chat is no conversation: the window is still folded as quiet.</summary>
+    [Fact]
+    public async Task A_note_alone_in_a_window_s_chat_keeps_it_quiet()
+    {
+        var (vm, _, _, _) = await OverviewVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.Note("Using the headset again.");
+
+        await TalkInAsync(vm, 0, "What's going on?");
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Nothing going on in chat 1 CodeSwitchX, chat 3 ContentAutomatorX");
+    }
+
     [Fact]
     public async Task Several_working_chats_are_counted()
     {

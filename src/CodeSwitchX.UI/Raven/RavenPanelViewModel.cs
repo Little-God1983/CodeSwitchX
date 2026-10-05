@@ -1732,10 +1732,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var reading = IsOverview(brain) ? BusyWindowsAsync() : null;
             if (IsOverview(brain) && !_summaries.IsCompleted)
             {
+                var waitedFrom = _time.GetTimestamp();
                 await Task.WhenAny(_summaries, Task.Delay(SummaryWait, _time));
-                if (question.Merged)
+                if (_time.GetElapsedTime(waitedFrom) > TimeSpan.FromSeconds(1))
                 {
-                    return; // words said meanwhile took it along
+                    reading = BusyWindowsAsync(); // waited long for a summary: the Yard as it is now, not as it was
                 }
             }
 
@@ -2627,7 +2628,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var now = busy?.GetValueOrDefault(chat.WorkspaceId!.Value) ?? default;
             var cards = WaitingIn(chat);
             // Counts only, never a chat's title or words: chat 0 knows a window's chats by its summary and these numbers.
-            List<string> parts = [];
+            List<string> parts = busy is null ? ["its Claude Code chats unknown: the Yard could not be read"] : [];
             if (now.Working > 0)
             {
                 parts.Add(now.Working == 1 ? "1 Claude Code chat working" : $"{now.Working} Claude Code chats working");
@@ -2645,7 +2646,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             // A window never talked in and with nothing going on is folded into one line, by number and name, so many idle
             // windows keep it short; one talked in whose summary has not come yet is not idle: "no summary yet".
-            if (parts.Count == 0 && chat.Summary is null && !Log.Any(e => e.Chat == chat))
+            if (parts.Count == 0 && chat.Summary is null && !Log.Any(e => e.Chat == chat && SummaryLine(e) is { Length: > 0 }))
             {
                 quiet.Add($"{chat.Number} {chat.Name}");
                 continue;
@@ -2688,9 +2689,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             using var wait = new CancellationTokenSource(BusyWait, _time);
-            var chats = await _yard.ChatsAsync(wait.Token);
+            // Bounded here too: a Yard that does not watch the token must not hold chat 0's question.
+            var chats = await _yard.ChatsAsync(wait.Token).WaitAsync(BusyWait, _time, wait.Token);
             return chats.GroupBy(c => c.WorkspaceId).ToDictionary(g => g.Key, g => new Busy(
-                g.Count(c => c.State == SessionState.Working), g.Count(c => c.NeedsYou)));
+                g.Count(c => c.State is SessionState.Working or SessionState.Starting), g.Count(c => c.NeedsYou)));
         }
         catch (Exception ex)
         {
