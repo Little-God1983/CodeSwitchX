@@ -160,6 +160,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 Settings.RavenPanelOpen = Raven.IsOpen;
                 TrackRavenOpen();
+                Fold();
                 OfferVoiceSetup();
             }
             else if (e.PropertyName == nameof(RavenPanelViewModel.PreferredMicrophone))
@@ -445,7 +446,28 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     partial void OnModeChanged(ShellMode value)
     {
         TellHostWhereTheCabWaits();
-        Raven.IsListFolded = value == ShellMode.Cab; // VS Code keeps its width: the list folds to its numbers
+        Fold();
+    }
+
+    /// <summary>The width of the window's content, as the window last reported it; NaN before it did.</summary>
+    private double _width = double.NaN;
+
+    /// <summary>The window's content is this wide now (device-independent pixels): what folds follows it (#162).</summary>
+    public void SetWidth(double width)
+    {
+        _width = width;
+        Fold();
+    }
+
+    /// <summary>
+    /// In the Cab Raven's list folds to its numbers: VS Code keeps its width. In Settings on a narrow window, the list and
+    /// then the sidebar fold so the page keeps room to read (<see cref="NarrowLayout"/>).
+    /// </summary>
+    private void Fold()
+    {
+        var (list, sidebar) = Mode == ShellMode.Settings ? NarrowLayout.Folds(_width, Raven.IsOpen) : (false, false);
+        Raven.IsListFolded = Mode == ShellMode.Cab || list;
+        Settings.IsSidebarFolded = sidebar;
     }
 
     /// <summary>

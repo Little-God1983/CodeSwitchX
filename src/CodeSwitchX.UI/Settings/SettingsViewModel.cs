@@ -117,6 +117,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public static string HideIdleText(int hours) => hours == 0 ? "Never" : hours == 1 ? "1 hour" : $"{hours} hours";
 
+    /// <summary>
+    /// The sidebar shows only the pages' icons, so a narrow window keeps room for the page (#162); the shell sets it from
+    /// the window's width.
+    /// </summary>
+    [ObservableProperty] private bool _isSidebarFolded;
+
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 

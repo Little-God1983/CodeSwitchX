@@ -452,6 +452,35 @@ public class ShellViewModelTests
         _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
     }
 
+    /// <summary>
+    /// #162: in Settings on a narrow window Raven's list and then the sidebar fold; on the Yard nothing does, and they
+    /// follow the width and the panel as they change.
+    /// </summary>
+    [Fact]
+    public async Task On_a_narrow_window_Settings_folds_Raven_s_list_and_then_its_sidebar()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.SetWidth(900);
+        (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false), "the Yard keeps both");
+
+        _h.Shell.OpenSettings();
+        (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((true, true));
+
+        _h.Shell.SetWidth(1200);
+        (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((true, false));
+
+        _h.Shell.SetWidth(1400);
+        (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false));
+
+        _h.Shell.SetWidth(900);
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.Settings.IsSidebarFolded.ShouldBeFalse("a closed panel leaves the page room");
+
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.CloseSettings();
+        (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false));
+    }
+
     /// <summary>"Open chat two" switches Raven's chat and docks its window; the brain's switch_chat gets Raven's line back.</summary>
     [Fact]
     public async Task Open_chat_two_docks_its_window_and_the_brain_s_switch_says_where()
