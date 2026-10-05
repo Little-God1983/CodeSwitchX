@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 
@@ -36,8 +37,6 @@ public sealed class AppSettings : IAppSettings
     /// <summary>The list, with the values that change (voices, microphones, model names) as they are now.</summary>
     public Task<IReadOnlyList<AppSetting>> ListAsync(CancellationToken ct) => _ui.InvokeAsync<IReadOnlyList<AppSetting>>(
         () => [.. _entries.Select(e => e.Values?.Invoke() is { } values ? e.Info with { Values = values } : e.Info)], RavenActions.UiTimeout, ct);
-
-    public IReadOnlyList<string> Pages { get; } = [.. SettingsPageItem.All.Select(p => p.Title)];
 
     private SettingsViewModel S => _shell().Settings;
 
@@ -214,20 +213,13 @@ public sealed class AppSettings : IAppSettings
         }
     }
 
+    /// <summary>The Whisper models by the names their Listening rows show (#141): one added later is listed too.</summary>
     private static readonly IReadOnlyList<(WhisperModel Model, string Name)> WhisperNames =
-    [
-        (WhisperModel.TinyEnglish, "Tiny English"),
-        (WhisperModel.BaseEnglish, "Base English"),
-        (WhisperModel.SmallEnglish, "Small English"),
-        (WhisperModel.LargeV3Turbo, "Large v3 Turbo"),
-    ];
+        [.. Enum.GetValues<WhisperModel>().Select(m => (m, ModelLamp.RowNameOf(m)))];
 
+    /// <summary>The engines by the names the Voice page shows, as stored, and None.</summary>
     private static readonly IReadOnlyList<(string Stored, string Name)> EngineNames =
-    [
-        (SettingsViewModel.NoEngine, "None"),
-        (nameof(SpeechEngine.Kokoro), "Kokoro"),
-        (nameof(SpeechEngine.Qwen), "Qwen3-TTS"),
-    ];
+        [(SettingsViewModel.NoEngine, "None"), .. Enum.GetValues<SpeechEngine>().Select(e => (e.ToString(), ModelLamp.NameOf(e)))];
 
     private static readonly IReadOnlyList<(SpeechModel Model, string Name)> VoiceModelNames = [(SpeechModel.Small, "0.6B"), (SpeechModel.Large, "1.7B")];
 
@@ -240,6 +232,16 @@ public sealed class AppSettings : IAppSettings
                 set(Switch(name, v));
                 return null;
             });
+
+        // A count of seconds the Voice page offers in a box: "20", "20 seconds".
+        Entry Seconds(string name, string description, string[] aliases, IReadOnlyList<int> choices, Func<int> get, Action<int> set) =>
+            new(new(name, Title(SettingsPage.Voice), description, [.. choices.Select(c => $"{c} seconds")]), SettingsPage.Voice, aliases,
+                () => $"{get()} seconds", v =>
+                {
+                    set(Number(v) is { } n && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                        : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", choices)} seconds, not '{v}'. Nothing was changed."));
+                    return null;
+                });
 
         return
         [
@@ -301,17 +303,12 @@ public sealed class AppSettings : IAppSettings
                 + "only written.", () => S.RavenSpeakNews, v => S.RavenSpeakNews = v, "chat news", "news"),
             Toggle("sound for other chats", SettingsPage.Voice, "Other chats make a short sound, when it is quiet, instead of being spoken; "
                 + "off, they are only marked in the list.", () => S.RavenChatSound, v => S.RavenChatSound = v, "chime", "sound", "other chats"),
-            new(new("cooldown", Title(SettingsPage.Voice), "Seconds other chats stay silent after Raven speaks or a chat makes its sound.",
-                    [.. TrafficWatcher.CooldownChoices.Select(c => $"{c} seconds")]), SettingsPage.Voice, ["cool down", "quiet time"],
-                () => $"{S.RavenCooldownSeconds} seconds",
-                v =>
-                {
-                    var seconds = Number(v) is { } n && TrafficWatcher.CooldownChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
-                        : throw new YardActionException($"The cooldown is one of {string.Join(", ", TrafficWatcher.CooldownChoices)} seconds, not '{v}'. "
-                            + "Nothing was changed.");
-                    S.RavenCooldownSeconds = seconds;
-                    return null;
-                }),
+            Seconds("cooldown", "Seconds other chats stay silent after Raven speaks or a chat makes its sound.", ["cool down", "quiet time"],
+                TrafficWatcher.CooldownChoices, () => S.RavenCooldownSeconds, v => S.RavenCooldownSeconds = v),
+            Seconds("pause between messages", "Seconds what Raven says on its own (news, a catch-up, a question read out) waits after Raven "
+                    + "last spoke or a chat made its sound; a chat's sound inside it is left out. Raven's answers to the user never wait.",
+                ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
+                TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
@@ -358,13 +355,15 @@ public sealed class AppSettings : IAppSettings
                 () => [.. R.Microphones.Select(m => m.Name)]),
             Toggle("talk over Raven", SettingsPage.Listening, "In open mic, the user talking over Raven stops it; off, open mic ignores "
                 + "speech while Raven speaks (Raven heard on speakers).", () => S.RavenBargeIn, v => S.RavenBargeIn = v, "barge in", "interrupt"),
-            new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: the "
-                    + "English ones are smaller and faster, Large v3 Turbo also hears other languages.", [.. WhisperNames.Select(w => w.Name)]),
+            new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: Tiny, "
+                    + "Base and Small hear English only and are smaller and faster; Large v3 Turbo also hears other languages.", [.. WhisperNames.Select(w => w.Name)]),
                 SettingsPage.Listening, ["whisper", "whisper model", "dictation model", "speech recognition"],
-                () => WhisperNames.Single(w => w.Model == S.RavenWhisperModel).Name,
+                () => ModelLamp.RowNameOf(S.RavenWhisperModel),
                 v =>
                 {
-                    var name = OneOf("the speech-to-text model", v, [.. WhisperNames.Select(w => w.Name)]);
+                    // "Whisper Tiny", "tiny English", "base.en": the row's name is the model's.
+                    var said = string.Join(" ", Words(v).Where(w => w is not ("whisper" or "english" or "en" or "model")));
+                    var name = OneOf("the speech-to-text model", said.Length > 0 ? said : v, [.. WhisperNames.Select(w => w.Name)]);
                     S.RavenWhisperModel = WhisperNames.Single(w => w.Name == name).Model;
                     return "A model not on this PC downloads with the next dictation, or from its row on the Listening page.";
                 }),
@@ -381,10 +380,7 @@ public sealed class AppSettings : IAppSettings
                 () => S.RavenChatModel,
                 v =>
                 {
-                    // As set_defaults takes it: an alias by its name, else the model id it means.
-                    S.SetChatDefaults(_chats.Defaults with { Model = IsDefault(v) ? null
-                        : ChatModels.AliasNamed(v, _chats.Aliases)?.Name ?? ChatModels.ResolveModel(v, _chats.Aliases)
-                        ?? throw NoModel(v) });
+                    S.SetChatDefaults(_chats.Defaults with { Model = _chats.DefaultModelOf(v) }); // as set_defaults takes it
                     return null;
                 },
                 () => S.ChatModelChoices),
@@ -393,9 +389,7 @@ public sealed class AppSettings : IAppSettings
                 () => S.RavenChatEffort,
                 v =>
                 {
-                    S.SetChatDefaults(_chats.Defaults with { Effort = IsDefault(v) ? null : ChatModels.ResolveEffort(v)
-                        ?? throw new YardActionException($"'{v}' is no effort level: say {string.Join(", ", SettingsViewModel.EffortChoices)}. "
-                            + "Nothing was changed.") });
+                    S.SetChatDefaults(_chats.Defaults with { Effort = ChatSettings.DefaultEffortOf(v) }); // as set_defaults takes it
                     return null;
                 }),
 
@@ -416,16 +410,16 @@ public sealed class AppSettings : IAppSettings
                 () => S.StorePayloads, v => S.StorePayloads = v, "payloads", "keep payloads"),
 
             // Not by voice
-            new(new("shortcuts", Title(SettingsPage.Shortcuts), "The keys that switch Raven's chat.", null, ByVoice: false,
+            new(new("shortcuts", Title(SettingsPage.Shortcuts), "The keys that switch Raven's chat.", null,
                     NotByVoice: "a shortcut is set by pressing it in its box."), SettingsPage.Shortcuts, ["hotkeys", "hotkey", "keys", "shortcut"],
                 () => "set on the Shortcuts page", null),
             new(new("hooks", Title(SettingsPage.ClaudeCode), "The hooks that let every Claude Code chat report its state to CodeSwitchX.", null,
-                    ByVoice: false, NotByVoice: "installing or removing them changes Claude Code's own settings file, so the user does it on the page."),
+                    NotByVoice: "installing or removing them changes Claude Code's own settings file, so the user does it on the page."),
                 SettingsPage.ClaudeCode, ["claude code hooks", "install hooks", "remove hooks"], () => S.HookStatusText, null),
-            new(new("relay path", Title(SettingsPage.ClaudeCode), "The hook relay program Claude Code runs for every hook.", null, ByVoice: false,
+            new(new("relay path", Title(SettingsPage.ClaudeCode), "The hook relay program Claude Code runs for every hook.", null,
                     NotByVoice: "every Claude Code chat runs it, so the user changes it on the page."), SettingsPage.ClaudeCode,
                 ["relay", "hook relay", "relay executable"], () => S.RelayExecutable, null),
-            new(new("data", Title(SettingsPage.Privacy), "What CodeSwitchX keeps, and where: its data folder and logs.", null, ByVoice: false,
+            new(new("data", Title(SettingsPage.Privacy), "What CodeSwitchX keeps, and where: its data folder and logs.", null,
                     NotByVoice: "Raven never deletes or moves data."), SettingsPage.Privacy,
                 ["delete data", "clear data", "data folder", "logs", "database", "delete logs"], () => S.DataFolder, null),
         ];
@@ -449,7 +443,7 @@ public sealed class AppSettings : IAppSettings
     /// </summary>
     private string? SetModel(string value, Action<string> set)
     {
-        var id = ChatModels.ResolveModel(value, _chats.Aliases) ?? throw NoModel(value);
+        var id = _chats.ModelIdOf(value);
         if (!_chats.Aliases.Any(a => a.Id == id) && !SettingsViewModel.KnownBrainModels.Contains(id))
         {
             throw new YardActionException($"{id} is not a model Raven knows, and Raven could not answer at all with a wrong one: type it on "
@@ -459,11 +453,6 @@ public sealed class AppSettings : IAppSettings
         set(id);
         return null;
     }
-
-    private YardActionException NoModel(string value) => new($"'{value}' is no model: say one of "
-        + $"{string.Join(", ", _chats.Aliases.Select(a => a.Name))}, the name with its version, or a full model id. Nothing was changed.");
-
-    private static bool IsDefault(string value) => Normal(value) is "default" or "claude code s default" or "claude codes default" or "claude default";
 
     /// <param name="Aliases">Other ways the user may name it.</param>
     /// <param name="Set">Sets it from what was said and returns a note; null for a setting not changed by voice.</param>

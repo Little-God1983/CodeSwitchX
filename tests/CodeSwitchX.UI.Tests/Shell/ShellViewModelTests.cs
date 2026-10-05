@@ -849,10 +849,12 @@ public class ShellViewModelTests
         _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(20));
         _h.Shell.Raven.Traffic.SoundOn.ShouldBeFalse();
         _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeFalse();
+        _h.Shell.Raven.Traffic.Pause.ShouldBe(TrafficWatcher.DefaultPause);
 
         _h.Shell.Settings.RavenCooldownSeconds = 30;
         _h.Shell.Settings.RavenChatSound = true;
         _h.Shell.Settings.RavenOwnNewsWaits = true;
+        _h.Shell.Settings.RavenPauseSeconds = 10;
         _h.Shell.Raven.CatchUp.ShouldBeFalse("off by default");
         _h.Shell.Settings.RavenCatchUp = true;
 
@@ -860,6 +862,7 @@ public class ShellViewModelTests
         _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(30));
         _h.Shell.Raven.Traffic.SoundOn.ShouldBeTrue();
         _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeTrue();
+        _h.Shell.Raven.Traffic.Pause.ShouldBe(TimeSpan.FromSeconds(10));
     }
 
     [Fact]

@@ -45,7 +45,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.State == RavenState.Idle);
         await WithinAsync(_voice.WhenQuietAsync());
         await Until(() => vm.State == RavenState.Idle);
-        _time.Advance(TrafficWatcher.NewsGrace);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
         await WithinAsync(vm.PendingAnswers);
     }
 

@@ -27,7 +27,7 @@ public sealed partial class SpeechToTextRow : ObservableObject
     public WhisperModel Model { get; }
 
     /// <summary>"Large v3 Turbo": the row's title.</summary>
-    public string Name => ModelLamp.NameOf(Model)["Whisper ".Length..];
+    public string Name => ModelLamp.RowNameOf(Model);
 
     public string Description { get; }
 

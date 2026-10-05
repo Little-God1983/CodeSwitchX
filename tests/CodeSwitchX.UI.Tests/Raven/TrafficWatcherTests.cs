@@ -48,6 +48,49 @@ public sealed class TrafficWatcherTests
         watcher.TrySound(floorFree: true).ShouldBeTrue();
     }
 
+    /// <summary>#152: the pause runs from the last thing Raven said or played; nothing said yet, none is left.</summary>
+    [Fact]
+    public void The_pause_runs_from_the_last_announcement()
+    {
+        var watcher = new TrafficWatcher(_time);
+        watcher.PauseLeft.ShouldBe(TimeSpan.Zero);
+
+        watcher.Announced();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        watcher.PauseLeft.ShouldBe(TimeSpan.FromSeconds(2));
+        _time.Advance(TimeSpan.FromSeconds(5));
+        watcher.PauseLeft.ShouldBe(TimeSpan.Zero);
+    }
+
+    /// <summary>#152: the pause set again to what it is says nothing: what waits for it keeps its wait.</summary>
+    [Fact]
+    public void Only_a_new_pause_is_a_change()
+    {
+        var watcher = new TrafficWatcher(_time);
+        var changes = 0;
+        watcher.PauseChanged += (_, _) => changes++;
+
+        watcher.Pause = TrafficWatcher.DefaultPause;
+        watcher.Pause = TimeSpan.FromSeconds(10);
+
+        changes.ShouldBe(1);
+    }
+
+    /// <summary>#152: a pause longer than the cooldown holds a chat's sound back too.</summary>
+    [Fact]
+    public void A_sound_waits_for_a_pause_longer_than_the_cooldown()
+    {
+        var watcher = new TrafficWatcher(_time) { Cooldown = TimeSpan.FromSeconds(5), Pause = TimeSpan.FromSeconds(10) };
+        watcher.Announced();
+
+        _time.Advance(TimeSpan.FromSeconds(6));
+        watcher.TrySound(floorFree: true).ShouldBeFalse("the cooldown is over, the pause is not");
+        _time.Advance(TimeSpan.FromSeconds(4));
+
+        watcher.TrySound(floorFree: true).ShouldBeTrue();
+    }
+
     [Fact]
     public void A_busy_floor_means_silent()
     {

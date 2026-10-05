@@ -23,8 +23,6 @@ public sealed class SettingsToolsTests
         public Task<IReadOnlyList<AppSetting>> ListAsync(CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<AppSetting>>([new("open mic", "Listening", "Listens all the time.", ["on", "off"])]);
 
-        public IReadOnlyList<string> Pages { get; } = ["Voice", "Listening"];
-
         public Task<AppSettingValue> GetAsync(string name, CancellationToken ct)
         {
             Calls.Add($"get {name}");

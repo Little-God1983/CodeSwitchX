@@ -1,9 +1,14 @@
+using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
+using CodeSwitchX.UI.Voice;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
 
@@ -199,6 +204,85 @@ public sealed class AppSettingsTests
         _h.Chats.Defaults.Model.ShouldBeNull();
     }
 
+    /// <summary>What set_defaults calls, on the same shell and chat settings.</summary>
+    private RavenActions SetDefaultsTool()
+    {
+        var bus = new EventBus(NullLogger<EventBus>.Instance);
+        return new RavenActions(Substitute.For<IVsCodeChats>(), _h.Chats, bus, (_, _) => { }, () => _h.Shell, new ImmediateDispatcher(),
+            (_, _) => Task.FromResult<Workspace?>(null), new TurnStops(bus, TimeProvider.System), TimeProvider.System, NullLogger<RavenActions>.Instance);
+    }
+
+    /// <summary>#141: set_defaults and set_setting read a model and an effort by one set of rules, and store the same.</summary>
+    [Theory]
+    [InlineData("Opus 5.5", "extra high", "claude-opus-5-5", "xhigh")]
+    [InlineData("opus", "maximum", "Opus", "max")]
+    [InlineData("default", "Claude Code's default", null, null)]
+    public async Task Set_defaults_and_set_setting_store_the_same_for_the_same_words(string model, string effort, string? stored, string? level)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var actions = SetDefaultsTool();
+        var before = new ChatDefaults("Fable", "high");
+
+        _h.Shell.Settings.SetChatDefaults(before); // as the page holds them
+        await actions.SetDefaultsAsync(model, effort, Ct);
+        var byDefaults = _h.Chats.Defaults;
+        _h.Shell.Settings.SetChatDefaults(before); // as the page holds them
+        await _settings.SetAsync("new chats' model", model, Ct);
+        await _settings.SetAsync("new chats' effort", effort, Ct);
+
+        byDefaults.ShouldBe(new ChatDefaults(stored, level));
+        _h.Chats.Defaults.ShouldBe(byDefaults);
+    }
+
+    /// <summary>#141: what neither knows is refused by both in the same words.</summary>
+    [Fact]
+    public async Task Set_defaults_and_set_setting_refuse_a_model_in_the_same_words()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var actions = SetDefaultsTool();
+
+        var byDefaults = await Should.ThrowAsync<YardActionException>(() => actions.SetDefaultsAsync("GPT", null, Ct));
+        var bySetting = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("new chats' model", "GPT", Ct));
+
+        bySetting.Message.ShouldBe(byDefaults.Message);
+        (await Should.ThrowAsync<YardActionException>(() => actions.SetDefaultsAsync(null, "hard", Ct))).Message
+            .ShouldBe((await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("new chats' effort", "hard", Ct))).Message);
+    }
+
+    /// <summary>#141: the speech-to-text models are the Listening rows' names, said with or without "Whisper" or "English".</summary>
+    [Theory]
+    [InlineData("Tiny", WhisperModel.TinyEnglish)]
+    [InlineData("whisper base", WhisperModel.BaseEnglish)]
+    [InlineData("base.en", WhisperModel.BaseEnglish)]
+    [InlineData("small English", WhisperModel.SmallEnglish)]
+    [InlineData("large", WhisperModel.LargeV3Turbo)]
+    public async Task The_speech_to_text_model_goes_by_its_row_s_name(string said, WhisperModel model)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        var set = await _settings.SetAsync("whisper model", said, Ct);
+
+        _h.Shell.Settings.RavenWhisperModel.ShouldBe(model);
+        set.Value.ShouldBe(ModelLamp.RowNameOf(model));
+        set.Values!.ShouldBe(Enum.GetValues<WhisperModel>().Select(ModelLamp.RowNameOf));
+    }
+
+    /// <summary>#152: the pause is set by voice to one the page offers, and found by how it is said; another is refused.</summary>
+    [Theory]
+    [InlineData("pause between messages")]
+    [InlineData("the pause")]
+    [InlineData("gap")]
+    public async Task The_pause_between_messages_is_set_by_voice(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync(said, "5 seconds", Ct)).Value.ShouldBe("5 seconds");
+        _h.Shell.Raven.Traffic.Pause.ShouldBe(TimeSpan.FromSeconds(5));
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync(said, "4", Ct))).Message.ShouldContain("Nothing was changed");
+        _h.Shell.Settings.RavenPauseSeconds.ShouldBe(5);
+    }
+
     [Theory]
     [InlineData("the chat I'm in waits for the cooldown")]
     [InlineData("chat I'm in waits")]
@@ -270,7 +354,7 @@ public sealed class AppSettingsTests
     {
         var list = await _settings.ListAsync(Ct);
 
-        list.ShouldAllBe(s => _settings.Pages.Contains(s.Page) && s.Description.Length > 0);
+        list.ShouldAllBe(s => SettingsPageItem.All.Any(p => p.Title == s.Page) && s.Description.Length > 0);
         list.Where(s => !s.ByVoice).ShouldAllBe(s => s.NotByVoice != null);
         list.Select(s => s.Name).ShouldBeUnique();
     }

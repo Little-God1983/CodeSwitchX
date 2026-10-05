@@ -101,8 +101,8 @@ public sealed class RavenActions : IYardActions
 
     public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
     {
-        var modelId = ChatSettings.Blank(model) is { } m ? ModelIdOf(m) : _chats.DefaultModelId;
-        var level = ChatSettings.Blank(effort) is { } e ? EffortOf(e) : _chats.Defaults.Effort;
+        var modelId = ChatSettings.Blank(model) is { } m ? _chats.ModelIdOf(m) : _chats.DefaultModelId;
+        var level = ChatSettings.Blank(effort) is { } e ? ChatSettings.EffortOf(e) : _chats.Defaults.Effort;
         var registered = await _workspaceOf(workspace.Id, ct).ConfigureAwait(false)
             ?? throw new YardActionException($"{workspace.Name} is not on the Yard any more.");
 
@@ -162,8 +162,8 @@ public sealed class RavenActions : IYardActions
     {
         var current = _chats.Defaults;
         var next = new ChatDefaults(
-            ChatSettings.Blank(model) is { } m ? NameOf(m) : current.Model,
-            ChatSettings.Blank(effort) is { } e ? EffortOf(e) : current.Effort);
+            ChatSettings.Blank(model) is { } m ? _chats.DefaultModelOf(m) : current.Model,
+            ChatSettings.Blank(effort) is { } e ? ChatSettings.DefaultEffortOf(e) : current.Effort);
         await OnUiAsync(() => _shell().SetChatDefaults(next), ct).ConfigureAwait(false);
         return _chats.Defaults;
     }
@@ -222,18 +222,6 @@ public sealed class RavenActions : IYardActions
     /// <summary>How the row's voice mark reads: "Fable 5.1 · high".</summary>
     internal static string Label(string? model, string? effort) =>
         $"{(model is null ? "default model" : ChatModels.DisplayName(model))} · {effort ?? "default effort"}";
-
-    private string ModelIdOf(string said) => ChatModels.ResolveModel(said, _chats.Aliases)
-        ?? throw new YardActionException($"'{said}' is no model Raven knows. Say {string.Join(", ", _chats.Aliases.Select(a => a.Name))}, or a full model id.");
-
-    /// <summary>
-    /// The alias name when the user said just that ("Opus"), so a new id for it in the table applies; else the id. A
-    /// version or id said ("Opus 5.5") names that one model, which a later change of the table must not swap.
-    /// </summary>
-    private string NameOf(string said) => ChatModels.AliasNamed(said, _chats.Aliases)?.Name ?? ModelIdOf(said);
-
-    private static string EffortOf(string said) => ChatModels.ResolveEffort(said)
-        ?? throw new YardActionException($"'{said}' is no effort level. Say {string.Join(", ", ChatModels.EffortLevels)}.");
 
     private Task OnUiAsync(Action action, CancellationToken ct) => _ui.InvokeAsync(() =>
     {

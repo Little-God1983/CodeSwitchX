@@ -24,14 +24,25 @@ public enum ModelDot
 /// <param name="Progress">How far a download is, 0..1, when that is known.</param>
 public sealed record ModelLamp(ModelDot Dot, string Text, string Detail, double? Progress = null)
 {
-    public static string NameOf(SpeechEngine engine) => engine == SpeechEngine.Kokoro ? "Kokoro" : "Qwen3-TTS";
-
-    public static string NameOf(WhisperModel model) => model switch
+    /// <summary>The engine's name; one added later is called by its member's name until it gets one here.</summary>
+    public static string NameOf(SpeechEngine engine) => engine switch
     {
-        WhisperModel.TinyEnglish => "Whisper Tiny",
-        WhisperModel.BaseEnglish => "Whisper Base",
-        WhisperModel.SmallEnglish => "Whisper Small",
-        _ => "Whisper Large v3 Turbo",
+        SpeechEngine.Kokoro => "Kokoro",
+        SpeechEngine.Qwen => "Qwen3-TTS",
+        _ => engine.ToString(),
+    };
+
+    /// <summary>"Whisper Tiny"; a model added later is called by its member's name until it gets one here.</summary>
+    public static string NameOf(WhisperModel model) => $"Whisper {RowNameOf(model)}";
+
+    /// <summary>"Large v3 Turbo": the model's name on its Listening row, and as Raven says it.</summary>
+    public static string RowNameOf(WhisperModel model) => model switch
+    {
+        WhisperModel.TinyEnglish => "Tiny",
+        WhisperModel.BaseEnglish => "Base",
+        WhisperModel.SmallEnglish => "Small",
+        WhisperModel.LargeV3Turbo => "Large v3 Turbo",
+        _ => model.ToString(),
     };
 
     /// <summary>The lamp of <paramref name="engine"/>, or of the voice when none is picked (<see cref="TextToSpeechState.NoEngine"/>).</summary>

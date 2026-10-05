@@ -214,8 +214,8 @@ public sealed class RavenActionsTests
     }
 
     [Theory]
-    [InlineData("GPT", null, "'GPT' is no model Raven knows. Say Fable, Opus, Sonnet, Haiku, or a full model id.")]
-    [InlineData(null, "hard", "'hard' is no effort level. Say low, medium, high, xhigh, max.")]
+    [InlineData("GPT", null, "'GPT' is no model Raven knows: say Fable, Opus, Sonnet, Haiku, the name with its version, or a full model id. Nothing was changed.")]
+    [InlineData(null, "hard", "'hard' is no effort level: say low, medium, high, xhigh, max. Nothing was changed.")]
     public async Task A_model_or_effort_it_does_not_know_is_refused_before_anything_starts(string? model, string? effort, string message)
     {
         (await Should.ThrowAsync<YardActionException>(() => StartAsync(model, effort))).Message.ShouldBe(message);

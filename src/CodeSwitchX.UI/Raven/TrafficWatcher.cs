@@ -16,11 +16,48 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>The cooldowns Settings offers, in seconds.</summary>
     public static readonly IReadOnlyList<int> CooldownChoices = [5, 10, 15, 20, 30, 60];
 
+    /// <summary>The pause between messages before Settings changes it (#152).</summary>
+    public static readonly TimeSpan DefaultPause = TimeSpan.FromSeconds(3);
+
+    /// <summary>The pauses Settings offers, in seconds.</summary>
+    public static readonly IReadOnlyList<int> PauseChoices = [2, 3, 5, 10, 15, 20, 30];
+
     /// <summary>When the last sound or announcement was, as a timestamp: the system clock set back does not stretch the cooldown.</summary>
     private long? _lastSound;
 
     /// <summary>How long after an announcement or sound another chat stays silent.</summary>
     public TimeSpan Cooldown { get; set; } = DefaultCooldown;
+
+    /// <summary>
+    /// How long after Raven last spoke or made a sound whatever it says on its own waits (#152): news, a catch-up, a card read
+    /// out. A chat's sound inside it is left out, as inside the cooldown. Its answers to the user never wait: the user waits
+    /// for them.
+    /// </summary>
+    public TimeSpan Pause
+    {
+        get => _pause;
+        set
+        {
+            if (_pause == value)
+            {
+                return; // set again with the other traffic settings: what waits keeps its wait
+            }
+
+            _pause = value;
+            PauseChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private TimeSpan _pause = DefaultPause;
+
+    /// <summary>The pause was set: what waits for it is told by the new one.</summary>
+    public event EventHandler? PauseChanged;
+
+    /// <summary>How much of the pause is left; zero once it has passed, or when Raven has said nothing yet.</summary>
+    public TimeSpan PauseLeft => _lastSound is { } last && Pause - time.GetElapsedTime(last) is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+
+    /// <summary>How long what Raven says on its own waits once the floor is free: the grace, or what is left of the pause if longer.</summary>
+    public TimeSpan WaitBeforeTelling => PauseLeft is var left && left > NewsGrace ? left : NewsGrace;
 
     /// <summary>Other chats get their short sound; off, they are only marked in the list.</summary>
     public bool SoundOn { get; set; } = true;
@@ -45,12 +82,12 @@ public sealed class TrafficWatcher(TimeProvider time)
     public bool CooledDown => _lastSound is not { } last || time.GetElapsedTime(last) >= Cooldown;
 
     /// <summary>
-    /// Whether another chat's news or card makes its sound now: the sound is on, the floor free and the cooldown over. The
-    /// sound made starts the cooldown again.
+    /// Whether another chat's news or card makes its sound now: the sound is on, the floor free, and the cooldown and the
+    /// pause over. The sound made starts them again.
     /// </summary>
     public bool TrySound(bool floorFree)
     {
-        if (!SoundOn || !floorFree || !CooledDown)
+        if (!SoundOn || !floorFree || !CooledDown || PauseLeft > TimeSpan.Zero)
         {
             return false;
         }

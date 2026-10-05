@@ -170,7 +170,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
                 Raven.BargeIn = Settings.RavenBargeIn;
             }
             else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
-                or nameof(SettingsViewModel.RavenOwnNewsWaits))
+                or nameof(SettingsViewModel.RavenOwnNewsWaits) or nameof(SettingsViewModel.RavenPauseSeconds))
             {
                 ShowTraffic();
             }
@@ -353,10 +353,11 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;
 
-    /// <summary>The traffic watcher follows the Voice page's cooldown and switches.</summary>
+    /// <summary>The traffic watcher follows the Voice page's cooldown, pause and switches.</summary>
     private void ShowTraffic()
     {
         Raven.Traffic.Cooldown = TimeSpan.FromSeconds(Settings.RavenCooldownSeconds);
+        Raven.Traffic.Pause = TimeSpan.FromSeconds(Settings.RavenPauseSeconds);
         Raven.Traffic.SoundOn = Settings.RavenChatSound;
         Raven.Traffic.OwnNewsWaits = Settings.RavenOwnNewsWaits;
     }

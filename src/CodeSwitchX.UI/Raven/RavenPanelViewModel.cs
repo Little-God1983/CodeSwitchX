@@ -312,6 +312,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _news = news;
         _teller = teller;
         _newsTimer = time.CreateTimer(_ => _dispatcher.Post(TellNewsIfFree), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        Traffic.PauseChanged += (_, _) => _dispatcher.Post(ScheduleNews); // set shorter, what waits is told sooner
         if (news is not null)
         {
             news.Arrived += (_, workspaceId) => _dispatcher.Post(() =>
@@ -1903,14 +1904,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Waits <see cref="TrafficWatcher.NewsGrace"/> for the floor to stay free, then tells the news. Called when news
-    /// arrives and whenever the panel's state changes (UI thread): each call starts the wait again.
+    /// Waits <see cref="TrafficWatcher.NewsGrace"/> for the floor to stay free, and the pause (#152) since Raven last spoke
+    /// or made a sound, then tells the news. Called when news arrives and whenever the panel's state changes (UI thread):
+    /// each call starts the wait again.
     /// </summary>
     private void ScheduleNews()
     {
         if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null) && FloorIsFree)
         {
-            _newsTimer.Change(TrafficWatcher.NewsGrace, Timeout.InfiniteTimeSpan);
+            _newsTimer.Change(Traffic.WaitBeforeTelling, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -1958,6 +1960,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if ((_news is not { HasNews: true } && _untold.Count == 0 && _catchUpDue is null) || !FloorIsFree)
         {
             return; // the next change of state schedules it again
+        }
+
+        if (Traffic.PauseLeft is var left && left > TimeSpan.Zero)
+        {
+            // A chat's sound came meanwhile, or the timer, counting coarser than the clock, fired a little early: only what is
+            // left of the pause is waited, in whole milliseconds (a timer due in less fires at once).
+            _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(left.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
+            return;
         }
 
         // A question takes the floor from it, and a press stops it too.
