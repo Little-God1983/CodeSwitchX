@@ -565,7 +565,7 @@
                 <StackPanel>
                   <TextBlock Text="Pause between messages" FontSize="14.5" FontWeight="SemiBold" />
                   <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
-                             Text="What Raven says on its own (news, a catch-up, a question read out, a chat's sound) waits this long after Raven last spoke, so it never comes all at once. Raven's answers to you never wait." />
+                             Text="What Raven says on its own (news, a catch-up, a question read out) waits this long after Raven last spoke or a chat made its sound, so it never comes all at once. A chat's sound inside it is left out. Raven's answers to you never wait." />
                 </StackPanel>
               </DockPanel>
               <DockPanel Margin="0,16,0,0">

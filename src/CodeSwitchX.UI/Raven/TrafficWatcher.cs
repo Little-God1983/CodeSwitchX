@@ -30,13 +30,19 @@ public sealed class TrafficWatcher(TimeProvider time)
 
     /// <summary>
     /// How long after Raven last spoke or made a sound whatever it says on its own waits (#152): news, a catch-up, a card read
-    /// out, a chat's sound. Its answers to the user never wait: the user waits for them.
+    /// out. A chat's sound inside it is left out, as inside the cooldown. Its answers to the user never wait: the user waits
+    /// for them.
     /// </summary>
     public TimeSpan Pause
     {
         get => _pause;
         set
         {
+            if (_pause == value)
+            {
+                return; // set again with the other traffic settings: what waits keeps its wait
+            }
+
             _pause = value;
             PauseChanged?.Invoke(this, EventArgs.Empty);
         }

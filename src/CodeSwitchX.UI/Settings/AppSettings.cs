@@ -305,8 +305,8 @@ public sealed class AppSettings : IAppSettings
                 + "off, they are only marked in the list.", () => S.RavenChatSound, v => S.RavenChatSound = v, "chime", "sound", "other chats"),
             Seconds("cooldown", "Seconds other chats stay silent after Raven speaks or a chat makes its sound.", ["cool down", "quiet time"],
                 TrafficWatcher.CooldownChoices, () => S.RavenCooldownSeconds, v => S.RavenCooldownSeconds = v),
-            Seconds("pause between messages", "Seconds what Raven says on its own (news, a catch-up, a question read out, a chat's sound) "
-                    + "waits after Raven last spoke or made a sound. Raven's answers to the user never wait.",
+            Seconds("pause between messages", "Seconds what Raven says on its own (news, a catch-up, a question read out) waits after Raven "
+                    + "last spoke or a chat made its sound; a chat's sound inside it is left out. Raven's answers to the user never wait.",
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
                 TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "

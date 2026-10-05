@@ -63,6 +63,20 @@ public sealed class TrafficWatcherTests
         watcher.PauseLeft.ShouldBe(TimeSpan.Zero);
     }
 
+    /// <summary>#152: the pause set again to what it is says nothing: what waits for it keeps its wait.</summary>
+    [Fact]
+    public void Only_a_new_pause_is_a_change()
+    {
+        var watcher = new TrafficWatcher(_time);
+        var changes = 0;
+        watcher.PauseChanged += (_, _) => changes++;
+
+        watcher.Pause = TrafficWatcher.DefaultPause;
+        watcher.Pause = TimeSpan.FromSeconds(10);
+
+        changes.ShouldBe(1);
+    }
+
     /// <summary>#152: a pause longer than the cooldown holds a chat's sound back too.</summary>
     [Fact]
     public void A_sound_waits_for_a_pause_longer_than_the_cooldown()
