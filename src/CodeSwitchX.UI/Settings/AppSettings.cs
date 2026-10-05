@@ -310,7 +310,7 @@ public sealed class AppSettings : IAppSettings
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
                 TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
-                + "if Raven spoke or a chat made its sound within the cooldown.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
+                + "if Raven spoke or a chat made its sound within the cooldown; the catch-up on switching is still said.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
             Toggle("catch-up when I switch chats", SettingsPage.Voice, "On, switching to a chat with something new makes Raven say in a "
                 + "sentence or two what happened there while the user was away, a pause after Raven last spoke or a chat made its sound. "

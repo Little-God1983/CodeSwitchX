@@ -583,7 +583,7 @@
                 <StackPanel>
                   <TextBlock Text="The chat I'm in also waits for the cooldown" FontSize="14.5" FontWeight="SemiBold" />
                   <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
-                             Text="On, the news of the chat you're in is only shown if Raven spoke or a chat made its sound within the cooldown. Its questions and Raven's answers to you are always spoken." />
+                             Text="On, the news of the chat you're in is only shown if Raven spoke or a chat made its sound within the cooldown. Its questions, Raven's answers to you and the catch-up when you switch to it are always spoken." />
                 </StackPanel>
               </DockPanel>
               <DockPanel Margin="0,16,0,0">

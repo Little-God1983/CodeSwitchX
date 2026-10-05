@@ -119,9 +119,12 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
     }
 
-    /// <summary>#143: "the chat I'm in also waits for the cooldown" holds the catch-up too: it is that chat's news.</summary>
+    /// <summary>
+    /// #143: "the chat I'm in also waits for the cooldown" does not hold the catch-up: the switch asked for it, and dropped it
+    /// would never be said (the switch marked its lines seen).
+    /// </summary>
     [Fact]
-    public async Task With_own_news_waiting_for_the_cooldown_a_switch_inside_it_is_not_caught_up()
+    public async Task With_own_news_waiting_for_the_cooldown_a_switch_inside_it_is_still_caught_up()
     {
         var vm = await AwayFromChatTwoAsync();
         vm.Traffic.OwnNewsWaits = true;
@@ -129,8 +132,9 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
 
-        _teller.Asked.ShouldBeEmpty();
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
     }
 
     /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>

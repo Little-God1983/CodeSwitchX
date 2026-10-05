@@ -3325,8 +3325,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// talks over the user or an allow waiting for their yes; its cards that came meanwhile are read after it, one at a
     /// time. Nothing is said for a chat with nothing new, or muted. The cooldown does not hold it (#143): the user switched,
     /// most often right after the chat's sound, and asked for it so; it waits the pause after that sound (#152) instead.
-    /// Only when the chat the user is in waits for the cooldown too (<see cref="TrafficWatcher.OwnNewsWaits"/>) is it not
-    /// said inside it, as that chat's news is not.
+    /// That holds with <see cref="TrafficWatcher.OwnNewsWaits"/> on too: dropped, it would never be said, as the switch has
+    /// marked its lines seen.
     /// </summary>
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
@@ -3343,7 +3343,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null && Traffic.MaySpeakOwnNews;
+        var catchUp = lines.Count > 0 && !IsMuted && _teller is not null;
         if (catchUp)
         {
             _catchUpDue = (chat, lines);
