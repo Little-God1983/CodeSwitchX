@@ -104,7 +104,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The chat is another tile's now, or no tile's: this one knows it no more.</summary>
     public void Remove(string sessionId)
     {
-        if (_sessions.Remove(sessionId) | Chats.Any(c => Same(c.SessionId, sessionId)))
+        // Its row goes with it: one kept for a tab of it here would show the chat's last state for good.
+        var row = Chats.FirstOrDefault(c => Same(c.SessionId, sessionId));
+        if (_sessions.Remove(sessionId) | (row is not null && Chats.Remove(row)))
         {
             Arrange(_owner.Now);
         }
@@ -119,9 +121,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     /// <summary>Whether the engine put this chat on this tile.</summary>
     public bool Knows(string sessionId) => _sessions.ContainsKey(sessionId);
-
-    /// <summary>Whether the tile has a row of this chat.</summary>
-    public bool Shows(string sessionId) => Chats.Any(c => Same(c.SessionId, sessionId));
 
     /// <summary>
     /// The chat tabs VS Code lists for the workspace, null when it keeps no list; with when the chats of tabs the app
@@ -164,7 +163,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         }
 
         var shown = _sessions.Values.Where(s => Shows(s, now)).Select(s => s.SessionId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var tabsAlone = (_tabs?.Tabs ?? []).Where(t => !_sessions.ContainsKey(t.SessionId) && !_forgotten.Contains(t.SessionId) && !IdleTooLong(t, now)).ToList();
+        var tabsAlone = (_tabs?.Tabs ?? []).Where(t => !_sessions.ContainsKey(t.SessionId) && !_forgotten.Contains(t.SessionId)
+            && !_owner.OnAnotherTile(this, t.SessionId) && !IdleTooLong(t, now)).ToList();
         foreach (var row in Chats.Where(c => !shown.Contains(c.SessionId) && !tabsAlone.Exists(t => Same(t.SessionId, c.SessionId))).ToList())
         {
             Chats.Remove(row);
@@ -181,7 +181,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
                 Chats.Add(row);
             }
 
-            row.ShowTab(TabOf(id), notRunning: !SessionStateMachine.IsLive(session.State) && InTab(session));
+            // Ended with its tab open: the tab does not run. One that crashed keeps its red dot.
+            row.ShowTab(TabOf(id), notRunning: session.State == SessionState.Ended && InTab(session));
         }
 
         foreach (var tab in tabsAlone)

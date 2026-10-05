@@ -62,6 +62,13 @@ public sealed class TileTabsTests
 
     private static OpenChatTab Tab(string id, string? title = null) => new(id, title);
 
+    /// <summary>Time passes; the look at the tabs it sets off is over before the test goes on.</summary>
+    private async Task Pass(TimeSpan time)
+    {
+        _time.Advance(time);
+        await _yard.CurrentTabsRefresh;
+    }
+
     [Fact]
     public async Task A_tab_VS_Code_will_come_back_with_shows_before_its_chat_ever_ran()
     {
@@ -96,7 +103,7 @@ public sealed class TileTabsTests
         await VsCodeWrites(Tab("a"));
         Says(Chat("a", SessionState.Idle));
 
-        _time.Advance(TimeSpan.FromHours(30));
+        await Pass(TimeSpan.FromHours(30));
         Says(Chat("a", SessionState.Stale) with { LastEventAt = Now - TimeSpan.FromHours(30), Version = 2 });
         _yard.Tick(Now);
 
@@ -113,12 +120,12 @@ public sealed class TileTabsTests
         await VsCodeWrites(Tab("a"));
         Says(Chat("a", SessionState.Idle));
 
-        _time.Advance(TimeSpan.FromMinutes(5));
+        await Pass(TimeSpan.FromMinutes(5));
         Says(Chat("a", SessionState.Ended) with { Version = 2 });
 
         Rows.ShouldBeEmpty();
 
-        _time.Advance(TimeSpan.FromSeconds(40));
+        await Pass(TimeSpan.FromSeconds(40));
         await VsCodeWrites();
         Rows.ShouldBeEmpty();
     }
@@ -132,11 +139,11 @@ public sealed class TileTabsTests
         await VsCodeWrites();
         Says(Chat("a", SessionState.Ended));
 
-        _time.Advance(TimeSpan.FromMinutes(4));
+        await Pass(TimeSpan.FromMinutes(4));
         _yard.Tick(Now);
         App.Chats.Select(c => (c.SessionId, c.NotRunning, c.IsLive)).ShouldBe([("a", false, false)]);
 
-        _time.Advance(TimeSpan.FromMinutes(2));
+        await Pass(TimeSpan.FromMinutes(2));
         _yard.Tick(Now);
         Rows.ShouldBeEmpty();
 
@@ -153,16 +160,16 @@ public sealed class TileTabsTests
         Says(Chat("a", SessionState.Idle));
         Says(Chat("b", SessionState.Idle));
 
-        _time.Advance(TimeSpan.FromMinutes(5));
+        await Pass(TimeSpan.FromMinutes(5));
         await VsCodeWrites(Tab("a"), Tab("b"));
-        _time.Advance(TimeSpan.FromSeconds(3)); // the ends are heard a moment after the list was written
+        await Pass(TimeSpan.FromSeconds(3)); // the ends are heard a moment after the list was written
         Says(Chat("a", SessionState.Ended) with { Version = 2 });
         Says(Chat("b", SessionState.Ended) with { Version = 2 });
         App.HostState = HostState.Stopped;
 
         App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true), ("b", true)]);
 
-        _time.Advance(TimeSpan.FromHours(20));
+        await Pass(TimeSpan.FromHours(20));
         _yard.Tick(Now);
         Rows.ShouldBe(["a", "b"], "until the tabs are closed");
     }
@@ -175,7 +182,7 @@ public sealed class TileTabsTests
         await VsCodeWrites(Tab("a"));
         Says(Chat("a", SessionState.Idle));
 
-        _time.Advance(TimeSpan.FromHours(2));
+        await Pass(TimeSpan.FromHours(2));
         Says(Chat("a", SessionState.Ended) with { Version = 2 });
 
         App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true)]);
@@ -216,11 +223,11 @@ public sealed class TileTabsTests
         Rows.ShouldBe(["a"]);
 
         Says(Chat("a", SessionState.Stale) with { Version = 2 });
-        _time.Advance(WorkspaceTileViewModel.StaleRowLifetime - TimeSpan.FromMinutes(1));
+        await Pass(WorkspaceTileViewModel.StaleRowLifetime - TimeSpan.FromMinutes(1));
         _yard.Tick(Now);
         Rows.ShouldBe(["a"]);
 
-        _time.Advance(TimeSpan.FromMinutes(2));
+        await Pass(TimeSpan.FromMinutes(2));
         _yard.Tick(Now);
         Rows.ShouldBeEmpty();
     }
@@ -234,10 +241,10 @@ public sealed class TileTabsTests
         await VsCodeWrites(Tab("a"));
         Says(Chat("a", SessionState.Working));
 
-        _time.Advance(TimeSpan.FromMinutes(5));
+        await Pass(TimeSpan.FromMinutes(5));
         Says(Chat("a", SessionState.Errored) with { Version = 2 });
 
-        App.Chats.Select(c => (c.SessionId, c.State, c.NotRunning)).ShouldBe([("a", SessionState.Errored, true)]);
+        App.Chats.Select(c => (c.SessionId, c.State, c.NotRunning)).ShouldBe([("a", SessionState.Errored, false)], "its red dot says what happened");
     }
 
     /// <summary>Hidden for being idle, and ended long ago: its tab does not bring it back as a tab nothing is known of.</summary>
@@ -250,7 +257,7 @@ public sealed class TileTabsTests
         Says(Chat("a", SessionState.Ended));
         Rows.ShouldBe(["a"]);
 
-        _time.Advance(TimeSpan.FromHours(3));
+        await Pass(TimeSpan.FromHours(3));
         _yard.Tick(Now);
         _yard.Tick(Now);
         await _yard.RefreshTabsAsync();
@@ -296,7 +303,7 @@ public sealed class TileTabsTests
         await VsCodeWrites(Tab("a"));
         Says(Chat("a", SessionState.Idle));
         _yard.MarkVoice("a", "Fable 5.1 · high");
-        _time.Advance(TimeSpan.FromHours(2));
+        await Pass(TimeSpan.FromHours(2));
         _yard.Tick(Now);
         Rows.ShouldBeEmpty();
 
@@ -316,7 +323,7 @@ public sealed class TileTabsTests
         Says(Chat("a", SessionState.Idle));
         Rows.ShouldBe(["a", "this-morning", "unknown"], ignoreOrder: true);
 
-        _time.Advance(TimeSpan.FromHours(5));
+        await Pass(TimeSpan.FromHours(5));
         _yard.Tick(Now);
         Rows.ShouldBe(["unknown"], "a tab nothing is known of is not hidden");
 
@@ -351,7 +358,7 @@ public sealed class TileTabsTests
         await _yard.RefreshTabsAsync();
         Rows.ShouldBeEmpty();
 
-        _time.Advance(TimeSpan.FromMinutes(1));
+        await Pass(TimeSpan.FromMinutes(1));
         Says(Chat("a", SessionState.Working) with { LastEventAt = Now, Version = 3 });
         Rows.ShouldBe(["a"]);
     }
@@ -368,10 +375,42 @@ public sealed class TileTabsTests
         Rows.ShouldBeEmpty();
         _yard.FindTile(_shop.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["a"]);
 
-        // Ended, the other tile shows it no more: its tab, still open in this window, does here.
+        // Ended, it is still that tile's chat: the tab here is no row of its own.
         Says(Chat("a", SessionState.Ended, workspace: _shop.Id) with { Version = 2 });
         await _yard.RefreshTabsAsync();
-        App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true)]);
+        Rows.ShouldBeEmpty();
+    }
+
+    /// <summary>The chat is another tile's now: this one keeps no row that shows its last state for good.</summary>
+    [Fact]
+    public async Task A_chat_that_moves_to_another_tile_leaves_no_row_behind_though_its_tab_is_listed_here()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Waiting));
+        App.NeedsAttention.ShouldBeTrue();
+
+        Says(Chat("a", SessionState.Waiting, workspace: _shop.Id) with { Version = 2 });
+
+        Rows.ShouldBeEmpty();
+        App.NeedsAttention.ShouldBeFalse();
+        _yard.FindTile(_shop.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["a"]);
+    }
+
+    /// <summary>A new tab has no conversation yet: when it was written in is asked for again, not taken as never known.</summary>
+    [Fact]
+    public async Task When_a_tab_was_written_in_is_asked_for_again_until_it_is_known()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        _yard.Tick(Now);
+        App.Chats[0].ElapsedText.ShouldBe("");
+
+        _writtenIn["a"] = Now - TimeSpan.FromMinutes(5);
+        await _yard.RefreshTabsAsync();
+        _yard.Tick(Now);
+
+        App.Chats[0].ElapsedText.ShouldBe("5m");
     }
 
     [Fact]
@@ -381,7 +420,7 @@ public sealed class TileTabsTests
         Rows.ShouldBeEmpty();
 
         _tabs.Of[_app.Id] = new OpenChatTabs(Now, [Tab("a")]);
-        _time.Advance(YardViewModel.TabsInterval);
+        await Pass(YardViewModel.TabsInterval);
         for (var i = 0; i < 200 && Rows.Length == 0; i++)
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);

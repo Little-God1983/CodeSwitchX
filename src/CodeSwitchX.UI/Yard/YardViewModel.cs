@@ -81,6 +81,15 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The voice label of a chat Raven started, null for any other: a row gets it as it is made.</summary>
     internal string? VoiceLabelOf(string sessionId) => _voiceLabels.GetValueOrDefault(sessionId);
 
+    /// <summary>
+    /// Whether the engine put the chat on another tile than this one (the folder it runs in is that tile's): it is that
+    /// tile's to show, by what the chat reports, and a tab of it here is not a second row.
+    /// </summary>
+    internal bool OnAnotherTile(WorkspaceTileViewModel tile, string sessionId) => Tiles.Any(t => t != tile && t.Knows(sessionId));
+
+    /// <summary>The read of the tabs that runs, or the last one; tests await it.</summary>
+    internal Task CurrentTabsRefresh { get; private set; } = Task.CompletedTask;
+
     /// <summary>The time the tiles go by.</summary>
     internal DateTimeOffset Now => _time.GetUtcNow();
 
@@ -199,7 +208,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
             await RefreshTabsAsync();
-            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => _ = RefreshTabsAsync()), null, TabsInterval, TabsInterval);
+            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync()), null, TabsInterval, TabsInterval);
         }
 
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
@@ -336,21 +345,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
             foreach (var (id, at) in activity)
             {
-                _tabActivityAsked.Add(id);
+                // One that is not known yet (a new tab has no conversation, a folder could not be read) is asked for again.
                 if (at is { } known)
                 {
+                    _tabActivityAsked.Add(id);
                     _tabActivity[id] = known;
                 }
             }
 
             foreach (var tile in Tiles.ToList())
             {
-                var ofTile = tabs.GetValueOrDefault(tile.Id);
-                // Shown on the tile of the folder it runs in (a multi-root window), it is not shown here too; once it
-                // shows there no more, its tab does here.
-                var others = Tiles.Where(t => t != tile).ToList();
-                tile.ShowTabs(ofTile is null ? null : ofTile with { Tabs = [.. ofTile.Tabs.Where(tab => !others.Exists(t => t.Shows(tab.SessionId)))] },
-                    _tabActivity);
+                tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity);
             }
 
             if (NeedsMeFirst)
@@ -615,13 +620,14 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // On its tile first: the tile it leaves then knows the chat is another's, and keeps no row for a tab of it.
         var tile = snapshot.WorkspaceId is { } workspaceId ? FindTile(workspaceId) : null;
+        tile?.Upsert(snapshot, _pricing.Pricing);
         foreach (var other in Tiles.Where(t => t != tile && t.Knows(snapshot.SessionId)).ToList())
         {
             other.Remove(snapshot.SessionId);
         }
 
-        tile?.Upsert(snapshot, _pricing.Pricing);
         if (tile?.Chats.FirstOrDefault(c => c.SessionId == snapshot.SessionId) is { } row)
         {
             row.VoiceLabel = _voiceLabels.GetValueOrDefault(snapshot.SessionId);

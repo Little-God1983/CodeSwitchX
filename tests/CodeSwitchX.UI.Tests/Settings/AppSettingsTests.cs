@@ -286,6 +286,13 @@ public sealed class AppSettingsTests
             .ShouldBe("Hide an idle chat is one of never, 1 hour, 4 hours, 12 hours, 24 hours, not '3 hours'. Nothing was changed.");
         (await _settings.SetAsync("idle chats", "never", Ct)).Value.ShouldBe("never");
         _h.Shell.Yard.HideIdleAfter.ShouldBeNull();
+
+        // The unit said counts: a minute is no hour.
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("hide idle chats", "1 minute", Ct));
+        (await _settings.SetAsync("hide idle chats", "60 minutes", Ct)).Value.ShouldBe("1 hour");
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("keep closed chats", "1 hour", Ct));
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("keep closed chats", "1.5", Ct));
+        (await _settings.SetAsync("keep closed chats", "30 mins", Ct)).Value.ShouldBe("30 minutes");
     }
 
     /// <summary>#152: the pause is set by voice to one the page offers, and found by how it is said; another is refused.</summary>

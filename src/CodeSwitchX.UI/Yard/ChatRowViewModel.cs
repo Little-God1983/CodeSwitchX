@@ -101,10 +101,13 @@ public sealed partial class ChatRowViewModel : ObservableObject
         if (!_hasSession)
         {
             // Ended since it was last written in, as far as anyone knows; the time is shown only when it is known.
-            State = SessionState.Ended;
             StateSince = lastWrittenIn ?? listedAt;
             _timed = lastWrittenIn is not null;
-            OnPropertyChanged(nameof(IsLive));
+            if (State != SessionState.Ended)
+            {
+                State = SessionState.Ended;
+                OnPropertyChanged(nameof(IsLive));
+            }
         }
 
         ShowTitle();
