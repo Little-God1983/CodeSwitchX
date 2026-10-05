@@ -48,11 +48,11 @@ public sealed class UiDispatcherExtensionsTests
         }, Short, ct);
         began.IsSet.ShouldBeTrue("the posted read began");
 
-        await Task.Delay(Short * 5, TestContext.Current.CancellationToken);
+        await Task.Delay(Short * 5, ct);
         read.IsCompleted.ShouldBeFalse();
         go.Set();
 
-        (await read.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldBe(7);
+        (await read.WaitAsync(TimeSpan.FromSeconds(10), ct)).ShouldBe(7);
     }
 
     /// <summary>
