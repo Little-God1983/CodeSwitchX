@@ -123,12 +123,24 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// </summary>
     [ObservableProperty] private bool _isSidebarFolded;
 
-    /// <summary>Folded, the search box is gone: a search left in it would filter the pages with no way to see or clear it.</summary>
+    /// <summary>The search put aside while the sidebar is folded, given back as it unfolds.</summary>
+    private string _searchBeforeFold = "";
+
+    /// <summary>
+    /// Folded, the search box is gone: a search left in it would filter the pages with no way to see or clear it. It is put
+    /// aside, and back as the sidebar unfolds, so a window that is narrow only for a moment does not lose it.
+    /// </summary>
     partial void OnIsSidebarFoldedChanged(bool value)
     {
         if (value)
         {
+            _searchBeforeFold = Search;
             Search = "";
+        }
+        else
+        {
+            Search = _searchBeforeFold;
+            _searchBeforeFold = "";
         }
     }
 

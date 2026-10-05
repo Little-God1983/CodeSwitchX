@@ -449,6 +449,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Fold();
     }
 
+    /// <summary>The width of a scroll bar, as the system draws it; set otherwise in tests.</summary>
+    internal double ScrollBar { get; set; } = System.Windows.SystemParameters.VerticalScrollBarWidth;
+
     /// <summary>The width of the window's content, as the window last reported it; NaN before it did.</summary>
     private double _width = double.NaN;
 
@@ -465,7 +468,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// </summary>
     private void Fold()
     {
-        var (list, sidebar) = Mode == ShellMode.Settings ? NarrowLayout.Folds(_width, Raven.IsOpen) : (false, false);
+        var (list, sidebar) = Mode == ShellMode.Settings ? NarrowLayout.Folds(_width, Raven.IsOpen, ScrollBar) : (false, false);
         Raven.IsListFolded = Mode == ShellMode.Cab || list;
         Settings.IsSidebarFolded = sidebar;
     }

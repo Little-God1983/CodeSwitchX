@@ -460,6 +460,7 @@ public class ShellViewModelTests
     public async Task On_a_narrow_window_Settings_folds_Raven_s_list_and_then_its_sidebar()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.ScrollBar = 17;
         _h.Shell.SetWidth(900);
         (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false), "the Yard keeps both");
 

@@ -3256,7 +3256,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(TypePrompt))]
     private RavenChat _selectedChat;
 
-    /// <summary>The Cab shows a VS Code: the list folds to its numbers, so VS Code keeps its width.</summary>
+    /// <summary>
+    /// The list folds to its numbers: the Cab shows a VS Code, which keeps its width, or Settings is open on a narrow
+    /// window and its page needs the room (#162).
+    /// </summary>
     [ObservableProperty]
     private bool _isListFolded;
 

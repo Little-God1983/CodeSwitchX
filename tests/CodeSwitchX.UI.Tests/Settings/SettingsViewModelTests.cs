@@ -296,7 +296,7 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.YardHideIdleHours, 24, Arg.Any<CancellationToken>());
     }
 
-    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages for good.</summary>
+    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>
     [Fact]
     public void A_search_is_cleared_when_the_sidebar_folds()
     {
@@ -307,6 +307,9 @@ public class SettingsViewModelTests : IDisposable
 
         _vm.Search.ShouldBe("");
         _vm.Pages.Count.ShouldBe(SettingsPageItem.All.Count);
+
+        _vm.IsSidebarFolded = false;
+        _vm.Search.ShouldBe("zzz", "narrow only for a moment, the search is given back");
     }
 
     [Fact]

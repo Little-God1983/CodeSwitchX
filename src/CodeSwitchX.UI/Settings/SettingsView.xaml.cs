@@ -13,6 +13,18 @@ public partial class SettingsView : UserControl
         InitializeComponent();
     }
 
+    /// <summary>
+    /// The search box folded away with the sidebar (#162) while it had the keyboard: the pages' list takes it, so the next
+    /// key is not lost.
+    /// </summary>
+    private void OnSearchVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is false && SearchBox.IsKeyboardFocusWithin)
+        {
+            PagesList.Focus();
+        }
+    }
+
     /// <summary>A chord box has the keyboard: the chat hotkeys are let go, so pressing one reaches the box.</summary>
     private void OnChordFocus(object sender, KeyboardFocusChangedEventArgs e)
     {

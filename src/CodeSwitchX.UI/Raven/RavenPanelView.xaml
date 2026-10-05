@@ -661,7 +661,7 @@
               </Button>
             </StackPanel>
 
-            <!-- Folded in the Cab: the orb and the mic, as on the collapsed rail. -->
+            <!-- Folded (the Cab, or Settings on a narrow window): the orb and the mic, as on the collapsed rail. -->
             <StackPanel Grid.Row="0" Margin="0,14,0,6" HorizontalAlignment="Center"
                         Visibility="{Binding IsListFolded, Converter={StaticResource BoolVisible}}">
               <Button Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}" HorizontalAlignment="Center"

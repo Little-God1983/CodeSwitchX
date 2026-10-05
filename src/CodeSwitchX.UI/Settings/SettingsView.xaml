@@ -349,8 +349,18 @@
             </Style.Triggers>
           </Style>
         </DockPanel.Style>
-        <Button DockPanel.Dock="Top" Style="{StaticResource Ghost}" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                AutomationProperties.Name="Back to Yard" ToolTip="Back to Yard" Padding="6,4">
+        <Button DockPanel.Dock="Top" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                AutomationProperties.Name="Back to Yard" Padding="6,4">
+          <Button.Style>
+            <!-- Folded, the words are gone: the tooltip has them. -->
+            <Style TargetType="Button" BasedOn="{StaticResource Ghost}">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                  <Setter Property="ToolTip" Value="Back to Yard" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Button.Style>
           <StackPanel Orientation="Horizontal">
             <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center">
               <TextBlock.Style>
@@ -369,9 +379,9 @@
         </Button>
         <TextBlock DockPanel.Dock="Top" Text="Settings" FontSize="22" FontWeight="SemiBold" Margin="6,14,0,14"
                    Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
-        <!-- Folded, the search is gone with the names it finds; a search typed before stays, so the pages listed are its. -->
+        <!-- Folded, the search is gone with the names it finds: the view model puts a search typed before aside until it unfolds. -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,14" Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}">
-          <TextBox x:Name="SearchBox" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="30,7,8,7" FontSize="13.5"
+          <TextBox x:Name="SearchBox" IsVisibleChanged="OnSearchVisibleChanged" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="30,7,8,7" FontSize="13.5"
                    AutomationProperties.Name="Search settings" />
           <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}" Margin="11,0,0,0"
                      VerticalAlignment="Center" IsHitTestVisible="False" />
@@ -388,7 +398,16 @@
             </TextBlock.Style>
           </TextBlock>
         </Grid>
-        <StackPanel DockPanel.Dock="Bottom" Margin="6,12,0,0" ToolTip="Changes save as you make them">
+        <StackPanel DockPanel.Dock="Bottom" Margin="6,12,0,0">
+          <StackPanel.Style>
+            <Style TargetType="StackPanel">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                  <Setter Property="ToolTip" Value="Changes save as you make them" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </StackPanel.Style>
           <StackPanel Orientation="Horizontal">
             <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center" Margin="0,0,8,0" />
             <TextBlock Text="Changes save as you make them" FontSize="12.5" Foreground="{StaticResource Muted}"
@@ -396,7 +415,7 @@
           </StackPanel>
         </StackPanel>
         <Grid>
-          <ListBox ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}" infra:KeepSelection.IsEnabled="True"
+          <ListBox x:Name="PagesList" ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}" infra:KeepSelection.IsEnabled="True"
                    Background="Transparent" BorderThickness="0" AutomationProperties.Name="Settings pages"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListBox.GroupStyle>
@@ -416,12 +435,13 @@
             </ListBox.GroupStyle>
             <ListBox.ItemTemplate>
               <DataTemplate DataType="settings:SettingsPageItem">
-                <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding Title}" ToolTip="{Binding Title}">
+                <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding Title}">
                   <StackPanel.Style>
                     <Style TargetType="StackPanel">
                       <Style.Triggers>
                         <DataTrigger Binding="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
                           <Setter Property="HorizontalAlignment" Value="Center" />
+                          <Setter Property="ToolTip" Value="{Binding Title}" />
                         </DataTrigger>
                       </Style.Triggers>
                     </Style>

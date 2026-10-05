@@ -26,8 +26,8 @@ public static class NarrowLayout
     /// <summary>The least a Settings page reads well in, its margins included.</summary>
     public const double PageNeeds = 480;
 
-    /// <summary>What else takes room beside the page: the panel's 1 px edge, and the page's scroll bar when it scrolls.</summary>
-    public const double Chrome = 18;
+    /// <summary>The open panel's 1 px edge beside its chat; a closed panel's is inside its width.</summary>
+    public const double PanelEdge = 1;
 
     public static GridLength RavenChatColumn { get; } = new(RavenChat);
 
@@ -39,14 +39,18 @@ public static class NarrowLayout
     /// What folds for a window this wide (its content, in device-independent pixels), with Raven's panel open or not. An
     /// unknown width (not laid out yet) folds nothing.
     /// </summary>
-    public static (bool RavenList, bool Sidebar) Folds(double width, bool ravenOpen)
+    /// <param name="scrollBar">
+    /// The page's scroll bar, counted whether it shows or not: a page that grows to scroll must not lose its room
+    /// (<see cref="SystemParameters.VerticalScrollBarWidth"/>).
+    /// </param>
+    public static (bool RavenList, bool Sidebar) Folds(double width, bool ravenOpen, double scrollBar)
     {
         if (!double.IsFinite(width) || width <= 0)
         {
             return (false, false);
         }
 
-        var page = width - Chrome;
+        var page = width - scrollBar - (ravenOpen ? PanelEdge : 0);
         var raven = ravenOpen ? RavenChat + RavenList : RavenListFolded;
         if (page - raven - Sidebar >= PageNeeds)
         {
