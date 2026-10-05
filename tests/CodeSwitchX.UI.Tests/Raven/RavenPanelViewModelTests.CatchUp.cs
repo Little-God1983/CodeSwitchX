@@ -227,6 +227,73 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_typed_question_drops_the_catch_up_waiting_and_rests_the_teller()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var vm = await AwayFromChatTwoAsync();
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        Type(vm, "anything new?");
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldBeEmpty();
+        _teller.Rests.ShouldBeGreaterThan(0, "warmed for the catch-up that was dropped");
+    }
+
+    [Fact]
+    public async Task A_quick_switch_to_a_chat_with_nothing_new_rests_the_teller()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        var rests = _teller.Rests;
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        vm.SelectedChat = ChatNumbered(vm, 4);
+
+        _teller.Rests.ShouldBeGreaterThan(rests);
+    }
+
+    [Fact]
+    public async Task Muting_while_it_waits_drops_the_catch_up()
+    {
+        var vm = await AwayFromChatTwoAsync();
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        vm.IsMuted = true;
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Turning_the_catch_up_off_drops_the_one_waiting()
+    {
+        var vm = await AwayFromChatTwoAsync();
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        vm.CatchUp = false;
+        await GraceAsync(vm);
+
+        _teller.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_teller_that_says_nothing_leaves_a_plain_catch_up()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [];
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        var said = vm.Log.Single(e => e.Kind == RavenLogKind.Raven);
+        said.Chat.Number.ShouldBe(2);
+        said.Text.ShouldStartWith("While you were away");
+        _speech.Spoken.ShouldNotBeEmpty();
+    }
+
+    [Fact]
     public void The_catch_up_is_worded_from_news_answers_and_warnings_not_cards()
     {
         var at = DateTimeOffset.UnixEpoch;
