@@ -162,6 +162,18 @@ public sealed class YardActionToolsTests
         error.Message.ShouldContain("chat 0");
     }
 
+    /// <summary>#153: "this chat" is the chat the user is in, "the Yard" chat 0 (which the app refuses), never a window with a like name.</summary>
+    [Theory]
+    [InlineData("this chat", 4)]
+    [InlineData("This one.", 4)]
+    [InlineData("the Yard", 0)]
+    public async Task Mute_chat_reads_this_chat_and_the_yard_before_any_window_name(string said, int number)
+    {
+        await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).MuteChat(said, cancellationToken: Ct);
+
+        _actions.MuteSet.ShouldBe((number, true));
+    }
+
     [Fact]
     public async Task Switch_chat_opens_the_window_only_when_asked_and_activity_never()
     {

@@ -99,6 +99,39 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldBeEmpty();
     }
 
+    /// <summary>Muted while its news is being told, the chat stops telling it: muted means quiet now.</summary>
+    [Fact]
+    public async Task Muting_the_chat_while_its_news_is_told_stops_it()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Gate = new TaskCompletionSource();
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
+        await PassGraceAsync(vm);
+        await Until(() => _teller.Asked.Count == 1);
+
+        ChatNumbered(vm, 1).ToggleMuteCommand.Execute(null);
+        _teller.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _speech.Spoken.ShouldBeEmpty();
+    }
+
+    /// <summary>A removed window's mute is not kept: the stored list holds windows that are there.</summary>
+    [Fact]
+    public async Task A_removed_window_s_mute_is_forgotten()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.MuteChat(2, true);
+        var told = 0;
+        vm.MutedWindowsChanged += (_, _) => told++;
+
+        vm.SetWorkspaces([.. vm.Chats.Where(c => c.WorkspaceId is not null && c.Number != 2).Select(c => (c.WorkspaceId!.Value, c.Number, c.Name))]);
+
+        vm.MutedWindows.ShouldBeEmpty();
+        told.ShouldBe(1);
+    }
+
     [Fact]
     public async Task Unmuted_its_news_is_spoken_again()
     {

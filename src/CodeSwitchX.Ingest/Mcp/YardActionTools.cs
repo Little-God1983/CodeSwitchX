@@ -110,25 +110,34 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True when the user also asked to open the window (\"open the audio one\").")] bool open = false,
         CancellationToken cancellationToken = default)
     {
-        ChatSwitch target;
-        var said = chat.Trim();
-        // As the app reads a spoken switch: "activity", "chat 3", or the number alone.
-        if (SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read))
-        {
-            target = read with { Open = !read.Activity && (open || read.Open) };
-        }
-        else if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
-        {
-            target = new ChatSwitch(0, Activity: false, Open: false);
-        }
-        else
-        {
-            var match = await OneWorkspaceAsync(said, cancellationToken).ConfigureAwait(false);
-            target = new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
-        }
-
+        var target = await NamedChatAsync(chat.Trim(), open, cancellationToken).ConfigureAwait(false);
         return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The chat the user named, as the app reads a spoken switch: "activity", "chat 3", the number alone, the Yard, or a
+    /// window by its name; opened only when asked, and Activity never.
+    /// </summary>
+    private async Task<ChatSwitch> NamedChatAsync(string said, bool open, CancellationToken ct)
+    {
+        if (SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read))
+        {
+            return read with { Open = !read.Activity && (open || read.Open) };
+        }
+
+        if (said.Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries).Any(w => w.Equals("yard", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new ChatSwitch(0, Activity: false, Open: false);
+        }
+
+        var match = await OneWorkspaceAsync(said, ct).ConfigureAwait(false);
+        return new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
+    }
+
+    /// <summary>"this chat", "this one", "here": the chat the call comes from, as when none is named.</summary>
+    private static bool ThisChat(string said) =>
+        said.Trim().TrimEnd('.', '!').ToLowerInvariant() is "this" or "this chat" or "this one" or "here" or "current" or "the current chat"
+            or "current chat" or "it";
 
     [McpServerTool(Name = "mute_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news, "
@@ -142,18 +151,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         int number;
         var said = chat?.Trim() ?? "";
-        if (said.Length == 0)
+        if (said.Length == 0 || ThisChat(said))
         {
             number = (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number
                 ?? throw new McpException("Say which chat: the user is in chat 0, which has no mute of its own.");
         }
-        else if ((SpokenChatSwitch.TryRead(said, out var read) || SpokenChatSwitch.TryRead("chat " + said, out read)) && read.Number is { } spoken)
-        {
-            number = spoken;
-        }
         else
         {
-            number = (await OneWorkspaceAsync(said, cancellationToken).ConfigureAwait(false)).Workspace.Number;
+            number = (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
+                ?? throw new McpException("Activity has no mute of its own: it only lists every chat's lines. Say which window's chat.");
         }
 
         return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
