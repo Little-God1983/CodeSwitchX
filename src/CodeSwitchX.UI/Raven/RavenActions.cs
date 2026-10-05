@@ -12,11 +12,8 @@ namespace CodeSwitchX.UI.Raven;
 /// <summary>What Raven's actions do to the window; the shell does it, on the UI thread.</summary>
 public interface IRavenShell
 {
-    /// <summary>
-    /// Brings the window forward and shows the workspace in the Cab, with the tab of a chat (its session id) in front when
-    /// one is given; null once it is shown, else why not.
-    /// </summary>
-    Task<string?> OpenInCabAsync(Guid workspaceId, string? chat = null);
+    /// <summary>Brings the window forward and shows the workspace in the Cab; null once it is shown, else why not.</summary>
+    Task<string?> OpenInCabAsync(Guid workspaceId);
 
     void ShowYard();
 
@@ -174,18 +171,40 @@ public sealed class RavenActions : IYardActions
         return _chats.Defaults;
     }
 
-    public async Task<string> OpenWorkspaceAsync(YardWorkspace workspace, YardChat? chat, CancellationToken ct) =>
-        await ShowInCabAsync(workspace.Id, chat?.Id, ct).ConfigureAwait(false) is { } problem
-            ? throw new YardActionException($"{workspace.Name} could not be opened: {problem}")
-            : chat is null ? $"{workspace.Name} is open." : $"{workspace.Name} is open, with the chat \"{chat.Title}\" in front.";
+    public async Task<string> OpenWorkspaceAsync(YardWorkspace workspace, YardChat? chat, CancellationToken ct)
+    {
+        if (await ShowInCabAsync(workspace.Id, ct).ConfigureAwait(false) is { } problem)
+        {
+            throw new YardActionException($"{workspace.Name} could not be opened: {problem}");
+        }
+
+        if (chat is null)
+        {
+            return $"{workspace.Name} is open.";
+        }
+
+        // The workspace shows either way: a chat that cannot be shown is said as that, not as the workspace failing (#115).
+        try
+        {
+            var registered = await _workspaceOf(workspace.Id, ct).ConfigureAwait(false)
+                ?? throw new YardActionException("its workspace is not on the Yard any more.");
+            await _vsCode.ShowAsync(registered, chat.Id, ct).ConfigureAwait(false);
+        }
+        catch (YardActionException ex)
+        {
+            throw new YardActionException($"{workspace.Name} is open, but the chat \"{chat.Title}\" is not in front: {ex.Message}");
+        }
+
+        return $"{workspace.Name} is open, with the chat \"{chat.Title}\" in front.";
+    }
 
     /// <summary>Shows the workspace in the Cab; null once it is shown, else why not. Never throws for a window that is slow.</summary>
-    private async Task<string?> ShowInCabAsync(Guid workspaceId, string? chat, CancellationToken ct)
+    private async Task<string?> ShowInCabAsync(Guid workspaceId, CancellationToken ct)
     {
         Task<string?> shown;
         try
         {
-            shown = await _ui.InvokeAsync(() => _shell().OpenInCabAsync(workspaceId, chat), UiTimeout, ct).ConfigureAwait(false);
+            shown = await _ui.InvokeAsync(() => _shell().OpenInCabAsync(workspaceId), UiTimeout, ct).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
@@ -222,7 +241,7 @@ public sealed class RavenActions : IYardActions
             throw new YardActionException($"No window has the number {target.Number}: list_workspaces shows each one's number.");
         }
 
-        if (target.Open && done.WorkspaceId is { } workspace && await ShowInCabAsync(workspace, null, ct).ConfigureAwait(false) is { } problem)
+        if (target.Open && done.WorkspaceId is { } workspace && await ShowInCabAsync(workspace, ct).ConfigureAwait(false) is { } problem)
         {
             throw new YardActionException($"{done.Said} Its window could not be opened: {problem}");
         }

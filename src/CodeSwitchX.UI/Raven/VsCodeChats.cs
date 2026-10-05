@@ -235,11 +235,8 @@ public sealed class VsCodeChats : IVsCodeChats
                 + "here. Close its tab in VS Code.");
         }
 
-        if (Version.TryParse(window.Version, out var version) && version < ClosesSince)
-        {
-            throw new YardActionException("The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
-                + "Reload that window (Developer: Reload Window) and try again.");
-        }
+        Requires(window, ClosesSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
+            + "Reload that window (Developer: Reload Window) and try again.");
 
         var answer = await _windows.SendAsync(window, CompanionWindows.CloseChat, chat.SessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
@@ -264,10 +261,15 @@ public sealed class VsCodeChats : IVsCodeChats
     public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
     {
         var window = _windows.Find(workspace) ?? await OpenWindowAsync(workspace, ct).ConfigureAwait(false);
-        if (!Version.TryParse(window.Version, out var version) || version < ShowsSince)
+        Requires(window, ShowsSince, $"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
+            + "chat. Reload that window (Developer: Reload Window) and try again.");
+
+        // Open in a tab of another window (the same folder opened twice), it would be opened here a second time: two
+        // Claude Codes on one conversation.
+        var running = _running(null).FirstOrDefault(c => string.Equals(c.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+        if (running is not null && _parents().TryGetValue(running.Pid, out var host) && host != window.Pid)
         {
-            throw new YardActionException($"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
-                + "chat. Reload that window (Developer: Reload Window) and try again.");
+            throw new YardActionException($"That chat is open in another VS Code window, not the one of {workspace.Name}. Look for its tab there.");
         }
 
         var answer = await _windows.SendAsync(window, CompanionWindows.OpenChat, sessionId, ct).ConfigureAwait(false);
@@ -277,6 +279,15 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         _logger.LogInformation("Showed chat {Id} in VS Code for {Workspace}", sessionId, workspace.Name);
+    }
+
+    /// <summary>Refuses a window whose companion is older than the first that can do what is asked; one whose version cannot be read is older.</summary>
+    private static void Requires(CompanionWindow window, Version since, string otherwise)
+    {
+        if (!Version.TryParse(window.Version, out var version) || version < since)
+        {
+            throw new YardActionException(otherwise);
+        }
     }
 
     /// <summary>

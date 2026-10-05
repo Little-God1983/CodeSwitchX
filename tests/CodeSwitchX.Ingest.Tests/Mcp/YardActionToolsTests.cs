@@ -118,6 +118,15 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task A_chat_given_with_a_workspace_is_still_shown_in_front()
+    {
+        await Tools.OpenWorkspace("Diffusion-Full", "cccccccc", Ct);
+
+        _actions.Opened.ShouldNotBeNull().Name.ShouldBe("Diffusion-Full");
+        _actions.OpenedChat.ShouldNotBeNull().Id.ShouldStartWith("cccccccc");
+    }
+
+    [Fact]
     public async Task Opening_a_workspace_by_name_finds_it_like_the_other_tools()
     {
         await Tools.OpenWorkspace("code switch ex", cancellationToken: Ct);

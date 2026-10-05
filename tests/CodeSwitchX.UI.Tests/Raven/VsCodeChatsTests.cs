@@ -459,6 +459,30 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.SessionIds.ShouldBe(["ended-yesterday"]);
     }
 
+    /// <summary>The same folder open in two windows: the chat's tab is in the other one, and is not opened here a second time.</summary>
+    [Fact]
+    public async Task A_chat_open_in_another_window_is_not_opened_a_second_time()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "elsewhere", 9999);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "ELSEWHERE", Ct))).Message
+            .ShouldBe("That chat is open in another VS Code window, not the one of App. Look for its tab there.");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    /// <summary>A companion that says no version is older than any that does: it is not asked for what it cannot do.</summary>
+    [Fact]
+    public async Task A_window_whose_companion_says_no_version_is_told_to_reload()
+    {
+        _windows.Shown = Window() with { Version = null };
+        Starts(300, "a-chat", Host);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "a-chat", Ct))).Message.ShouldContain("Reload that window");
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("a-chat", Ct))).Message.ShouldContain("Reload that window");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task Showing_a_chat_starts_VS_Code_when_it_does_not_run()
     {

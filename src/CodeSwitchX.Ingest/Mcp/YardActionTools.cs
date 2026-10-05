@@ -88,13 +88,14 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             return await Act(() => actions.OpenWorkspaceAsync(window, null, cancellationToken)).ConfigureAwait(false);
         }
 
-        if (!string.IsNullOrWhiteSpace(workspace))
+        // A chat is in one workspace only, so it says which: a workspace named with it adds nothing.
+        if (string.IsNullOrWhiteSpace(chat))
         {
-            var named = (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
+            var named = (await OneWorkspaceAsync(workspace!, cancellationToken).ConfigureAwait(false)).Workspace;
             return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false);
         }
 
-        var one = await OneChatAsync(chat!, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
+        var one = await OneChatAsync(chat, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)
             ?? throw new McpException($"The workspace of chat '{chat}' is not on the Yard any more.");
         return await Act(() => actions.OpenWorkspaceAsync(target, one, cancellationToken)).ConfigureAwait(false);

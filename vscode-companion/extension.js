@@ -173,6 +173,17 @@ async function newChat() {
  * when it has none here. A chat shown in the side bar is shown there.
  */
 async function openChat(sessionId) {
+    const refused = await cannotReveal(sessionId);
+    if (refused) {
+        return refused;
+    }
+
+    await reveal(sessionId);
+    return { ok: true, pid: process.pid };
+}
+
+/** Why a chat cannot be asked for here, as an answer; undefined when it can. */
+async function cannotReveal(sessionId) {
     if (typeof sessionId !== 'string' || !SessionId.test(sessionId)) {
         return { ok: false, error: 'No chat id.' };
     }
@@ -181,8 +192,12 @@ async function openChat(sessionId) {
         return { ok: false, error: "Claude Code's VS Code extension is not installed in this window." };
     }
 
-    await vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
-    return { ok: true, pid: process.pid };
+    return undefined;
+}
+
+/** Asks Claude Code to bring the chat to the front: its tab if it has one here, else a tab opened with its history. */
+function reveal(sessionId) {
+    return vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
 }
 
 /**
@@ -192,12 +207,9 @@ async function openChat(sessionId) {
  * the side bar, so a blank editor is put in front first, and taken away again after.
  */
 async function closeChat(sessionId) {
-    if (typeof sessionId !== 'string' || !SessionId.test(sessionId)) {
-        return { ok: false, error: 'No chat id.' };
-    }
-
-    if (!await activateClaudeCode()) {
-        return { ok: false, error: "Claude Code's VS Code extension is not installed in this window." };
+    const refused = await cannotReveal(sessionId);
+    if (refused) {
+        return refused;
     }
 
     const before = new Set(claudeTabs());
@@ -208,7 +220,7 @@ async function closeChat(sessionId) {
     }
 
     try {
-        await vscode.commands.executeCommand('claude-vscode.editor.open', sessionId, undefined, undefined, undefined, undefined, { programmatic: 'pin-to-panel' });
+        await reveal(sessionId);
         const tab = await waitFor(() => isClaudeTab(activeTab()) ? activeTab() : undefined, RevealMs);
         if (!tab) {
             return { ok: false, error: NoTab };

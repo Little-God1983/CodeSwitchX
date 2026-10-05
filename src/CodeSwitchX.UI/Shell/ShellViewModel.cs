@@ -308,7 +308,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             // The workspace shows either way; a chat that cannot be shown is said on the strip.
             if (chat is not null && _vsCode is not null && attempt == _openAttempt)
             {
-                await _vsCode.ShowAsync(tile.Workspace, chat, CancellationToken.None);
+                // Off this thread: finding the window reads the companions' records.
+                var vsCode = _vsCode;
+                await Task.Run(() => vsCode.ShowAsync(tile.Workspace, chat, CancellationToken.None));
             }
         }
         catch (YardActionException ex)
@@ -533,7 +535,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>
     public void BringForward() => ForwardRequested?.Invoke();
 
-    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId, string? chat)
+    async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
     {
         if (Yard.FindTile(workspaceId) is null)
         {
@@ -541,7 +543,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
 
         ForwardRequested?.Invoke();
-        await EnterCabAsync(workspaceId, chat);
+        await EnterCabAsync(workspaceId);
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 
