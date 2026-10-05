@@ -840,6 +840,26 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task The_traffic_watcher_follows_the_voice_settings()
+    {
+        _h.Settings.GetAsync<int?>(SettingKeys.RavenCooldownSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(20));
+        _h.Settings.GetAsync<bool?>(SettingKeys.RavenChatSound, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(20));
+        _h.Shell.Raven.Traffic.SoundOn.ShouldBeFalse();
+        _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeFalse();
+
+        _h.Shell.Settings.RavenCooldownSeconds = 30;
+        _h.Shell.Settings.RavenChatSound = true;
+        _h.Shell.Settings.RavenOwnNewsWaits = true;
+
+        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(30));
+        _h.Shell.Raven.Traffic.SoundOn.ShouldBeTrue();
+        _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Barge_in_follows_the_setting()
     {
         _h.Settings.GetAsync<bool?>(SettingKeys.RavenBargeIn, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));

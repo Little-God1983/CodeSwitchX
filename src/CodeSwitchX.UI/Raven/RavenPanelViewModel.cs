@@ -1947,9 +1947,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        // The brain knows it with the next question, wherever the card is: "deny both" covers a card not read out yet.
-        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), null));
-        if (card.ShownIn != CurrentChat)
+        // The brain knows it with the next question, so "deny both" covers a card not read out yet. Another chat's card,
+        // never read out, goes to its own window's brain only: "allow it" said here is not about it.
+        var elsewhere = card.ShownIn != CurrentChat;
+        _toldNews.Add(new ToldFact(_time.GetUtcNow(), QuestionFact(card), elsewhere ? BrainOf(card.ShownIn!) : null));
+        if (elsewhere)
         {
             SoundForOtherChat(FloorIsFree);
             return;
@@ -2281,6 +2283,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
+            if (!SpeakNews || IsMuted)
+            {
+                _untold.Clear(); // none is read out: they need not wait for a telling each
+                _tellerWarm = false;
+                return;
+            }
+
             var card = _untold[0];
             _untold.RemoveAt(0);
             // Still warm for a long command's card after this one; a card that comes while this is told warms it up again.
@@ -2487,8 +2496,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 spoken.Add(sentence);
             }
 
-            // With no voice to say it, the remark is only written: it is no announcement, and the other chats still sound.
-            if (others && _tts.Status.State is TextToSpeechState.NoEngine or TextToSpeechState.Failed)
+            // With no voice ready to say it (none picked, failed, installing or loading), the remark is only written: it is
+            // no announcement, and the other chats still sound. One that is off starts and says it.
+            if (others && _tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off))
             {
                 SoundForOtherChat(FloorIsFreeButTelling);
             }

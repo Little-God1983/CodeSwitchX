@@ -17,7 +17,7 @@ public sealed partial class RavenPanelViewModelTests
     private readonly FakeChime _chime = new();
 
     /// <summary>Five windows, each with a chat; the user is in chat 1, CodeSwitchX's, where "b" runs.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> TrafficVmAsync()
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> TrafficVmAsync(IChatBrains? brains = null)
     {
         string[] workspaces = ["CodeSwitchX", "ContentAutomatorX", "DiffusionNexus", "RawCutX", "VideoX"];
         string[] ids = ["b", "a", "c", "d", "e"];
@@ -29,7 +29,7 @@ public sealed partial class RavenPanelViewModelTests
         var news = new ChatNews(_bus, _yard, _time, _ => "Done.");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, chime: _chime);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, brains: brains, chime: _chime);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -271,11 +271,14 @@ public sealed partial class RavenPanelViewModelTests
         asked.ShouldContain("(ask id p2)");
     }
 
-    [Fact]
-    public async Task With_no_voice_the_chat_s_own_news_is_written_and_other_chats_still_make_their_sound()
+    [Theory]
+    [InlineData(TextToSpeechState.NoEngine)]
+    [InlineData(TextToSpeechState.Loading)]
+    [InlineData(TextToSpeechState.Installing)]
+    public async Task With_no_voice_the_chat_s_own_news_is_written_and_other_chats_still_make_their_sound(TextToSpeechState state)
     {
         var (vm, _) = await TrafficVmAsync();
-        var none = new TextToSpeechStatus(TextToSpeechState.NoEngine);
+        var none = new TextToSpeechStatus(state);
         _speech.Report(none);
         _speech.Fails = new TextToSpeechNotReadyException(none); // as the engines answer with none picked
 
@@ -285,6 +288,47 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => _chime.Plays == 1); // nothing was heard of chat 1's news
 
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
+    }
+}
+
+public sealed partial class RavenPanelViewModelTests
+{
+    /// <summary>A card the user was not read out goes to its own window's brain only: chat 1's "allow it" is not about it.</summary>
+    [Fact]
+    public async Task Another_chat_s_card_is_told_only_to_its_own_window_s_brain()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var (vm, asks) = await TrafficVmAsync(brains);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem().ShouldNotContain("(ask id p1)");
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("(ask id p1)");
+    }
+
+    /// <summary>Muted, nothing is read out: the cards waiting in the chat hold up the news no longer than one telling.</summary>
+    [Fact]
+    public async Task Muted_the_chat_s_cards_do_not_hold_up_its_news_one_by_one()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        vm.IsMuted = true;
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("b", "p2"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("b", "p3"), CancellationToken.None);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.Permission) == 3);
+        _yard.Show("b2", "CodeSwitchX", "Task b2"); // another chat of the same window: b itself waits on its cards
+        Changes("b2", SessionState.Working, SessionState.Errored);
+
+        await GraceAsync(vm);
+        await GraceAsync(vm);
+
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.News);
     }
 }
 

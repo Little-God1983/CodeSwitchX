@@ -16,7 +16,8 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>The cooldowns Settings offers, in seconds.</summary>
     public static readonly IReadOnlyList<int> CooldownChoices = [5, 10, 15, 20, 30, 60];
 
-    private DateTimeOffset? _lastSound;
+    /// <summary>When the last sound or announcement was, as a timestamp: the system clock set back does not stretch the cooldown.</summary>
+    private long? _lastSound;
 
     /// <summary>How long after an announcement or sound another chat stays silent.</summary>
     public TimeSpan Cooldown { get; set; } = DefaultCooldown;
@@ -38,14 +39,14 @@ public sealed class TrafficWatcher(TimeProvider time)
     };
 
     /// <summary>Raven said something, or stopped saying it: the cooldown runs from now.</summary>
-    public void Announced() => _lastSound = time.GetUtcNow();
+    public void Announced() => _lastSound = time.GetTimestamp();
 
     /// <summary>No announcement or sound within the cooldown.</summary>
-    public bool CooledDown => _lastSound is not { } last || time.GetUtcNow() - last >= Cooldown;
+    public bool CooledDown => _lastSound is not { } last || time.GetElapsedTime(last) >= Cooldown;
 
     /// <summary>
-    /// Whether another chat's news or card makes its sound now: the sound is on, the floor free and the cooldown over. A
-    /// yes counts as a sound, so the next one waits for the cooldown.
+    /// Whether another chat's news or card makes its sound now: the sound is on, the floor free and the cooldown over. The
+    /// sound made starts the cooldown again.
     /// </summary>
     public bool TrySound(bool floorFree)
     {
