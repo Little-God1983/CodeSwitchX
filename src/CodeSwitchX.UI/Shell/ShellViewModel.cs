@@ -139,7 +139,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.BargeIn = Settings.RavenBargeIn;
         Raven.CatchUp = Settings.RavenCatchUp;
         Raven.SetMutedWindows(Settings.RavenMutedWindows);
-        Raven.MutedWindowsChanged += (_, _) => Settings.RavenMutedWindows = [.. Raven.MutedWindows];
+        Raven.MutedWindowsChanged += (_, _) => Settings.RavenMutedWindows = Raven.MutedWindows;
         ShowTraffic();
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;

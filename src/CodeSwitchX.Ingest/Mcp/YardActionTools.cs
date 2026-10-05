@@ -134,14 +134,16 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return new ChatSwitch(match.Workspace.Number, Activity: false, Open: open);
     }
 
-    /// <summary>"this chat", "this one", "here": the chat the call comes from, as when none is named.</summary>
+    /// <summary>"this chat", "this one?", "the chat I'm in": the chat the call comes from, as when none is named.</summary>
     private static bool ThisChat(string said) =>
-        said.Trim().TrimEnd('.', '!').ToLowerInvariant() is "this" or "this chat" or "this one" or "here" or "current" or "the current chat"
-            or "current chat" or "it";
+        string.Join(" ", new string([.. said.ToLowerInvariant().Select(c => char.IsLetter(c) ? c : ' ')]).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            is "this" or "this chat" or "this one" or "here" or "it" or "current" or "current chat" or "the current chat" or "my chat"
+            or "the chat i m in" or "the chat im in" or "the one i m in";
 
     [McpServerTool(Name = "mute_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news, "
-        + "its sound and its catch-up are only written; its questions are still read out, and you still answer aloud in it. Chat 0 has no "
+    [Description("Mutes or unmutes one window's Raven chat (\"mute chat 2\", \"mute this chat\", \"unmute the audio one\"). Muted, its news "
+        + "and its catch-up are only written, with no sound; its questions are still read out, and still sound from elsewhere, and you still "
+        + "answer aloud in it. Chat 0 has no "
         + "mute of its own: the mute button on the panel quiets everything. Returns what you say.")]
     public async Task<string> MuteChat(
         [Description("The chat: its number (\"2\", \"two\") or a window's name as the user said it. Left out for the chat the user is in.")]

@@ -210,7 +210,7 @@
         <DataTrigger Binding="{Binding IsMuted}" Value="True">
           <Setter Property="Content" Value="&#xE74F;" />
           <Setter Property="Foreground" Value="#F59E0B" />
-          <Setter Property="ToolTip" Value="Muted: this chat's news, sound and catch-up are only written; its questions are still read out. Click to hear it again." />
+          <Setter Property="ToolTip" Value="Muted: this chat's news and catch-up are only written, with no sound; its questions are still read out. Click to hear it again." />
         </DataTrigger>
         <DataTrigger Binding="{Binding CanMute}" Value="False">
           <Setter Property="Visibility" Value="Collapsed" />

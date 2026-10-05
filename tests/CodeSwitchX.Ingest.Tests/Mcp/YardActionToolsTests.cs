@@ -166,6 +166,8 @@ public sealed class YardActionToolsTests
     [Theory]
     [InlineData("this chat", 4)]
     [InlineData("This one.", 4)]
+    [InlineData("this chat?", 4)]
+    [InlineData("the chat I'm in", 4)]
     [InlineData("the Yard", 0)]
     public async Task Mute_chat_reads_this_chat_and_the_yard_before_any_window_name(string said, int number)
     {

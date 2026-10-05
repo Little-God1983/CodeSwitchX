@@ -54,7 +54,7 @@ public interface IYardActions
     Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct);
 
     /// <summary>
-    /// Mutes or unmutes a window's Raven chat (#153): its news, its sound and its catch-up only written, its questions still
+    /// Mutes or unmutes a window's Raven chat (#153): its news and its catch-up only written, with no sound; its questions still
     /// read out. Returns what Raven says of it; throws for chat 0 and a number no window has.
     /// </summary>
     Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct);

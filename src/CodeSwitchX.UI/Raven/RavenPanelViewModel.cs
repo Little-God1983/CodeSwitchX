@@ -3489,6 +3489,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _asks?.ToVsCode(open.Ask.Id);
             }
 
+            gone.PropertyChanged -= OnChatPropertyChanged; // kept by the log's entries, it is muted no more
             if (gone.WorkspaceId is { } retired)
             {
                 _brains?.Retire(retired); // its process, config and conversation go with it
@@ -3526,7 +3527,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly HashSet<Guid> _mutedWindows = [];
 
     /// <summary>The windows whose Raven chat is muted now (#153), as a copy.</summary>
-    public IReadOnlyCollection<Guid> MutedWindows => [.. _mutedWindows];
+    public IReadOnlyList<Guid> MutedWindows => [.. _mutedWindows];
 
     /// <summary>A window's chat was muted or unmuted by the user (UI thread): the shell stores it.</summary>
     public event EventHandler? MutedWindowsChanged;
@@ -3559,7 +3560,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>What Raven says of a chat muted or unmuted: "Chat 3, ContentAutomatorX, is muted: …".</summary>
     internal static string MuteLine(RavenChat chat) => chat.IsMuted
-        ? $"Chat {chat.Number}, {chat.Name}, is muted: its news, its sound and its catch-up are only written; its questions are still read out."
+        ? $"Chat {chat.Number}, {chat.Name}, is muted: its news and its catch-up are only written, with no sound; its questions are still read out."
         : $"Chat {chat.Number}, {chat.Name}, speaks again.";
 
     private void OnChatPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)

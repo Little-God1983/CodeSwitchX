@@ -88,8 +88,9 @@ public sealed partial class RavenChat : ObservableObject
     public bool CanMute => WorkspaceId is not null;
 
     /// <summary>
-    /// Muted (#153): its news, the sound it makes while the user is elsewhere and its catch-up are only written. Its cards
-    /// are still read out, and Raven still answers aloud in it. The panel remembers it by the window.
+    /// Muted (#153): its news, with the sound it makes while the user is elsewhere, and its catch-up are only written. Its
+    /// cards are still read out, and sound from elsewhere: the chat waits on them. Raven still answers aloud in it. The panel
+    /// remembers it by the window.
     /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Status))]

@@ -185,8 +185,8 @@ public sealed partial class RavenPanelViewModelTests
     {
         var chat = RavenChat.Of(Guid.NewGuid(), 3, "ContentAutomatorX");
         chat.IsMuted = true;
-        RavenPanelViewModel.MuteLine(chat).ShouldBe("Chat 3, ContentAutomatorX, is muted: its news, its sound and its catch-up are only written; "
-            + "its questions are still read out.");
+        RavenPanelViewModel.MuteLine(chat).ShouldBe("Chat 3, ContentAutomatorX, is muted: its news and its catch-up are only written, with no "
+            + "sound; its questions are still read out.");
         chat.IsMuted = false;
         RavenPanelViewModel.MuteLine(chat).ShouldBe("Chat 3, ContentAutomatorX, speaks again.");
     }
