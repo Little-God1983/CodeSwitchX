@@ -100,11 +100,11 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         {
             one = await OneChatAsync(chat, " Name its workspace to open that instead.", cancellationToken).ConfigureAwait(false);
         }
-        catch (McpException) when (!string.IsNullOrWhiteSpace(workspace))
+        catch (McpException ex) when (!string.IsNullOrWhiteSpace(workspace))
         {
             var named = (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
             return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false)
-                + $" No chat '{chat.Trim()}' was found, so no chat was brought to the front.";
+                + $" No chat was brought to the front: {ex.Message}";
         }
 
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)

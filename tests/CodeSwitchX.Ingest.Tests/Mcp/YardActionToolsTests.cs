@@ -133,7 +133,8 @@ public sealed class YardActionToolsTests
 
         _actions.Opened!.Name.ShouldBe("CodeSwitchX");
         _actions.OpenedChat.ShouldBeNull();
-        said.ShouldEndWith("No chat 'zzzz' was found, so no chat was brought to the front.");
+        said.ShouldContain("No chat was brought to the front: ");
+        said.ShouldContain("no chat 'zzzz'");
     }
 
     [Fact]

@@ -324,7 +324,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
         catch (YardActionException ex)
         {
-            ReportFor(attempt, ex.Message);
+            if (showing is not { IsCancellationRequested: true })
+            {
+                ReportFor(attempt, ex.Message);
+            }
         }
         catch (Exception ex)
         {
@@ -450,6 +453,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     private void LeaveChatShow()
     {
         _chatShow?.Cancel();
+        _chatShow?.Dispose();
         _chatShow = null;
     }
 
