@@ -288,6 +288,27 @@ public class ShellViewModelTests
         _h.Shell.StatusMessage.ShouldBe("VS Code did not show the chat: no.");
     }
 
+    /// <summary>Back on the Yard before a slow VS Code has shown the chat: it is not opened behind the user's back, and nothing is said.</summary>
+    [Fact]
+    public async Task A_chat_still_being_shown_is_let_go_when_the_user_goes_back_to_the_Yard()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.VsCode.Hangs = true;
+
+        var enter = _h.Shell.EnterCabAsync(_h.App.Id, "s1");
+        for (var i = 0; i < 200 && _h.VsCode.Shown.Count == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _h.Shell.BackToYard();
+        await enter;
+
+        _h.VsCode.Ended.ShouldBe(1);
+        _h.Shell.StatusMessage.ShouldBeNull();
+    }
+
     [Fact]
     public async Task A_workspace_whose_VS_Code_does_not_start_is_asked_for_no_chat()
     {

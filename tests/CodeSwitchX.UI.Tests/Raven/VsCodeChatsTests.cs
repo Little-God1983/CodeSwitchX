@@ -21,6 +21,7 @@ public sealed class VsCodeChatsTests : IDisposable
     private readonly List<LiveChat> _running = [];
     private readonly Dictionary<int, int> _parents = [];
     private readonly HashSet<string> _conversations = [];
+    private readonly HashSet<string> _outside = [];
     private readonly List<IReadOnlySet<int>?> _skipped = [];
     private readonly List<string> _opened = [];
     private readonly FakeTimeProvider _time = new();
@@ -56,7 +57,7 @@ public sealed class VsCodeChatsTests : IDisposable
                     return new Dictionary<int, int>(_parents);
                 }
             },
-            id => _conversations.Contains(id), Path.Combine(_root, "pending"), _time, NullLogger<VsCodeChats>.Instance);
+            id => _conversations.Contains(id), id => _outside.Contains(id), Path.Combine(_root, "pending"), _time, NullLogger<VsCodeChats>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -471,16 +472,38 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Commands.ShouldBeEmpty();
     }
 
-    /// <summary>A companion that says no version is older than any that does: it is not asked for what it cannot do.</summary>
+    /// <summary>A chat in a terminal or run by a script is live there: a tab of it would be a second Claude Code on one conversation.</summary>
     [Fact]
-    public async Task A_window_whose_companion_says_no_version_is_told_to_reload()
+    public async Task A_chat_that_runs_outside_VS_Code_is_not_opened_in_a_tab_too()
+    {
+        _outside.Add("in-a-terminal");
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "in-a-terminal", Ct))).Message
+            .ShouldStartWith("That chat runs outside VS Code, in a terminal or started by a script");
+        _opened.ShouldBeEmpty("VS Code is not started for it");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    /// <summary>The chat is in another window: reloading this one, which an old companion asks for, would not help.</summary>
+    [Fact]
+    public async Task A_chat_in_another_window_is_said_before_an_old_companion_is()
+    {
+        _windows.Shown = Closing();
+        Starts(300, "elsewhere", 9999);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "elsewhere", Ct))).Message
+            .ShouldStartWith("That chat is open in another VS Code window");
+    }
+
+    /// <summary>A companion whose version cannot be read is asked: it says itself what it has no command for.</summary>
+    [Fact]
+    public async Task A_window_whose_companion_says_no_version_is_asked()
     {
         _windows.Shown = Window() with { Version = null };
-        Starts(300, "a-chat", Host);
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.ShowAsync(_workspace, "a-chat", Ct))).Message.ShouldContain("Reload that window");
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("a-chat", Ct))).Message.ShouldContain("Reload that window");
-        _windows.Commands.ShouldBeEmpty();
+        await _chats.ShowAsync(_workspace, "old-chat", Ct);
+
+        _windows.Commands.ShouldBe([CompanionWindows.OpenChat]);
     }
 
     [Fact]

@@ -127,6 +127,16 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task A_workspace_named_with_a_chat_that_is_not_found_still_opens()
+    {
+        var said = await Tools.OpenWorkspace("code switch ex", "zzzz", Ct);
+
+        _actions.Opened!.Name.ShouldBe("CodeSwitchX");
+        _actions.OpenedChat.ShouldBeNull();
+        said.ShouldEndWith("No chat 'zzzz' was found, so no chat was brought to the front.");
+    }
+
+    [Fact]
     public async Task Opening_a_workspace_by_name_finds_it_like_the_other_tools()
     {
         await Tools.OpenWorkspace("code switch ex", cancellationToken: Ct);

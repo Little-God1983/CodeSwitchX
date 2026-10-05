@@ -115,10 +115,32 @@ public sealed class ShellTestHarness
 
         public Task CloseAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
 
-        public Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
+        /// <summary>When set, a show waits until it is ended: VS Code is slow to start.</summary>
+        public bool Hangs { get; set; }
+
+        /// <summary>The shows that were ended while they waited.</summary>
+        public int Ended;
+
+        public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
         {
             Shown.Add((workspace.Name, sessionId));
-            return Failure is { } failure ? Task.FromException(new CodeSwitchX.Core.Yard.YardActionException(failure)) : Task.CompletedTask;
+            if (Hangs)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref Ended);
+                    throw;
+                }
+            }
+
+            if (Failure is { } failure)
+            {
+                throw new CodeSwitchX.Core.Yard.YardActionException(failure);
+            }
         }
     }
 

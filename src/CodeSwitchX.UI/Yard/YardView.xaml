@@ -18,9 +18,6 @@
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="Row" Property="Background" Value="#1AFFFFFF" />
               </Trigger>
-              <Trigger Property="IsKeyboardFocused" Value="True">
-                <Setter TargetName="Row" Property="Background" Value="#1AFFFFFF" />
-              </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Button.Template>

@@ -153,6 +153,29 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.NameOf(Issues).ShouldBeNull();
     }
 
+    /// <summary>#115: such a chat is not opened in a VS Code tab too.</summary>
+    [Theory]
+    [InlineData("cli", "interactive")]
+    [InlineData("claude-vscode", "print")]
+    public void A_chat_run_outside_a_VS_Code_tab_is_known_to_run_there(string entrypoint, string kind)
+    {
+        Record(21688, Issues, "codeswitchx-ea", entrypoint: entrypoint, kind: kind);
+
+        _live.RunsOutsideVsCode(Issues.ToUpperInvariant()).ShouldBeTrue();
+        _live.RunsOutsideVsCode("00000000-0000-0000-0000-000000000000").ShouldBeFalse();
+
+        _processes.Gone.Add(21688);
+        _live.RunsOutsideVsCode(Issues).ShouldBeFalse("it has ended: only its record is left");
+    }
+
+    [Fact]
+    public void A_chat_in_a_VS_Code_tab_does_not_run_outside_one()
+    {
+        Record(21688, Issues, "codeswitchx-ea");
+
+        _live.RunsOutsideVsCode(Issues).ShouldBeFalse();
+    }
+
     [Theory]
     [InlineData("procStart")]
     [InlineData("entrypoint")]

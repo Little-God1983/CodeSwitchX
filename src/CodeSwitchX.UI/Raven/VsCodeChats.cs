@@ -87,6 +87,7 @@ public sealed class VsCodeChats : IVsCodeChats
     private readonly Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> _running;
     private readonly Func<IReadOnlyDictionary<int, int>> _parents;
     private readonly Func<string, bool> _hasConversation;
+    private readonly Func<string, bool> _runsOutside;
     private readonly string _pendingSettings;
     private readonly TimeProvider _time;
     private readonly ILogger<VsCodeChats> _logger;
@@ -96,11 +97,13 @@ public sealed class VsCodeChats : IVsCodeChats
     /// <param name="running">The chats open in VS Code tabs right now, but those of the processes given (<see cref="ClaudeLiveSessions.RunningNow"/>).</param>
     /// <param name="parents">Every running process with its parent, from one snapshot.</param>
     /// <param name="hasConversation">Whether a session has a conversation on disk: one it goes on, not a new chat.</param>
+    /// <param name="runsOutside">Whether a session runs right now outside a VS Code tab, in a terminal or by <c>claude -p</c> (<see cref="ClaudeLiveSessions.RunsOutsideVsCode"/>).</param>
     /// <param name="pendingSettings">Where what puts a folder's settings back is kept while a chat starts (<see cref="StartSettings"/>).</param>
     public VsCodeChats(ICompanionWindows windows, ICompanionInstaller installer, Func<Workspace, CancellationToken, Task<string?>> openVsCode,
         Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> running, Func<IReadOnlyDictionary<int, int>> parents, Func<string, bool> hasConversation,
-        string pendingSettings, TimeProvider time, ILogger<VsCodeChats> logger)
+        Func<string, bool> runsOutside, string pendingSettings, TimeProvider time, ILogger<VsCodeChats> logger)
     {
+        _runsOutside = runsOutside;
         _pendingSettings = pendingSettings;
         _windows = windows;
         _installer = installer;
@@ -260,17 +263,23 @@ public sealed class VsCodeChats : IVsCodeChats
 
     public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
     {
-        var window = _windows.Find(workspace) ?? await OpenWindowAsync(workspace, ct).ConfigureAwait(false);
-        Requires(window, ShowsSince, $"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
-            + "chat. Reload that window (Developer: Reload Window) and try again.");
+        // Running in a terminal, by claude -p, or in a tab of another window (the same folder opened twice), it would be
+        // opened here a second time: two Claude Codes on one conversation. Looked at before VS Code is started for nothing.
+        if (_runsOutside(sessionId))
+        {
+            throw new YardActionException("That chat runs outside VS Code, in a terminal or started by a script: opened in a tab too, it would run "
+                + "twice. Go on with it where it runs.");
+        }
 
-        // Open in a tab of another window (the same folder opened twice), it would be opened here a second time: two
-        // Claude Codes on one conversation.
+        var window = _windows.Find(workspace) ?? await OpenWindowAsync(workspace, ct).ConfigureAwait(false);
         var running = _running(null).FirstOrDefault(c => string.Equals(c.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
         if (running is not null && _parents().TryGetValue(running.Pid, out var host) && host != window.Pid)
         {
             throw new YardActionException($"That chat is open in another VS Code window, not the one of {workspace.Name}. Look for its tab there.");
         }
+
+        Requires(window, ShowsSince, $"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
+            + "chat. Reload that window (Developer: Reload Window) and try again.");
 
         var answer = await _windows.SendAsync(window, CompanionWindows.OpenChat, sessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
@@ -281,10 +290,13 @@ public sealed class VsCodeChats : IVsCodeChats
         _logger.LogInformation("Showed chat {Id} in VS Code for {Workspace}", sessionId, workspace.Name);
     }
 
-    /// <summary>Refuses a window whose companion is older than the first that can do what is asked; one whose version cannot be read is older.</summary>
+    /// <summary>
+    /// Refuses a window whose companion is older than the first that can do what is asked. One whose version cannot be
+    /// read is asked: a companion says itself what it has no command for.
+    /// </summary>
     private static void Requires(CompanionWindow window, Version since, string otherwise)
     {
-        if (!Version.TryParse(window.Version, out var version) || version < since)
+        if (Version.TryParse(window.Version, out var version) && version < since)
         {
             throw new YardActionException(otherwise);
         }

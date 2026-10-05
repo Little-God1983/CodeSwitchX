@@ -52,6 +52,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Counts the opens; the status strip belongs to the latest one (see <see cref="ReportFor"/>).</summary>
     private int _openAttempt;
 
+    /// <summary>Ends the showing of a chat (#115) the user has moved on from: another open, or back to the Yard.</summary>
+    private CancellationTokenSource? _chatShow;
+
     public ShellViewModel(YardViewModel yard, CabViewModel cab, SettingsViewModel settings, PerformanceBarViewModel performanceBar,
         RavenPanelViewModel raven, ChatSettings chats, HostManager host, ILogger<ShellViewModel> logger, IVsCodeChats? vsCode = null)
     {
@@ -284,6 +287,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             _host.HideAll();
         }
 
+        LeaveChatShow();
+        var showing = chat is null ? null : _chatShow = new CancellationTokenSource();
         ActiveWorkspaceId = workspaceId;
         Raven.ShowChatOf(workspaceId); // the window opened is the one the user talks about
         Cab.SetActive(tile, Yard.Tiles);
@@ -306,12 +311,16 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             }
 
             // The workspace shows either way; a chat that cannot be shown is said on the strip.
-            if (chat is not null && _vsCode is not null && attempt == _openAttempt)
+            if (chat is not null && showing is { IsCancellationRequested: false } && _vsCode is { } vsCode)
             {
                 // Off this thread: finding the window reads the companions' records.
-                var vsCode = _vsCode;
-                await Task.Run(() => vsCode.ShowAsync(tile.Workspace, chat, CancellationToken.None));
+                var token = showing.Token;
+                await Task.Run(() => vsCode.ShowAsync(tile.Workspace, chat, token), token);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // The user moved on: the chat is not shown behind their back.
         }
         catch (YardActionException ex)
         {
@@ -437,6 +446,12 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     partial void OnActiveWorkspaceIdChanged(Guid? value) => TellHostWhereTheCabWaits();
+
+    private void LeaveChatShow()
+    {
+        _chatShow?.Cancel();
+        _chatShow = null;
+    }
 
     /// <summary>
     /// The status strip belongs to the latest open: one the user has moved on from, to another workspace or to a retry of
@@ -577,6 +592,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     [RelayCommand]
     public void BackToYard()
     {
+        LeaveChatShow();
         _host.HideAll();
         Mode = ShellMode.Yard;
     }
