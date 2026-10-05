@@ -48,11 +48,17 @@ public sealed class CardColumnsPanel : Panel
             : Math.Clamp((int)Math.Floor((width + gap) / (Math.Max(1, minColumnWidth) + gap)), 1, most);
     }
 
+    /// <summary>The columns the last measure laid out: arrange keeps them, as the cards were sized for them.</summary>
+    private int _columns = 1;
+
     protected override Size MeasureOverride(Size availableSize)
     {
         var children = InternalChildren;
-        var columns = ColumnsFor(availableSize.Width, MinColumnWidth, MaxColumns, Gap);
-        var width = double.IsInfinity(availableSize.Width) ? double.PositiveInfinity : ColumnWidth(availableSize.Width, columns);
+        var unlimited = double.IsInfinity(availableSize.Width);
+        // Not limited in width: as many columns as there are cards to fill, up to the most.
+        var columns = unlimited ? Math.Clamp(children.Count, 1, Math.Max(1, MaxColumns)) : ColumnsFor(availableSize.Width, MinColumnWidth, MaxColumns, Gap);
+        _columns = columns;
+        var width = unlimited ? double.PositiveInfinity : ColumnWidth(availableSize.Width, columns);
         var widest = 0.0;
         foreach (UIElement child in children)
         {
@@ -67,7 +73,7 @@ public sealed class CardColumnsPanel : Panel
     protected override Size ArrangeOverride(Size finalSize)
     {
         var children = InternalChildren;
-        var columns = ColumnsFor(finalSize.Width, MinColumnWidth, MaxColumns, Gap);
+        var columns = _columns; // a hair wider or narrower from layout rounding, the cards keep the columns they were measured for
         var width = ColumnWidth(finalSize.Width, columns);
         var top = 0.0;
         for (var start = 0; start < children.Count; start += columns)

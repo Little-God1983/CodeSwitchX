@@ -207,10 +207,11 @@
           </ControlTemplate>
         </Setter.Value>
       </Setter>
+      <!-- Side by side; in a narrow place the last ones wrap rather than being cut off (#155). -->
       <Setter Property="ItemsPanel">
         <Setter.Value>
           <ItemsPanelTemplate>
-            <StackPanel Orientation="Horizontal" />
+            <WrapPanel />
           </ItemsPanelTemplate>
         </Setter.Value>
       </Setter>
@@ -453,25 +454,19 @@
                             </DataTemplate>
                           </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0" Visibility="{Binding Lamp, Converter={StaticResource NullToCollapsed}}"
-                                    ToolTip="{Binding Lamp.Detail}" AutomationProperties.Name="{Binding StatusText}">
+                        <!-- Docked, not stacked: in a narrow card a long status ends in an ellipsis instead of being cut (#155). -->
+                        <DockPanel Margin="0,6,0,0" Visibility="{Binding Lamp, Converter={StaticResource NullToCollapsed}}"
+                                   ToolTip="{Binding Lamp.Detail}" AutomationProperties.Name="{Binding StatusText}">
                           <Ellipse Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" Fill="{Binding Lamp.Dot, Converter={StaticResource DotBrush}}" />
                           <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" />
-                        </StackPanel>
+                        </DockPanel>
                         <!-- Qwen3-TTS's model, while it is the engine picked. -->
                         <StackPanel x:Name="Model" Margin="0,14,0,0" Visibility="Collapsed">
                           <TextBlock Style="{StaticResource Label}" Text="Model" />
                           <ListBox Style="{StaticResource Segmented}" AutomationProperties.Name="Qwen3-TTS model"
                                    ItemsSource="{Binding DataContext.VoiceModelChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                    DisplayMemberPath="Label" SelectedValuePath="Model"
-                                   SelectedValue="{Binding DataContext.RavenVoiceModel, RelativeSource={RelativeSource AncestorType=UserControl}}">
-                            <!-- Wraps in a narrow card rather than cutting off 1.7B (#155). -->
-                            <ListBox.ItemsPanel>
-                              <ItemsPanelTemplate>
-                                <WrapPanel />
-                              </ItemsPanelTemplate>
-                            </ListBox.ItemsPanel>
-                          </ListBox>
+                                   SelectedValue="{Binding DataContext.RavenVoiceModel, RelativeSource={RelativeSource AncestorType=UserControl}}" />
                           <TextBlock Text="1.7B sounds better and is a little slower; it downloads (3.5 GB) the first time Raven speaks with it." FontSize="12"
                                      Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,6,0,0" />
                         </StackPanel>

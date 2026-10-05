@@ -40,5 +40,36 @@ public sealed class CardColumnsPanelTests
         Slot(panel, 2).ShouldBe(new Rect(0, 310, 245, 50));
     });
 
+    /// <summary>
+    /// Arranged a hair wider than it was measured (layout rounding), it keeps the columns it measured: the cards were sized
+    /// for those, and in narrower columns their text would run past the rows' measured height and be cut.
+    /// </summary>
+    [Fact]
+    public Task Arranged_a_hair_wider_it_keeps_the_columns_it_measured() => StaThread.RunAsync(() =>
+    {
+        var panel = new CardColumnsPanel { MinColumnWidth = 210, MaxColumns = 3, Gap = 10 };
+        for (var i = 0; i < 3; i++)
+        {
+            panel.Children.Add(new Border { Height = 100 });
+        }
+
+        panel.Measure(new Size(649.6, double.PositiveInfinity)); // two columns
+        panel.Arrange(new Rect(0, 0, 650, panel.DesiredSize.Height));
+
+        Slot(panel, 2).Y.ShouldBe(110, "the third card stays on the second row");
+    });
+
+    /// <summary>Not limited in width, it asks for as many columns as it has cards, up to three, and no more.</summary>
+    [Fact]
+    public Task Unlimited_in_width_it_asks_only_for_the_columns_its_cards_fill() => StaThread.RunAsync(() =>
+    {
+        var panel = new CardColumnsPanel { MinColumnWidth = 210, MaxColumns = 3, Gap = 10 };
+        panel.Children.Add(new Border { Width = 100, Height = 50 });
+
+        panel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        panel.DesiredSize.ShouldBe(new Size(100, 50));
+    });
+
     private static Rect Slot(Panel panel, int index) => System.Windows.Controls.Primitives.LayoutInformation.GetLayoutSlot((FrameworkElement)panel.Children[index]);
 }
