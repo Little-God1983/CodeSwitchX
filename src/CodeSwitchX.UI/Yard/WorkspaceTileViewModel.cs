@@ -120,6 +120,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>Whether the engine put this chat on this tile.</summary>
     public bool Knows(string sessionId) => _sessions.ContainsKey(sessionId);
 
+    /// <summary>Whether the tile has a row of this chat.</summary>
+    public bool Shows(string sessionId) => Chats.Any(c => Same(c.SessionId, sessionId));
+
     /// <summary>
     /// The chat tabs VS Code lists for the workspace, null when it keeps no list; with when the chats of tabs the app
     /// knows no chat of were last written in.
@@ -128,8 +131,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     {
         _tabs = tabs;
         _tabActivity = lastActivity;
-        // A chat closed on purpose is remembered until VS Code has written its tabs without it.
-        _forgotten.RemoveWhere(id => TabOf(id) is null);
+        if (tabs is not null)
+        {
+            // A chat closed on purpose is remembered until VS Code has written its tabs without it.
+            _forgotten.RemoveWhere(id => TabOf(id) is null);
+        }
+
         Arrange(_owner.Now);
     }
 
@@ -148,7 +155,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// </summary>
     private void Arrange(DateTimeOffset now)
     {
-        foreach (var ended in _sessions.Values.Where(s => !SessionStateMachine.IsLive(s.State) && now - s.StateSince >= ForgetEndedAfter && !Shows(s, now)).ToList())
+        // One whose tab is still listed is kept: forgotten, its tab would bring it back as a tab nothing is known of,
+        // the idle time that hides it with it.
+        foreach (var ended in _sessions.Values.Where(s => !SessionStateMachine.IsLive(s.State) && now - s.StateSince >= ForgetEndedAfter
+                     && TabOf(s.SessionId) is null && !Shows(s, now)).ToList())
         {
             _sessions.Remove(ended.SessionId);
         }
@@ -182,13 +192,14 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
                 Chats.Add(row = NewRow(tab.SessionId));
             }
 
-            row.ShowTab(tab, notRunning: true);
+            row.ShowTab(tab, notRunning: true, _tabActivity.TryGetValue(tab.SessionId, out var last) ? last : null, _tabs!.WrittenAt);
         }
 
         Recompute();
     }
 
-    private ChatRowViewModel NewRow(string sessionId) => new(sessionId, id => _owner.RequestOpenChat(Id, id));
+    private ChatRowViewModel NewRow(string sessionId) =>
+        new(sessionId, id => _owner.RequestOpenChat(Id, id)) { VoiceLabel = _owner.VoiceLabelOf(sessionId) };
 
     /// <summary>
     /// Whether the chat has a row. A chat with a tab in the workspace's VS Code window has one, whatever it said so far. One
@@ -214,27 +225,22 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             return false;
         }
 
-        if (_tabs is null)
-        {
-            // VS Code keeps no list for this workspace: by what the chats report alone.
-            return SessionStateMachine.IsLive(session.State)
-                ? session.State != SessionState.Stale || now - session.StateSince < StaleRowLifetime
-                : now - session.StateSince < _owner.KeepClosed;
-        }
-
-        // Without a tab, a chat quiet long enough to be stale has none any more: closed, as one that ended.
-        return session.State is SessionState.Starting or SessionState.Idle or SessionState.Working or SessionState.Waiting
-            || now - session.StateSince < _owner.KeepClosed;
+        // Without a tab it runs elsewhere (VS Code's side bar, a terminal) or its tab is not written down yet: shown while
+        // it reports, and as long as before once it went stale. Ended, it is closed.
+        return SessionStateMachine.IsLive(session.State)
+            ? session.State != SessionState.Stale || now - session.StateSince < StaleRowLifetime
+            : now - session.StateSince < _owner.KeepClosed;
     }
 
     /// <summary>
     /// Whether the chat's tab is open. A chat that ended while VS Code runs is in the list only if VS Code wrote the list
     /// after: one written before still has the tab that was just closed. A VS Code that does not run wrote its last list
-    /// as it closed, and comes back with those tabs.
+    /// as it closed, and comes back with those tabs. A chat whose Claude Code went without saying it ends (it crashed)
+    /// left its tab open: closing a tab is said.
     /// </summary>
     private bool InTab(SessionSnapshot session) =>
         _tabs is { } tabs && TabOf(session.SessionId) is not null
-        && (SessionStateMachine.IsLive(session.State) || HostState != HostState.Running || tabs.WrittenAt >= session.StateSince - TabListSlack);
+        && (session.State != SessionState.Ended || HostState != HostState.Running || tabs.WrittenAt >= session.StateSince - TabListSlack);
 
     private OpenChatTab? TabOf(string sessionId) => _tabs?.Tabs.FirstOrDefault(t => Same(t.SessionId, sessionId));
 

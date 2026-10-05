@@ -156,6 +156,17 @@ public sealed class VsCodeOpenTabsTests : IDisposable
         Read().ShouldBeNull();
     }
 
+    /// <summary>A workspace no longer asked for is not given again, and what is given is the caller's to keep.</summary>
+    [Fact]
+    public void Each_look_gives_the_workspaces_asked_for()
+    {
+        Store("a1", new { folder = FileUri(_app.RootPath) }, Chat(Apple, "Apple"));
+        var other = new Workspace { Name = "Other", RootPath = Path.Combine(_root, "Repos", "Other") };
+
+        _tabs.Read([_app, other]).Keys.ShouldBe([_app.Id]);
+        _tabs.Read([other]).ShouldBeEmpty();
+    }
+
     [Fact]
     public void No_storage_folder_gives_nothing()
     {

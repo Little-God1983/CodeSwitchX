@@ -277,6 +277,8 @@ public sealed class AppSettingsTests
         _h.Shell.Yard.KeepClosed.ShouldBe(TimeSpan.FromMinutes(10));
         (await _settings.SetAsync("closed chats", "off", Ct)).Value.ShouldBe("off");
         _h.Shell.Yard.KeepClosed.ShouldBe(TimeSpan.Zero);
+        await _settings.SetAsync("closed chats", "5", Ct);
+        (await _settings.SetAsync("closed chats", "0 minutes", Ct)).Value.ShouldBe("off");
 
         (await _settings.SetAsync("hide idle chats", "1", Ct)).Value.ShouldBe("1 hour");
         _h.Shell.Yard.HideIdleAfter.ShouldBe(TimeSpan.FromHours(1));

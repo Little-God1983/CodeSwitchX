@@ -49,6 +49,9 @@ public sealed class VsCodeOpenTabs : IVsCodeOpenTabs
     /// <summary>The tabs read from each store file, with the write time they were read at.</summary>
     private readonly Dictionary<string, OpenChatTabs> _read = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>What the last look that went through gave: a look that fails gives it again.</summary>
+    private Dictionary<Guid, OpenChatTabs> _last = [];
+
     public VsCodeOpenTabs(string directory)
     {
         _directory = directory;
@@ -98,11 +101,14 @@ public sealed class VsCodeOpenTabs : IVsCodeOpenTabs
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // The folder went, or may not be listed: what was read so far stands.
+                // The folder may not be listed just now: the tiles keep the tabs they had, of the workspaces still asked for.
+                return _last.Where(t => workspaces.Any(w => w.Id == t.Key)).ToDictionary(t => t.Key, t => t.Value);
             }
+
+            _last = result;
         }
 
-        return result;
+        return new Dictionary<Guid, OpenChatTabs>(result);
     }
 
     private string? TargetOf(string store)

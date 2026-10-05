@@ -78,6 +78,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The voice label of a chat Raven started, null for any other: a row gets it as it is made.</summary>
+    internal string? VoiceLabelOf(string sessionId) => _voiceLabels.GetValueOrDefault(sessionId);
+
     /// <summary>The time the tiles go by.</summary>
     internal DateTimeOffset Now => _time.GetUtcNow();
 
@@ -343,8 +346,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             foreach (var tile in Tiles.ToList())
             {
                 var ofTile = tabs.GetValueOrDefault(tile.Id);
+                // Shown on the tile of the folder it runs in (a multi-root window), it is not shown here too; once it
+                // shows there no more, its tab does here.
                 var others = Tiles.Where(t => t != tile).ToList();
-                tile.ShowTabs(ofTile is null ? null : ofTile with { Tabs = [.. ofTile.Tabs.Where(tab => !others.Exists(t => t.Knows(tab.SessionId)))] },
+                tile.ShowTabs(ofTile is null ? null : ofTile with { Tabs = [.. ofTile.Tabs.Where(tab => !others.Exists(t => t.Shows(tab.SessionId)))] },
                     _tabActivity);
             }
 

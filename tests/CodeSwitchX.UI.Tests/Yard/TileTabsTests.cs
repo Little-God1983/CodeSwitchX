@@ -206,9 +206,9 @@ public sealed class TileTabsTests
         App.Chats.Select(c => (c.SessionId, c.Title, c.NotRunning)).ShouldBe([("blank", "New chat", false)]);
     }
 
-    /// <summary>Without a tab, a chat quiet long enough to go stale has none any more: its end was not heard.</summary>
+    /// <summary>A chat in VS Code's side bar, or a terminal, has no tab: it shows while it reports, and as long as before once it went stale.</summary>
     [Fact]
-    public async Task A_stale_chat_without_a_tab_is_closed()
+    public async Task A_chat_without_a_tab_shows_while_it_reports_and_a_while_after_it_went_stale()
     {
         await _yard.InitializeAsync(CancellationToken.None);
         await VsCodeWrites();
@@ -216,8 +216,93 @@ public sealed class TileTabsTests
         Rows.ShouldBe(["a"]);
 
         Says(Chat("a", SessionState.Stale) with { Version = 2 });
+        _time.Advance(WorkspaceTileViewModel.StaleRowLifetime - TimeSpan.FromMinutes(1));
+        _yard.Tick(Now);
+        Rows.ShouldBe(["a"]);
+
+        _time.Advance(TimeSpan.FromMinutes(2));
+        _yard.Tick(Now);
+        Rows.ShouldBeEmpty();
+    }
+
+    /// <summary>Its Claude Code crashed: nothing said the tab closed, and VS Code, which runs, has not written its list since.</summary>
+    [Fact]
+    public async Task A_chat_whose_Claude_Code_went_without_a_word_keeps_its_row_while_its_tab_is_listed()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Working));
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        Says(Chat("a", SessionState.Errored) with { Version = 2 });
+
+        App.Chats.Select(c => (c.SessionId, c.State, c.NotRunning)).ShouldBe([("a", SessionState.Errored, true)]);
+    }
+
+    /// <summary>Hidden for being idle, and ended long ago: its tab does not bring it back as a tab nothing is known of.</summary>
+    [Fact]
+    public async Task An_ended_chat_hidden_for_being_idle_stays_hidden_while_its_tab_is_listed()
+    {
+        _yard.HideIdleAfter = TimeSpan.FromHours(1);
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Ended));
+        Rows.ShouldBe(["a"]);
+
+        _time.Advance(TimeSpan.FromHours(3));
+        _yard.Tick(Now);
+        _yard.Tick(Now);
+        await _yard.RefreshTabsAsync();
 
         Rows.ShouldBeEmpty();
+    }
+
+    /// <summary>The folder cannot be listed for a moment: the tiles keep their tabs, and a chat closed on purpose stays gone.</summary>
+    [Fact]
+    public async Task A_look_that_gives_no_list_keeps_a_closed_chat_gone()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Idle));
+        _yard.ForgetChat("a");
+        Says(Chat("a", SessionState.Ended) with { Version = 2 });
+
+        var list = _tabs.Of[_app.Id];
+        _tabs.Of.Clear();
+        await _yard.RefreshTabsAsync();
+        _tabs.Of[_app.Id] = list;
+        await _yard.RefreshTabsAsync();
+
+        Rows.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_tab_nothing_is_known_of_tells_Raven_when_it_was_listed_and_shows_a_time_only_when_it_was_written_in()
+    {
+        _writtenIn["known"] = Now - TimeSpan.FromHours(2);
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("known"), Tab("unknown"));
+        _yard.Tick(Now);
+
+        App.Chats.Select(c => (c.SessionId, c.StateSince, c.ElapsedText)).ShouldBe([("known", Now - TimeSpan.FromHours(2), "2h 00m"), ("unknown", Now, "")]);
+    }
+
+    [Fact]
+    public async Task A_row_made_for_a_chat_Raven_started_has_its_voice_mark_whenever_it_is_made()
+    {
+        _yard.HideIdleAfter = TimeSpan.FromHours(1);
+        await _yard.InitializeAsync(CancellationToken.None);
+        await VsCodeWrites(Tab("a"));
+        Says(Chat("a", SessionState.Idle));
+        _yard.MarkVoice("a", "Fable 5.1 · high");
+        _time.Advance(TimeSpan.FromHours(2));
+        _yard.Tick(Now);
+        Rows.ShouldBeEmpty();
+
+        _yard.HideIdleAfter = null;
+
+        App.Chats.ShouldHaveSingleItem().VoiceLabel.ShouldBe("Fable 5.1 · high");
     }
 
     [Fact]
@@ -251,14 +336,6 @@ public sealed class TileTabsTests
         Says(Chat("ended", SessionState.Ended));
 
         Rows.ShouldBe(["idle"], "a closed chat is not kept unless the user says so");
-
-        Says(Chat("idle", SessionState.Stale) with { Version = 2 });
-        _time.Advance(WorkspaceTileViewModel.StaleRowLifetime - TimeSpan.FromMinutes(1));
-        _yard.Tick(Now);
-        Rows.ShouldBe(["idle"]);
-        _time.Advance(TimeSpan.FromMinutes(2));
-        _yard.Tick(Now);
-        Rows.ShouldBeEmpty();
     }
 
     /// <summary>Raven closed the chat: the list VS Code has not written again still has its tab, which brings no row back.</summary>
@@ -290,6 +367,11 @@ public sealed class TileTabsTests
 
         Rows.ShouldBeEmpty();
         _yard.FindTile(_shop.Id)!.Chats.Select(c => c.SessionId).ShouldBe(["a"]);
+
+        // Ended, the other tile shows it no more: its tab, still open in this window, does here.
+        Says(Chat("a", SessionState.Ended, workspace: _shop.Id) with { Version = 2 });
+        await _yard.RefreshTabsAsync();
+        App.Chats.Select(c => (c.SessionId, c.NotRunning)).ShouldBe([("a", true)]);
     }
 
     [Fact]

@@ -371,8 +371,7 @@ public sealed class VsCodeChats : IVsCodeChats
     {
         try
         {
-            return Directory.Exists(projectsDirectory)
-                && Directory.EnumerateDirectories(projectsDirectory).Any(project => File.Exists(Path.Combine(project, sessionId + ".jsonl")));
+            return ConversationFile(projectsDirectory, sessionId) is not null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -387,19 +386,18 @@ public sealed class VsCodeChats : IVsCodeChats
     {
         try
         {
-            if (!Directory.Exists(projectsDirectory) || sessionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            {
-                return null;
-            }
-
-            var file = Directory.EnumerateDirectories(projectsDirectory).Select(project => Path.Combine(project, sessionId + ".jsonl")).FirstOrDefault(File.Exists);
-            return file is null ? null : new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+            return ConversationFile(projectsDirectory, sessionId) is { } file ? new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero) : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
     }
+
+    /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>
+    private static string? ConversationFile(string projectsDirectory, string sessionId) =>
+        !Directory.Exists(projectsDirectory) || sessionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ? null
+            : Directory.EnumerateDirectories(projectsDirectory).Select(project => Path.Combine(project, sessionId + ".jsonl")).FirstOrDefault(File.Exists);
 
     private static string NameOf(string folder) => Path.GetFileName(Path.TrimEndingDirectorySeparator(folder)) is { Length: > 0 } name ? name : folder;
 }

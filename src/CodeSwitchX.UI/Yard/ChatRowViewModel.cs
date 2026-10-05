@@ -36,8 +36,11 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>What the chat calls itself; null while it said nothing yet, and for a tab the app knows no chat of.</summary>
     private string? _ownTitle;
 
-    /// <summary>Whether a chat's state was ever shown; a tab alone has none, and no time since.</summary>
+    /// <summary>Whether a chat's state was ever shown; a tab alone has none.</summary>
     private bool _hasSession;
+
+    /// <summary>Whether a tab alone has a time to show: when its chat was last written in.</summary>
+    private bool _timed;
 
     private OpenChatTab? _tab;
 
@@ -89,13 +92,18 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// knows only by its tab shows as that tab, not running.
     /// </summary>
     /// <param name="notRunning">Whether the row is there for the tab alone: the chat does not run.</param>
-    public void ShowTab(OpenChatTab? tab, bool notRunning)
+    /// <param name="lastWrittenIn">For a tab the app knows no chat of: when its conversation was last written in, null when that is not known.</param>
+    /// <param name="listedAt">For such a tab: when VS Code wrote the list it is in.</param>
+    public void ShowTab(OpenChatTab? tab, bool notRunning, DateTimeOffset? lastWrittenIn = null, DateTimeOffset listedAt = default)
     {
         _tab = tab;
         NotRunning = notRunning;
         if (!_hasSession)
         {
+            // Ended since it was last written in, as far as anyone knows; the time is shown only when it is known.
             State = SessionState.Ended;
+            StateSince = lastWrittenIn ?? listedAt;
+            _timed = lastWrittenIn is not null;
             OnPropertyChanged(nameof(IsLive));
         }
 
@@ -108,7 +116,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>What a tab nothing was said in yet is called.</summary>
     public const string NewChatTitle = "New chat";
 
-    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession ? FormatElapsed(now - StateSince) : string.Empty;
+    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
 
     public static string FormatElapsed(TimeSpan elapsed)
     {
