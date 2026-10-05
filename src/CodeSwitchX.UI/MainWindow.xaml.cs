@@ -41,6 +41,7 @@ public partial class MainWindow : Window, IShellWindow
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         shell.ForwardRequested += () => WindowActivation.BringUp(this);
+        shell.AskBeforeRemove = (workspace, cards) => Task.FromResult(RemoveWorkspaceWindow.Ask(this, workspace, cards));
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
     }

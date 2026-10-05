@@ -1,5 +1,17 @@
 namespace CodeSwitchX.UI.Shell;
 
+/// <summary>What becomes of a window's open cards when its workspace is to be removed (#135).</summary>
+public enum RemoveChoice
+{
+    /// <summary>Nothing is removed: the panel shows the window's chat with its cards.</summary>
+    AnswerFirst,
+
+    /// <summary>Each card goes to its chat's VS Code tab, then the workspace is removed.</summary>
+    LeaveToVsCode,
+
+    Cancel,
+}
+
 /// <summary>The size state of CodeSwitchX's own window.</summary>
 public enum ShellWindowState
 {

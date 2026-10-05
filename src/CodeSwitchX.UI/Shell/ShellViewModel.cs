@@ -63,6 +63,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
         Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles);
+        Yard.BeforeRemove = MayRemoveAsync;
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
@@ -397,6 +398,46 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         if (attempt == _openAttempt)
         {
             StatusMessage = message;
+        }
+    }
+
+    /// <summary>
+    /// Asks the user what becomes of a window's open cards before it is removed (#135): the workspace's name and how many
+    /// wait. Set by the main window; null in tests that do not ask, which keeps the workspace.
+    /// </summary>
+    public Func<string, int, Task<RemoveChoice>>? AskBeforeRemove { get; set; }
+
+    /// <summary>
+    /// Whether the workspace may be removed now. With open cards in its Raven chat the user chooses: answer them first (the
+    /// panel shows that chat, nothing is removed), leave them to VS Code (then it is removed), or cancel.
+    /// </summary>
+    private async Task<bool> MayRemoveAsync(Guid workspaceId)
+    {
+        var cards = Raven.OpenCardsOf(workspaceId);
+        if (cards == 0)
+        {
+            return true;
+        }
+
+        var name = Yard.FindTile(workspaceId)?.Name ?? "This workspace";
+        if (AskBeforeRemove is not { } ask)
+        {
+            _logger.LogWarning("Not removing {Workspace}: {Cards} card(s) wait in its Raven chat and there is no window to ask in", name, cards);
+            return false;
+        }
+
+        var choice = await ask(name, cards);
+        switch (choice)
+        {
+            case RemoveChoice.AnswerFirst:
+                Raven.IsOpen = true; // a folded panel shows no cards
+                Raven.ShowChatOf(workspaceId);
+                return false;
+            case RemoveChoice.LeaveToVsCode:
+                // Once removed, the window's open cards go to VS Code (Raven.SetWorkspaces); a removal that fails keeps them.
+                return true;
+            default:
+                return false;
         }
     }
 

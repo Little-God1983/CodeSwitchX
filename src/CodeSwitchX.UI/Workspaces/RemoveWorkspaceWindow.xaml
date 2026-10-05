@@ -1,0 +1,19 @@
+<Window x:Class="CodeSwitchX.UI.Workspaces.RemoveWorkspaceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Remove workspace" Width="520" SizeToContent="Height" WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False">
+  <!-- #135: a window whose Raven chat has open cards is not removed without asking what becomes of them. -->
+  <StackPanel Margin="16">
+    <TextBlock x:Name="Question" FontWeight="SemiBold" TextWrapping="Wrap" />
+    <TextBlock Margin="0,6,0,14" TextWrapping="Wrap" Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"
+               Text="Removed, its Raven chat goes with it. The chats in VS Code are not touched." />
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="Answer them first" Click="AnswerFirst" Margin="0,0,8,0" Padding="12,4" IsDefault="True"
+              ToolTip="Nothing is removed: Raven shows the window's chat with its cards" />
+      <Button Content="Leave them to VS Code" Click="LeaveToVsCode" Margin="0,0,8,0" Padding="12,4"
+              ToolTip="Each card goes to its chat's VS Code tab, then the workspace is removed" />
+      <Button Content="Cancel" Click="Cancel" Padding="12,4" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

@@ -215,25 +215,85 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     /// <summary>
-    /// A window removed while its chat waits on a card: the card moves to the Yard's chat, where chats on no tile ask, so
-    /// it can still be answered by a click (Activity has no buttons).
+    /// A window removed while its chat waits on a card: the card goes to its chat's VS Code tab (#135), never to chat 0,
+    /// which answers no card. Its entries stay in Activity.
     /// </summary>
     [Fact]
-    public async Task A_removed_window_s_open_card_moves_to_the_yard_s_chat_and_can_still_be_answered()
+    public async Task A_removed_window_s_open_card_goes_to_vs_code_not_to_chat_zero()
     {
         var (vm, asks) = await ChatsVmAsync();
         var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "hello");
         await WithinAsync(vm.PendingAnswers);
+        var card = vm.Log.Single(e => e.Kind == RavenLogKind.Permission).Ask.ShouldNotBeNull();
 
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
 
-        vm.SelectedChat.ShouldBe(vm.YardChat);
-        var card = vm.Shown.ShouldHaveSingleItem("its other entries stay in Activity only").Ask.ShouldNotBeNull();
-        vm.AllowCommand.Execute(card);
         await WithinAsync(held);
-        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+        (card.IsOpen, card.Outcome).ShouldBe((false, "Left to VS Code: answer it in the chat's tab."));
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        vm.Shown.ShouldBeEmpty("no card of the removed window is in chat 0");
+        vm.YardChat.IsWaiting.ShouldBeFalse();
+    }
+
+    /// <summary>A card that comes for a window already removed (while the remove was asked, say) goes to VS Code too.</summary>
+    [Fact]
+    public async Task A_card_that_comes_for_a_removed_window_goes_to_vs_code()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+
+        await WithinAsync(held);
+        vm.Log.Single(e => e.Kind == RavenLogKind.Permission).Ask!.Outcome.ShouldBe("Left to VS Code: answer it in the chat's tab.");
+        vm.YardChat.IsWaiting.ShouldBeFalse();
+        vm.SelectedChat = vm.YardChat;
+        vm.Shown.ShouldBeEmpty();
+    }
+
+    /// <summary>A card whose entry the log let go of still waits: removing its window leaves it to VS Code too.</summary>
+    [Fact]
+    public async Task A_removed_window_s_card_the_log_let_go_of_still_goes_to_vs_code()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        var held = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.Log.ShouldNotContain(e => e.Ask != null);
+        vm.OpenCardsOf(ContentAutomatorX).ShouldBe(1, "it still waits");
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+        vm.YardChat.IsWaiting.ShouldBeFalse();
+    }
+
+    /// <summary>What Raven says of a card in a window's chat goes to that chat, as for chat 0's.</summary>
+    [Fact]
+    public async Task The_lines_about_a_window_s_card_go_to_its_chat()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+
+        asks.Propose("p1");
+
+        vm.Log.Select(e => (e.Kind, e.Chat.Number)).ShouldBe([(RavenLogKind.Permission, 3), (RavenLogKind.Raven, 3)]);
+    }
+
+    [Fact]
+    public async Task The_open_cards_of_a_window_are_counted()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("a", "p2"), CancellationToken.None);
+        _ = asks.HoldAsync(PermittingIn("b", "p3"), CancellationToken.None);
+
+        (vm.OpenCardsOf(ContentAutomatorX), vm.OpenCardsOf(CodeSwitchX), vm.OpenCardsOf(Guid.NewGuid())).ShouldBe((2, 1, 0));
     }
 
     /// <summary>Each window's news card is in its own chat; only the news of the chat the user is in is spoken (#125).</summary>
@@ -298,9 +358,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_lines_about_a_card_go_to_the_chat_the_card_is_in()
     {
         var (vm, asks) = await ChatsVmAsync();
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
-        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _yard.Show("z", "Elsewhere", "A chat on no tile"); // its card is in chat 0
+        _ = asks.HoldAsync(PermittingIn("z", "p1"), CancellationToken.None);
 
         asks.Propose("p1");
 
