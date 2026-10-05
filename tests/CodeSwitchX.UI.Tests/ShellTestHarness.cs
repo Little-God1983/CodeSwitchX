@@ -55,7 +55,14 @@ public sealed class ShellTestHarness
     public SessionEngine Engine { get; }
     public HostManager Host { get; }
     public ShellViewModel Shell { get; }
-    public Workspace App { get; } = new() { Name = "App", RootPath = @"c:\repo\app" };
+    /// <summary>Its id is the one the fake Yard directory gives "App", so a card of a chat there is placed in its Raven chat.</summary>
+    public Workspace App { get; } = new() { Id = Raven.FakeYardDirectory.WorkspaceOf("App"), Name = "App", RootPath = @"c:\repo\app" };
+
+    /// <summary>What chats ask, held for Raven's panel.</summary>
+    public CodeSwitchX.Core.Sessions.ChatAsks Asks { get; }
+
+    /// <summary>The Yard as Raven's tools see it: the chats that ask, and where.</summary>
+    internal Raven.FakeYardDirectory YardDirectory { get; } = new();
     public Track General { get; } = new() { Name = "General" };
 
     public ShellTestHarness()
@@ -88,7 +95,8 @@ public sealed class ShellTestHarness
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
-            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic);
+            Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic,
+            asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory);
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance);
     }
 

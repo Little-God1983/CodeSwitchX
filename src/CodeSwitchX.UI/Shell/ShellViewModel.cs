@@ -63,6 +63,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Yard.TileRemoved += OnTileRemoved;
         Yard.HostStopped += OnHostStopped;
         Yard.TilesChanged += () => Raven.SetWorkspaces(Yard.Tiles);
+        Yard.BeforeRemove = MayRemoveAsync;
         Cab.BackRequested += BackToYard;
         Cab.SwitchRequested += id => _ = EnterCabAsync(id);
     }
@@ -397,6 +398,39 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         if (attempt == _openAttempt)
         {
             StatusMessage = message;
+        }
+    }
+
+    /// <summary>
+    /// Asks the user what becomes of a window's open cards before it is removed (#135): the workspace's name and how many
+    /// wait. Set by the main window; null in tests that do not ask, which keeps the workspace.
+    /// </summary>
+    public Func<string, int, Task<RemoveChoice>>? AskBeforeRemove { get; set; }
+
+    /// <summary>
+    /// Whether the workspace may be removed now. With open cards in its Raven chat the user chooses: answer them first (the
+    /// panel shows that chat, nothing is removed), leave them to VS Code (then it is removed), or cancel.
+    /// </summary>
+    private async Task<bool> MayRemoveAsync(Guid workspaceId)
+    {
+        var cards = Raven.OpenCardsOf(workspaceId);
+        if (cards == 0)
+        {
+            return true;
+        }
+
+        var name = Yard.FindTile(workspaceId)?.Name ?? "This workspace";
+        var choice = AskBeforeRemove is { } ask ? await ask(name, cards) : RemoveChoice.Cancel;
+        switch (choice)
+        {
+            case RemoveChoice.AnswerFirst:
+                Raven.ShowChatOf(workspaceId);
+                return false;
+            case RemoveChoice.LeaveToVsCode:
+                Raven.LeaveCardsToVsCode(workspaceId);
+                return true;
+            default:
+                return false;
         }
     }
 

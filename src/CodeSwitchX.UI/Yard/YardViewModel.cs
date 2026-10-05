@@ -234,8 +234,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
+    /// <summary>
+    /// Asked before a workspace is removed, with its id: false keeps it (#135: the shell asks what becomes of the cards in
+    /// its Raven chat). Null removes at once.
+    /// </summary>
+    public Func<Guid, Task<bool>>? BeforeRemove { get; set; }
+
     public async Task UnregisterAsync(Guid workspaceId)
     {
+        if (BeforeRemove is { } ask && !await ask(workspaceId))
+        {
+            return;
+        }
+
         try
         {
             await _registry.UnregisterAsync(workspaceId, CancellationToken.None);

@@ -1993,6 +1993,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         await card.Naming;
         _dispatcher.Post(() =>
         {
+            if (card.WorkspaceId is { } window && _removedWindows.TryGetValue(window, out var removed))
+            {
+                // Its window is gone from the Yard (it came while the remove was asked, say): VS Code asks it, not chat 0.
+                card.ShownIn = Append(entry, removed).Chat;
+                _asks?.ToVsCode(card.Ask.Id);
+                return;
+            }
+
             card.ShownIn = Append(entry, ChatOf(card.WorkspaceId)).Chat;
             Summarize(card.ShownIn);
             Arrive(card);
@@ -3302,45 +3310,37 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The workspaces the Yard shows, by number: each gets its chat, a renamed one keeps it, a removed one's chat leaves the
-    /// list. Its entries stay in Activity, the Yard's chat is selected if it was, and a card of it still open moves to the
-    /// Yard's chat, where chats on no tile ask: Activity has no buttons to answer it with. UI thread.
+    /// list. Its entries stay in Activity, and the Yard's chat is selected if it was. A card still open of a removed window
+    /// goes to its chat's VS Code tab (#135): chat 0 answers no card. A renumbered window's cards go to its new chat. UI thread.
     /// </summary>
     public void SetWorkspaces(IEnumerable<(Guid Id, int Number, string Name)> workspaces)
     {
         var wanted = workspaces.Where(w => w.Number > 0).OrderBy(w => w.Number).ToList();
+        List<RavenLogEntry> renumbered = [];
         foreach (var gone in Chats.Where(c => c.WorkspaceId is { } id && wanted.All(w => w.Id != id || w.Number != c.Number)).ToList())
         {
-            var moved = false;
-            foreach (var open in Log.Where(e => e.Chat == gone && e.Ask is { IsOpen: true }))
+            var removed = gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired);
+            foreach (var open in Log.Where(e => e.Chat == gone && e.Ask is { IsOpen: true }).ToList())
             {
-                open.Chat = YardChat;
-                open.Ask!.ShownIn = YardChat;
-                moved = true;
-                if (open.IsUnread)
+                if (removed)
                 {
-                    open.IsUnread = false;
-                    CountUnread(open); // still unread, where it is now
+                    _asks?.ToVsCode(open.Ask!.Ask.Id);
+                }
+                else
+                {
+                    renumbered.Add(open);
                 }
             }
 
-            if (gone.WorkspaceId is { } retired && wanted.All(w => w.Id != retired))
+            if (removed)
             {
-                _brains?.Retire(retired); // its process, config and conversation go with it
-            }
-
-            if (moved)
-            {
-                YardChat.IsWaiting = true;
-                YardChat.IsWaitingUnseen |= gone.IsWaitingUnseen && SelectedChat != YardChat; // seen in its window's chat is seen
+                _removedWindows[gone.WorkspaceId!.Value] = gone;
+                _brains?.Retire(gone.WorkspaceId!.Value); // its process, config and conversation go with it
             }
 
             if (SelectedChat == gone)
             {
                 SelectedChat = YardChat;
-            }
-            else if (moved)
-            {
-                ShowSelected(); // the Yard's chat gets the cards, Activity their new number
             }
 
             Chats.Remove(gone);
@@ -3357,6 +3357,46 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             chat.Name = name;
+            _removedWindows.Remove(id); // added again: its cards are asked here again
+        }
+
+        foreach (var open in renumbered)
+        {
+            var chat = ChatOf(open.Ask!.WorkspaceId);
+            open.Chat = chat;
+            open.Ask.ShownIn = chat;
+            chat.IsWaiting = true;
+            if (open.IsUnread)
+            {
+                open.IsUnread = false;
+                CountUnread(open); // still unread, where it is now
+            }
+        }
+
+        if (renumbered.Count > 0)
+        {
+            ShowSelected();
+        }
+    }
+
+    /// <summary>The chats of windows removed from the Yard: a card that comes for one goes to VS Code, never to chat 0 (UI thread).</summary>
+    private readonly Dictionary<Guid, RavenChat> _removedWindows = [];
+
+    /// <summary>How many cards wait in the workspace's Raven chat (#135).</summary>
+    public int OpenCardsOf(Guid workspaceId) =>
+        Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat ? _askCards.Values.Count(c => c.IsOpen && c.ShownIn == chat) : 0;
+
+    /// <summary>Each open card of the workspace's Raven chat goes to its chat's VS Code tab, as Answer in VS Code does.</summary>
+    public void LeaveCardsToVsCode(Guid workspaceId)
+    {
+        if (Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is not { } chat)
+        {
+            return;
+        }
+
+        foreach (var card in _askCards.Values.Where(c => c.IsOpen && c.ShownIn == chat).ToList())
+        {
+            _asks?.ToVsCode(card.Ask.Id);
         }
     }
 

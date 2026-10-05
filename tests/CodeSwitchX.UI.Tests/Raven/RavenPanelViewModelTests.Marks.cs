@@ -158,8 +158,9 @@ public sealed partial class RavenPanelViewModelTests
         vm.YardChat.Unread.ShouldBe(0);
     }
 
+    /// <summary>A removed window's waiting card goes to VS Code (#135): no mark moves to chat 0.</summary>
     [Fact]
-    public async Task A_waiting_card_of_a_removed_window_moves_its_mark_to_the_yard()
+    public async Task A_waiting_card_of_a_removed_window_leaves_no_mark_in_chat_zero()
     {
         var (vm, asks) = await ChatsVmAsync();
         vm.SelectedChat = ChatNumbered(vm, 1);
@@ -167,12 +168,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
 
-        vm.YardChat.IsWaiting.ShouldBeTrue();
-        vm.YardChat.IsWaitingUnseen.ShouldBeTrue("the user has not seen it in the Yard's chat");
-        vm.YardChat.Unread.ShouldBe(1, "the card is still unread, where it is now");
-
-        vm.SelectedChat = vm.YardChat;
-        vm.YardChat.Unread.ShouldBe(0);
+        (vm.YardChat.IsWaiting, vm.YardChat.IsWaitingUnseen, vm.YardChat.Unread).ShouldBe((false, false, 0));
     }
 
     [Fact]
@@ -258,20 +254,6 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = vm.YardChat;
         vm.YardChat.IsWaitingUnseen.ShouldBeFalse();
         vm.YardChat.Unread.ShouldBe(0);
-    }
-
-    [Fact]
-    public async Task A_card_the_user_has_seen_does_not_blink_again_when_its_window_is_removed()
-    {
-        var (vm, asks) = await ChatsVmAsync();
-        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
-        vm.SelectedChat = ChatNumbered(vm, 3);
-        vm.SelectedChat = ChatNumbered(vm, 1);
-
-        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
-
-        vm.YardChat.IsWaiting.ShouldBeTrue();
-        vm.YardChat.IsWaitingUnseen.ShouldBeFalse();
     }
 
     [Fact]
