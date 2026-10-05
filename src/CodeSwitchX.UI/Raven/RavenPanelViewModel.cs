@@ -1736,9 +1736,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
             }
 
+            // Chat 0 is told how busy each window is, from the Yard as it is now (#136): a window never talked about has no summary.
+            var busy = IsOverview(brain) ? await BusyWindowsAsync() : null;
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            await StreamAnswerAsync(brain, WithToldNews(question, brain), spoken, floor, question.Chat, question);
+            await StreamAnswerAsync(brain, WithToldNews(question, brain, busy), spoken, floor, question.Chat, question);
 
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
@@ -2587,7 +2589,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
     /// along is kept until the brain has it, so a question merged into the next or failed before it went loses none.
     /// </summary>
-    private string WithToldNews(Question question, IConductorBrain brain)
+    private string WithToldNews(Question question, IConductorBrain brain, IReadOnlyDictionary<Guid, Busy>? busy = null)
     {
         var now = _time.GetUtcNow();
         _toldNews.RemoveAll(t => now - t.At > ToldNewsLifetime);
@@ -2595,7 +2597,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Chat 0 is the overview: it is given each window's chat by its summary, and no fact of a card or a chat's news.
             question.Told = [];
-            return Overview() + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
+            return Overview(busy) + question.Earlier + WhereTheUserIs(question.Chat, brain, always: question.Earlier.Length > 0) + question.Text;
         }
 
         question.Told = [.. _toldNews.Where(t => !t.ToldTo.Contains(brain) && (t.For is null || t.For == brain))];
@@ -2609,14 +2611,46 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What chat 0 is told of the window chats with each question: each one's number, name, the cards waiting in it, and
     /// its summary. Never the chat's words or a card's text: those reach the summarizer only.
     /// </summary>
-    private string Overview()
+    private string Overview(IReadOnlyDictionary<Guid, Busy>? busy = null)
     {
-        var lines = Chats.Where(c => c.WorkspaceId is not null).Select(chat =>
+        List<string> lines = [];
+        List<int> quiet = [];
+        foreach (var chat in Chats.Where(c => c.WorkspaceId is not null))
         {
-            var waiting = WaitingIn(chat);
-            var cards = waiting switch { 0 => "nothing waiting", 1 => "1 card waiting", _ => $"{waiting} cards waiting" };
-            return $"Chat {chat.Number}, {chat.Name} ({cards}): {chat.Summary ?? "no summary yet"}";
-        }).ToList();
+            var now = busy?.GetValueOrDefault(chat.WorkspaceId!.Value) ?? default;
+            var cards = WaitingIn(chat);
+            // Counts only, never a chat's title or words: chat 0 knows a window's chats by its summary and these numbers.
+            List<string> parts = [];
+            if (now.Working > 0)
+            {
+                parts.Add(now.Working == 1 ? "1 Claude Code chat working" : $"{now.Working} Claude Code chats working");
+            }
+
+            if (now.Waiting > 0)
+            {
+                parts.Add(now.Waiting == 1 ? "1 waiting on the user" : $"{now.Waiting} waiting on the user");
+            }
+
+            if (cards > 0)
+            {
+                parts.Add(cards == 1 ? "1 card waiting" : $"{cards} cards waiting");
+            }
+
+            if (parts.Count == 0 && chat.Summary is null)
+            {
+                quiet.Add(chat.Number); // folded into one line: many idle windows keep it short
+                continue;
+            }
+
+            lines.Add($"Chat {chat.Number}, {chat.Name} ({(parts.Count == 0 ? "nothing going on" : string.Join(", ", parts))}): "
+                + (chat.Summary ?? "no summary yet"));
+        }
+
+        if (quiet.Count > 0)
+        {
+            lines.Add((quiet.Count == 1 ? $"Chat {quiet[0]}" : "Chats " + string.Join(", ", quiet)) + ": nothing going on");
+        }
+
         if (WaitingIn(YardChat) is > 0 and var here)
         {
             // Chats on no tile ask here: counted, as no summary has them.
@@ -2625,7 +2659,36 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         return lines.Count == 0
             ? "[There are no window chats now: no window is on the Yard.]\n"
-            : "[The window chats now, as their summaries say: " + string.Join("; ", lines) + ".]\n";
+            : "[The window chats now, as their summaries and the Yard say: " + string.Join("; ", lines) + ".]\n";
+    }
+
+    /// <summary>How many of a window's Claude Code chats work, and how many wait on the user.</summary>
+    internal readonly record struct Busy(int Working, int Waiting);
+
+    /// <summary>How long chat 0's question waits for the Yard's chats before it goes without their counts.</summary>
+    private static readonly TimeSpan BusyWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>Each window's working and waiting chats, as the Yard shows them now; null when it cannot say. Never faults.</summary>
+    private async Task<IReadOnlyDictionary<Guid, Busy>?> BusyWindowsAsync()
+    {
+        if (_yard is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var wait = new CancellationTokenSource(BusyWait);
+            var chats = await _yard.ChatsAsync(wait.Token);
+            return chats.GroupBy(c => c.WorkspaceId).ToDictionary(g => g.Key, g => new Busy(
+                g.Count(c => c.State == SessionState.Working && !c.NeedsYou),
+                g.Count(c => c.NeedsYou || c.State == SessionState.Waiting)));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(ex, "Chat 0 goes without the windows' chat counts");
+            return null;
+        }
     }
 
     /// <summary>Chat 0's brain, the overview, when there is one: with no summarizer chat 0 is told what every chat is.</summary>

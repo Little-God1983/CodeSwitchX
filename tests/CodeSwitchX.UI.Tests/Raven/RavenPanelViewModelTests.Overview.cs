@@ -30,6 +30,38 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingSummaries);
     }
 
+    /// <summary>#136: a window never talked about has no summary; its working chats still count, by number only.</summary>
+    [Fact]
+    public async Task A_window_with_a_working_chat_and_no_summary_is_named_with_its_counts_and_no_title()
+    {
+        var (vm, _, _, _) = await OverviewVmAsync();
+        _yard.Show("b", "CodeSwitchX", "Release notes");
+        _yard.Show("b2", "CodeSwitchX", "Secret refactor");
+        _yard.Now("b", SessionState.Working);
+        _yard.Now("b2", SessionState.Waiting, needsYou: true);
+
+        await TalkInAsync(vm, 0, "What's going on?");
+
+        var sent = _brain.Sent.ShouldHaveSingleItem();
+        sent.ShouldContain("Chat 1, CodeSwitchX (1 Claude Code chat working, 1 waiting on the user): no summary yet");
+        sent.ShouldContain("Chat 3: nothing going on");
+        sent.ShouldNotContain("Release notes", customMessage: "no chat's title");
+        sent.ShouldNotContain("Secret refactor", customMessage: "no chat's title");
+    }
+
+    [Fact]
+    public async Task Several_working_chats_are_counted()
+    {
+        var (vm, _, _, _) = await OverviewVmAsync();
+        _yard.Now("a", SessionState.Working);
+        _yard.Show("a2", "ContentAutomatorX", "Second");
+        _yard.Now("a2", SessionState.Working);
+
+        await TalkInAsync(vm, 0, "What's going on?");
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Chat 3, ContentAutomatorX (2 Claude Code chats working): no summary yet");
+    }
+
     [Fact]
     public async Task Chat_zero_s_brain_is_given_the_summaries_and_no_chat_s_conversation_or_card_text()
     {
@@ -46,7 +78,7 @@ public sealed partial class RavenPanelViewModelTests
         sent.ShouldContain("Chat 3, ContentAutomatorX");
         sent.ShouldContain("Retry fix waits on a test run.");
         sent.ShouldContain("1 card waiting");
-        sent.ShouldContain("Chat 1, CodeSwitchX");
+        sent.ShouldContain("Chat 1: nothing going on", customMessage: "a quiet window is folded into one line");
         sent.ShouldEndWith("What's going on?");
         sent.ShouldNotContain("Bluebird", customMessage: "what the user said in chat 3");
         sent.ShouldNotContain("Window answer", customMessage: "what Raven answered in chat 3");
@@ -189,7 +221,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(RavenPanelViewModel.SummaryWait);
         await WithinAsync(vm.PendingAnswers);
 
-        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Chat 3, ContentAutomatorX (nothing waiting): no summary yet");
+        _brain.Sent.ShouldHaveSingleItem().ShouldContain("Chats 1, 3: nothing going on");
     }
 
     [Fact]
