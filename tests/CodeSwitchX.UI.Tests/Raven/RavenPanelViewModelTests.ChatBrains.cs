@@ -256,8 +256,34 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = vm.YardChat; // moving away lets the proposal go: its brain is told
         Type(vm, "anything new?");
         await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "and here?");
+        await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("allow you proposed", customMessage: "its proposer is told");
+    }
+
+    /// <summary>A window's brain made anew (the window left the list for a moment) still gets the window's facts.</summary>
+    [Fact]
+    public async Task A_window_s_facts_reach_a_brain_made_anew_for_it()
+    {
+        _yard.Show("a", "ContentAutomatorX", "Deploy");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is { ShownIn: not null }));
+        brains.Windows.Remove(ContentAutomatorX); // as Retire does: the next For makes a new brain
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "allow it");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldContain("(ask id p1)");
     }
 
     /// <summary>#137: a card of window 3 reaches chat 3's brain, never chat 1's, even when the user is in chat 1.</summary>
