@@ -45,7 +45,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     private bool _ravenOpen;
     private Guid? _cabShowing;
 
-    /// <summary>The workspaces with a tile, and so a Raven chat (#148): only their chats' questions are taken. Under <see cref="_askGate"/>.</summary>
+    /// <summary>The workspaces with a Raven chat (#148): only their chats' questions are taken. Under <see cref="_askGate"/>.</summary>
     private HashSet<Guid> _tiled = [];
 
     /// <summary>Counts the opens; the status strip belongs to the latest one (see <see cref="ReportFor"/>).</summary>
@@ -334,7 +334,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// </summary>
     private void TrackTiles()
     {
-        HashSet<Guid> tiled = [.. Yard.Tiles.Where(t => t.Number > 0).Select(t => t.Id)];
+        HashSet<Guid> tiled = [.. Raven.Chats.Select(c => c.WorkspaceId).OfType<Guid>()]; // as the panel lists them
         bool changed;
         lock (_askGate)
         {

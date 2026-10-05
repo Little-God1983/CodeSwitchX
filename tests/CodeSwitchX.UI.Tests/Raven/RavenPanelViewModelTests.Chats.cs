@@ -239,10 +239,10 @@ public sealed partial class RavenPanelViewModelTests
 
     /// <summary>
     /// #148: a card whose window is removed while it is named (the remove asked meanwhile, say) is asked in its VS Code tab:
-    /// no card of it is in chat 0, or anywhere in the panel; the user removed the window, so nothing is said of it.
+    /// no card of it is in chat 0, or anywhere in the panel; a note says where it waits.
     /// </summary>
     [Fact]
-    public async Task A_card_whose_window_goes_while_it_is_named_goes_to_vs_code_unshown()
+    public async Task A_card_whose_window_goes_while_it_is_named_goes_to_vs_code_with_a_note()
     {
         var (vm, asks) = await ChatsVmAsync();
         _yard.Gate = new TaskCompletionSource();
@@ -254,7 +254,8 @@ public sealed partial class RavenPanelViewModelTests
 
         await WithinAsync(held);
         asks.IsHeld("p1").ShouldBeFalse("its tab asks it");
-        vm.Log.ShouldBeEmpty();
+        vm.Log.ShouldHaveSingleItem().Text.ShouldBe("A permission prompt from ContentAutomatorX · Fix the upload retry went to its VS Code tab: "
+            + "Raven found no window's chat for it.");
         (vm.OpenQuestions, vm.YardChat.IsWaiting).ShouldBe((0, false));
     }
 
@@ -270,7 +271,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(held);
         asks.IsHeld("p1").ShouldBeFalse();
         vm.Log.ShouldNotContain(e => e.Ask != null);
-        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("A permission prompt went to its chat's VS Code tab: Raven found no window's chat for it.");
+        vm.Shown.ShouldHaveSingleItem().Text.ShouldBe("A permission prompt from a chat went to its VS Code tab: Raven found no window's chat for it.");
         (vm.OpenQuestions, vm.YardChat.IsWaiting).ShouldBe((0, false));
     }
 

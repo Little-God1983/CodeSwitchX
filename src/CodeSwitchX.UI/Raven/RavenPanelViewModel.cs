@@ -2040,10 +2040,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The card goes in its window's chat, and only there: it is answered where that window's other cards are. Which
-    /// window that is the naming finds. A chat on no tile is asked in its VS Code tab (#148): its question is not taken,
-    /// and one whose window went while it was named goes there too, unshown. One the naming found on no tile at all (the
-    /// Yard too slow to read, say) goes there with a note, so the user knows where it waits. Chat 0 never has a card.
-    /// Never faults.
+    /// window that is the naming finds. A chat on no tile is asked in its VS Code tab (#148): its question is not taken.
+    /// One taken all the same (its window removed while it was named, or the Yard too slow to read) goes there too, with a
+    /// note in the chat the user is in, so they know where it waits. Chat 0 never has a card. Never faults.
     /// </summary>
     private async Task PlaceAsync(RavenLogEntry entry, ChatAskCard card)
     {
@@ -2052,16 +2051,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             if (ChatOf(card.WorkspaceId) == YardChat)
             {
-                _askCards.Remove(card.Ask.Id);
-                OpenQuestions = _askCards.Count;
+                // Its end takes the card away (OnAskClosed); one ended already is gone.
                 if (_asks?.IsHeld(card.Ask.Id) == true)
                 {
                     _asks.ToVsCode(card.Ask.Id);
-                    if (card.Workspace is null)
-                    {
-                        AddEntry(RavenLogKind.Note, $"{card.Ask.Kind switch { ChatAskKind.Permission => "A permission prompt", _ => "A question" }} "
-                            + "went to its chat's VS Code tab: Raven found no window's chat for it.");
-                    }
+                    AddEntry(RavenLogKind.Note, $"{(card.Ask.Kind == ChatAskKind.Permission ? "A permission prompt" : "A question")} from "
+                        + $"{(card.Workspace is null ? FolderOf(card.Ask) : card.Chat)} went to its VS Code tab: Raven found no window's chat for it.");
                 }
 
                 return;
@@ -2101,6 +2096,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _logger.LogInformation(ex, "Could not name the chat that asks");
         }
     }
+
+    /// <summary>"a chat in RawCutX": the folder the chat that asks works in, for a note when the Yard does not name it.</summary>
+    private static string FolderOf(ChatAsk ask) =>
+        ask.Step.Cwd is { Length: > 0 } cwd && System.IO.Path.GetFileName(System.IO.Path.TrimEndingDirectorySeparator(cwd)) is { Length: > 0 } folder
+            ? $"a chat in {folder}"
+            : "a chat";
 
     /// <summary>A held question ended: its card shows how, and takes no more clicks.</summary>
     private void OnAskClosed(ChatAskClosed closed)
