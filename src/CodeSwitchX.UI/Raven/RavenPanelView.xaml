@@ -6,6 +6,7 @@
              xmlns:raven="clr-namespace:CodeSwitchX.UI.Raven"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:shell="clr-namespace:CodeSwitchX.UI.Shell"
              mc:Ignorable="d"
              d:DataContext="{d:DesignInstance raven:RavenPanelViewModel}"
              d:DesignWidth="320" d:DesignHeight="800">
@@ -573,16 +574,16 @@
       <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolVisible}}">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="320" />
+          <ColumnDefinition Width="{x:Static shell:NarrowLayout.RavenChatColumn}" />
         </Grid.ColumnDefinitions>
 
         <Border Grid.Column="0" Background="#0B111E" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
           <Border.Style>
             <Style TargetType="Border">
-              <Setter Property="Width" Value="236" />
+              <Setter Property="Width" Value="{x:Static shell:NarrowLayout.RavenList}" />
               <Style.Triggers>
                 <DataTrigger Binding="{Binding IsListFolded}" Value="True">
-                  <Setter Property="Width" Value="58" />
+                  <Setter Property="Width" Value="{x:Static shell:NarrowLayout.RavenListFolded}" />
                 </DataTrigger>
               </Style.Triggers>
             </Style>
@@ -660,7 +661,7 @@
               </Button>
             </StackPanel>
 
-            <!-- Folded in the Cab: the orb and the mic, as on the collapsed rail. -->
+            <!-- Folded (the Cab, or Settings on a narrow window): the orb and the mic, as on the collapsed rail. -->
             <StackPanel Grid.Row="0" Margin="0,14,0,6" HorizontalAlignment="Center"
                         Visibility="{Binding IsListFolded, Converter={StaticResource BoolVisible}}">
               <Button Style="{StaticResource IconButton}" Content="&#xE76B;" Command="{Binding TogglePanelCommand}" HorizontalAlignment="Center"

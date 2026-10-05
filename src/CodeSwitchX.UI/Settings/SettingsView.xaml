@@ -4,6 +4,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:shell="clr-namespace:CodeSwitchX.UI.Shell"
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              mc:Ignorable="d"
@@ -294,27 +295,93 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <!--
+      A field as wide as there is room, at most 460 and to the left (#162): a Width of 460 ran past the right edge of a
+      narrow page, and a MaxWidth alone would centre it.
+    -->
+    <Style x:Key="FieldWidth" TargetType="ContentControl">
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="IsTabStop" Value="False" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContentControl">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="460" />
+                <ColumnDefinition Width="0.0001*" />
+              </Grid.ColumnDefinitions>
+              <ContentPresenter />
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </UserControl.Resources>
 
   <Grid Background="{StaticResource Bg}" TextElement.Foreground="{StaticResource Text}">
     <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="260" />
+      <!-- On a narrow window the sidebar folds to the pages' icons (#162). -->
+      <ColumnDefinition>
+        <ColumnDefinition.Style>
+          <Style TargetType="ColumnDefinition">
+            <Setter Property="Width" Value="{x:Static shell:NarrowLayout.SidebarColumn}" />
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                <Setter Property="Width" Value="{x:Static shell:NarrowLayout.SidebarFoldedColumn}" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </ColumnDefinition.Style>
+      </ColumnDefinition>
       <ColumnDefinition Width="*" />
     </Grid.ColumnDefinitions>
 
     <!-- The sidebar: back, search, the pages, and how changes are kept. -->
     <Border Background="{StaticResource Side}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
-      <DockPanel Margin="14,16,14,16">
-        <Button DockPanel.Dock="Top" Style="{StaticResource Ghost}" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+      <DockPanel>
+        <DockPanel.Style>
+          <Style TargetType="DockPanel">
+            <Setter Property="Margin" Value="14,16,14,16" />
+            <Style.Triggers>
+              <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                <Setter Property="Margin" Value="6,16,6,16" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </DockPanel.Style>
+        <Button DockPanel.Dock="Top" Command="{Binding DataContext.CloseSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                 AutomationProperties.Name="Back to Yard" Padding="6,4">
+          <Button.Style>
+            <!-- Folded, the words are gone: the tooltip has them. -->
+            <Style TargetType="Button" BasedOn="{StaticResource Ghost}">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                  <Setter Property="ToolTip" Value="Back to Yard" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Button.Style>
           <StackPanel Orientation="Horizontal">
-            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <TextBlock Text="Back to Yard" />
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE72B;" FontSize="12" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Margin" Value="0,0,8,0" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                      <Setter Property="Margin" Value="0" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="Back to Yard" Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
           </StackPanel>
         </Button>
-        <TextBlock DockPanel.Dock="Top" Text="Settings" FontSize="22" FontWeight="SemiBold" Margin="6,14,0,14" />
-        <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
-          <TextBox x:Name="SearchBox" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="30,7,8,7" FontSize="13.5"
+        <TextBlock DockPanel.Dock="Top" Text="Settings" FontSize="22" FontWeight="SemiBold" Margin="6,14,0,14"
+                   Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
+        <!-- Folded, the search is gone with the names it finds: the view model puts a search typed before aside until it unfolds. -->
+        <Grid DockPanel.Dock="Top" Margin="0,0,0,14" Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}">
+          <TextBox x:Name="SearchBox" IsVisibleChanged="OnSearchVisibleChanged" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="30,7,8,7" FontSize="13.5"
                    AutomationProperties.Name="Search settings" />
           <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE721;" FontSize="13" Foreground="{StaticResource Faint}" Margin="11,0,0,0"
                      VerticalAlignment="Center" IsHitTestVisible="False" />
@@ -331,21 +398,52 @@
             </TextBlock.Style>
           </TextBlock>
         </Grid>
-        <StackPanel DockPanel.Dock="Bottom" Margin="6,12,0,0">
+        <StackPanel DockPanel.Dock="Bottom">
+          <StackPanel.Style>
+            <Style TargetType="StackPanel">
+              <Setter Property="Margin" Value="6,12,0,0" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                  <Setter Property="ToolTip" Value="Changes save as you make them" />
+                  <Setter Property="Margin" Value="0,12,0,0" />
+                  <Setter Property="HorizontalAlignment" Value="Center" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </StackPanel.Style>
           <StackPanel Orientation="Horizontal">
-            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center" Margin="0,0,8,0" />
-            <TextBlock Text="Changes save as you make them" FontSize="12.5" Foreground="{StaticResource Muted}" />
+            <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE73E;" FontSize="12" Foreground="#34D399" VerticalAlignment="Center">
+              <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                  <Setter Property="Margin" Value="0,0,8,0" />
+                  <Style.Triggers>
+                    <!-- Folded: centred in the rail, as the icons above it. -->
+                    <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                      <Setter Property="Margin" Value="0" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="Changes save as you make them" FontSize="12.5" Foreground="{StaticResource Muted}"
+                       Visibility="{Binding IsSidebarFolded, Converter={StaticResource BoolCollapsed}}" />
           </StackPanel>
         </StackPanel>
         <Grid>
-          <ListBox ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}" infra:KeepSelection.IsEnabled="True"
+          <ListBox x:Name="PagesList" ItemsSource="{Binding Source={StaticResource PageGroups}}" SelectedItem="{Binding ListedPage}" ItemContainerStyle="{StaticResource NavItem}" infra:KeepSelection.IsEnabled="True"
                    Background="Transparent" BorderThickness="0" AutomationProperties.Name="Settings pages"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListBox.GroupStyle>
               <GroupStyle>
                 <GroupStyle.HeaderTemplate>
                   <DataTemplate>
-                    <TextBlock Style="{StaticResource Caps}" Text="{Binding Name}" Margin="12,10,0,6" />
+                    <!-- Folded, a line parts the groups where their names were. -->
+                    <Grid Margin="12,10,0,6">
+                      <TextBlock Style="{StaticResource Caps}" Text="{Binding Name}"
+                                 Visibility="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolCollapsed}}" />
+                      <Border Height="1" Background="{StaticResource Line}" Margin="-6,0,6,0"
+                              Visibility="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolVisible}}" />
+                    </Grid>
                   </DataTemplate>
                 </GroupStyle.HeaderTemplate>
               </GroupStyle>
@@ -353,8 +451,30 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="settings:SettingsPageItem">
                 <StackPanel Orientation="Horizontal" AutomationProperties.Name="{Binding Title}">
-                  <TextBlock FontFamily="{StaticResource Icons}" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Center" Margin="0,0,12,0" />
-                  <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                          <Setter Property="HorizontalAlignment" Value="Center" />
+                          <Setter Property="ToolTip" Value="{Binding Title}" />
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </StackPanel.Style>
+                  <TextBlock FontFamily="{StaticResource Icons}" Text="{Binding Icon}" FontSize="15" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock">
+                        <Setter Property="Margin" Value="0,0,12,0" />
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
+                            <Setter Property="Margin" Value="0" />
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                  <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                             Visibility="{Binding DataContext.IsSidebarFolded, RelativeSource={RelativeSource AncestorType=ListBox}, Converter={StaticResource BoolCollapsed}}" />
                 </StackPanel>
               </DataTemplate>
             </ListBox.ItemTemplate>
@@ -376,7 +496,18 @@
     </Border>
 
     <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-      <StackPanel Margin="40,30,40,40" MaxWidth="860" HorizontalAlignment="Left">
+      <StackPanel MaxWidth="860" HorizontalAlignment="Left">
+        <StackPanel.Style>
+          <Style TargetType="StackPanel">
+            <Setter Property="Margin" Value="40,30,40,40" />
+            <Style.Triggers>
+              <!-- Narrow: the margins give some of their room to the page too. -->
+              <DataTrigger Binding="{Binding IsSidebarFolded}" Value="True">
+                <Setter Property="Margin" Value="16,24,16,32" />
+              </DataTrigger>
+            </Style.Triggers>
+          </Style>
+        </StackPanel.Style>
         <TextBlock Text="{Binding SelectedPage.Title}" FontSize="28" FontWeight="SemiBold" />
         <TextBlock Text="{Binding SelectedPage.Subtitle}" Style="{StaticResource Help}" FontSize="14.5" Margin="0,6,0,22" />
         <Border CornerRadius="10" Background="#3A1A20" Padding="14,10" Margin="0,0,0,16"
@@ -621,10 +752,13 @@
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Microphone" />
               <TextBlock Style="{StaticResource Help}" Text="The mic Raven hears. The level moves while Raven listens. Push to talk or Open mic is switched on Raven's panel, where you talk." />
-              <ComboBox Width="460" HorizontalAlignment="Left" FontSize="14" AutomationProperties.Name="Microphone"
-                        ItemsSource="{Binding DataContext.Raven.Microphones, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
-                        SelectedItem="{Binding DataContext.Raven.SelectedMicrophone, RelativeSource={RelativeSource AncestorType=Window}}" />
-              <DockPanel Width="460" HorizontalAlignment="Left" Margin="0,12,0,0">
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox FontSize="14" AutomationProperties.Name="Microphone"
+                          ItemsSource="{Binding DataContext.Raven.Microphones, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
+                          SelectedItem="{Binding DataContext.Raven.SelectedMicrophone, RelativeSource={RelativeSource AncestorType=Window}}" />
+              </ContentControl>
+              <ContentControl Style="{StaticResource FieldWidth}" Margin="0,12,0,0">
+              <DockPanel>
                 <TextBlock Text="Level" FontSize="12" Foreground="{StaticResource Muted}" Width="44" VerticalAlignment="Center" />
                 <Border Height="6" CornerRadius="3" Background="{StaticResource Line}" ClipToBounds="True" VerticalAlignment="Center" ToolTip="Mic level">
                   <!-- Raven's level carries its own voice while it speaks, not the mic's: hidden then, as on the panel. -->
@@ -644,6 +778,7 @@
                   </Border>
                 </Border>
               </DockPanel>
+              </ContentControl>
             </StackPanel>
           </Border>
 
@@ -656,13 +791,16 @@
                 <ListBox.ItemTemplate>
                   <DataTemplate DataType="settings:SpeechToTextRow">
                     <Border Style="{StaticResource PickRow}" Padding="14,10" Margin="0,0,0,6" AutomationProperties.Name="{Binding Name}">
+                      <!-- The name and what it is, then its size, where it stands and its download on a line of their own: in one row
+                           they left the name no room on a narrow page (#162). -->
                       <Grid>
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="32" />
                           <ColumnDefinition Width="*" />
-                          <ColumnDefinition Width="70" />
-                          <ColumnDefinition Width="150" />
-                          <ColumnDefinition Width="104" />
                         </Grid.ColumnDefinitions>
                         <Grid Width="18" Height="18" HorizontalAlignment="Left">
                           <Ellipse Style="{StaticResource RadioRing}" />
@@ -670,15 +808,18 @@
                         </Grid>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                           <TextBlock Text="{Binding Name}" FontSize="14.5" FontWeight="SemiBold" />
-                          <TextBlock Text="{Binding Description}" FontSize="13" Foreground="{StaticResource Muted}" />
+                          <TextBlock Text="{Binding Description}" FontSize="13" Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
                         </StackPanel>
-                        <TextBlock Grid.Column="2" Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
-                        <voice:ModelLampView Grid.Column="3" DataContext="{Binding Lamp}" Foreground="#C7D2E2" />
-                        <Button Grid.Column="4" Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" HorizontalAlignment="Right"
-                                AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
-                                Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
-                        <ProgressBar Grid.Column="4" Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}" VerticalAlignment="Center"
-                                     Foreground="#FBBF24" Visibility="{Binding Progress, Converter={StaticResource NullToCollapsed}}" />
+                        <WrapPanel Grid.Row="1" Grid.Column="1" Margin="0,6,0,0">
+                          <TextBlock Text="{Binding Size}" FontFamily="{StaticResource Mono}" FontSize="12.5" Foreground="{StaticResource Muted}" VerticalAlignment="Center"
+                                     MinWidth="62" Margin="0,0,10,0" />
+                          <voice:ModelLampView DataContext="{Binding Lamp}" Foreground="#C7D2E2" VerticalAlignment="Center" MinWidth="140" Margin="0,0,10,0" />
+                          <Button Style="{StaticResource Small}" Content="Download" Command="{Binding DownloadCommand}" VerticalAlignment="Center"
+                                  AutomationProperties.Name="{Binding Name, StringFormat='Download {0}'}"
+                                  Visibility="{Binding CanDownload, Converter={StaticResource BoolVisible}}" />
+                          <ProgressBar Width="104" Height="5" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay, TargetNullValue=0}" VerticalAlignment="Center"
+                                       Foreground="#FBBF24" Visibility="{Binding Progress, Converter={StaticResource NullToCollapsed}}" />
+                        </WrapPanel>
                       </Grid>
                     </Border>
                   </DataTemplate>
@@ -709,15 +850,19 @@
               <TextBlock Style="{StaticResource H3}" Text="Raven's brain" />
               <TextBlock Style="{StaticResource Help}" Text="The model Raven answers with, through the Yard's tools only. A faster model answers sooner. A change starts a new conversation." />
               <TextBlock Style="{StaticResource Label}" Text="Window chats" />
-              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Raven model"
-                        ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
-                        Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
-                        ToolTip="A full model id. Pick one or type another." />
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox IsEditable="True" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Raven model"
+                          ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
+                          Text="{Binding RavenBrainModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                          ToolTip="A full model id. Pick one or type another." />
+              </ContentControl>
               <TextBlock Style="{StaticResource Label}" Text="Chat 0, the overview" Margin="0,18,0,6" />
-              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Chat 0 model"
-                        ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
-                        Text="{Binding RavenOverviewModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
-                        ToolTip="Chat 0 knows each window's chat by a short summary, worded with this model too. A small model is enough." />
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox IsEditable="True" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Chat 0 model"
+                          ItemsSource="{Binding KnownBrainModels, Mode=OneTime}"
+                          Text="{Binding RavenOverviewModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                          ToolTip="Chat 0 knows each window's chat by a short summary, worded with this model too. A small model is enough." />
+              </ContentControl>
             </StackPanel>
           </Border>
 
@@ -726,27 +871,33 @@
               <TextBlock Style="{StaticResource H3}" Text="New chats Raven starts" />
               <TextBlock Style="{StaticResource Help}" Text="They run in auto mode with these unless you name others for one chat. Saying &quot;from now on Opus&quot; changes them here too. Default leaves it to Claude Code." />
               <TextBlock Style="{StaticResource Label}" Text="Model" />
-              <ComboBox IsEditable="True" Width="460" HorizontalAlignment="Left" FontSize="14" AutomationProperties.Name="Chat model"
-                        ItemsSource="{Binding ChatModelChoices}"
-                        Text="{Binding RavenChatModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
-                        ToolTip="A name from the table below, a full model id, or default." />
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox IsEditable="True" FontSize="14" AutomationProperties.Name="Chat model"
+                          ItemsSource="{Binding ChatModelChoices}"
+                          Text="{Binding RavenChatModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
+                          ToolTip="A name from the table below, a full model id, or default." />
+              </ContentControl>
               <TextBlock Style="{StaticResource Label}" Text="Effort" Margin="0,18,0,6" />
               <ListBox Style="{StaticResource Segmented}" ItemsSource="{Binding EffortChoices, Mode=OneTime}" SelectedItem="{Binding RavenChatEffort}"
                        AutomationProperties.Name="Chat effort" />
 
               <TextBlock Style="{StaticResource Label}" Text="Model names" Margin="0,22,0,2" />
-              <TextBlock Text="The name you say, and the model it starts. Edit a row when a new model comes out." FontSize="13" Foreground="{StaticResource Muted}" Margin="0,0,0,10" />
+              <TextBlock Text="The name you say, and the model it starts. Edit a row when a new model comes out." FontSize="13" Foreground="{StaticResource Muted}" Margin="0,0,0,10"
+                         TextWrapping="Wrap" />
               <Border BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
                 <StackPanel>
-                  <Grid Background="{StaticResource Side}">
-                    <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="170" />
-                      <ColumnDefinition Width="*" />
-                      <ColumnDefinition Width="44" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Style="{StaticResource Caps}" Text="YOU SAY" Margin="14,9" />
-                    <TextBlock Grid.Column="1" Style="{StaticResource Caps}" Text="MODEL ID" Margin="8,9" />
-                  </Grid>
+                  <!-- The same columns as the rows, padded alike, so they line up at any width (#162). -->
+                  <Border Background="{StaticResource Side}" Padding="6,0">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="96" MaxWidth="164" />
+                        <ColumnDefinition Width="2*" />
+                        <ColumnDefinition Width="38" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Style="{StaticResource Caps}" Text="YOU SAY" Margin="8,9" />
+                      <TextBlock Grid.Column="1" Style="{StaticResource Caps}" Text="MODEL ID" Margin="2,9" />
+                    </Grid>
+                  </Border>
                   <ItemsControl ItemsSource="{Binding Aliases}" Focusable="False">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate DataType="settings:AliasRow">
@@ -757,8 +908,8 @@
                               <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="164" />
-                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="*" MinWidth="96" MaxWidth="164" />
+                              <ColumnDefinition Width="2*" />
                               <ColumnDefinition Width="38" />
                             </Grid.ColumnDefinitions>
                             <TextBox Text="{Binding Name, UpdateSourceTrigger=LostFocus}" FontWeight="SemiBold" Margin="0,0,6,0" AutomationProperties.Name="Name you say" />
@@ -865,23 +1016,27 @@
                 <ItemsControl.ItemTemplate>
                   <DataTemplate>
                     <Grid Margin="0,4">
+                      <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                      </Grid.RowDefinitions>
                       <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="170" />
-                        <ColumnDefinition Width="210" />
+                        <ColumnDefinition Width="*" MinWidth="56" MaxWidth="170" />
+                        <ColumnDefinition Width="*" MinWidth="146" MaxWidth="210" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="0.0001*" />
                       </Grid.ColumnDefinitions>
-                      <TextBlock Text="{Binding Label}" FontSize="14" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding Label}" FontSize="14" VerticalAlignment="Center" TextWrapping="Wrap" />
                       <TextBox Grid.Column="1" Text="{Binding Chord, UpdateSourceTrigger=LostFocus}" FontFamily="{StaticResource Mono}" FontSize="13.5"
                                AutomationProperties.Name="{Binding Label, StringFormat='Hotkey for {0}'}" PreviewKeyDown="OnChordKeyDown"
                                GotKeyboardFocus="OnChordFocus" LostKeyboardFocus="OnChordFocusLost" />
-                      <Button Grid.Column="2" Style="{StaticResource Small}" Content="Default" Command="{Binding ResetCommand}" Margin="8,0,0,0"
+                      <Button Grid.Column="2" Style="{StaticResource Small}" Content="Default" Command="{Binding ResetCommand}" Margin="6,0,0,0"
                               AutomationProperties.Name="{Binding Label, StringFormat='Default hotkey for {0}'}" />
-                      <Button Grid.Column="3" Style="{StaticResource Small}" Content="None" Command="{Binding ClearCommand}" Margin="6,0,0,0"
+                      <Button Grid.Column="3" Style="{StaticResource Small}" Content="None" Command="{Binding ClearCommand}" Margin="4,0,0,0"
                               AutomationProperties.Name="{Binding Label, StringFormat='No hotkey for {0}'}" />
-                      <TextBlock Grid.Column="4" Text="{Binding Problem}" Foreground="#F59E0B" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center"
-                                 Margin="12,0,0,0" Visibility="{Binding Problem, Converter={StaticResource NullToCollapsed}}" />
+                      <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="4" Text="{Binding Problem}" Foreground="#F59E0B" FontSize="12.5" TextWrapping="Wrap"
+                                 Margin="2,4,0,0" Visibility="{Binding Problem, Converter={StaticResource NullToCollapsed}}" />
                     </Grid>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
@@ -949,7 +1104,8 @@
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Data folder" />
               <TextBlock Style="{StaticResource Help}" Text="The database, the logs and the downloaded models." />
-              <TextBlock Text="{Binding DataFolder}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" Margin="0,0,0,14" />
+              <TextBlock Text="{Binding DataFolder}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="#C7D2E2" TextTrimming="CharacterEllipsis" Margin="0,0,0,14"
+                         ToolTip="{Binding DataFolder}" />
               <StackPanel Orientation="Horizontal">
                 <Button Style="{StaticResource Secondary}" Content="Open folder" Command="{Binding OpenDataFolderCommand}" Margin="0,0,8,0" AutomationProperties.Name="Open data folder" />
                 <Button Style="{StaticResource Secondary}" Content="Open logs" Command="{Binding OpenLogsFolderCommand}" />

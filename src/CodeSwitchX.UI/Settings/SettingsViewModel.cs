@@ -117,6 +117,38 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public static string HideIdleText(int hours) => hours == 0 ? "Never" : hours == 1 ? "1 hour" : $"{hours} hours";
 
+    /// <summary>
+    /// The sidebar shows only the pages' icons, so a narrow window keeps room for the page (#162); the shell sets it from
+    /// the window's width.
+    /// </summary>
+    [ObservableProperty] private bool _isSidebarFolded;
+
+    /// <summary>The search put aside while the sidebar is folded, given back as it unfolds.</summary>
+    private string _searchBeforeFold = "";
+
+    /// <summary>
+    /// Folded, the search box is gone: a search left in it would filter the pages with no way to see or clear it. It is put
+    /// aside, and back as the sidebar unfolds, so a window that is narrow only for a moment does not lose it; but only
+    /// while it still finds the page shown, so it never takes the user off a page they picked meanwhile.
+    /// </summary>
+    partial void OnIsSidebarFoldedChanged(bool value)
+    {
+        if (value)
+        {
+            _searchBeforeFold = Search;
+            Search = "";
+        }
+        else
+        {
+            if (SelectedPage.Matches(_searchBeforeFold))
+            {
+                Search = _searchBeforeFold;
+            }
+
+            _searchBeforeFold = "";
+        }
+    }
+
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 
@@ -228,6 +260,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public void OpenPage(SettingsPage page)
     {
         Search = "";
+        _searchBeforeFold = "";
         SelectedPage = SettingsPageItem.All.First(p => p.Page == page);
     }
 

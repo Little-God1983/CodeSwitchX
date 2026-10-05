@@ -128,6 +128,24 @@ public partial class MainWindow : Window, IShellWindow
             (_, _) => _host.PollLiveness(), Dispatcher);
         _livenessTimer.Start();
         Activated += OnActivated;
+        // The content's width, not the window's: what folds on a narrow window is reckoned from the room inside it (#162).
+        if (Content is FrameworkElement content)
+        {
+            content.SizeChanged += (_, e) =>
+            {
+                if (e.WidthChanged)
+                {
+                    _shell.SetWidth(e.NewSize.Width);
+                }
+            };
+
+            // Laid out already, its first change is past.
+            if (content.ActualWidth > 0)
+            {
+                _shell.SetWidth(content.ActualWidth);
+            }
+        }
+
         StateChanged += (_, _) =>
         {
             if (WindowState != WindowState.Minimized)

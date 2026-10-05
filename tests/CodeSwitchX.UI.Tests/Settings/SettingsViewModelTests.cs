@@ -296,6 +296,47 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.YardHideIdleHours, 24, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>
+    [Fact]
+    public void A_search_is_cleared_when_the_sidebar_folds()
+    {
+        _vm.Search = "budget";
+        _vm.Pages.ShouldHaveSingleItem().Page.ShouldBe(SettingsPage.Usage);
+
+        _vm.IsSidebarFolded = true;
+
+        _vm.Search.ShouldBe("");
+        _vm.Pages.Count.ShouldBe(SettingsPageItem.All.Count);
+
+        _vm.IsSidebarFolded = false;
+        _vm.Search.ShouldBe("budget", "narrow only for a moment, the search is given back");
+    }
+
+    /// <summary>A page picked while folded stays: the search given back would have taken the user off it.</summary>
+    [Fact]
+    public void A_search_that_does_not_find_the_page_picked_while_folded_is_not_given_back()
+    {
+        _vm.Search = "budget";
+        _vm.IsSidebarFolded = true;
+        _vm.ListedPage = _vm.Pages.First(p => p.Page == SettingsPage.Shortcuts);
+
+        _vm.IsSidebarFolded = false;
+
+        (_vm.Search, _vm.Page).ShouldBe(("", SettingsPage.Shortcuts));
+    }
+
+    [Fact]
+    public void A_page_opened_while_folded_drops_the_search_put_aside()
+    {
+        _vm.Search = "hotkey";
+        _vm.IsSidebarFolded = true;
+
+        _vm.OpenPage(SettingsPage.Shortcuts);
+        _vm.IsSidebarFolded = false;
+
+        _vm.Search.ShouldBe("");
+    }
+
     [Fact]
     public void The_Yard_s_times_are_offered_in_words()
     {
