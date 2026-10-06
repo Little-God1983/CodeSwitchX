@@ -115,6 +115,26 @@ public class ShellViewModelTests
         await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, Arg.Any<MicrophoneDevice?>(), Arg.Any<CancellationToken>());
     }
 
+    // #172: a mic tried on Raven's panel is not saved, the default picked in Settings is; a restart starts on the default.
+    [Fact]
+    public async Task A_microphone_tried_on_the_panel_is_not_saved_and_one_picked_in_settings_is()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var desk = new MicrophoneDevice("id-desk", "Desk mic");
+        _h.Microphones.List().Returns([headset, desk]);
+        _h.Microphones.Default().Returns(headset);
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh;
+
+        _h.Shell.Raven.SelectedMicrophone = desk;
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenMicrophone, Arg.Any<MicrophoneDevice?>(), Arg.Any<CancellationToken>());
+
+        _h.Shell.Raven.DefaultMicrophone = desk;
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received().SetAsync(SettingKeys.RavenMicrophone, desk, Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task A_stored_microphone_that_appears_after_startup_is_selected_and_never_saved_over()
     {
@@ -164,7 +184,7 @@ public class ShellViewModelTests
     }
 
     [Fact]
-    public async Task Choosing_another_microphone_is_saved()
+    public async Task Choosing_another_default_microphone_is_saved()
     {
         var headset = new MicrophoneDevice("id-headset", "Headset");
         var desk = new MicrophoneDevice("id-desk", "Desk mic");
@@ -174,7 +194,7 @@ public class ShellViewModelTests
         await _h.Shell.Raven.PendingRefresh; // the microphones are listed off the UI thread
         _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset, "nothing stored: the Windows default");
 
-        _h.Shell.Raven.SelectedMicrophone = desk;
+        _h.Shell.Raven.DefaultMicrophone = desk; // picked in Settings
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
 

@@ -362,17 +362,40 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private bool _isOpen = true;
 
-    /// <summary>The microphone recorded from: the preferred one while it is plugged in, the Windows default otherwise.</summary>
+    /// <summary>
+    /// The microphone recorded from, which the panel's picker shows: one picked there to try it while it is plugged in,
+    /// the default otherwise. A pick on the panel is never saved (<see cref="TrialMicrophone"/>).
+    /// </summary>
     [ObservableProperty]
     private MicrophoneDevice? _selectedMicrophone;
 
     /// <summary>
-    /// The user's choice: the one stored in the settings, or the one last picked. Only a pick changes it, never a
-    /// fallback, so the choice is selected again when its device comes back (RØDE Connect started after CodeSwitchX,
-    /// a Bluetooth headset waking up). Null means "no choice": the Windows default.
+    /// The default as listed, which Settings shows and picks: the preferred one while it is plugged in, the Windows
+    /// default otherwise. A pick makes it the preferred one and ends a trial on the panel.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MicTrialNote))]
+    private MicrophoneDevice? _defaultMicrophone;
+
+    /// <summary>
+    /// The user's choice of default: the one stored in the settings, or the one last picked in Settings. Only a pick
+    /// changes it, never a fallback, so the choice is selected again when its device comes back (RØDE Connect started
+    /// after CodeSwitchX, a Bluetooth headset waking up). Null means "no choice": the Windows default.
     /// </summary>
     [ObservableProperty]
     private MicrophoneDevice? _preferredMicrophone;
+
+    /// <summary>
+    /// A microphone picked on the panel to try it, other than the default: heard until the default is picked again, it
+    /// is unplugged or the app restarts. Kept in memory only. Null: the default is heard.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MicTrialNote))]
+    private MicrophoneDevice? _trialMicrophone;
+
+    /// <summary>Under the panel's picker while a microphone is tried there: that it is not saved; null otherwise.</summary>
+    public string? MicTrialNote => TrialMicrophone is null ? null
+        : DefaultMicrophone is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
 
     [ObservableProperty]
     private RavenState _state;
@@ -562,7 +585,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var previous = SelectedMicrophone;
         var preferred = PreferredMicrophone;
+        var trialPicked = TrialMicrophone;
         MicrophoneChoiceResult choice;
+        MicrophoneDevice? trial = null;
         // A list-bound ComboBox writes null into the selection while the list is cleared; that is no pick.
         _refreshing = true;
         try
@@ -574,17 +599,40 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             choice = MicrophoneChoice.Resolve(devices, preferred, windowsDefault);
-            SelectedMicrophone = choice.Device;
+            if (trialPicked is not null
+                && MicrophoneChoice.Resolve(devices, trialPicked, windowsDefault) is { Outcome: MicrophoneChoiceOutcome.Stored or MicrophoneChoiceOutcome.Relocated } tried)
+            {
+                trial = tried.Device;
+            }
+
+            DefaultMicrophone = choice.Device;
+            SelectedMicrophone = trial ?? choice.Device;
         }
         finally
         {
             _refreshing = false;
         }
 
+        TrialMicrophone = Equals(trial, choice.Device) ? null : trial;
         if (_openMicWaitsForList && MicMode == MicMode.OpenMic)
         {
             _openMicWaitsForList = false;
             PendingOpenMic = StartOpenMicAsync();
+        }
+
+        if (trialPicked is not null && trial is null)
+        {
+            // The microphone being tried went: the default is heard again, and the trial is over.
+            _fellBack = choice.Outcome == MicrophoneChoiceOutcome.FellBackToDefault;
+            AddEntry(RavenLogKind.Note, choice.Device is null
+                ? $"{trialPicked.Name} is gone. No microphone is connected."
+                : $"{trialPicked.Name} is gone. Using {choice.Device.Name}.");
+            return;
+        }
+
+        if (trial is not null)
+        {
+            return; // the trial is heard: the default's comings and goings show in Settings only
         }
 
         if (preferred is null || Equals(previous, choice.Device))
@@ -617,6 +665,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             Microphones.Clear();
             SelectedMicrophone = null;
+            DefaultMicrophone = null;
         }
         finally
         {
@@ -624,11 +673,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    partial void OnSelectedMicrophoneChanged(MicrophoneDevice? value)
+    /// <summary>A pick in Settings (or by voice): the new default, saved, and heard from now on, ending a trial.</summary>
+    partial void OnDefaultMicrophoneChanged(MicrophoneDevice? value)
     {
         if (!_refreshing && value is not null)
         {
             PreferredMicrophone = value;
+            TrialMicrophone = null; // also when the mic being tried is the one picked: then the selection does not change
+            SelectedMicrophone = value;
+        }
+    }
+
+    partial void OnSelectedMicrophoneChanged(MicrophoneDevice? value)
+    {
+        if (!_refreshing && value is not null)
+        {
+            // A pick on the panel: tried, not saved. Picking the default there ends the trial.
+            TrialMicrophone = Equals(value, DefaultMicrophone) ? null : value;
         }
 
         if (_openRun is { } run && value is not null && value.Id != run.DeviceId)

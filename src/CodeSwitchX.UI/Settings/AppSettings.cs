@@ -363,8 +363,9 @@ public sealed class AppSettings : IAppSettings
             Toggle("push to talk", SettingsPage.Listening, "On, the user holds a key or the mic button to talk; off, open mic: Raven "
                     + "listens all the time.", () => R.MicMode != MicMode.OpenMic,
                 v => R.ChooseMicModeCommand.Execute(v ? MicMode.PushToTalk : MicMode.OpenMic), "push-to-talk"),
-            new(new("microphone", Title(SettingsPage.Listening), "The microphone Raven hears.", null), SettingsPage.Listening, ["mic", "input"],
-                () => R.SelectedMicrophone?.Name ?? "none",
+            new(new("microphone", Title(SettingsPage.Listening), "The microphone Raven starts with and hears, unless another is being "
+                    + "tried on Raven's panel. Setting it also ends that trial.", null), SettingsPage.Listening, ["mic", "input"],
+                () => R.DefaultMicrophone?.Name ?? "none",
                 v =>
                 {
                     if (R.Microphones.Count == 0)
@@ -373,7 +374,8 @@ public sealed class AppSettings : IAppSettings
                     }
 
                     var name = OneOf("the microphone", v, [.. R.Microphones.Select(m => m.Name)]);
-                    R.SelectedMicrophone = R.Microphones.First(m => m.Name == name);
+                    R.DefaultMicrophone = R.Microphones.First(m => m.Name == name);
+                    R.SelectedMicrophone = R.DefaultMicrophone; // the same default again still ends a trial
                     return null;
                 },
                 () => [.. R.Microphones.Select(m => m.Name)]),

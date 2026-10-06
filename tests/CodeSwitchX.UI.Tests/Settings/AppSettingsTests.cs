@@ -463,6 +463,25 @@ public sealed class AppSettingsTests
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("microphone", "Blue Yeti", Ct))).Message.ShouldContain("No microphone");
     }
 
+    // #172: the setting is the default; a mic tried on the panel is not it, and setting the default ends the trial.
+    [Fact]
+    public async Task The_microphone_setting_is_the_default_and_setting_it_ends_a_trial()
+    {
+        var headset = new MicrophoneDevice("id-headset", "Headset");
+        var desk = new MicrophoneDevice("id-desk", "Desk mic");
+        _h.Microphones.List().Returns([headset, desk]);
+        _h.Microphones.Default().Returns(headset);
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        await _h.Shell.Raven.PendingRefresh;
+        _h.Shell.Raven.SelectedMicrophone = desk;
+
+        (await _settings.GetAsync("microphone", Ct)).Value.ShouldBe("Headset");
+        await _settings.SetAsync("microphone", "Headset", Ct);
+
+        _h.Shell.Raven.SelectedMicrophone.ShouldBe(headset, "the same default said again still ends the trial");
+        _h.Shell.Raven.TrialMicrophone.ShouldBeNull();
+    }
+
     [Fact]
     public async Task Opening_settings_brings_the_window_forward()
     {
