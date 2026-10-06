@@ -492,6 +492,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The last question to Raven's brain; completes once every question asked is answered.</summary>
     internal Task PendingAnswers => _conversation;
 
+    /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
+    internal Task PendingHeardCheck { get; private set; } = Task.CompletedTask;
+
     /// <summary>The window chats being summed up for chat 0.</summary>
     internal Task PendingSummaries => _summaries;
 
@@ -1931,7 +1934,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
-                            reply = AddEntry(RavenLogKind.Raven, start, chat);
+                            reply = AddSaid(start, chat, spoken);
                             said = true;
                             spoken.Add(start);
                         }
@@ -2242,9 +2245,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        AddEntry(RavenLogKind.Raven, line, ChatOfAsk(proposal.Ask));
-        if (IsMuted || _tts.Status.State != TextToSpeechState.Ready)
+        if (!VoiceSpeaks)
         {
+            AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
             return;
         }
@@ -2252,6 +2255,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
         // written, and is not heard.
         var spoken = _voice.Begin(silent: _openSpeech, whole: true);
+        AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
         _ = HeardAsync(proposal, spoken.Played);
@@ -2339,8 +2343,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             TakeFloor();
         }
 
-        AddEntry(RavenLogKind.Raven, said, chat);
         var spoken = _voice.Begin(silent: _openSpeech);
+        AddSaid(said, chat, spoken);
         spoken.Add(said);
         spoken.Complete();
     }
@@ -2698,7 +2702,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (!said && !floor.IsCancellationRequested)
             {
                 var sentence = FallbackSentence(own);
-                AddEntry(RavenLogKind.Raven, sentence, chat);
+                AddSaid(sentence, chat, spoken);
                 spoken.Add(sentence);
             }
 
@@ -3206,6 +3210,57 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenLogEntry AddEntry(RavenLogKind kind, string text, RavenChat? chat = null) =>
         Append(new RavenLogEntry(kind, text, _time.GetUtcNow()), chat);
 
+    /// <summary>Raven's line in <paramref name="chat"/>, and whether it is said aloud as well as written.</summary>
+    private RavenLogEntry AddSaid(string text, RavenChat chat, bool said) =>
+        Append(new RavenLogEntry(RavenLogKind.Raven, text, _time.GetUtcNow()) { Said = said }, chat);
+
+    /// <summary>
+    /// Each reply written as said and not seen, with its latest line (UI thread): should the reply turn out not heard to
+    /// its end, that line counts. One count a reply, however many lines its cards split it into: its earlier lines were
+    /// said before it.
+    /// </summary>
+    private readonly Dictionary<ReplyVoice.SpokenReply, RavenLogEntry> _saidUnseen = [];
+
+    /// <summary>
+    /// Raven's line in <paramref name="chat"/>, said in <paramref name="spoken"/> unless that is silent or no voice speaks.
+    /// Should the reply turn out not heard to its end (hushed, dropped by a voice that could not speak, muted midway, or cut
+    /// at its sentence limit), the line was only read after all, and counts like one only written; unless it was seen
+    /// meanwhile, in the open panel.
+    /// </summary>
+    private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
+    {
+        var entry = AddSaid(text, chat, !spoken.IsSilent && VoiceSpeaks);
+        if (!entry.Said)
+        {
+            _saidUnseen.Remove(spoken); // the voice stopped between its lines: this one counts for the reply, once
+        }
+        else if (!(IsOpen && IsShown(entry)))
+        {
+            var first = !_saidUnseen.ContainsKey(spoken);
+            _saidUnseen[spoken] = entry; // before the check: a reply hushed already settles it at once, on this thread
+            if (first)
+            {
+                PendingHeardCheck = Task.WhenAll(PendingHeardCheck, CountUnlessHeardAsync(spoken));
+            }
+        }
+
+        return entry;
+    }
+
+    private async Task CountUnlessHeardAsync(ReplyVoice.SpokenReply spoken)
+    {
+        var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
+        _dispatcher.Post(() =>
+        {
+            // Not when seen since (the panel opened on its chat), nor when the log has let it go: nothing would clear it.
+            if (_saidUnseen.Remove(spoken, out var entry) && !heard && Log.Contains(entry))
+            {
+                entry.Said = false;
+                CountUnread(entry);
+            }
+        });
+    }
+
     private RavenLogEntry Append(RavenLogEntry entry, RavenChat? chat = null)
     {
         entry.Chat = chat ?? CurrentChat;
@@ -3287,11 +3342,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them.</summary>
-    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && VoiceSpeaks && entry.Kind == RavenLogKind.Raven && entry.Chat == CurrentChat;
+    /// <summary>
+    /// Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them. One only
+    /// written is (#178).
+    /// </summary>
+    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && entry.Said && VoiceSpeaks && entry.Chat == CurrentChat; // muted since: the rest is only written
 
-    /// <summary>What Raven says is heard: not muted, and a voice ready (one that is off starts and says it). Otherwise it is only written.</summary>
-    private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off;
+    /// <summary>
+    /// What Raven says is heard: not muted, and a voice ready. Otherwise it is only written: one that is off (asleep) starts
+    /// loading on the first sentence it is given, and that reply is dropped as "still loading" (#178).
+    /// </summary>
+    private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready;
 
     /// <summary>Collapsed, an entry counted unread is said aloud after all: it is heard, and its count goes.</summary>
     private void Heard(RavenLogEntry entry)
@@ -3360,6 +3421,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         foreach (var entry in Log.Where(e => e.IsUnread && e.Chat == chat))
         {
             entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
+        }
+
+        // Read now, heard or not; collapsed (a catch-up said), nothing was read.
+        foreach (var reply in IsOpen ? _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList() : [])
+        {
+            _saidUnseen.Remove(reply);
         }
 
         chat.Unread = 0;
@@ -3603,7 +3670,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // The teller failed or said nothing: the user still hears that something came, and reads it in the chat.
                 var sentence = lines.Count == 1 ? "While you were away, one thing came in here." : $"While you were away, {lines.Count} things came in here.";
-                AddEntry(RavenLogKind.Raven, sentence, chat);
+                AddSaid(sentence, chat, spoken);
                 spoken.Add(sentence);
             }
         }

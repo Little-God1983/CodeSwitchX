@@ -1,6 +1,8 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Speech;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -213,6 +215,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Collapsed_a_catch_up_said_counts_the_chat_as_seen()
     {
         var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("While you were away, Task a finished and Task a2 failed.")];
         vm.IsOpen = false;
         var two = ChatNumbered(vm, 2);
 
@@ -273,5 +276,233 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
 
         (two.Unread, two.HasFailed).ShouldBe((0, false));
+    }
+
+    // #178: the read-back is spoken only by a voice that is ready; one that is off counted as speaking, so a read-back only
+    // written counted as heard.
+    [Fact]
+    public async Task Collapsed_with_the_voice_off_the_read_back_is_only_written_so_it_counts()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Off));
+        vm.IsOpen = false;
+
+        asks.Propose("p1");
+
+        vm.Log.Last().Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.");
+        chat.Unread.ShouldBe(1, "written, not said");
+        _speech.Spoken.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Collapsed_with_the_voice_ready_the_read_back_is_heard()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        vm.IsOpen = false;
+
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+
+        chat.Unread.ShouldBe(0);
+    }
+
+    // #178: while the user talks in Open mic, Raven's answer is only written; collapsed it counted as heard.
+    [Fact]
+    public async Task Collapsed_an_answer_only_written_while_the_user_talks_in_Open_mic_counts()
+    {
+        var transcript = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcript.Task);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync();
+        vm.IsOpen = false;
+        _openMic.Speak();
+        _openMic.EndTurn();
+
+        _openMic.Speak(); // the user's next turn has started
+        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        var answer = vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
+        _speech.Spoken.ShouldBeEmpty("the user is talking");
+        answer.Chat.Unread.ShouldBe(1, "written, not said");
+    }
+
+    // Review of #187: a voice that is off (asleep) starts loading on the first sentence and drops the reply as "still
+    // loading": the answer is only written.
+    [Fact]
+    public async Task Collapsed_with_the_voice_off_an_answer_is_only_written_so_it_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Off));
+        vm.IsOpen = false;
+
+        Type(vm, "How many chats run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review of #187: past three sentences a reply is only written; the line said only in part counts.
+    [Fact]
+    public async Task Collapsed_an_answer_cut_at_the_sentence_limit_counts_once_it_has_played()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("One. Two. Three. Four. Five.")];
+        vm.IsOpen = false;
+
+        Type(vm, "Count to five.");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        await Until(() => vm.YardChat.Unread == 1);
+        _speech.Spoken.ShouldNotContain(s => s.Contains("Four", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Collapsed_an_answer_said_to_its_end_stays_heard()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("One. Two. Three.")];
+        vm.IsOpen = false;
+
+        Type(vm, "Count to three.");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review round 2 of #187: each line of a reply split by a card counted when the reply was cut at its end.
+    [Fact]
+    public async Task Collapsed_a_reply_split_by_a_card_and_cut_at_its_end_counts_once()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ =>
+        [
+            new BrainText("Let me check."),
+            new BrainToolCall("t1", "list_chats", "{}"),
+            new BrainToolResult("t1", false),
+            new BrainText("Found it. Chat 3 finished. Chat 5 failed. Details are below."),
+        ];
+        vm.IsOpen = false;
+
+        Type(vm, "What happened?");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review round 2 of #187: a line read in the open panel counted once the panel was collapsed again and the reply hushed.
+    [Fact]
+    public async Task A_line_read_in_the_open_panel_does_not_count_when_its_reply_is_hushed_later()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Gate = new TaskCompletionSource(); // it has not played yet
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.IsOpen = true; // read
+        vm.IsOpen = false;
+        vm.IsMuted = true; // hushes the reply before it has played
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review round 2 of #187: a line the log let go of was counted, and nothing could take the count off again.
+    [Fact]
+    public async Task A_line_the_log_let_go_of_is_not_counted_when_its_reply_is_hushed()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Gate = new TaskCompletionSource();
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _speech.Spoken.Count > 0);
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.IsMuted = true;
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review of #187: a read-back cut off by the user's words was never heard to its end; only a note said so, which counts
+    // for nothing.
+    [Fact]
+    public async Task Collapsed_a_read_back_cut_off_counts()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        vm.IsOpen = false;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        Type(vm, "wait");
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        asks.IsHeard(proposal).ShouldBeFalse();
+        await Until(() => chat.Unread == 1);
+    }
+
+    // Review round 3 of #187: a reply hushed before its first words settled at once, before its line was tracked.
+    [Fact]
+    public async Task Collapsed_an_answer_whose_reply_was_hushed_before_its_first_words_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _brain.Gate = new TaskCompletionSource();
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _brain.Sent.Count == 1);
+
+        vm.IsMuted = true; // hushes the reply begun for the answer
+        vm.IsMuted = false;
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        _speech.Spoken.ShouldBeEmpty();
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review round 3 of #187: begun in the open panel, then collapsed and muted, the rest of the answer is only written.
+    [Fact]
+    public async Task An_answer_begun_open_counts_when_muted_after_collapsing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Let me look."), new BrainText(" There are two chats.")];
+        _brain.Pause = new TaskCompletionSource();
+        Type(vm, "How many chats run?");
+        await Until(() => vm.Log.Any(e => e.Text.StartsWith("Let me look.", StringComparison.Ordinal)));
+
+        vm.IsOpen = false;
+        vm.IsMuted = true;
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
     }
 }

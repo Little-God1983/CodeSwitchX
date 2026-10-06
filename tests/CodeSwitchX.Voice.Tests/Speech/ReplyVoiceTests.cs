@@ -43,6 +43,34 @@ public sealed class ReplyVoiceTests : IDisposable
         reply.Complete();
         await _voice.WhenQuietAsync();
         _tts.Spoken.ShouldBe(["One.", "Two.", "Three."]);
+        reply.IsCut.ShouldBeTrue();
+    }
+
+    // Review of #187: the sentence the chunker still held when the limit came was never looked at.
+    [Theory]
+    [InlineData("One. Two. Three. Four.", true)]
+    [InlineData("One. Two. Three.", false)]
+    [InlineData("One. Two. Three. Four", true)]
+    public async Task A_reply_says_whether_text_was_left_unsaid_past_the_limit(string text, bool cut)
+    {
+        var reply = _voice.Begin();
+        reply.Add(text);
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+
+        reply.IsCut.ShouldBe(cut);
+    }
+
+    // Review of #187: what would not be spoken anyway (code, a rule) leaves nothing unsaid.
+    [Fact]
+    public async Task Code_past_the_limit_is_not_text_left_unsaid()
+    {
+        var reply = _voice.Begin();
+        reply.Add("Fixed it. Tests pass. The PR is up.\n```csharp\nvar x = 1;\n```\n---\n");
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+
+        reply.IsCut.ShouldBeFalse();
     }
 
     [Fact]

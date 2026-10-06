@@ -555,7 +555,9 @@ public sealed class ReplyVoice : IDisposable
         private int _spoken;
         private int _dropped;
         private int _heard;
+        private int _completing;
         private int _completed;
+        private int _cut;
         private long _lastAudio;
 
         internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio, bool whole = false)
@@ -569,6 +571,12 @@ public sealed class ReplyVoice : IDisposable
 
         internal long Number { get; }
 
+        /// <summary>Only written: begun muted or silent (the user talking in Open mic), so nothing of it is spoken.</summary>
+        public bool IsSilent => _muted;
+
+        /// <summary>Text of it was left unspoken past <see cref="MaximumSentences"/>: only written, even when it <see cref="Played"/>.</summary>
+        public bool IsCut => Volatile.Read(ref _cut) == 1;
+
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
         /// <summary>
@@ -577,6 +585,12 @@ public sealed class ReplyVoice : IDisposable
         /// was hushed or dropped before that.
         /// </summary>
         public Task<bool> Played => _played.Task;
+
+        /// <summary>
+        /// Whether every word of it was heard: it <see cref="Played"/>, and nothing of it was cut at
+        /// <see cref="MaximumSentences"/>. A line said in a reply that was not is only read.
+        /// </summary>
+        public async Task<bool> HeardWholeAsync() => await Played.ConfigureAwait(false) && !IsCut;
 
         /// <summary>Complete, and every sentence it queued has been spoken (under the voice's lock).</summary>
         internal bool IsSpokenOut => Volatile.Read(ref _completed) == 1 && Volatile.Read(ref _spoken) >= _queued && _queued > 0;
@@ -593,13 +607,16 @@ public sealed class ReplyVoice : IDisposable
 
         internal void SetPlayed(bool heard) => _played.TrySetResult(heard);
 
-        /// <summary>Nothing more of it is spoken: muted, dropped, hushed, or its sentences are all queued.</summary>
-        private bool Done => _muted || Dropped || _queued >= _maximum || _voice.IsHushed(Number);
+        /// <summary>Nothing more of it is spoken, whatever comes: muted, dropped or hushed.</summary>
+        private bool Stopped => _muted || Dropped || _voice.IsHushed(Number);
 
-        /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken.</summary>
+        /// <summary>As many sentences queued as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
+        private bool Full => _queued >= _maximum;
+
+        /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken or looked at.</summary>
         public void Add(string piece)
         {
-            if (!Done)
+            if (!Stopped && !IsCut)
             {
                 Queue(_chunker.Add(piece));
             }
@@ -608,16 +625,18 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>The reply is complete: what is left of it is a sentence too, and it no longer keeps the output awake.</summary>
         public void Complete()
         {
-            if (Interlocked.Exchange(ref _completed, 1) == 1)
+            if (Interlocked.Exchange(ref _completing, 1) == 1)
             {
                 return;
             }
 
-            if (!Done)
+            if (!Stopped && !IsCut)
             {
-                Queue(_chunker.Flush());
+                Queue(_chunker.Flush()); // past the limit too: a last sentence held back is one unsaid
             }
 
+            // Only now: complete, it may count as played out at once, and what awaits that reads IsCut.
+            Volatile.Write(ref _completed, 1);
             Interlocked.Decrement(ref _voice._open);
             if (_muted || _queued == 0)
             {
@@ -633,17 +652,20 @@ public sealed class ReplyVoice : IDisposable
         {
             foreach (var sentence in sentences)
             {
-                if (_queued >= _maximum)
+                var spoken = SpeechText.CleanForSpeech(sentence);
+                if (!spoken.Any(char.IsLetterOrDigit))
                 {
+                    continue; // nothing to say: code, a rule, an address
+                }
+
+                if (Full)
+                {
+                    Volatile.Write(ref _cut, 1);
                     return;
                 }
 
-                var spoken = SpeechText.CleanForSpeech(sentence);
-                if (spoken.Any(char.IsLetterOrDigit))
-                {
-                    _queued++;
-                    _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
-                }
+                _queued++;
+                _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
             }
         }
 
