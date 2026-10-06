@@ -276,8 +276,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
-        IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatChime? chime = null)
+        IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatChime? chime = null,
+        SpeakerChoice? speakers = null)
     {
+        Speakers = speakers;
         _catalog = catalog;
         _recorder = recorder;
         _dictation = dictation;
@@ -367,6 +369,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// the default otherwise. A pick on the panel is never saved (<see cref="TrialMicrophone"/>).
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MicTrialNote))]
     private MicrophoneDevice? _selectedMicrophone;
 
     /// <summary>
@@ -394,7 +397,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private MicrophoneDevice? _trialMicrophone;
 
     /// <summary>Under the panel's picker while a microphone is tried there: that it is not saved; null otherwise.</summary>
-    public string? MicTrialNote => TrialMicrophone is null ? null
+    public string? MicTrialNote => TrialMicrophone is null || SelectedMicrophone is null ? null
         : DefaultMicrophone is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
 
     [ObservableProperty]
@@ -468,6 +471,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private string _chatEffortChip = "Default effort";
 
     public ObservableCollection<MicrophoneDevice> Microphones { get; } = [];
+
+    /// <summary>The output Raven speaks on (#172): the panel tries one, Settings keeps the default. Null in tests that leave it out.</summary>
+    public SpeakerChoice? Speakers { get; }
 
     /// <summary>Every entry of every chat, in time order: Activity (UI thread).</summary>
     public ObservableCollection<RavenLogEntry> Log { get; } = [];
@@ -613,7 +619,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _refreshing = false;
         }
 
-        TrialMicrophone = Equals(trial, choice.Device) ? null : trial;
+        // Only the user ends a trial, or its microphone going: the default falling back onto the same device does not.
+        TrialMicrophone = trial;
         if (_openMicWaitsForList && MicMode == MicMode.OpenMic)
         {
             _openMicWaitsForList = false;
@@ -673,15 +680,22 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>A pick in Settings (or by voice): the new default, saved, and heard from now on, ending a trial.</summary>
+    /// <summary>A pick in Settings.</summary>
     partial void OnDefaultMicrophoneChanged(MicrophoneDevice? value)
     {
         if (!_refreshing && value is not null)
         {
-            PreferredMicrophone = value;
-            TrialMicrophone = null; // also when the mic being tried is the one picked: then the selection does not change
-            SelectedMicrophone = value;
+            ChooseDefaultMicrophone(value);
         }
+    }
+
+    /// <summary>The new default, saved, and heard from now on, ending a trial: also when it is the default already, as by voice.</summary>
+    public void ChooseDefaultMicrophone(MicrophoneDevice device)
+    {
+        DefaultMicrophone = device;
+        PreferredMicrophone = device;
+        TrialMicrophone = null; // also when the mic being tried is the one picked: then the selection does not change
+        SelectedMicrophone = device;
     }
 
     partial void OnSelectedMicrophoneChanged(MicrophoneDevice? value)

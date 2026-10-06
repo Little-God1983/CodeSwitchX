@@ -6,13 +6,13 @@ namespace CodeSwitchX.Voice.Audio;
 /// <summary>The short sound another chat makes instead of speaking (#125); the tests use a fake.</summary>
 public interface IChatChime
 {
-    /// <summary>Plays it once on the default output device, off the caller's thread. Any thread; never throws.</summary>
+    /// <summary>Plays it once on the output chosen, off the caller's thread. Any thread; never throws.</summary>
     void Play();
 }
 
 /// <summary>
 /// Two soft rising tones, a quarter of a second in all, made here rather than shipped as a file. Each play opens the
-/// default device of the moment and closes it when done, on the thread pool: opening a waking device can take a while.
+/// output chosen, or the default device of the moment, and closes it when done, on the thread pool: opening a waking device can take a while.
 /// </summary>
 public sealed class ChatChime : IChatChime
 {
@@ -20,10 +20,12 @@ public sealed class ChatChime : IChatChime
 
     private static readonly byte[] Pcm = Make();
 
+    private readonly IAudioOutput _audioOutput;
     private readonly ILogger<ChatChime> _logger;
 
-    public ChatChime(ILogger<ChatChime> logger)
+    public ChatChime(IAudioOutput audioOutput, ILogger<ChatChime> logger)
     {
+        _audioOutput = audioOutput;
         _logger = logger;
     }
 
@@ -31,10 +33,10 @@ public sealed class ChatChime : IChatChime
 
     private void PlayNow()
     {
-        WaveOutEvent? output = null;
+        IWavePlayer? output = null;
         try
         {
-            output = new WaveOutEvent { DesiredLatency = 120 };
+            output = _audioOutput.Create(120);
             var playing = output;
             output.Init(new RawSourceWaveStream(Pcm, 0, Pcm.Length, new WaveFormat(SampleRate, 16, 1)));
             output.PlaybackStopped += (_, _) => playing.Dispose();

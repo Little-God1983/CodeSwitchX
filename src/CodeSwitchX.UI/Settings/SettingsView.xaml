@@ -744,6 +744,19 @@
               </DockPanel>
             </StackPanel>
           </Border>
+
+          <!-- The output Raven speaks on (#172): the default, saved; the panel's picker only tries another. -->
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Speaker" />
+              <TextBlock Style="{StaticResource Help}" Text="Where Raven speaks: its answers, chat news, the chats' sound and the samples above. To try another, pick it on Raven's panel: that pick isn't saved, and picking here ends it." />
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox FontSize="14" AutomationProperties.Name="Default speaker"
+                          ItemsSource="{Binding DataContext.Raven.Speakers.Speakers, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
+                          SelectedItem="{Binding DataContext.Raven.Speakers.DefaultSpeaker, RelativeSource={RelativeSource AncestorType=Window}}" />
+              </ContentControl>
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <!-- Listening -->

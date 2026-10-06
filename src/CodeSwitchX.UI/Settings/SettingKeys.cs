@@ -10,6 +10,7 @@ public static class SettingKeys
     public const string YardHideIdleHours = "yard.hideIdleHours";
     public const string RavenPanelOpen = "raven.panelOpen";
     public const string RavenMicrophone = "raven.microphone";
+    public const string RavenSpeaker = "raven.speaker";
     public const string RavenBrainModel = "raven.brainModel";
     public const string RavenOverviewModel = "raven.overviewModel";
     public const string RavenChatModel = "raven.chatModel";

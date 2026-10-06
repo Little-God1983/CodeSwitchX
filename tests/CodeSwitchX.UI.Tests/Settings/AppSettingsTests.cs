@@ -483,6 +483,26 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
+    public async Task The_speaker_setting_is_the_default_and_setting_it_ends_a_trial()
+    {
+        var speakers = new SpeakerDevice("id-speakers", "Speakers");
+        var headphones = new SpeakerDevice("id-headphones", "Headphones");
+        _h.Speakers.List().Returns([speakers, headphones]);
+        _h.Speakers.Default().Returns(speakers);
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var choice = _h.Shell.Raven.Speakers!;
+        await choice.PendingRefresh;
+        choice.SelectedSpeaker = headphones;
+
+        (await _settings.GetAsync("audio output", Ct)).Value.ShouldBe("Speakers");
+        await _settings.SetAsync("speaker", "Speakers", Ct);
+
+        choice.SelectedSpeaker.ShouldBe(speakers);
+        choice.TrialSpeaker.ShouldBeNull();
+        choice.PreferredSpeaker.ShouldBe(speakers);
+    }
+
+    [Fact]
     public async Task Opening_settings_brings_the_window_forward()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

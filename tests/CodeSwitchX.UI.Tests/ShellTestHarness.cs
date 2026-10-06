@@ -41,6 +41,8 @@ public sealed class ShellTestHarness
 
     public ChatSettings Chats { get; } = new();
     public IMicrophoneCatalog Microphones { get; } = Substitute.For<IMicrophoneCatalog>();
+    public ISpeakerCatalog Speakers { get; } = Substitute.For<ISpeakerCatalog>();
+    public IAudioOutput AudioOutput { get; } = Substitute.For<IAudioOutput>();
     public IMicrophoneRecorder Recorder { get; } = Substitute.For<IMicrophoneRecorder>();
     public IDictationService Dictation { get; } = Substitute.For<IDictationService>();
     internal Raven.FakeSpeech Voice { get; } = new();
@@ -94,9 +96,11 @@ public sealed class ShellTestHarness
             Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
+        Speakers.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
             Substitute.For<IDictationVocabularyProvider>(), new Raven.FakeBrain(), Voice.NewVoice(), Voice, dispatcher, Time, NullLogger<RavenPanelViewModel>.Instance, openMic: OpenMic,
-            asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory);
+            asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory,
+            speakers: new SpeakerChoice(Speakers, AudioOutput, dispatcher, Time, NullLogger<SpeakerChoice>.Instance));
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance, VsCode);
     }
 

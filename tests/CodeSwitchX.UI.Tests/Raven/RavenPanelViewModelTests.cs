@@ -1020,6 +1020,43 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Count.ShouldBe(1);
     }
 
+    // Review of #174: the default falling back onto the mic being tried ended the trial, and its return switched mics silently.
+    [Fact]
+    public async Task A_trial_of_the_windows_default_outlives_the_stored_default_falling_back_onto_it()
+    {
+        var vm = await NewVmAsync();
+        vm.DefaultMicrophone = Desk;
+        vm.SelectedMicrophone = Headset; // the Windows default, tried
+
+        _catalog.List().Returns([Headset]);
+        DevicesChange();
+        vm.TrialMicrophone.ShouldBe(Headset);
+        _catalog.List().Returns([Headset, Desk]);
+        DevicesChange();
+
+        vm.SelectedMicrophone.ShouldBe(Headset, "only the user, or its mic going, ends a trial");
+        vm.DefaultMicrophone.ShouldBe(Desk);
+        vm.Log.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task While_windows_audio_is_down_the_trial_note_is_not_shown()
+    {
+        Exception? failure = null;
+        _catalog.List().Returns(_ => failure is null ? [Headset, Desk] : throw failure);
+        var vm = await NewVmAsync();
+        vm.SelectedMicrophone = Desk;
+
+        failure = new System.Runtime.InteropServices.COMException("The audio service is not running.");
+        DevicesChange();
+        vm.MicTrialNote.ShouldBeNull("nothing is heard, so nothing is being tried");
+
+        failure = null;
+        DevicesChange();
+        vm.SelectedMicrophone.ShouldBe(Desk, "the trial is heard again once Windows audio is back");
+        vm.MicTrialNote.ShouldNotBeNull();
+    }
+
     [Fact]
     public async Task While_a_trial_is_heard_the_default_going_and_coming_back_says_nothing()
     {

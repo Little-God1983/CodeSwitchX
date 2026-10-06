@@ -136,6 +136,29 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task The_stored_speaker_is_heard_at_startup_a_trial_is_not_saved_and_a_settings_pick_is()
+    {
+        var speakers = new SpeakerDevice("id-speakers", "Speakers");
+        var headphones = new SpeakerDevice("id-headphones", "Headphones");
+        _h.Speakers.List().Returns([speakers, headphones]);
+        _h.Speakers.Default().Returns(speakers);
+        _h.Settings.GetAsync<SpeakerDevice>(SettingKeys.RavenSpeaker, Arg.Any<CancellationToken>()).Returns(Task.FromResult<SpeakerDevice?>(headphones));
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var choice = _h.Shell.Raven.Speakers!;
+        await choice.PendingRefresh;
+        choice.SelectedSpeaker.ShouldBe(headphones);
+        _h.AudioOutput.DeviceId.ShouldBe(headphones.Id);
+
+        choice.SelectedSpeaker = speakers;
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.DidNotReceive().SetAsync(SettingKeys.RavenSpeaker, Arg.Any<SpeakerDevice?>(), Arg.Any<CancellationToken>());
+
+        choice.DefaultSpeaker = speakers;
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received().SetAsync(SettingKeys.RavenSpeaker, speakers, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task A_stored_microphone_that_appears_after_startup_is_selected_and_never_saved_over()
     {
         // CodeSwitchX started before RØDE Connect: the virtual input is missing at first.

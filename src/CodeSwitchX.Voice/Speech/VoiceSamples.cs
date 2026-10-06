@@ -1,3 +1,4 @@
+using CodeSwitchX.Voice.Audio;
 using NAudio.Wave;
 
 namespace CodeSwitchX.Voice.Speech;
@@ -8,11 +9,11 @@ namespace CodeSwitchX.Voice.Speech;
 /// </summary>
 public interface IVoiceSamples
 {
-    /// <summary>Plays the clip on the default output device until it ends or <paramref name="ct"/> is cancelled; then returns. Never on the caller's thread.</summary>
+    /// <summary>Plays the clip on the output chosen until it ends or <paramref name="ct"/> is cancelled; then returns. Never on the caller's thread.</summary>
     Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct);
 }
 
-public sealed class VoiceSamples : IVoiceSamples
+public sealed class VoiceSamples(IAudioOutput audioOutput) : IVoiceSamples
 {
     private static string ResourceName(SpeechEngine engine, string voice) => $"CodeSwitchX.Voice.Samples.{engine}.{voice}.wav";
 
@@ -25,7 +26,7 @@ public sealed class VoiceSamples : IVoiceSamples
         await using var clip = typeof(VoiceSamples).Assembly.GetManifestResourceStream(ResourceName(engine, voice))
             ?? throw new InvalidOperationException($"No sample of {engine}'s voice {voice}.");
         await using var reader = new WaveFileReader(clip);
-        using var output = new WaveOutEvent();
+        using var output = audioOutput.Create(300);
         var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         output.PlaybackStopped += (_, _) => ended.TrySetResult();
         output.Init(reader);

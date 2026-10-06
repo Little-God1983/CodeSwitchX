@@ -5,7 +5,7 @@ using NAudio.Wave;
 
 namespace CodeSwitchX.Voice.Audio;
 
-/// <summary>Plays speech as it comes, chunk after chunk, on the default output device.</summary>
+/// <summary>Plays speech as it comes, chunk after chunk, on the output chosen (<see cref="IAudioOutput"/>).</summary>
 public interface ISpeechPlayer : IDisposable
 {
     /// <summary>Plays the chunk after those queued before it; the first one opens the device. Any thread.</summary>
@@ -23,18 +23,20 @@ public interface ISpeechPlayer : IDisposable
 
 /// <summary>
 /// NAudio's <see cref="WaveOutEvent"/> fed from a <see cref="BufferedWaveProvider"/>: chunks queue there, and it plays
-/// silence once they run out, until <see cref="Stop"/> closes it. Opened on the default device of the moment, so speech
-/// follows a headset plugged in since the last reply.
+/// silence once they run out, until <see cref="Stop"/> closes it. Opened on the output chosen, or on the default device of
+/// the moment, so speech follows a headset plugged in since the last reply.
 /// </summary>
 public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 {
     private readonly ILogger<WaveOutSpeechPlayer> _logger;
+    private readonly IAudioOutput _audioOutput;
     private readonly Lock _lock = new();
-    private WaveOutEvent? _output;
+    private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
 
-    public WaveOutSpeechPlayer(ILogger<WaveOutSpeechPlayer> logger)
+    public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
     {
+        _audioOutput = audioOutput;
         _logger = logger;
     }
 
@@ -72,7 +74,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     }
 
     /// <summary>
-    /// Opens the default device. Only a device that opened and plays is kept: one that fails (none there, or busy) is
+    /// Opens the output. Only a device that opened and plays is kept: one that fails (none there, or busy) is
     /// disposed and the error thrown, so the next chunk tries again instead of filling a buffer nothing plays.
     /// </summary>
     private void Open(int sampleRate)
@@ -82,7 +84,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             DiscardOnBufferOverflow = true,
             ReadFully = true,
         };
-        var output = new WaveOutEvent { DesiredLatency = 120 };
+        var output = _audioOutput.Create(120);
         try
         {
             output.Init(new Meter(buffer, this));

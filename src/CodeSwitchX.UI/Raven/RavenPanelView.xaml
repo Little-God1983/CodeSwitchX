@@ -565,6 +565,11 @@
         <TextBlock Grid.Column="1" FontSize="13" Foreground="#F59E0B" TextWrapping="Wrap" Text="{Binding Text}" />
       </Grid>
     </DataTemplate>
+
+    <!-- A device's name in the panel's pickers: shortened with "…" where the panel is too narrow, whole in the tooltip. -->
+    <DataTemplate x:Key="DeviceName">
+      <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+    </DataTemplate>
   </UserControl.Resources>
 
   <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
@@ -634,7 +639,7 @@
 
               <!-- The mic heard, to try another where you talk: a pick here is not saved, Settings → Listening keeps the default. -->
               <TextBlock Text="Mic" FontSize="11" Foreground="#9CA3AF" Margin="0,12,0,4" />
-              <ComboBox ItemsSource="{Binding Microphones}" DisplayMemberPath="Name" SelectedItem="{Binding SelectedMicrophone}"
+              <ComboBox ItemsSource="{Binding Microphones}" ItemTemplate="{StaticResource DeviceName}" SelectedItem="{Binding SelectedMicrophone}"
                         FontSize="13" HorizontalAlignment="Stretch" AutomationProperties.Name="Microphone"
                         ToolTip="{Binding SelectedMicrophone.Name}" />
               <Border Height="4" CornerRadius="2" Background="#1F2937" Margin="0,8,0,0" ClipToBounds="True" ToolTip="Mic level">
@@ -656,6 +661,16 @@
               </Border>
               <TextBlock Text="{Binding MicTrialNote}" FontSize="11" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="0,6,0,0"
                          Visibility="{Binding MicTrialNote, Converter={StaticResource NullToCollapsed}}" />
+
+              <!-- The output Raven speaks on, to try another: as with the mic, Settings → Voice keeps the default. -->
+              <StackPanel DataContext="{Binding Speakers}" Visibility="{Binding Converter={StaticResource NullToCollapsed}}">
+                <TextBlock Text="Speaker" FontSize="11" Foreground="#9CA3AF" Margin="0,10,0,4" />
+                <ComboBox ItemsSource="{Binding Speakers}" ItemTemplate="{StaticResource DeviceName}" SelectedItem="{Binding SelectedSpeaker}"
+                          FontSize="13" HorizontalAlignment="Stretch" AutomationProperties.Name="Speaker"
+                          ToolTip="{Binding SelectedSpeaker.Name}" />
+                <TextBlock Text="{Binding TrialNote}" FontSize="11" Foreground="#9CA3AF" TextWrapping="Wrap" Margin="0,6,0,0"
+                           Visibility="{Binding TrialNote, Converter={StaticResource NullToCollapsed}}" />
+              </StackPanel>
 
               <!-- What a chat Raven starts runs with: set by voice ("from now on Opus") or in Settings → Brain & chats, which a click opens. -->
               <Button Margin="0,12,0,0" HorizontalAlignment="Center" Cursor="Hand" FocusVisualStyle="{StaticResource FocusRing}"

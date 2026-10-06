@@ -17,8 +17,9 @@ public interface IAudioKeepAlive : IDisposable
 }
 
 /// <summary>
-/// Plays endless digital silence to keep the default output device, and a Bluetooth audio link, awake, so speech does not
-/// lose its first word to the device waking up. Follows default-device changes and recovers from device errors.
+/// Plays endless digital silence to keep the output Raven speaks on, and a Bluetooth audio link, awake, so speech does not
+/// lose its first word to the device waking up. Follows the output chosen and default-device changes, and recovers from
+/// device errors.
 /// Best-effort throughout: it never throws. Ported from RAIVEN's <c>AudioKeepAlive</c>.
 /// </summary>
 public sealed class AudioKeepAlive : IAudioKeepAlive
@@ -26,16 +27,19 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
     private static readonly TimeSpan RestartDelay = TimeSpan.FromSeconds(2);
 
     private readonly ILogger<AudioKeepAlive> _logger;
+    private readonly IAudioOutput _audioOutput;
     private readonly Lock _lock = new();
     private MMDeviceEnumerator? _enumerator;
     private DeviceChangeListener? _listener;
-    private WaveOutEvent? _output;
+    private IWavePlayer? _output;
     private bool _shouldRun;
     private int _restartPending;
 
-    public AudioKeepAlive(ILogger<AudioKeepAlive> logger)
+    public AudioKeepAlive(IAudioOutput audioOutput, ILogger<AudioKeepAlive> logger)
     {
+        _audioOutput = audioOutput;
         _logger = logger;
+        _audioOutput.Changed += (_, _) => RestartSoon(); // another output chosen: keep that one awake instead
     }
 
     public void Start()
@@ -100,10 +104,10 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
             return;
         }
 
-        WaveOutEvent? output = null;
+        IWavePlayer? output = null;
         try
         {
-            output = new WaveOutEvent();
+            output = _audioOutput.Create(300);
             output.Init(new SilenceProvider(new WaveFormat(44100, 16, 2)));
             output.PlaybackStopped += OnPlaybackStopped;
             output.Play();
