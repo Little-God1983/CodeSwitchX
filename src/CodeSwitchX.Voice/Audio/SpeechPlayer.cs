@@ -24,7 +24,10 @@ public interface ISpeechPlayer : IDisposable
     /// </summary>
     TimeSpan Remaining { get; }
 
-    /// <summary>Drops whatever is queued and closes the device at once. Any thread.</summary>
+    /// <summary>
+    /// Drops whatever is queued and closes the device playing it. Any thread, and never waits for a device still opening:
+    /// that one is closed unheard once its open returns, on the thread that opens it.
+    /// </summary>
     void Stop();
 
     /// <summary>How loud what plays now is, 0..1, about twenty times a second while it plays; on the playback thread.</summary>
@@ -49,6 +52,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private string? _openingFor; // the output chosen as the device began to open: a move there is none
     private Func<bool>? _hushed; // whether the reply queued last is hushed: a device opening for its queue is let go then
     private int _movePending; // a move queued and not yet started: picks in a row (arrowing through the list) queue one
+    private readonly Action<Action> _offThread;
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
         : this(audioOutput, logger, move => ThreadPool.QueueUserWorkItem(_ => move()))
@@ -63,13 +67,16 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     {
         _audioOutput = audioOutput;
         _logger = logger;
-        _audioOutput.Changed += (_, _) =>
+        _offThread = offThread;
+        _audioOutput.Changed += (_, _) => MoveSoon();
+    }
+
+    private void MoveSoon()
+    {
+        if (Interlocked.Exchange(ref _movePending, 1) == 0)
         {
-            if (Interlocked.Exchange(ref _movePending, 1) == 0)
-            {
-                offThread(Move);
-            }
-        };
+            _offThread(Move);
+        }
     }
 
     public event EventHandler<float>? LevelChanged;
@@ -169,10 +176,17 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     {
         lock (_lock)
         {
-            if (generation == _generation)
+            if (generation == _generation && IsHushedLocked())
             {
-                _openingFor = _audioOutput.DeviceId; // as late as can be: Open reads it once more
+                StopLocked(); // hushed before it opened: no device is woken for it
             }
+
+            if (generation != _generation)
+            {
+                return; // stopped, replaced or moved before it opened
+            }
+
+            _openingFor = _audioOutput.DeviceId; // as late as can be: Open reads it once more
         }
 
         IWavePlayer output;
@@ -231,6 +245,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         {
             _logger.LogInformation("Speech goes on on {Output}", playsOn is null ? "the Windows default" : "the output chosen");
         }
+
+        if (playsOn is not null && playsOn != _audioOutput.DeviceId)
+        {
+            MoveSoon(); // picked away and back while it opened (one move for both): it opened on the one in between
+        }
     }
 
     /// <summary>
@@ -246,6 +265,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
+            rethrow &= !IsHushedLocked(); // the reply is silenced on purpose: no "could not speak" for it
             StopLocked();
         }
 
@@ -300,6 +320,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         var old = DetachLocked();
         _buffer?.ClearBuffer();
         _buffer = null;
+        _hushed = null; // the reply's check goes with its queue
         NextGenerationLocked();
         return old;
     }
@@ -394,8 +415,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             }
             else
             {
-                _buffer = null;
-                NextGenerationLocked();
+                StopLocked();
             }
         }
 

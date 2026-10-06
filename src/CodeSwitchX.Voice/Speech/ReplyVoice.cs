@@ -348,6 +348,11 @@ public sealed class ReplyVoice : IDisposable
                     _playerGate.Release();
                 }
 
+                if (IsHushed(reply.Number))
+                {
+                    return; // hushed while its device opened: none of it was heard, nor is it speaking
+                }
+
                 SetSpeaking(true, reply.Number);
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }

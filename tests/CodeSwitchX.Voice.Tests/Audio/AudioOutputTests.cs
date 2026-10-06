@@ -834,6 +834,99 @@ public sealed class AudioOutputTests
         devices.Players.ShouldHaveSingleItem().Playing.ShouldBeTrue();
     }
 
+    // Review round 3 of #190: an open already hushed still woke the device, only to close it.
+    [Fact]
+    public void A_reply_hushed_before_its_device_opens_wakes_no_device()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = Speech(devices);
+
+        speech.Enqueue(MarkedSpeech(), () => true);
+
+        devices.Players.ShouldBeEmpty();
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // Review round 3 of #190: an open that failed after the hush said "could not speak" for a reply silenced on purpose.
+    [Fact]
+    public void An_open_that_fails_after_the_reply_was_hushed_is_no_error()
+    {
+        var devices = new Devices { FailingInInit = "id-headphones", DefaultFailsInInit = true };
+        devices.Output.DeviceId = "id-headphones";
+        var hushed = false;
+        devices.WhileOpening = () => hushed = true;
+        using var speech = Speech(devices);
+
+        Should.NotThrow(() => speech.Enqueue(MarkedSpeech(), () => hushed));
+
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // Review round 3 of #190: picked away and back while the first device opened, with one move for both: the move ran during
+    // the open and found it opening for the choice, but the open had read the pick in between.
+    [Fact]
+    public void A_device_opened_for_a_pick_in_between_is_moved_to_the_choice()
+    {
+        var output = new PickedWhileOpening { DeviceId = "id-x" };
+        var moves = new List<Action>();
+        using var speech = new WaveOutSpeechPlayer(output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        output.BeforeRead = () => output.DeviceId = "id-y"; // picked away: one move queued
+        output.AfterRead = () =>
+        {
+            output.DeviceId = "id-x"; // and back: the same move
+            moves[0](); // it runs while the device opens
+        };
+
+        speech.Enqueue(MarkedSpeech());
+
+        output.Players.Single().Device.ShouldBe("id-y");
+        moves.Count.ShouldBe(2, "a move for the device opened on the pick in between");
+        moves[1]();
+        (output.Players[^1].Device, output.Players[^1].Playing).ShouldBe(("id-x", true));
+        output.Players[0].Disposed.ShouldBeTrue();
+    }
+
+    /// <summary>An output whose choice the test changes just before and after <see cref="Open"/> reads it.</summary>
+    private sealed class PickedWhileOpening : IAudioOutput
+    {
+        private readonly Devices _devices = new();
+        private string? _deviceId;
+
+        public List<FakePlayer> Players { get; } = [];
+
+        public Action? BeforeRead { get; set; }
+
+        public Action? AfterRead { get; set; }
+
+        public string? DeviceId
+        {
+            get => _deviceId;
+            set
+            {
+                _deviceId = value;
+                Changed?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        public event EventHandler? Changed;
+
+        public IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn)
+        {
+            var before = BeforeRead;
+            BeforeRead = null;
+            before?.Invoke();
+            playsOn = DeviceId;
+            var after = AfterRead;
+            AfterRead = null;
+            after?.Invoke();
+            var player = new FakePlayer(playsOn, _devices, failsInInit: false);
+            player.Init(source);
+            Players.Add(player);
+            return player;
+        }
+    }
+
     private static async Task UntilAsync(Func<bool> done)
     {
         for (var i = 0; i < 250 && !done(); i++)
