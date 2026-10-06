@@ -556,6 +556,7 @@ public sealed class ReplyVoice : IDisposable
         private int _dropped;
         private int _heard;
         private int _completed;
+        private int _cut;
         private long _lastAudio;
 
         internal SpokenReply(ReplyVoice voice, long number, bool muted, Action<DateTimeOffset>? onFirstAudio, bool whole = false)
@@ -571,6 +572,9 @@ public sealed class ReplyVoice : IDisposable
 
         /// <summary>Only written: begun muted or silent (the user talking in Open mic), so nothing of it is spoken.</summary>
         public bool IsSilent => _muted;
+
+        /// <summary>Text of it was left unspoken past <see cref="MaximumSentences"/>: only written, even when it <see cref="Played"/>.</summary>
+        public bool IsCut => Volatile.Read(ref _cut) == 1;
 
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
@@ -606,6 +610,10 @@ public sealed class ReplyVoice : IDisposable
             {
                 Queue(_chunker.Add(piece));
             }
+            else if (_queued >= _maximum && piece.Any(char.IsLetterOrDigit))
+            {
+                Volatile.Write(ref _cut, 1);
+            }
         }
 
         /// <summary>The reply is complete: what is left of it is a sentence too, and it no longer keeps the output awake.</summary>
@@ -638,6 +646,11 @@ public sealed class ReplyVoice : IDisposable
             {
                 if (_queued >= _maximum)
                 {
+                    if (sentence.Any(char.IsLetterOrDigit))
+                    {
+                        Volatile.Write(ref _cut, 1);
+                    }
+
                     return;
                 }
 

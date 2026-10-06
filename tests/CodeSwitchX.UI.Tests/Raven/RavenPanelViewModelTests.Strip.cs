@@ -215,6 +215,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Collapsed_a_catch_up_said_counts_the_chat_as_seen()
     {
         var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("While you were away, Task a finished and Task a2 failed.")];
         vm.IsOpen = false;
         var two = ChatNumbered(vm, 2);
 
@@ -331,5 +332,74 @@ public sealed partial class RavenPanelViewModelTests
         var answer = vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
         _speech.Spoken.ShouldBeEmpty("the user is talking");
         answer.Chat.Unread.ShouldBe(1, "written, not said");
+    }
+
+    // Review of #187: a voice that is off (asleep) starts loading on the first sentence and drops the reply as "still
+    // loading": the answer is only written.
+    [Fact]
+    public async Task Collapsed_with_the_voice_off_an_answer_is_only_written_so_it_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Off));
+        vm.IsOpen = false;
+
+        Type(vm, "How many chats run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review of #187: past three sentences a reply is only written; the line said only in part counts.
+    [Fact]
+    public async Task Collapsed_an_answer_cut_at_the_sentence_limit_counts_once_it_has_played()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("One. Two. Three. Four. Five.")];
+        vm.IsOpen = false;
+
+        Type(vm, "Count to five.");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        await Until(() => vm.YardChat.Unread == 1);
+        _speech.Spoken.ShouldNotContain(s => s.Contains("Four", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Collapsed_an_answer_said_to_its_end_stays_heard()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("One. Two. Three.")];
+        vm.IsOpen = false;
+
+        Type(vm, "Count to three.");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review of #187: a read-back cut off by the user's words was never heard to its end; only a note said so, which counts
+    // for nothing.
+    [Fact]
+    public async Task Collapsed_a_read_back_cut_off_counts()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        vm.IsOpen = false;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        Type(vm, "wait");
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        asks.IsHeard(proposal).ShouldBeFalse();
+        await Until(() => chat.Unread == 1);
     }
 }
