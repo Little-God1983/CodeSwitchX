@@ -11,7 +11,10 @@ public interface ISpeechPlayer : IDisposable
     /// <summary>Plays the chunk after those queued before it; the first one opens the device. Any thread.</summary>
     void Enqueue(SpeechChunk chunk);
 
-    /// <summary>How much of the queued audio is still to be heard; zero when it is done.</summary>
+    /// <summary>
+    /// How much of the queued audio is still to be heard; zero when it is done. Any thread, and never waits: the UI thread's
+    /// Hush asks it while a device may be opening (#177).
+    /// </summary>
     TimeSpan Remaining { get; }
 
     /// <summary>Drops whatever is queued and closes the device at once. Any thread.</summary>
@@ -35,6 +38,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private volatile BufferedWaveProvider? _buffer; // read without the lock by Remaining: Hush asks it on the UI thread
     private string? _playsOn; // the device it plays on, null for the Windows default: a move to where it plays already is none
     private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
+    private int _movePending; // a move queued and not yet started: picks in a row (arrowing through the list) queue one
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
         : this(audioOutput, logger, move => ThreadPool.QueueUserWorkItem(_ => move()))
@@ -49,7 +53,13 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     {
         _audioOutput = audioOutput;
         _logger = logger;
-        _audioOutput.Changed += (_, _) => offThread(Move);
+        _audioOutput.Changed += (_, _) =>
+        {
+            if (Interlocked.Exchange(ref _movePending, 1) == 0)
+            {
+                offThread(Move);
+            }
+        };
     }
 
     public event EventHandler<float>? LevelChanged;
@@ -84,6 +94,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     /// </summary>
     private void Move()
     {
+        Volatile.Write(ref _movePending, 0); // a pick from here on queues another move, which reads the choice anew
         try
         {
             lock (_lock)
@@ -98,7 +109,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 CloseOutputLocked(); // the queue stays: Remaining reads on through the move
                 try
                 {
-                    LevelChanged?.Invoke(this, 0); // the orb rests while the new device wakes
+                    RestTheOrb(); // while the new device wakes
                     Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
                 }
                 catch (Exception ex)
@@ -160,7 +171,20 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     {
         CloseOutputLocked();
         _buffer = null;
-        LevelChanged?.Invoke(this, 0);
+        RestTheOrb();
+    }
+
+    /// <summary>Level 0 to the orb. A listener that fails is logged: it must not end a move or a reopen, which hold the speech.</summary>
+    private void RestTheOrb()
+    {
+        try
+        {
+            LevelChanged?.Invoke(this, 0);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A speech level listener failed");
+        }
     }
 
     /// <summary>Lets go of the device; what is queued stays, for a move or a reopen to play on.</summary>
@@ -220,6 +244,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             }
 
             CloseOutputLocked();
+            RestTheOrb(); // while the other device opens
             try
             {
                 Open(buffer, afterFailure: true);

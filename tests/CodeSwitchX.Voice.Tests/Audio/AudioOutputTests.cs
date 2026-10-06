@@ -394,10 +394,10 @@ public sealed class AudioOutputTests
     [Fact]
     public async Task What_is_left_to_hear_is_read_at_once_while_a_move_opens_a_device()
     {
+        using var waking = new ManualResetEventSlim(); // disposed after the player, whose move may still wait on it
         var devices = new Devices();
         using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
         speech.Enqueue(MarkedSpeech());
-        using var waking = new ManualResetEventSlim();
         var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         devices.WhileOpening = () =>
         {
@@ -405,14 +405,20 @@ public sealed class AudioOutputTests
             waking.Wait(TimeSpan.FromSeconds(10));
         };
 
-        devices.Output.DeviceId = "id-headphones";
-        await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        try
+        {
+            devices.Output.DeviceId = "id-headphones";
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var read = Task.Run(() => speech.Remaining, TestContext.Current.CancellationToken);
-        var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
-        waking.Set();
-        finished.ShouldBeSameAs(read, "Remaining waited for the move");
-        (await read).ShouldBeGreaterThan(TimeSpan.Zero, "the queue stays through the move");
+            var read = Task.Run(() => speech.Remaining, TestContext.Current.CancellationToken);
+            var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
+            finished.ShouldBeSameAs(read, "Remaining waited for the move");
+            (await read).ShouldBeGreaterThan(TimeSpan.Zero, "the queue stays through the move");
+        }
+        finally
+        {
+            waking.Set();
+        }
     }
 
     [Fact]
@@ -443,29 +449,20 @@ public sealed class AudioOutputTests
         devices.Players[^1].Playing.ShouldBeTrue();
     }
 
+    // The orb's listener is UI code: one that fails (a view being torn down) took the move down and dropped the reply.
     [Fact]
-    public void A_move_stops_where_it_failed_and_the_next_chunk_plays_again()
+    public void A_level_listener_that_fails_does_not_stop_the_move()
     {
         var devices = new Devices();
         using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
-        var levels = new List<float>();
-        speech.LevelChanged += (_, level) =>
-        {
-            levels.Add(level);
-            if (levels.Count <= 2) // on the move, and again on the stop that cleans up after it
-            {
-                throw new InvalidOperationException("a listener that fails");
-            }
-        };
+        speech.LevelChanged += (_, _) => throw new InvalidOperationException("a listener that fails");
 
         Should.NotThrow(() => devices.Output.DeviceId = "id-headphones");
-        speech.Remaining.ShouldBe(TimeSpan.Zero, "what was queued is dropped, not left without an output");
 
-        speech.Enqueue(MarkedSpeech());
         devices.Players[^1].Device.ShouldBe("id-headphones");
         devices.Players[^1].Playing.ShouldBeTrue();
-        levels.ShouldContain(0f);
+        speech.Remaining.ShouldBeGreaterThan(TimeSpan.Zero, "the reply goes on there");
     }
 
     // The orb held its last loud level while a Bluetooth device woke (review of #185).
@@ -485,26 +482,53 @@ public sealed class AudioOutputTests
         levelWhileOpening.ShouldBe(0f);
     }
 
+    [Fact]
+    public void A_reopen_after_a_device_error_rests_the_orb_while_the_output_opens()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = Speech(devices);
+        speech.Enqueue(MarkedSpeech());
+        var levels = new List<float>();
+        speech.LevelChanged += (_, level) => levels.Add(level);
+        float? levelWhileOpening = null;
+        devices.WhileOpening = () => levelWhileOpening = levels.LastOrDefault(-1);
+
+        devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
+
+        levelWhileOpening.ShouldBe(0f);
+    }
+
     // A pick on the panel mid-reply opened the new device on the UI thread, inside the player's lock: the window froze while a
     // Bluetooth device woke, or while a chunk opened one in Enqueue (#177).
     [Fact]
-    public async Task A_pick_mid_reply_opens_the_new_output_off_the_thread_that_picked_it()
+    public async Task A_pick_mid_reply_returns_before_the_new_output_has_opened()
     {
+        using var waking = new ManualResetEventSlim(); // disposed after the player, whose move may still wait on it
         var devices = new Devices();
         using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
         speech.Enqueue(MarkedSpeech());
+        devices.WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(5)); // a Bluetooth headset waking
         var opened = devices.Opened("id-headphones");
-        var picker = Environment.CurrentManagedThreadId;
 
-        devices.Output.DeviceId = "id-headphones";
+        var picking = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            devices.Output.DeviceId = "id-headphones";
+            picking.Stop();
+        }
+        finally
+        {
+            waking.Set();
+        }
 
-        var moved = await opened.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-        moved.OpenedOn.ShouldNotBe(picker);
+        picking.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(1), "the pick waited for the device to wake");
+        (await opened.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).Playing.ShouldBeTrue();
     }
 
-    // Two picks in a row: the first move runs after both and opens on the second; the second then has nothing left to do.
+    // Picks in a row (arrowing through the list): one move is queued, and it opens on the last pick.
     [Fact]
-    public void Two_picks_in_a_row_move_the_speech_once()
+    public void Picks_in_a_row_queue_one_move_that_ends_on_the_last()
     {
         var devices = new Devices();
         var moves = new List<Action>();
@@ -513,13 +537,37 @@ public sealed class AudioOutputTests
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
         devices.Output.DeviceId = "id-tv";
+        devices.Output.DeviceId = "id-speakers";
         devices.Output.DeviceId = "id-headphones";
-        moves.ForEach(move => move());
+        moves.Count.ShouldBe(1, "a pool thread for each pick, all waiting on the lock while one device wakes");
+        moves[0]();
 
         devices.Players.Count.ShouldBe(2);
         devices.Players[1].Device.ShouldBe("id-headphones");
         devices.Players[1].Disposed.ShouldBeFalse();
         ReadsTheMark(devices.Players[1]).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_pick_while_a_move_runs_queues_another_that_follows_it()
+    {
+        var devices = new Devices();
+        var moves = new List<Action>();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        speech.Enqueue(MarkedSpeech());
+        devices.Output.DeviceId = "id-tv";
+        devices.WhileOpening = () =>
+        {
+            devices.WhileOpening = null;
+            devices.Output.DeviceId = "id-headphones"; // picked while the TV wakes
+        };
+
+        moves[0]();
+        moves.Count.ShouldBe(2);
+        moves[1]();
+
+        devices.Players[^1].Device.ShouldBe("id-headphones");
+        devices.Players[^1].Playing.ShouldBeTrue();
     }
 
     /// <summary>The speech player with its moves run inline, so a test sees them done when the pick returns.</summary>
