@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Media;
 
@@ -7,18 +8,22 @@ namespace CodeSwitchX.UI.Infrastructure;
 /// <summary>
 /// An item of a <see cref="GiveWayBar"/> that folds at its <see cref="Step"/>. Folded, it takes no room and shows nothing,
 /// but it still measures its content, so the bar always knows how wide the item would be shown: an item that shrank while
-/// folded comes back as soon as it fits again. Its content's own Visibility is left alone.
+/// folded comes back as soon as it fits again. Its content's own Visibility is left alone; folded, the content is not in
+/// the automation tree either, so a screen reader does not read what is not shown.
 /// </summary>
 public sealed class GiveWay : Decorator
 {
     public static readonly DependencyProperty StepProperty = DependencyProperty.Register(nameof(Step), typeof(int), typeof(GiveWay),
-        new PropertyMetadata(0, (item, _) => ((GiveWay)item)._bar?.InvalidateMeasure()));
+        new PropertyMetadata(0, (item, _) => ((GiveWay)item)._bar?.InvalidateMeasure()), step => (int)step is >= 0 and <= MaxStep);
+
+    /// <summary>The bar keeps a width per step: a few steps make sense on a row, not thousands.</summary>
+    public const int MaxStep = 32;
 
     private GiveWayBar? _bar;
 
     private bool _folded;
 
-    /// <summary>When the item folds: 1 first, then 2, and so on; 0 (the default) never.</summary>
+    /// <summary>When the item folds: 1 first, then 2, and so on up to <see cref="MaxStep"/>; 0 (the default) never.</summary>
     public int Step
     {
         get => (int)GetValue(StepProperty);
@@ -39,6 +44,7 @@ public sealed class GiveWay : Decorator
             }
 
             _folded = value;
+            UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
             // A changed item marks only its parent for a new measure: everything up to the bar must measure again, or a
             // parent that was not marked returns its old size.
             for (DependencyObject? up = this; up is not null && up != _bar; up = GiveWayBar.ParentOf(up))
@@ -91,8 +97,23 @@ public sealed class GiveWay : Decorator
     internal void LetGo()
     {
         _bar = null;
+        Show();
+    }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new Peer(this);
+
+    /// <summary>Shown again outside any bar: only the item itself needs to measure again, its new row lays it out anew.</summary>
+    private void Show()
+    {
+        if (!_folded)
+        {
+            return;
+        }
+
         _folded = false;
+        UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
         InvalidateMeasure();
+        InvalidateArrange();
     }
 
     private void Join(GiveWayBar? bar)
@@ -105,7 +126,17 @@ public sealed class GiveWay : Decorator
         // A new bar (or none) starts it shown; the bar folds it again if its row needs that.
         _bar?.Leave(this);
         _bar = bar;
-        _folded = false;
+        Show();
         bar?.Join(this);
+    }
+
+    /// <summary>Not an element of its own in the automation tree; its content is, unless folded.</summary>
+    private sealed class Peer(GiveWay owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override bool IsControlElementCore() => false;
+
+        protected override bool IsContentElementCore() => false;
+
+        protected override List<AutomationPeer>? GetChildrenCore() => owner.IsFolded ? null : base.GetChildrenCore();
     }
 }

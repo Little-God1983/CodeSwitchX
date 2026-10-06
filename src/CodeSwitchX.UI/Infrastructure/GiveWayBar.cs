@@ -20,6 +20,25 @@ public sealed class GiveWayBar : Decorator
 
     private readonly List<GiveWay> _items = [];
 
+    /// <summary>Each step's width at the last measure, by step: kept to measure without allocating.</summary>
+    private readonly double[] _steps = new double[GiveWay.MaxStep];
+
+    /// <summary>The items in the row at the last measure, the ones it folds.</summary>
+    private readonly List<GiveWay> _inRow = [];
+
+    /// <summary>Where an item that joined the bar is now.</summary>
+    private enum Place
+    {
+        /// <summary>In the row, shown or folded.</summary>
+        Row,
+
+        /// <summary>Under a collapsed panel (the bar collapsed to its arrow): not laid out, so its width is not current.</summary>
+        Hidden,
+
+        /// <summary>Taken out of the bar, with a row or panel it was in.</summary>
+        Gone,
+    }
+
     /// <summary>How many steps the last measure folded: 0 none.</summary>
     public int Folded { get; private set; }
 
@@ -64,6 +83,22 @@ public sealed class GiveWayBar : Decorator
     internal static DependencyObject? ParentOf(DependencyObject node) =>
         (node is Visual or Visual3D ? VisualTreeHelper.GetParent(node) : null) ?? LogicalTreeHelper.GetParent(node);
 
+    private Place Where(GiveWay item)
+    {
+        var hidden = false;
+        for (DependencyObject? node = item; node is not null; node = ParentOf(node))
+        {
+            if (node == this)
+            {
+                return hidden ? Place.Hidden : Place.Row;
+            }
+
+            hidden |= node is UIElement { Visibility: Visibility.Collapsed };
+        }
+
+        return Place.Gone;
+    }
+
     internal void Join(GiveWay item)
     {
         _items.Add(item);
@@ -89,20 +124,30 @@ public sealed class GiveWayBar : Decorator
         // still reaches this measure. Its items join the bar as they measure.
         var unlimited = new Size(double.PositiveInfinity, constraint.Height);
         child.Measure(unlimited);
-        // A row taken out with its items in it: they are no longer this bar's.
-        foreach (var gone in _items.Where(item => Above(item) != this).ToList())
-        {
-            _items.Remove(gone);
-            gone.LetGo();
-        }
 
-        var steps = new double[_items.Count == 0 ? 0 : _items.Max(item => item.Step)];
+        Array.Clear(_steps);
+        _inRow.Clear();
+        var last = 0;
         var unfolded = child.DesiredSize.Width;
-        foreach (var item in _items)
+        for (var i = _items.Count - 1; i >= 0; i--)
         {
+            var item = _items[i];
+            switch (Where(item))
+            {
+                case Place.Gone:
+                    _items.RemoveAt(i);
+                    item.LetGo();
+                    continue;
+                case Place.Hidden:
+                    continue; // under a collapsed panel it is not in the row: neither is its width, and its fold waits
+            }
+
+            _inRow.Add(item);
+
             if (item.Step > 0)
             {
-                steps[item.Step - 1] += item.Natural;
+                _steps[item.Step - 1] += item.Natural;
+                last = Math.Max(last, item.Step);
             }
 
             if (item.IsFolded)
@@ -111,9 +156,9 @@ public sealed class GiveWayBar : Decorator
             }
         }
 
-        Folded = StepsFor(constraint.Width, unfolded, steps);
+        Folded = StepsFor(constraint.Width, unfolded, new ArraySegment<double>(_steps, 0, last));
         var changed = false;
-        foreach (var item in _items)
+        foreach (var item in _inRow)
         {
             var fold = item.Step > 0 && item.Step <= Folded;
             changed |= fold != item.IsFolded;
@@ -123,6 +168,14 @@ public sealed class GiveWayBar : Decorator
         if (changed)
         {
             child.Measure(unlimited);
+        }
+
+        if (!Fits(child.DesiredSize.Width, constraint.Width))
+        {
+            // Too wide even folded as far as it goes: measured at the bar's own width the row keeps its docked items (the
+            // models' dots, the collapse button) in view and cuts the end of its fill instead. Nothing is left to fold, and
+            // a row that shrinks back reports a new size from here too.
+            child.Measure(constraint);
         }
 
         return new Size(Math.Min(child.DesiredSize.Width, constraint.Width), child.DesiredSize.Height);

@@ -176,6 +176,114 @@ public sealed class GiveWayBarTests
         cost.IsFolded.ShouldBeFalse("taken out, it is no longer folded by the bar");
     });
 
+    /// <summary>
+    /// Too wide even with every step folded, the row cuts the end of its fill and keeps its docked items (the models' dots,
+    /// the collapse button) inside the bar.
+    /// </summary>
+    [Fact]
+    public Task Too_wide_even_folded_the_docked_items_stay_in_view() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+
+        Lay(bar, 300); // folded as far as it goes the row needs 310
+
+        bar.Folded.ShouldBe(3);
+        var link = (FrameworkElement)((FrameworkElement)parts.Name.Parent).Parent;
+        while (link is not Button)
+        {
+            link = (FrameworkElement)(link.Parent ?? System.Windows.Media.VisualTreeHelper.GetParent(link));
+        }
+
+        LayoutInformation.GetLayoutSlot(link).Right.ShouldBeLessThanOrEqualTo(300);
+    });
+
+    /// <summary>A folded item taken out and put into another panel shows there: its size and clip are its own again.</summary>
+    [Fact]
+    public Task A_folded_item_put_elsewhere_shows_there() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+        Lay(bar, 300);
+        var cost = (GiveWay)parts.Cost.Parent;
+        cost.IsFolded.ShouldBeTrue();
+
+        ((StackPanel)parts.Tokens.Parent).Children.Remove(cost);
+        var elsewhere = new StackPanel { Orientation = Orientation.Horizontal, Children = { cost } };
+        elsewhere.Measure(new Size(300, 20));
+        elsewhere.Arrange(new Rect(0, 0, 300, 20));
+
+        cost.DesiredSize.Width.ShouldBe(100);
+        LayoutInformation.GetLayoutClip(cost).ShouldNotBe(Geometry.Empty);
+    });
+
+    /// <summary>
+    /// Items under a collapsed panel (the bar collapsed to its arrow) are not in the row: their old widths do not count, and
+    /// they fold as the row needs once shown again.
+    /// </summary>
+    [Fact]
+    public Task Items_under_a_collapsed_panel_do_not_count() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+        var row = (StackPanel)parts.Tokens.Parent;
+        Lay(bar, 600);
+        bar.Folded.ShouldBe(1);
+
+        row.Visibility = Visibility.Collapsed; // the row is 130 without it
+        parts.Sparkline.Width = 2000; // a width it no longer has in the row
+        bar.UpdateLayout();
+        Lay(bar, 200);
+        bar.Folded.ShouldBe(0, "only the link is in the row");
+
+        row.Visibility = Visibility.Visible;
+        bar.UpdateLayout();
+        bar.Folded.ShouldBe(3);
+    });
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(GiveWay.MaxStep + 1)]
+    public void A_step_out_of_range_is_refused(int step) => Should.Throw<ArgumentException>(() => StaRun(() => new GiveWay { Step = step }));
+
+    /// <summary>Folded, its content is out of the automation tree: a screen reader does not read what is not shown.</summary>
+    [Fact]
+    public Task Folded_its_content_is_not_read_out() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+        var cost = (GiveWay)parts.Cost.Parent;
+        cost.Child = new TextBlock { Text = "cost today" }; // a TextBlock has a peer of its own, a Border none
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(cost);
+
+        Lay(bar, 900);
+        peer.ResetChildrenCache();
+        (peer.GetChildren()?.Count ?? 0).ShouldBe(1);
+
+        Lay(bar, 300);
+        peer.ResetChildrenCache();
+        (peer.GetChildren()?.Count ?? 0).ShouldBe(0);
+    });
+
+    private static void StaRun(Action body)
+    {
+        Exception? caught = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                body();
+            }
+            catch (Exception ex)
+            {
+                caught = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (caught is not null)
+        {
+            throw caught;
+        }
+    }
+
     private sealed record Parts(FrameworkElement Name, FrameworkElement Sparkline, FrameworkElement Cost, FrameworkElement Tokens);
 
     private static GiveWayBar Bar(out Parts parts)
