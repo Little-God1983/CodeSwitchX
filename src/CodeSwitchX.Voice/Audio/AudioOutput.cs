@@ -149,7 +149,8 @@ public sealed class AudioOutput : IAudioOutput
         return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
     }
 
-    private static void DisposeQuietly(IWavePlayer? player)
+    /// <summary>Best effort: a player that half started may throw on dispose too.</summary>
+    internal static void DisposeQuietly(IWavePlayer? player)
     {
         try
         {
