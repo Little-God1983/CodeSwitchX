@@ -133,6 +133,37 @@ public sealed class AudioOutputTests
         devices.Players.ShouldAllBe(p => p.Disposed);
     }
 
+    // The default's failure was caught as the chosen one's, and the default tried twice on the same source (review of #183).
+    [Fact]
+    public void With_the_chosen_output_asleep_a_default_that_will_not_start_is_tried_once()
+    {
+        var devices = new Devices { Asleep = "id-tv", DefaultFailsInInit = true };
+        devices.Output.DeviceId = "id-tv";
+
+        Should.Throw<COMException>(() => devices.Output.Open(new SilenceProvider(new WaveFormat(44100, 16, 2)), 300));
+
+        devices.Players.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Open_says_whether_the_sound_went_to_the_Windows_default()
+    {
+        var devices = new Devices { FailingInInit = "id-tv" };
+        var source = new SilenceProvider(new WaveFormat(44100, 16, 2));
+
+        devices.Output.DeviceId = "id-headphones";
+        devices.Output.Open(source, 300, out var onDefault);
+        onDefault.ShouldBeFalse();
+
+        devices.Output.DeviceId = "id-tv";
+        devices.Output.Open(source, 300, out onDefault);
+        onDefault.ShouldBeTrue();
+
+        devices.Output.DeviceId = null;
+        devices.Output.Open(source, 300, out onDefault);
+        onDefault.ShouldBeTrue();
+    }
+
     [Fact]
     public void Speech_on_an_output_chosen_that_will_not_start_is_heard_on_the_Windows_default()
     {
@@ -217,6 +248,38 @@ public sealed class AudioOutputTests
 
         devices.Players.Count.ShouldBe(2);
         devices.Players[1].Disposed.ShouldBeFalse();
+        ReadsTheMark(devices.Players[1]).ShouldBeTrue();
+    }
+
+    // The headset unplugged just before the reply: it starts on the default, and the listing then sets the choice back to the
+    // default too. Speech is there already (review of #183).
+    [Fact]
+    public void Speech_that_started_on_the_default_in_place_of_a_gone_output_stays_when_the_choice_follows()
+    {
+        var devices = new Devices { Gone = "id-headphones" };
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+
+        devices.Output.DeviceId = null;
+
+        devices.Players.Count.ShouldBe(1);
+        devices.Players[0].Disposed.ShouldBeFalse();
+    }
+
+    // Following the Windows default, a headset that is the default unplugged mid-reply: the default is now another device, and
+    // the rest of the reply plays there (older than #172).
+    [Fact]
+    public void Following_the_default_a_device_error_mid_reply_goes_on_on_the_new_default()
+    {
+        var devices = new Devices();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
+
+        devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
+
+        devices.Players.Count.ShouldBe(2);
         ReadsTheMark(devices.Players[1]).ShouldBeTrue();
     }
 

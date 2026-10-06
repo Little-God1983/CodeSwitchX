@@ -33,7 +33,8 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private readonly Lock _lock = new();
     private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
-    private bool _onDefault; // reopened on the Windows default after the output failed mid-reply: a second failure ends it
+    private bool _onDefault; // plays on the Windows default: none chosen, or the one chosen could not be used
+    private bool _reopened; // reopened after the output failed mid-reply: a second failure ends the reply
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
     {
@@ -90,7 +91,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
             if (_onDefault && _audioOutput.DeviceId is null)
             {
-                return; // the choice gone back to the Windows default after it failed mid-reply: speech is there already
+                return; // the choice gone back to the Windows default (the headset left the list): speech is there already
             }
 
             var buffer = _buffer;
@@ -119,10 +120,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         });
     }
 
-    private void Open(BufferedWaveProvider buffer, bool onDefault = false)
+    private void Open(BufferedWaveProvider buffer, bool afterFailure = false)
     {
         var meter = new Meter(buffer, this);
-        var output = onDefault ? _audioOutput.OpenDefault(meter, 120) : _audioOutput.Open(meter, 120);
+        var onDefault = true;
+        var output = afterFailure ? _audioOutput.OpenDefault(meter, 120) : _audioOutput.Open(meter, 120, out onDefault);
         try
         {
             output.PlaybackStopped += OnPlaybackStopped;
@@ -138,6 +140,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         _buffer = buffer;
         _output = output;
         _onDefault = onDefault;
+        _reopened = afterFailure;
     }
 
     public void Stop()
@@ -189,7 +192,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on on the Windows
             // default, once. Only what the failed device held, a tenth of a second, is lost.
             var buffer = _buffer!;
-            var reopen = e.Exception is not null && !_onDefault && buffer.BufferedBytes > 0;
+            var reopen = e.Exception is not null && !_reopened && buffer.BufferedBytes > 0;
             StopLocked();
             if (!reopen)
             {
@@ -198,7 +201,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
             try
             {
-                Open(buffer, onDefault: true);
+                Open(buffer, afterFailure: true);
                 _logger.LogInformation("Speech goes on on the Windows default");
             }
             catch (Exception ex)

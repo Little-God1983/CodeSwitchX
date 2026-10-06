@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -20,6 +21,9 @@ public interface IAudioOutput
     /// </summary>
     IWavePlayer Open(IWaveProvider source, int latencyMs);
 
+    /// <summary>The same, saying whether it plays on the Windows default: none chosen, or the one chosen could not be used.</summary>
+    IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault);
+
     /// <summary>
     /// The same on the Windows default whatever is chosen: for what was queued on an output that failed while it played.
     /// </summary>
@@ -33,6 +37,8 @@ public interface IAudioOutput
 /// </summary>
 public sealed class AudioOutput : IAudioOutput
 {
+    private const int DeviceInUse = unchecked((int)0x8889000A); // AUDCLNT_E_DEVICE_IN_USE: held in exclusive mode
+
     private readonly ILogger<AudioOutput> _logger;
     private readonly Func<string, int, IWavePlayer?> _openChosen;
     private readonly Func<int, IWavePlayer> _openDefault;
@@ -68,33 +74,51 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer Open(IWaveProvider source, int latencyMs)
-    {
-        if (DeviceId is { } id)
-        {
-            IWavePlayer? chosen = null;
-            try
-            {
-                chosen = _openChosen(id, latencyMs);
-                if (chosen is null)
-                {
-                    // A headset asleep or unplugged: an ordinary state, not worth a warning on every chime.
-                    _logger.LogInformation("The output chosen is not active; playing on the Windows default");
-                    return OpenDefault(source, latencyMs);
-                }
+    public IWavePlayer Open(IWaveProvider source, int latencyMs) => Open(source, latencyMs, out _);
 
-                chosen.Init(source); // where a device listed as active still refuses: AUDCLNT_E_DEVICE_IN_USE
-                return chosen;
-            }
-            catch (Exception ex)
-            {
-                // Unplugged since it was listed, gone for good, or busy: the default plays rather than nothing.
-                DisposeQuietly(chosen);
-                _logger.LogWarning(ex, "The output chosen could not be used; playing on the Windows default");
-            }
+    public IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault)
+    {
+        if (DeviceId is { } id && OpenChosen(id, source, latencyMs) is { } chosen)
+        {
+            onDefault = false;
+            return chosen;
         }
 
+        onDefault = true;
         return OpenDefault(source, latencyMs);
+    }
+
+    /// <summary>The device chosen, initialised; null when it cannot be used, which is logged: the default plays rather than nothing.</summary>
+    private IWavePlayer? OpenChosen(string id, IWaveProvider source, int latencyMs)
+    {
+        IWavePlayer? chosen = null;
+        try
+        {
+            chosen = _openChosen(id, latencyMs);
+            if (chosen is null)
+            {
+                // A headset asleep or unplugged: an ordinary state, not worth a warning on every chime.
+                _logger.LogInformation("The output chosen is not active; playing on the Windows default");
+                return null;
+            }
+
+            chosen.Init(source); // where a device listed as active still refuses: AUDCLNT_E_DEVICE_IN_USE
+            return chosen;
+        }
+        catch (COMException ex) when (ex.HResult == DeviceInUse)
+        {
+            // Lasts as long as the other app holds it: as ordinary as a device asleep.
+            DisposeQuietly(chosen);
+            _logger.LogInformation("The output chosen is held by another app; playing on the Windows default");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Unplugged since it was listed, or gone for good.
+            DisposeQuietly(chosen);
+            _logger.LogWarning(ex, "The output chosen could not be used; playing on the Windows default");
+            return null;
+        }
     }
 
     public IWavePlayer OpenDefault(IWaveProvider source, int latencyMs)
@@ -121,7 +145,7 @@ public sealed class AudioOutput : IAudioOutput
         {
             if (device.State == DeviceState.Active)
             {
-                return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs)); // it keeps the device
+                return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs), device);
             }
         }
         catch
@@ -155,10 +179,13 @@ public sealed class AudioOutput : IAudioOutput
 internal sealed class StoppedOffThread : IWavePlayer
 {
     private readonly IWavePlayer _inner;
+    private readonly IDisposable? _device;
 
-    public StoppedOffThread(IWavePlayer inner)
+    /// <param name="device">Let go with the player: WasapiOut keeps it but does not dispose it.</param>
+    public StoppedOffThread(IWavePlayer inner, IDisposable? device = null)
     {
         _inner = inner;
+        _device = device;
         _inner.PlaybackStopped += (_, e) => ThreadPool.QueueUserWorkItem(_ => PlaybackStopped?.Invoke(this, e));
     }
 
@@ -182,5 +209,9 @@ internal sealed class StoppedOffThread : IWavePlayer
 
     public void Stop() => _inner.Stop();
 
-    public void Dispose() => _inner.Dispose();
+    public void Dispose()
+    {
+        _inner.Dispose();
+        _device?.Dispose();
+    }
 }

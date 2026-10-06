@@ -213,6 +213,8 @@ public sealed class SpeakerChoiceTests
 
         public NAudio.Wave.IWavePlayer Open(NAudio.Wave.IWaveProvider source, int latencyMs) => throw new NotSupportedException();
 
+        public NAudio.Wave.IWavePlayer Open(NAudio.Wave.IWaveProvider source, int latencyMs, out bool onDefault) => throw new NotSupportedException();
+
         public NAudio.Wave.IWavePlayer OpenDefault(NAudio.Wave.IWaveProvider source, int latencyMs) => throw new NotSupportedException();
     }
 }
