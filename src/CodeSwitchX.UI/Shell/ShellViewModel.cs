@@ -555,8 +555,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         switch (choice)
         {
             case RemoveChoice.AnswerFirst:
+                Raven.ShowChatOf(workspaceId); // chosen first: opening must not count the chat shown before as seen
                 Raven.IsOpen = true; // a folded panel shows no cards
-                Raven.ShowChatOf(workspaceId);
                 return false;
             case RemoveChoice.LeaveToVsCode:
                 // Once removed, the window's open cards go to VS Code (Raven.SetWorkspaces); a removal that fails keeps them.
