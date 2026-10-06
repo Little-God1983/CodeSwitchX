@@ -30,7 +30,7 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.Players.Single().Device.ShouldBeNull("held by another app: the default is kept awake meanwhile");
 
         _output.Busy = false;
-        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _time.Advance(AudioKeepAlive.RetryEvery);
 
         _output.Players.Count.ShouldBe(2);
         _output.Players[0].Disposed.ShouldBeTrue();
@@ -42,12 +42,12 @@ public sealed class AudioKeepAliveTests : IDisposable
     {
         _keepAlive.Start();
 
-        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _time.Advance(AudioKeepAlive.RetryEvery);
         _output.Players[0].Disposed.ShouldBeFalse("the default plays on while the try fails");
         _output.Players.Skip(1).ShouldAllBe(p => p.Device == null && p.Disposed);
 
         _output.Busy = false;
-        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _time.Advance(AudioKeepAlive.RetryEvery);
         _output.Players[^1].Device.ShouldBe("id-tv");
         _output.Players[0].Disposed.ShouldBeTrue();
     }
@@ -58,7 +58,7 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.Busy = false;
         _keepAlive.Start();
 
-        _time.Advance(AudioKeepAlive.RetryChosenEvery * 3);
+        _time.Advance(AudioKeepAlive.RetryEvery * 3);
 
         _output.Players.Single().Device.ShouldBe("id-tv");
     }
@@ -69,7 +69,7 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.DeviceId = null;
         _keepAlive.Start();
 
-        _time.Advance(AudioKeepAlive.RetryChosenEvery * 3);
+        _time.Advance(AudioKeepAlive.RetryEvery * 3);
 
         _output.Players.ShouldHaveSingleItem();
     }
@@ -81,7 +81,7 @@ public sealed class AudioKeepAliveTests : IDisposable
         _keepAlive.Stop();
         _output.Busy = false;
 
-        _time.Advance(AudioKeepAlive.RetryChosenEvery * 3);
+        _time.Advance(AudioKeepAlive.RetryEvery * 3);
 
         _output.Players.ShouldHaveSingleItem().Disposed.ShouldBeTrue();
     }
@@ -94,12 +94,12 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.Busy = false;
         _output.ChosenWillNotPlay = true;
 
-        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _time.Advance(AudioKeepAlive.RetryEvery);
         _output.Players[0].Playing.ShouldBeTrue("the default plays on");
         _output.Players[1].Disposed.ShouldBeTrue();
 
         _output.ChosenWillNotPlay = false;
-        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _time.Advance(AudioKeepAlive.RetryEvery);
         (_output.Players[^1].Device, _output.Players[^1].Playing).ShouldBe(("id-tv", true));
         _output.Players[0].Disposed.ShouldBeTrue();
     }
@@ -116,6 +116,60 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.Players.ShouldBeEmpty();
     }
 
+    // Review round 2 of #189: the output chosen held, and the Windows default the same device, nothing started, and nothing
+    // tried again once the other app let go.
+    [Fact]
+    public void A_start_that_finds_no_output_tries_again()
+    {
+        _output.DefaultFails = true;
+        _keepAlive.Start();
+        _output.Players.ShouldBeEmpty();
+
+        _output.Busy = false;
+        _output.DefaultFails = false;
+        _time.Advance(AudioKeepAlive.RetryEvery);
+
+        (_output.Players.Single().Device, _output.Players.Single().Playing).ShouldBe(("id-tv", true));
+    }
+
+    // Review round 2 of #189: a pick stopped the old output before the new one played.
+    [Fact]
+    public async Task A_pick_moves_it_and_the_old_output_plays_until_the_new_one_does()
+    {
+        _output.Busy = false;
+        _keepAlive.Start();
+
+        _output.DeviceId = "id-headphones";
+        await RestartedAsync(() => _output.Players.Count == 2);
+
+        (_output.Players[1].Device, _output.Players[1].Playing).ShouldBe(("id-headphones", true));
+        _output.Players[0].Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_device_error_starts_it_again()
+    {
+        _output.Busy = false;
+        _keepAlive.Start();
+
+        _output.Players[0].Fail();
+        await RestartedAsync(() => _output.Players.Count == 2);
+
+        _output.Players[1].Playing.ShouldBeTrue();
+    }
+
+    /// <summary>Advances the clock by the restart's debounce until <paramref name="done"/>: the restart waits on the thread pool.</summary>
+    private async Task RestartedAsync(Func<bool> done)
+    {
+        for (var i = 0; i < 250 && !done(); i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(2));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        done().ShouldBeTrue();
+    }
+
     /// <summary>An output whose chosen device is held by another app while <see cref="Busy"/>; a null device is the default.</summary>
     private sealed class Output : IAudioOutput
     {
@@ -123,18 +177,34 @@ public sealed class AudioKeepAliveTests : IDisposable
 
         public bool Busy { get; set; }
 
+        /// <summary>The Windows default will not open either (the same device, held).</summary>
+        public bool DefaultFails { get; set; }
+
         /// <summary>The chosen device opens, then fails to play.</summary>
         public bool ChosenWillNotPlay { get; set; }
 
-        public string? DeviceId { get; set; }
+        private string? _deviceId;
 
-#pragma warning disable CS0067 // the tests set the device before the keep-alive starts
+        public string? DeviceId
+        {
+            get => _deviceId;
+            set
+            {
+                _deviceId = value;
+                Changed?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
         public event EventHandler? Changed;
-#pragma warning restore CS0067
 
         public IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn)
         {
             playsOn = DeviceId is { } id && !Busy ? id : null;
+            if (playsOn is null && DefaultFails)
+            {
+                throw new InvalidOperationException("MMSYSERR_ALLOCATED");
+            }
+
             var player = new Player(playsOn, playsOn is not null && ChosenWillNotPlay);
             player.Init(source);
             Players.Add(player);
@@ -150,9 +220,14 @@ public sealed class AudioKeepAliveTests : IDisposable
 
         public bool Disposed { get; private set; }
 
-#pragma warning disable CS0067 // never fails
         public event EventHandler<StoppedEventArgs>? PlaybackStopped;
-#pragma warning restore CS0067
+
+        /// <summary>The device went while playing.</summary>
+        public void Fail()
+        {
+            Playing = false;
+            PlaybackStopped?.Invoke(this, new StoppedEventArgs(new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED")));
+        }
 
         public float Volume { get; set; }
 

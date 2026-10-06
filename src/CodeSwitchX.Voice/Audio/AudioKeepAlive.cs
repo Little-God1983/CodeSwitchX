@@ -27,21 +27,22 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
     private static readonly TimeSpan RestartDelay = TimeSpan.FromSeconds(2);
 
     /// <summary>
-    /// How often a keep-alive on the Windows default in place of the output chosen tries that one again (#184): an app that
-    /// held it in exclusive mode lets go without any device change to tell.
+    /// How often it tries again when it does not play where it should (#184): on the Windows default in place of the output
+    /// chosen, which an app that held it in exclusive mode lets go of without any device change to tell; or nowhere, after
+    /// no output would start.
     /// </summary>
-    internal static readonly TimeSpan RetryChosenEvery = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan RetryEvery = TimeSpan.FromSeconds(30);
 
     private readonly ILogger<AudioKeepAlive> _logger;
     private readonly IAudioOutput _audioOutput;
     private readonly TimeProvider _time;
     private readonly bool _watchDevices;
-    private readonly ITimer _retryChosen;
+    private readonly ITimer _retry;
+    private readonly EventHandler _onChosen;
     private readonly Lock _lock = new();
     private MMDeviceEnumerator? _enumerator;
     private DeviceChangeListener? _listener;
     private IWavePlayer? _output;
-    private bool _inPlaceOfChosen; // on the Windows default because the output chosen could not be used
     private bool _shouldRun;
     private bool _disposed;
     private int _restartPending;
@@ -58,8 +59,9 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
         _logger = logger;
         _time = time;
         _watchDevices = watchDevices;
-        _retryChosen = time.CreateTimer(_ => TryChosenAgain(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        _audioOutput.Changed += (_, _) => RestartSoon(); // another output chosen: keep that one awake instead
+        _retry = time.CreateTimer(_ => Retry(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _onChosen = (_, _) => RestartSoon(); // another output chosen: keep that one awake instead
+        _audioOutput.Changed += _onChosen;
     }
 
     public void Start()
@@ -86,7 +88,10 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
                 }
             }
 
-            StartStreamLocked();
+            if (_output is null)
+            {
+                SwitchLocked(onlyToChosen: false);
+            }
         }
     }
 
@@ -104,6 +109,7 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
 
     public void Dispose()
     {
+        _audioOutput.Changed -= _onChosen;
         lock (_lock)
         {
             if (_disposed)
@@ -114,7 +120,7 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
             _shouldRun = false;
             StopStreamLocked();
             _disposed = true;
-            _retryChosen.Dispose(); // under the lock: no start or stop can reach it after this
+            _retry.Dispose(); // under the lock: no start or stop can reach it after this
             if (_enumerator is not null && _listener is not null)
             {
                 try
@@ -135,29 +141,46 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
 
     private static SilenceProvider Silence() => new(new WaveFormat(44100, 16, 2));
 
-    private void StartStreamLocked()
+    /// <summary>
+    /// Plays silence on the output chosen, or the Windows default in its place; the one before stops only once the next
+    /// plays, so a start that fails leaves what played on, and tries again in <see cref="RetryEvery"/>. With
+    /// <paramref name="onlyToChosen"/> it moves only to the output chosen: the default it would fall back to plays already.
+    /// </summary>
+    private void SwitchLocked(bool onlyToChosen)
     {
-        if (!_shouldRun || _output is not null)
-        {
-            return;
-        }
-
-        IWavePlayer? output = null;
+        var wanted = _audioOutput.DeviceId; // read once: a pick meanwhile switches again anyway
+        IWavePlayer? next = null;
+        string? playsOn;
         try
         {
-            var wanted = _audioOutput.DeviceId; // read once: a pick meanwhile restarts it anyway
-            output = _audioOutput.Open(Silence(), 300, out var playsOn);
-            Play(output);
-            _output = output;
-            _inPlaceOfChosen = wanted is not null && playsOn is null;
-            _retryChosen.Change(_inPlaceOfChosen ? RetryChosenEvery : Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-            _logger.LogInformation("Audio keep-alive started");
+            next = _audioOutput.Open(Silence(), 300, out playsOn);
+            if (onlyToChosen && playsOn is null)
+            {
+                AudioOutput.DisposeQuietly(next); // still held: the default it fell back to again
+                _retry.Change(RetryEvery, Timeout.InfiniteTimeSpan);
+                return;
+            }
+
+            Play(next);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Audio keep-alive could not start; it tries again on the next device change");
-            AudioOutput.DisposeQuietly(output);
-            _output = null;
+            _logger.LogWarning(ex, "Audio keep-alive could not start an output; it tries again in {Seconds} s", RetryEvery.TotalSeconds);
+            AudioOutput.DisposeQuietly(next);
+            _retry.Change(RetryEvery, Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        StopStreamLocked();
+        _output = next;
+        if (wanted is not null && playsOn is null)
+        {
+            _retry.Change(RetryEvery, Timeout.InfiniteTimeSpan); // on the default in place of the output chosen
+            _logger.LogInformation("Audio keep-alive keeps the Windows default awake in place of the output chosen");
+        }
+        else
+        {
+            _logger.LogInformation("Audio keep-alive started");
         }
     }
 
@@ -177,47 +200,23 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
     }
 
     /// <summary>
-    /// On the Windows default in place of the output chosen: tries that one again, and moves there once it opens. The
-    /// default plays on meanwhile, so a try that fails again leaves no gap.
+    /// Nothing plays (no output would start): starts on whatever opens. On the default in place of the output chosen:
+    /// moves there once it opens.
     /// </summary>
-    private void TryChosenAgain()
+    private void Retry()
     {
         lock (_lock)
         {
-            if (!_shouldRun || _output is null || !_inPlaceOfChosen)
+            if (_shouldRun)
             {
-                return;
-            }
-
-            IWavePlayer? chosen = null;
-            try
-            {
-                chosen = _audioOutput.Open(Silence(), 300, out var playsOn);
-                if (playsOn is null)
-                {
-                    AudioOutput.DisposeQuietly(chosen); // still held: the default it fell back to again
-                    _retryChosen.Change(RetryChosenEvery, Timeout.InfiniteTimeSpan);
-                    return;
-                }
-
-                Play(chosen); // playing before the default stops: a chosen one that will not play leaves the default on
-                StopStreamLocked();
-                _output = chosen;
-                _logger.LogInformation("Audio keep-alive is back on the output chosen");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Audio keep-alive could not try the output chosen again");
-                AudioOutput.DisposeQuietly(chosen);
-                _retryChosen.Change(RetryChosenEvery, Timeout.InfiniteTimeSpan);
+                SwitchLocked(onlyToChosen: _output is not null && _audioOutput.DeviceId is not null);
             }
         }
     }
 
     private void StopStreamLocked()
     {
-        _retryChosen.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        _inPlaceOfChosen = false;
+        _retry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         if (_output is null)
         {
             return;
@@ -239,10 +238,19 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        // The device went or failed: try again shortly on whatever is the default by then.
+        // The device went or failed: try again shortly on whatever is the default by then. The dead one is let go now:
+        // kept, a start that fails would leave it standing for one that plays.
         if (e.Exception is not null)
         {
             _logger.LogWarning(e.Exception, "Audio keep-alive stopped unexpectedly");
+        }
+
+        lock (_lock)
+        {
+            if (ReferenceEquals(sender, _output) && !_disposed)
+            {
+                StopStreamLocked();
+            }
         }
 
         RestartSoon();
@@ -262,13 +270,10 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
             Interlocked.Exchange(ref _restartPending, 0);
             lock (_lock)
             {
-                if (!_shouldRun)
+                if (_shouldRun)
                 {
-                    return;
+                    SwitchLocked(onlyToChosen: false); // the one before plays until the next does
                 }
-
-                StopStreamLocked();
-                StartStreamLocked();
             }
         });
     }
