@@ -66,7 +66,7 @@ public sealed class AudioKeepAliveTests : IDisposable
     [Fact]
     public void Following_the_Windows_default_it_tries_nothing()
     {
-        _output.DeviceId = null;
+        _output.Picked(null); // before the start: no restart to race the clock
         _keepAlive.Start();
 
         _time.Advance(AudioKeepAlive.RetryEvery * 3);

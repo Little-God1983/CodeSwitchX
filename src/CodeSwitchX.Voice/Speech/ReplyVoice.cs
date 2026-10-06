@@ -321,6 +321,7 @@ public sealed class ReplyVoice : IDisposable
         }
 
         using var stalled = CancellationTokenSource.CreateLinkedTokenSource(hush);
+        Func<bool> hushed = () => IsHushed(reply.Number); // the player asks it once a device for the reply has opened
         using var watchdog = _time.CreateTimer(_ => Cancel(stalled), null, FirstAudioTimeout, Timeout.InfiniteTimeSpan);
         var audio = TimeSpan.Zero;
         try
@@ -339,7 +340,7 @@ public sealed class ReplyVoice : IDisposable
                         return;
                     }
 
-                    _player.Enqueue(chunk, () => IsHushed(reply.Number));
+                    _player.Enqueue(chunk, hushed);
                     audio += TimeSpan.FromSeconds(chunk.Pcm16.Length / 2.0 / chunk.SampleRate);
                 }
                 finally

@@ -773,6 +773,36 @@ public sealed class AudioOutputTests
         speech.Remaining.ShouldBe(TimeSpan.Zero);
     }
 
+    // Review round 2 of #190: only the open the chunk started asked whether the reply was hushed; a move's device that opened
+    // after the hush played it until the stop came.
+    [Fact]
+    public void A_moves_device_that_opens_after_the_reply_was_hushed_is_never_heard()
+    {
+        var devices = new Devices();
+        using var speech = Speech(devices);
+        var hushed = false;
+        speech.Enqueue(MarkedSpeech(), () => hushed);
+        devices.WhileOpening = () => hushed = true; // the hush comes while the headphones open
+
+        devices.Output.DeviceId = "id-headphones";
+
+        var headphones = devices.Players.Single(p => p.Device == "id-headphones");
+        (headphones.PlayedEver, headphones.Disposed).ShouldBe((false, true));
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void A_hush_check_that_throws_is_no_hush_and_leaves_no_device_behind()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = Speech(devices);
+
+        speech.Enqueue(MarkedSpeech(), () => throw new ObjectDisposedException("reply"));
+
+        devices.Players.Single().Playing.ShouldBeTrue();
+    }
+
     // Review of #190: a pick made just before the first chunk opened its device on the same output woke that output twice.
     [Fact]
     public async Task A_move_to_where_the_first_device_is_opening_already_opens_nothing_more()
