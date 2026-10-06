@@ -3225,9 +3225,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        var chat = entry.Chat;
         entry.IsUnread = false;
-        entry.Chat.Unread -= UnreadLines(entry);
-        entry.Chat.IsNewsPulsing &= entry.Chat.Unread > 0;
+        chat.Unread -= UnreadLines(entry);
+        chat.IsNewsPulsing &= chat.Unread > 0;
+        // A failure said aloud is heard too: the red mark stays only for one still unread.
+        chat.HasFailed = Log.Any(e => e.Chat == chat && e.IsUnread && e.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true);
     }
 
     /// <summary>How long a badge pulses when a line comes (#173): three beats, then it stays steady.</summary>

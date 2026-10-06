@@ -258,4 +258,20 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.YardChat.Unread.ShouldBe(1);
     }
+    // Review round 3 of #175: the failure the digest said aloud kept its red mark on the chat talked to.
+    [Fact]
+    public async Task Collapsed_a_failure_said_aloud_in_the_chat_talked_to_leaves_no_red_mark()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        var two = ChatNumbered(vm, 2);
+        vm.SelectedChat = two;
+        vm.IsOpen = false;
+
+        Changes("a", SessionState.Working, SessionState.Errored);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        (two.Unread, two.HasFailed).ShouldBe((0, false));
+    }
 }
