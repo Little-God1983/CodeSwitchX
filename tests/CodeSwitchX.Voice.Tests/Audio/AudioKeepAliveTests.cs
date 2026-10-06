@@ -86,12 +86,45 @@ public sealed class AudioKeepAliveTests : IDisposable
         _output.Players.ShouldHaveSingleItem().Disposed.ShouldBeTrue();
     }
 
+    // Review of #189: the default was stopped before the chosen one played; one that would not play left nothing on.
+    [Fact]
+    public void A_chosen_output_that_opens_but_will_not_play_leaves_the_default_on_and_is_tried_again()
+    {
+        _keepAlive.Start();
+        _output.Busy = false;
+        _output.ChosenWillNotPlay = true;
+
+        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        _output.Players[0].Playing.ShouldBeTrue("the default plays on");
+        _output.Players[1].Disposed.ShouldBeTrue();
+
+        _output.ChosenWillNotPlay = false;
+        _time.Advance(AudioKeepAlive.RetryChosenEvery);
+        (_output.Players[^1].Device, _output.Players[^1].Playing).ShouldBe(("id-tv", true));
+        _output.Players[0].Disposed.ShouldBeTrue();
+    }
+
+    // Review of #189: the reply voice starts it on the thread pool, which can land after the app disposed it.
+    [Fact]
+    public void A_start_or_stop_after_dispose_does_nothing_and_does_not_throw()
+    {
+        _keepAlive.Dispose();
+
+        Should.NotThrow(() => _keepAlive.Start());
+        Should.NotThrow(() => _keepAlive.Stop());
+        Should.NotThrow(() => _keepAlive.Dispose());
+        _output.Players.ShouldBeEmpty();
+    }
+
     /// <summary>An output whose chosen device is held by another app while <see cref="Busy"/>; a null device is the default.</summary>
     private sealed class Output : IAudioOutput
     {
         public List<Player> Players { get; } = [];
 
         public bool Busy { get; set; }
+
+        /// <summary>The chosen device opens, then fails to play.</summary>
+        public bool ChosenWillNotPlay { get; set; }
 
         public string? DeviceId { get; set; }
 
@@ -102,14 +135,14 @@ public sealed class AudioKeepAliveTests : IDisposable
         public IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn)
         {
             playsOn = DeviceId is { } id && !Busy ? id : null;
-            var player = new Player(playsOn);
+            var player = new Player(playsOn, playsOn is not null && ChosenWillNotPlay);
             player.Init(source);
             Players.Add(player);
             return player;
         }
     }
 
-    private sealed class Player(string? device) : IWavePlayer
+    private sealed class Player(string? device, bool willNotPlay) : IWavePlayer
     {
         public string? Device => device;
 
@@ -129,7 +162,7 @@ public sealed class AudioKeepAliveTests : IDisposable
 
         public void Init(IWaveProvider waveProvider) => OutputWaveFormat = waveProvider.WaveFormat;
 
-        public void Play() => Playing = true;
+        public void Play() => Playing = willNotPlay ? throw new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED") : true;
 
         public void Pause() => Playing = false;
 
