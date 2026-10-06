@@ -566,6 +566,43 @@ public sealed class ReplyVoiceTests : IDisposable
         }
     }
 
+    // Review round 2 of #190: the player lets a device go unheard when the reply's hush comes while it opens; nothing checked
+    // that the voice hands it a check that answers.
+    [Fact]
+    public async Task The_player_is_told_when_the_reply_whose_device_opens_is_hushed()
+    {
+        _player.Opening = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Add("Hello there.");
+        reply.Complete();
+        await Until(() => _player.Enqueuing);
+
+        var hushed = _player.Hushed.ShouldNotBeNull();
+        hushed().ShouldBeFalse();
+        _voice.Hush();
+        hushed().ShouldBeTrue();
+        _player.Opening.SetResult();
+    }
+
+    // Review round 3 of #190: a reply hushed while its device opened was let go unheard, yet logged its first audio.
+    [Fact]
+    public async Task A_reply_hushed_while_its_device_opens_has_no_first_audio()
+    {
+        _player.Opening = new TaskCompletionSource();
+        var heard = false;
+        var reply = _voice.Begin(_ => heard = true);
+        reply.Add("Hello there.");
+        reply.Complete();
+        await Until(() => _player.Enqueuing);
+
+        _voice.Hush();
+        _player.Opening.SetResult();
+        await _voice.WhenQuietAsync();
+
+        heard.ShouldBeFalse();
+        _voice.IsSpeaking.ShouldBeFalse();
+    }
+
     private sealed class FakePlayer : ISpeechPlayer
     {
         private int _played;
@@ -590,8 +627,11 @@ public sealed class ReplyVoiceTests : IDisposable
 
         public List<string> Log { get; } = [];
 
-        public void Enqueue(SpeechChunk chunk)
+        public Func<bool>? Hushed { get; private set; }
+
+        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
         {
+            Hushed = hushed;
             Enqueuing = true;
             Opening?.Task.Wait();
             lock (Log)

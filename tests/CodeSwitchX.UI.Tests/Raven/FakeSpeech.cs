@@ -83,7 +83,7 @@ internal sealed class FakeSpeech : ITextToSpeech
             remove { }
         }
 
-        public void Enqueue(SpeechChunk chunk)
+        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
         {
         }
 

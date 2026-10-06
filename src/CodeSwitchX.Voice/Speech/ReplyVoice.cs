@@ -321,6 +321,7 @@ public sealed class ReplyVoice : IDisposable
         }
 
         using var stalled = CancellationTokenSource.CreateLinkedTokenSource(hush);
+        Func<bool> hushed = () => IsHushed(reply.Number); // the player asks it once a device for the reply has opened
         using var watchdog = _time.CreateTimer(_ => Cancel(stalled), null, FirstAudioTimeout, Timeout.InfiniteTimeSpan);
         var audio = TimeSpan.Zero;
         try
@@ -339,12 +340,17 @@ public sealed class ReplyVoice : IDisposable
                         return;
                     }
 
-                    _player.Enqueue(chunk);
+                    _player.Enqueue(chunk, hushed);
                     audio += TimeSpan.FromSeconds(chunk.Pcm16.Length / 2.0 / chunk.SampleRate);
                 }
                 finally
                 {
                     _playerGate.Release();
+                }
+
+                if (IsHushed(reply.Number))
+                {
+                    return; // hushed while its device opened: none of it was heard, nor is it speaking
                 }
 
                 SetSpeaking(true, reply.Number);
