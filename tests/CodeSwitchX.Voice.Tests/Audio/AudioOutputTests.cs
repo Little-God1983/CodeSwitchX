@@ -570,6 +570,148 @@ public sealed class AudioOutputTests
         devices.Players[^1].Playing.ShouldBeTrue();
     }
 
+    // #186: the first chunk opened its device under the player's lock; a stop (the Hush) waited while a Bluetooth device woke.
+    [Fact]
+    public async Task A_stop_returns_at_once_while_the_first_device_opens_and_that_device_is_never_heard()
+    {
+        using var waking = new ManualResetEventSlim(); // disposed after the player, whose open may still wait on it
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        devices.WhileOpening = () =>
+        {
+            opening.TrySetResult();
+            waking.Wait(TimeSpan.FromSeconds(10));
+        };
+        using var speech = Speech(devices);
+        var enqueue = Task.Run(() => speech.Enqueue(MarkedSpeech()), TestContext.Current.CancellationToken);
+
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            var stop = Task.Run(speech.Stop, TestContext.Current.CancellationToken);
+            (await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken))).ShouldBeSameAs(stop, "the stop waited for the device");
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await enqueue.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var player = devices.Players.ShouldHaveSingleItem();
+        (player.PlayedEver, player.Disposed).ShouldBe((false, true), "stopped while it opened, it is let go unheard");
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // #186: a move held the lock while the new device opened; the sidecar's next chunk waited, and speech stalled.
+    [Fact]
+    public async Task A_chunk_queues_at_once_while_a_move_opens_the_new_device()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        devices.WhileOpening = () =>
+        {
+            opening.TrySetResult();
+            waking.Wait(TimeSpan.FromSeconds(10));
+        };
+
+        devices.Output.DeviceId = "id-headphones";
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            var more = Task.Run(() => speech.Enqueue(MarkedSpeech()), TestContext.Current.CancellationToken);
+            (await Task.WhenAny(more, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken))).ShouldBeSameAs(more, "the chunk waited for the device");
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await UntilAsync(() => devices.Players.Any(p => p.Device == "id-headphones" && p.Playing));
+        speech.Remaining.ShouldBe(TimeSpan.FromSeconds(0.2), "both chunks are queued there");
+    }
+
+    // #186: a hush that came while a move's device opened was carried out after it, so the new device played a moment.
+    [Fact]
+    public async Task A_hush_while_a_move_opens_the_new_device_is_not_heard_there()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        devices.WhileOpening = () =>
+        {
+            opening.TrySetResult();
+            waking.Wait(TimeSpan.FromSeconds(10));
+        };
+
+        devices.Output.DeviceId = "id-headphones";
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            speech.Stop();
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await UntilAsync(() => devices.Players.Any(p => p.Device == "id-headphones" && p.Disposed));
+        devices.Players.Single(p => p.Device == "id-headphones").PlayedEver.ShouldBeFalse("not even a moment");
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // #186: a pick while the first device still opens moves the speech too; the device opening for the old choice is let go.
+    [Fact]
+    public async Task A_pick_while_the_first_device_opens_moves_the_speech()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-tv";
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opens = 0;
+        devices.WhileOpening = () =>
+        {
+            if (Interlocked.Increment(ref opens) == 1)
+            {
+                opening.TrySetResult();
+                waking.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        using var speech = Speech(devices);
+        var enqueue = Task.Run(() => speech.Enqueue(MarkedSpeech()), TestContext.Current.CancellationToken);
+
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            devices.Output.DeviceId = "id-headphones"; // the move runs here, inline
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await enqueue.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var headphones = devices.Players.Single(p => p.Device == "id-headphones");
+        var tv = devices.Players.Single(p => p.Device == "id-tv");
+        (headphones.Playing, tv.PlayedEver, tv.Disposed).ShouldBe((true, false, true));
+        ReadsTheMark(headphones, skip: 0).ShouldBeTrue();
+    }
+
+    private static async Task UntilAsync(Func<bool> done)
+    {
+        for (var i = 0; i < 250 && !done(); i++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        done().ShouldBeTrue();
+    }
+
     /// <summary>The speech player with its moves run inline, so a test sees them done when the pick returns.</summary>
     private static WaveOutSpeechPlayer Speech(Devices devices) =>
         new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, move => move());
@@ -646,7 +788,19 @@ public sealed class AudioOutputTests
 
         public IAudioOutput Output { get; }
 
-        public List<FakePlayer> Players { get; } = [];
+        private readonly List<FakePlayer> _players = [];
+
+        /// <summary>A copy: devices open on other threads in some tests.</summary>
+        public List<FakePlayer> Players
+        {
+            get
+            {
+                lock (_players)
+                {
+                    return [.. _players];
+                }
+            }
+        }
 
         /// <summary>The device listed as active that refuses to start.</summary>
         public string? FailingInInit { get; init; }
@@ -671,7 +825,7 @@ public sealed class AudioOutputTests
         public Task<FakePlayer> Opened(string? device)
         {
             var opened = new TaskCompletionSource<FakePlayer>(TaskCreationOptions.RunContinuationsAsynchronously);
-            lock (Players)
+            lock (_players)
             {
                 _awaited.Add((device, opened));
             }
@@ -687,9 +841,9 @@ public sealed class AudioOutputTests
 
         private FakePlayer Add(FakePlayer player)
         {
-            lock (Players)
+            lock (_players)
             {
-                Players.Add(player);
+                _players.Add(player);
                 foreach (var (device, opened) in _awaited.Where(a => a.Device == player.Device))
                 {
                     opened.TrySetResult(player);
@@ -726,9 +880,12 @@ public sealed class AudioOutputTests
 
         public void Play()
         {
-            Playing = true;
+            Playing = PlayedEver = true;
             devices.Started.TrySetResult();
         }
+
+        /// <summary>It played, if only a moment.</summary>
+        public bool PlayedEver { get; private set; }
 
         public void Pause() => Playing = false;
 
