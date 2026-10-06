@@ -375,8 +375,72 @@ public sealed partial class RavenPanelViewModelTests
 
         Type(vm, "Count to three.");
         await WithinAsync(vm.PendingAnswers);
-        await WithinAsync(_voice.WhenQuietAsync());
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review round 2 of #187: each line of a reply split by a card counted when the reply was cut at its end.
+    [Fact]
+    public async Task Collapsed_a_reply_split_by_a_card_and_cut_at_its_end_counts_once()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ =>
+        [
+            new BrainText("Let me check."),
+            new BrainToolCall("t1", "list_chats", "{}"),
+            new BrainToolResult("t1", false),
+            new BrainText("Found it. Chat 3 finished. Chat 5 failed. Details are below."),
+        ];
+        vm.IsOpen = false;
+
+        Type(vm, "What happened?");
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review round 2 of #187: a line read in the open panel counted once the panel was collapsed again and the reply hushed.
+    [Fact]
+    public async Task A_line_read_in_the_open_panel_does_not_count_when_its_reply_is_hushed_later()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Gate = new TaskCompletionSource(); // it has not played yet
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.IsOpen = true; // read
+        vm.IsOpen = false;
+        vm.IsMuted = true; // hushes the reply before it has played
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.YardChat.Unread.ShouldBe(0);
+    }
+
+    // Review round 2 of #187: a line the log let go of was counted, and nothing could take the count off again.
+    [Fact]
+    public async Task A_line_the_log_let_go_of_is_not_counted_when_its_reply_is_hushed()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Gate = new TaskCompletionSource();
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _speech.Spoken.Count > 0);
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.IsMuted = true;
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
 
         vm.YardChat.Unread.ShouldBe(0);
     }

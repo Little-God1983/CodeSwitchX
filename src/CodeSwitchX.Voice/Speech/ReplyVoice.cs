@@ -601,18 +601,17 @@ public sealed class ReplyVoice : IDisposable
         internal void SetPlayed(bool heard) => _played.TrySetResult(heard);
 
         /// <summary>Nothing more of it is spoken: muted, dropped, hushed, or its sentences are all queued.</summary>
-        private bool Done => _muted || Dropped || _queued >= _maximum || _voice.IsHushed(Number);
+        private bool Done => _muted || Dropped || Full || _voice.IsHushed(Number);
+
+        /// <summary>As many sentences queued as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
+        private bool Full => _queued >= _maximum;
 
         /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken.</summary>
         public void Add(string piece)
         {
-            if (!Done)
+            if (!Done || Full)
             {
                 Queue(_chunker.Add(piece));
-            }
-            else if (_queued >= _maximum && piece.Any(char.IsLetterOrDigit))
-            {
-                Volatile.Write(ref _cut, 1);
             }
         }
 
@@ -624,9 +623,9 @@ public sealed class ReplyVoice : IDisposable
                 return;
             }
 
-            if (!Done)
+            if (!Done || Full)
             {
-                Queue(_chunker.Flush());
+                Queue(_chunker.Flush()); // past the limit too: a last sentence held back is one unsaid
             }
 
             Interlocked.Decrement(ref _voice._open);
@@ -644,22 +643,20 @@ public sealed class ReplyVoice : IDisposable
         {
             foreach (var sentence in sentences)
             {
-                if (_queued >= _maximum)
+                var spoken = SpeechText.CleanForSpeech(sentence);
+                if (!spoken.Any(char.IsLetterOrDigit))
                 {
-                    if (sentence.Any(char.IsLetterOrDigit))
-                    {
-                        Volatile.Write(ref _cut, 1);
-                    }
+                    continue; // nothing to say: code, a rule, an address
+                }
 
+                if (Full)
+                {
+                    Volatile.Write(ref _cut, 1);
                     return;
                 }
 
-                var spoken = SpeechText.CleanForSpeech(sentence);
-                if (spoken.Any(char.IsLetterOrDigit))
-                {
-                    _queued++;
-                    _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
-                }
+                _queued++;
+                _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
             }
         }
 

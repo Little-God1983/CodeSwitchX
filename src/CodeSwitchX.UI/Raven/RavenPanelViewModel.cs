@@ -492,6 +492,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The last question to Raven's brain; completes once every question asked is answered.</summary>
     internal Task PendingAnswers => _conversation;
 
+    /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
+    internal Task PendingHeardCheck { get; private set; } = Task.CompletedTask;
+
     /// <summary>The window chats being summed up for chat 0.</summary>
     internal Task PendingSummaries => _summaries;
 
@@ -3212,32 +3215,45 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Append(new RavenLogEntry(RavenLogKind.Raven, text, _time.GetUtcNow()) { Said = said }, chat);
 
     /// <summary>
+    /// Each reply written as said and not seen, with its latest line (UI thread): should the reply turn out not heard to
+    /// its end, that line counts. One count a reply, however many lines its cards split it into: its earlier lines were
+    /// said before it.
+    /// </summary>
+    private readonly Dictionary<ReplyVoice.SpokenReply, RavenLogEntry> _saidUnseen = [];
+
+    /// <summary>
     /// Raven's line in <paramref name="chat"/>, said in <paramref name="spoken"/> unless that is silent or no voice speaks.
     /// Should the reply turn out not heard to its end (hushed, dropped by a voice that could not speak, muted midway, or cut
-    /// at its sentence limit), the line was only read after all, and counts like one only written.
+    /// at its sentence limit), the line was only read after all, and counts like one only written; unless it was seen
+    /// meanwhile, in the open panel.
     /// </summary>
     private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
     {
         var entry = AddSaid(text, chat, !spoken.IsSilent && VoiceSpeaks);
-        if (entry.Said)
+        if (entry.Said && !(IsOpen && IsShown(entry)))
         {
-            _ = CountUnlessHeardAsync(entry, spoken);
+            if (!_saidUnseen.ContainsKey(spoken))
+            {
+                PendingHeardCheck = CountUnlessHeardAsync(spoken);
+            }
+
+            _saidUnseen[spoken] = entry;
         }
 
         return entry;
     }
 
-    private async Task CountUnlessHeardAsync(RavenLogEntry entry, ReplyVoice.SpokenReply spoken)
+    private async Task CountUnlessHeardAsync(ReplyVoice.SpokenReply spoken)
     {
-        if (await spoken.Played.ConfigureAwait(false) && !spoken.IsCut)
-        {
-            return;
-        }
-
+        var heard = await spoken.Played.ConfigureAwait(false) && !spoken.IsCut;
         _dispatcher.Post(() =>
         {
-            entry.Said = false;
-            CountUnread(entry);
+            // Not when seen since (the panel opened on its chat), nor when the log has let it go: nothing would clear it.
+            if (_saidUnseen.Remove(spoken, out var entry) && !heard && Log.Contains(entry))
+            {
+                entry.Said = false;
+                CountUnread(entry);
+            }
         });
     }
 
@@ -3401,6 +3417,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         foreach (var entry in Log.Where(e => e.IsUnread && e.Chat == chat))
         {
             entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
+        }
+
+        foreach (var reply in _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList())
+        {
+            _saidUnseen.Remove(reply); // read now, heard or not
         }
 
         chat.Unread = 0;
