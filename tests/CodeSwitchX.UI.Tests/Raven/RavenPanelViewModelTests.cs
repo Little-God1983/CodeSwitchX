@@ -1031,6 +1031,7 @@ public sealed partial class RavenPanelViewModelTests
         _catalog.List().Returns([Headset]);
         DevicesChange();
         vm.TrialMicrophone.ShouldBe(Headset);
+        vm.MicTrialNote.ShouldBe("Trying it. Not saved: Raven starts with Desk mic.", "the saved choice, though it fell back onto the one tried");
         _catalog.List().Returns([Headset, Desk]);
         DevicesChange();
 

@@ -59,7 +59,7 @@ public sealed class AudioOutput : IAudioOutput
                 var device = enumerator.GetDevice(id);
                 if (device.State == DeviceState.Active)
                 {
-                    return new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs);
+                    return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
                 }
 
                 device.Dispose();
@@ -74,4 +74,42 @@ public sealed class AudioOutput : IAudioOutput
 
         return new WaveOutEvent { DesiredLatency = latencyMs };
     }
+}
+
+/// <summary>
+/// Raises the player's <see cref="IWavePlayer.PlaybackStopped"/> on the thread pool. WasapiOut raises it on its own play
+/// thread, and after a device error (unplugged, a Bluetooth link gone) still reports Playing: a handler that stops it there
+/// joins that very thread and never returns. WaveOutEvent sets Stopped first, so the callers were written for that.
+/// </summary>
+internal sealed class StoppedOffThread : IWavePlayer
+{
+    private readonly IWavePlayer _inner;
+
+    public StoppedOffThread(IWavePlayer inner)
+    {
+        _inner = inner;
+        _inner.PlaybackStopped += (_, e) => ThreadPool.QueueUserWorkItem(_ => PlaybackStopped?.Invoke(this, e));
+    }
+
+    public event EventHandler<StoppedEventArgs>? PlaybackStopped;
+
+    public float Volume
+    {
+        get => _inner.Volume;
+        set => _inner.Volume = value;
+    }
+
+    public PlaybackState PlaybackState => _inner.PlaybackState;
+
+    public WaveFormat OutputWaveFormat => _inner.OutputWaveFormat;
+
+    public void Init(IWaveProvider waveProvider) => _inner.Init(waveProvider);
+
+    public void Play() => _inner.Play();
+
+    public void Pause() => _inner.Pause();
+
+    public void Stop() => _inner.Stop();
+
+    public void Dispose() => _inner.Dispose();
 }

@@ -386,6 +386,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// after CodeSwitchX, a Bluetooth headset waking up). Null means "no choice": the Windows default.
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MicTrialNote))]
     private MicrophoneDevice? _preferredMicrophone;
 
     /// <summary>
@@ -398,7 +399,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>Under the panel's picker while a microphone is tried there: that it is not saved; null otherwise.</summary>
     public string? MicTrialNote => TrialMicrophone is null || SelectedMicrophone is null ? null
-        : DefaultMicrophone is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
+        : (PreferredMicrophone ?? DefaultMicrophone) is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
 
     [ObservableProperty]
     private RavenState _state;

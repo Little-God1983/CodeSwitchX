@@ -53,6 +53,7 @@ public sealed partial class SpeakerChoice : ObservableObject
 
     /// <summary>The user's choice of default, stored in the settings; only a pick in Settings changes it, never a fallback. Null: the Windows default.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TrialNote))]
     private SpeakerDevice? _preferredSpeaker;
 
     /// <summary>An output picked on the panel to try it: heard until the default is picked again, it is unplugged or the app restarts. Never saved.</summary>
@@ -62,7 +63,7 @@ public sealed partial class SpeakerChoice : ObservableObject
 
     /// <summary>Under the panel's picker while an output is tried there: that it is not saved; null otherwise.</summary>
     public string? TrialNote => TrialSpeaker is null || SelectedSpeaker is null ? null
-        : DefaultSpeaker is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
+        : (PreferredSpeaker ?? DefaultSpeaker) is { } chosen ? $"Trying it. Not saved: Raven starts with {chosen.Name}." : "Trying it. Not saved.";
 
     /// <summary>The last <see cref="RefreshAsync"/>; completed when none ran or it has been applied.</summary>
     internal Task PendingRefresh { get; private set; } = Task.CompletedTask;

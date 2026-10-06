@@ -158,6 +158,7 @@ public sealed class SpeakerChoiceTests
 
         _catalog.List().Returns([Speakers, Tv]);
         DevicesChange();
+        choice.TrialNote.ShouldBe("Trying it. Not saved: Raven starts with Headphones.");
         _catalog.List().Returns([Speakers, Headphones, Tv]);
         DevicesChange();
 

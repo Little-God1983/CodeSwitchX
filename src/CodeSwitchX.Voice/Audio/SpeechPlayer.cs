@@ -38,6 +38,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     {
         _audioOutput = audioOutput;
         _logger = logger;
+        _audioOutput.Changed += (_, _) => Move();
     }
 
     public event EventHandler<float>? LevelChanged;
@@ -74,16 +75,46 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     }
 
     /// <summary>
+    /// Another output chosen while speech plays (a pick on the panel mid-sentence): what is still queued goes on there,
+    /// rather than the rest of the reply on the output left. A buffer of the old device's, a tenth of a second, is lost.
+    /// </summary>
+    private void Move()
+    {
+        lock (_lock)
+        {
+            if (_output is null || _buffer is null)
+            {
+                return;
+            }
+
+            var buffer = _buffer;
+            StopLocked();
+            try
+            {
+                Open(buffer);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Speech could not move to the output chosen; the next chunk tries again");
+            }
+        }
+    }
+
+    /// <summary>
     /// Opens the output. Only a device that opened and plays is kept: one that fails (none there, or busy) is
     /// disposed and the error thrown, so the next chunk tries again instead of filling a buffer nothing plays.
     /// </summary>
     private void Open(int sampleRate)
     {
-        var buffer = new BufferedWaveProvider(new WaveFormat(sampleRate, 16, 1), TimeSpan.FromMinutes(5)) // a reply never fills it
+        Open(new BufferedWaveProvider(new WaveFormat(sampleRate, 16, 1), TimeSpan.FromMinutes(5)) // a reply never fills it
         {
             DiscardOnBufferOverflow = true,
             ReadFully = true,
-        };
+        });
+    }
+
+    private void Open(BufferedWaveProvider buffer)
+    {
         var output = _audioOutput.Create(120);
         try
         {
@@ -152,23 +183,35 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
     public void Dispose() => Stop();
 
-    /// <summary>Passes the audio through and measures it on the way: the orb follows what is heard.</summary>
+    /// <summary>
+    /// Passes the audio through and measures it on the way: the orb follows what is heard, about twenty times a second
+    /// however often the output reads (WASAPI every 10 ms, WinMM every 50 or so).
+    /// </summary>
     private sealed class Meter(IWaveProvider source, WaveOutSpeechPlayer owner) : IWaveProvider
     {
+        private readonly int _window = source.WaveFormat.SampleRate / 20;
+        private double _sum;
+        private int _samples;
+
         public WaveFormat WaveFormat => source.WaveFormat;
 
         public int Read(byte[] buffer, int offset, int count)
         {
             var read = source.Read(buffer, offset, count);
-            double sum = 0;
             var samples = read / 2;
             for (var i = 0; i < samples; i++)
             {
                 var sample = BitConverter.ToInt16(buffer, offset + i * 2) / 32768.0;
-                sum += sample * sample;
+                _sum += sample * sample;
             }
 
-            owner.LevelChanged?.Invoke(owner, samples == 0 ? 0 : (float)Math.Sqrt(sum / samples));
+            _samples += samples;
+            if (_samples >= _window || samples == 0)
+            {
+                owner.LevelChanged?.Invoke(owner, _samples == 0 ? 0 : (float)Math.Sqrt(_sum / _samples));
+                (_sum, _samples) = (0, 0);
+            }
+
             return read;
         }
     }
