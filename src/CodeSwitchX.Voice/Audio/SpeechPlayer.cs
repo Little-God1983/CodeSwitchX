@@ -11,7 +11,10 @@ public interface ISpeechPlayer : IDisposable
     /// <summary>Plays the chunk after those queued before it; the first one opens the device. Any thread.</summary>
     void Enqueue(SpeechChunk chunk);
 
-    /// <summary>How much of the queued audio is still to be heard; zero when it is done.</summary>
+    /// <summary>
+    /// How much of the queued audio is still to be heard; zero when it is done. Any thread, and never waits: the UI thread's
+    /// Hush asks it while a device may be opening (#177).
+    /// </summary>
     TimeSpan Remaining { get; }
 
     /// <summary>Drops whatever is queued and closes the device at once. Any thread.</summary>
@@ -32,29 +35,37 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private readonly IAudioOutput _audioOutput;
     private readonly Lock _lock = new();
     private IWavePlayer? _output;
-    private BufferedWaveProvider? _buffer;
-    private bool _onDefault; // plays on the Windows default: none chosen, or the one chosen could not be used
+    private volatile BufferedWaveProvider? _buffer; // read without the lock by Remaining: Hush asks it on the UI thread
+    private string? _playsOn; // the device it plays on, null for the Windows default: a move to where it plays already is none
     private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
+    private int _movePending; // a move queued and not yet started: picks in a row (arrowing through the list) queue one
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
+        : this(audioOutput, logger, move => ThreadPool.QueueUserWorkItem(_ => move()))
+    {
+    }
+
+    /// <param name="offThread">
+    /// Runs a move away from the thread that picked the output, the UI thread: opening a device takes tens of milliseconds,
+    /// a waking Bluetooth one longer, and the lock may be held by a chunk opening one already (#177). Inline in the tests.
+    /// </param>
+    internal WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger, Action<Action> offThread)
     {
         _audioOutput = audioOutput;
         _logger = logger;
-        _audioOutput.Changed += (_, _) => Move();
+        _audioOutput.Changed += (_, _) =>
+        {
+            if (Interlocked.Exchange(ref _movePending, 1) == 0)
+            {
+                offThread(Move);
+            }
+        };
     }
 
     public event EventHandler<float>? LevelChanged;
 
-    public TimeSpan Remaining
-    {
-        get
-        {
-            lock (_lock)
-            {
-                return _buffer?.BufferedDuration ?? TimeSpan.Zero;
-            }
-        }
-    }
+    /// <summary>Without the lock, which a move or a chunk holds while a device opens: <see cref="ReplyVoice.Hush"/> returns at once.</summary>
+    public TimeSpan Remaining => _buffer?.BufferedDuration ?? TimeSpan.Zero;
 
     public void Enqueue(SpeechChunk chunk)
     {
@@ -79,31 +90,38 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     /// <summary>
     /// Another output chosen while speech plays (a pick on the panel mid-sentence): what is still queued goes on there,
     /// rather than the rest of the reply on the output left. A buffer of the old device's, a tenth of a second, is lost.
+    /// On the thread pool: nothing it throws may end the app.
     /// </summary>
     private void Move()
     {
-        lock (_lock)
+        Volatile.Write(ref _movePending, 0); // a pick from here on queues another move, which reads the choice anew
+        try
         {
-            if (_output is null || _buffer is null)
+            lock (_lock)
             {
-                return;
-            }
+                // Plays where the choice points already: two picks in a row (the first move ran after both), or the choice
+                // gone back to the Windows default that speech fell back to (the headset left the list).
+                if (_output is null || _buffer is not { } buffer || _audioOutput.DeviceId == _playsOn)
+                {
+                    return;
+                }
 
-            if (_onDefault && _audioOutput.DeviceId is null)
-            {
-                return; // the choice gone back to the Windows default (the headset left the list): speech is there already
+                CloseOutputLocked(); // the queue stays: Remaining reads on through the move
+                try
+                {
+                    RestTheOrb(); // while the new device wakes
+                    Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Speech could not move to the output chosen nor to the Windows default; the next chunk tries again");
+                    StopLocked();
+                }
             }
-
-            var buffer = _buffer;
-            StopLocked();
-            try
-            {
-                Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Speech could not move to the output chosen nor to the Windows default; the next chunk tries again");
-            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Moving the speech to the output chosen failed");
         }
     }
 
@@ -122,8 +140,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
     private void Open(BufferedWaveProvider buffer, bool afterFailure = false)
     {
-        var meter = new Meter(buffer, this);
-        var output = _audioOutput.Open(meter, 120, out var onDefault);
+        var output = _audioOutput.Open(new Meter(buffer, this), 120, out var playsOn);
         try
         {
             output.PlaybackStopped += OnPlaybackStopped;
@@ -138,7 +155,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
         _buffer = buffer;
         _output = output;
-        _onDefault = onDefault;
+        _playsOn = playsOn;
         _reopened = afterFailure;
     }
 
@@ -152,24 +169,52 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
     private void StopLocked()
     {
-        if (_output is not null)
-        {
-            _output.PlaybackStopped -= OnPlaybackStopped;
-            try
-            {
-                _output.Stop();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Stopping the speech output failed");
-            }
+        CloseOutputLocked();
+        _buffer = null;
+        RestTheOrb();
+    }
 
-            _output.Dispose();
-            _output = null;
+    /// <summary>Level 0 to the orb. A listener that fails is logged: it must not end a move or a reopen, which hold the speech.</summary>
+    private void RestTheOrb()
+    {
+        try
+        {
+            LevelChanged?.Invoke(this, 0);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "A speech level listener failed");
+        }
+    }
+
+    /// <summary>Lets go of the device; what is queued stays, for a move or a reopen to play on.</summary>
+    private void CloseOutputLocked()
+    {
+        if (_output is null)
+        {
+            return;
         }
 
-        _buffer = null;
-        LevelChanged?.Invoke(this, 0);
+        _output.PlaybackStopped -= OnPlaybackStopped;
+        try
+        {
+            _output.Stop();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Stopping the speech output failed");
+        }
+
+        try
+        {
+            _output.Dispose(); // also after a failed stop: the device is let go either way
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Closing the speech output failed");
+        }
+
+        _output = null;
     }
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
@@ -192,21 +237,23 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             // chosen if it is still there (a driver reset), on the Windows default if not (unplugged). Only what the failed
             // device held, a tenth of a second, is lost.
             var buffer = _buffer!;
-            var reopen = e.Exception is not null && !_reopened && buffer.BufferedBytes > 0;
-            StopLocked();
-            if (!reopen)
+            if (e.Exception is null || _reopened || buffer.BufferedBytes == 0)
             {
+                StopLocked();
                 return;
             }
 
+            CloseOutputLocked();
+            RestTheOrb(); // while the other device opens
             try
             {
                 Open(buffer, afterFailure: true);
-                _logger.LogInformation("Speech goes on on {Output}", _onDefault ? "the Windows default" : "the output chosen");
+                _logger.LogInformation("Speech goes on on {Output}", _playsOn is null ? "the Windows default" : "the output chosen");
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Speech could not go on on any output; what was queued is dropped, the next chunk tries again");
+                StopLocked();
             }
         }
     }

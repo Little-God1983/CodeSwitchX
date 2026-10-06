@@ -11,7 +11,10 @@ public interface IAudioOutput
     /// <summary>The output device chosen, by its id; null follows the Windows default. Any thread.</summary>
     string? DeviceId { get; set; }
 
-    /// <summary>Raised on the setting thread when <see cref="DeviceId"/> changes: what holds an output open moves to the new one.</summary>
+    /// <summary>
+    /// Raised on the thread that sets <see cref="DeviceId"/> (the UI thread, for a pick) when it changes: what holds an
+    /// output open moves to the new one, off that thread, so later than the setter returns.
+    /// </summary>
     event EventHandler? Changed;
 
     /// <summary>
@@ -21,8 +24,11 @@ public interface IAudioOutput
     /// </summary>
     IWavePlayer Open(IWaveProvider source, int latencyMs) => Open(source, latencyMs, out _);
 
-    /// <summary>The same, saying whether it plays on the Windows default: none chosen, or the one chosen could not be used.</summary>
-    IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault);
+    /// <summary>
+    /// The same, saying where it plays: the id of the device chosen, or null on the Windows default (none chosen, or the one
+    /// chosen could not be used). <see cref="DeviceId"/> is read once, so a pick meanwhile cannot make it say another.
+    /// </summary>
+    IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn);
 }
 
 /// <summary>
@@ -69,15 +75,15 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault)
+    public IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn)
     {
         if (DeviceId is { } id && OpenChosen(id, source, latencyMs) is { } chosen)
         {
-            onDefault = false;
+            playsOn = id;
             return chosen;
         }
 
-        onDefault = true;
+        playsOn = null;
         return OpenDefault(source, latencyMs);
     }
 
