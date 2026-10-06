@@ -55,6 +55,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The microphone Raven records from, as stored; the panel owns the choice and falls back when it is gone.</summary>
     [ObservableProperty] private MicrophoneDevice? _ravenMicrophone;
 
+    /// <summary>The output Raven speaks on, as stored: the default picked in Settings; null follows the Windows default.</summary>
+    [ObservableProperty] private SpeakerDevice? _ravenSpeaker;
+
     /// <summary>The model Raven's brain answers with; a change takes effect with the next question, which starts a new conversation.</summary>
     [ObservableProperty] private string _ravenBrainModel = BrainSettings.DefaultModel;
 
@@ -404,6 +407,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
             RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
             RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
+            RavenSpeaker = await LoadOrDefaultAsync<SpeakerDevice>(SettingKeys.RavenSpeaker, "the Raven output", ct);
             RavenBrainModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenBrainModel, "the Raven brain model", ct) is { Length: > 0 } model
                 ? model
                 : BrainSettings.DefaultModel;
@@ -563,6 +567,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenPanelOpenChanged(bool value) => Persist(SettingKeys.RavenPanelOpen, value);
 
     partial void OnRavenMicrophoneChanged(MicrophoneDevice? value) => Persist(SettingKeys.RavenMicrophone, value);
+
+    partial void OnRavenSpeakerChanged(SpeakerDevice? value) => Persist(SettingKeys.RavenSpeaker, value);
 
     partial void OnRavenMutedChanged(bool value) => Persist(SettingKeys.RavenMuted, value);
 

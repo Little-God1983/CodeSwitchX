@@ -903,8 +903,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_fallback_keeps_the_preferred_microphone_and_selects_it_again_when_it_comes_back()
     {
         var vm = await NewVmAsync();
-        vm.SelectedMicrophone = Desk;
-        vm.PreferredMicrophone.ShouldBe(Desk, "a pick is the user's choice");
+        vm.DefaultMicrophone = Desk;
+        vm.PreferredMicrophone.ShouldBe(Desk, "a pick in Settings is the user's choice");
         _catalog.List().Returns([Headset]);
         DevicesChange();
         vm.SelectedMicrophone.ShouldBe(Headset);
@@ -922,13 +922,19 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_list_bound_control_clearing_the_selection_during_a_refresh_changes_neither_choice()
     {
         var vm = await NewVmAsync();
-        vm.SelectedMicrophone = Desk;
+        vm.DefaultMicrophone = Desk;
         // What a TwoWay-bound ComboBox does when its items are cleared: it writes null back.
-        vm.Microphones.CollectionChanged += (_, _) => vm.SelectedMicrophone = null;
+        // Both pickers do it: the panel's and the one in Settings.
+        vm.Microphones.CollectionChanged += (_, _) =>
+        {
+            vm.SelectedMicrophone = null;
+            vm.DefaultMicrophone = null;
+        };
 
         await vm.RefreshMicrophonesAsync();
 
         vm.SelectedMicrophone.ShouldBe(Desk);
+        vm.DefaultMicrophone.ShouldBe(Desk);
         vm.PreferredMicrophone.ShouldBe(Desk);
         vm.Log.ShouldBeEmpty();
     }
@@ -944,6 +950,132 @@ public sealed partial class RavenPanelViewModelTests
         await vm.RefreshMicrophonesAsync();
 
         vm.SelectedMicrophone.ShouldBe(moved);
+        vm.Log.ShouldBeEmpty();
+    }
+
+    // #172: the panel's picker is for trying a mic where you talk; Settings keeps the default Raven starts with.
+    [Fact]
+    public async Task A_pick_on_the_panel_is_heard_but_not_saved()
+    {
+        var vm = await NewVmAsync();
+
+        vm.SelectedMicrophone = Desk;
+
+        vm.DefaultMicrophone.ShouldBe(Headset);
+        vm.PreferredMicrophone.ShouldBeNull("a trial is not the user's choice of default");
+        vm.TrialMicrophone.ShouldBe(Desk);
+        vm.MicTrialNote.ShouldBe("Trying it. Not saved: Raven starts with Headset.");
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        _recorder.Received(1).Start(Desk.Id);
+    }
+
+    [Fact]
+    public async Task Picking_the_default_on_the_panel_ends_the_trial()
+    {
+        var vm = await NewVmAsync();
+        vm.SelectedMicrophone = Desk;
+
+        vm.SelectedMicrophone = Headset;
+
+        vm.TrialMicrophone.ShouldBeNull();
+        vm.MicTrialNote.ShouldBeNull();
+        vm.PreferredMicrophone.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_new_default_picked_in_settings_is_saved_heard_and_ends_the_trial()
+    {
+        var usb = new MicrophoneDevice("id-usb", "USB mic");
+        _catalog.List().Returns([Headset, Desk, usb]);
+        var vm = await NewVmAsync();
+        vm.SelectedMicrophone = usb;
+
+        vm.DefaultMicrophone = Desk;
+
+        vm.PreferredMicrophone.ShouldBe(Desk);
+        vm.SelectedMicrophone.ShouldBe(Desk);
+        vm.TrialMicrophone.ShouldBeNull();
+        vm.MicTrialNote.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_trial_outlives_device_changes_and_ends_when_its_microphone_goes()
+    {
+        var vm = await NewVmAsync();
+        vm.SelectedMicrophone = Desk;
+
+        DevicesChange(); // another device comes or goes
+        vm.SelectedMicrophone.ShouldBe(Desk);
+
+        _catalog.List().Returns([Headset]);
+        DevicesChange();
+        vm.SelectedMicrophone.ShouldBe(Headset);
+        vm.TrialMicrophone.ShouldBeNull();
+        vm.Log.Single().Text.ShouldBe("Desk mic is gone. Using Headset.");
+
+        _catalog.List().Returns([Headset, Desk]);
+        DevicesChange();
+        vm.SelectedMicrophone.ShouldBe(Headset, "the trial is over: the default stays");
+        vm.Log.Count.ShouldBe(1);
+    }
+
+    // Review of #174: the default falling back onto the mic being tried ended the trial, and its return switched mics silently.
+    [Fact]
+    public async Task A_trial_of_the_windows_default_outlives_the_stored_default_falling_back_onto_it()
+    {
+        var vm = await NewVmAsync();
+        vm.DefaultMicrophone = Desk;
+        vm.SelectedMicrophone = Headset; // the Windows default, tried
+
+        _catalog.List().Returns([Headset]);
+        DevicesChange();
+        vm.TrialMicrophone.ShouldBe(Headset);
+        vm.MicTrialNote.ShouldBe("Trying it. Not saved: Raven starts with Desk mic.", "the saved choice, though it fell back onto the one tried");
+        _catalog.List().Returns([Headset, Desk]);
+        DevicesChange();
+
+        vm.SelectedMicrophone.ShouldBe(Headset, "only the user, or its mic going, ends a trial");
+        vm.DefaultMicrophone.ShouldBe(Desk);
+        vm.Log.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task While_windows_audio_is_down_the_trial_note_is_not_shown()
+    {
+        Exception? failure = null;
+        _catalog.List().Returns(_ => failure is null ? [Headset, Desk] : throw failure);
+        var vm = await NewVmAsync();
+        vm.SelectedMicrophone = Desk;
+
+        failure = new System.Runtime.InteropServices.COMException("The audio service is not running.");
+        DevicesChange();
+        vm.MicTrialNote.ShouldBeNull("nothing is heard, so nothing is being tried");
+
+        failure = null;
+        DevicesChange();
+        vm.SelectedMicrophone.ShouldBe(Desk, "the trial is heard again once Windows audio is back");
+        vm.MicTrialNote.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task While_a_trial_is_heard_the_default_going_and_coming_back_says_nothing()
+    {
+        var usb = new MicrophoneDevice("id-usb", "USB mic");
+        _catalog.List().Returns([Headset, Desk, usb]);
+        var vm = await NewVmAsync();
+        vm.DefaultMicrophone = Desk;
+        vm.SelectedMicrophone = usb;
+
+        _catalog.List().Returns([Headset, usb]);
+        DevicesChange();
+        vm.DefaultMicrophone.ShouldBe(Headset, "the default falls back in Settings");
+        vm.SelectedMicrophone.ShouldBe(usb);
+        _catalog.List().Returns([Headset, Desk, usb]);
+        DevicesChange();
+
+        vm.DefaultMicrophone.ShouldBe(Desk);
+        vm.SelectedMicrophone.ShouldBe(usb);
         vm.Log.ShouldBeEmpty();
     }
 
@@ -1343,7 +1475,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Windows_audio_failing_on_the_default_device_is_caught_too()
     {
         var vm = await NewVmAsync();
-        vm.SelectedMicrophone = Desk;
+        vm.DefaultMicrophone = Desk;
         _catalog.Default().Returns(_ => throw new System.Runtime.InteropServices.COMException("gone"));
 
         await vm.RefreshMicrophonesAsync();
@@ -1413,7 +1545,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_only_microphone_unplugged_says_none_is_left_and_its_return_says_so_too()
     {
         var vm = await NewVmAsync();
-        vm.SelectedMicrophone = Desk;
+        vm.DefaultMicrophone = Desk;
         _catalog.List().Returns([]);
         _catalog.Default().Returns((MicrophoneDevice?)null);
 
@@ -1439,7 +1571,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task The_fallback_microphone_unplugged_too_says_none_is_left()
     {
         var vm = await NewVmAsync();
-        vm.SelectedMicrophone = Desk;
+        vm.DefaultMicrophone = Desk;
         _catalog.List().Returns([Headset]);
         DevicesChange();
         _catalog.List().Returns([]);
