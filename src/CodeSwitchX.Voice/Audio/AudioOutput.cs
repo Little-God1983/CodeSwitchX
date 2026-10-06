@@ -12,8 +12,8 @@ public interface IAudioOutput
     string? DeviceId { get; set; }
 
     /// <summary>
-    /// Raised on the setting thread, the UI thread, when <see cref="DeviceId"/> changes: what holds an output open moves to
-    /// the new one, off that thread, so later than the setter returns.
+    /// Raised on the thread that sets <see cref="DeviceId"/> (the UI thread, for a pick) when it changes: what holds an
+    /// output open moves to the new one, off that thread, so later than the setter returns.
     /// </summary>
     event EventHandler? Changed;
 

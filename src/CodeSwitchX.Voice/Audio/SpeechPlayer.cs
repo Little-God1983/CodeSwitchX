@@ -98,6 +98,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 CloseOutputLocked(); // the queue stays: Remaining reads on through the move
                 try
                 {
+                    LevelChanged?.Invoke(this, 0); // the orb rests while the new device wakes
                     Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
                 }
                 catch (Exception ex)
@@ -174,11 +175,19 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         try
         {
             _output.Stop();
-            _output.Dispose();
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Stopping the speech output failed");
+        }
+
+        try
+        {
+            _output.Dispose(); // also after a failed stop: the device is let go either way
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Closing the speech output failed");
         }
 
         _output = null;

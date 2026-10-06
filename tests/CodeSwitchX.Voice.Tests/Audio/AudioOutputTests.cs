@@ -415,6 +415,19 @@ public sealed class AudioOutputTests
         (await read).ShouldBeGreaterThan(TimeSpan.Zero, "the queue stays through the move");
     }
 
+    [Fact]
+    public void An_output_whose_stop_fails_is_still_let_go()
+    {
+        var devices = new Devices();
+        using var speech = Speech(devices);
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[0].StopThrows = true;
+
+        devices.Output.DeviceId = "id-headphones";
+
+        devices.Players[0].Disposed.ShouldBeTrue();
+    }
+
     // The move runs on the thread pool, where an exception ends the app; on the UI thread the dispatcher's handler caught it.
     [Fact]
     public void A_move_whose_old_output_fails_to_close_still_moves()
@@ -428,6 +441,48 @@ public sealed class AudioOutputTests
 
         devices.Players[^1].Device.ShouldBe("id-headphones");
         devices.Players[^1].Playing.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_move_stops_where_it_failed_and_the_next_chunk_plays_again()
+    {
+        var devices = new Devices();
+        using var speech = Speech(devices);
+        speech.Enqueue(MarkedSpeech());
+        var levels = new List<float>();
+        speech.LevelChanged += (_, level) =>
+        {
+            levels.Add(level);
+            if (levels.Count <= 2) // on the move, and again on the stop that cleans up after it
+            {
+                throw new InvalidOperationException("a listener that fails");
+            }
+        };
+
+        Should.NotThrow(() => devices.Output.DeviceId = "id-headphones");
+        speech.Remaining.ShouldBe(TimeSpan.Zero, "what was queued is dropped, not left without an output");
+
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[^1].Device.ShouldBe("id-headphones");
+        devices.Players[^1].Playing.ShouldBeTrue();
+        levels.ShouldContain(0f);
+    }
+
+    // The orb held its last loud level while a Bluetooth device woke (review of #185).
+    [Fact]
+    public void A_move_rests_the_orb_while_the_new_output_opens()
+    {
+        var devices = new Devices();
+        using var speech = Speech(devices);
+        speech.Enqueue(MarkedSpeech());
+        var levels = new List<float>();
+        speech.LevelChanged += (_, level) => levels.Add(level);
+        float? levelWhileOpening = null;
+        devices.WhileOpening = () => levelWhileOpening = levels.LastOrDefault(-1);
+
+        devices.Output.DeviceId = "id-headphones";
+
+        levelWhileOpening.ShouldBe(0f);
     }
 
     // A pick on the panel mid-reply opened the new device on the UI thread, inside the player's lock: the window froze while a
@@ -632,6 +687,11 @@ public sealed class AudioOutputTests
         /// <summary>As the real ones: a stop ends playback, and says so.</summary>
         public void Stop()
         {
+            if (StopThrows)
+            {
+                throw new COMException("MMSYSERR_NODRIVER");
+            }
+
             Playing = false;
             PlaybackStopped?.Invoke(this, new StoppedEventArgs());
         }
@@ -644,6 +704,8 @@ public sealed class AudioOutputTests
         }
 
         public bool DisposeThrows { get; set; }
+
+        public bool StopThrows { get; set; }
 
         public void Dispose()
         {
