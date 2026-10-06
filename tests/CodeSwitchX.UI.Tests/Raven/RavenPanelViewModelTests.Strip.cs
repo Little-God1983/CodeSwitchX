@@ -751,4 +751,44 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.ShouldContain(e => e.Text == "While you were away, 2 things came in here.");
         two.Unread.ShouldBe(2);
     }
+
+    // Review round 3 of #188: a teller that failed after its first words counted as having said everything.
+    [Fact]
+    public async Task Collapsed_a_catch_up_whose_teller_failed_midway_leaves_the_marks()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("While you were away, Task a finished."), new BrainFailed("The teller stopped.")];
+        vm.IsOpen = false;
+        var two = ChatNumbered(vm, 2);
+
+        vm.SelectedChat = two;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        two.Unread.ShouldBe(2, "Task a2's failure was never said");
+    }
+
+    // Review round 3 of #188: a line counted later in a removed chat started its pulse timer again.
+    [Fact]
+    public async Task A_removed_chat_gets_no_pulse_timer_back_from_a_line_counted_later()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        vm.SelectedChat = ChatNumbered(vm, 5);
+        vm.IsOpen = false;
+        _speech.Gate = new TaskCompletionSource(); // the answer has not played yet
+        Type(vm, "How many chats run?");
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.SetWorkspaces([.. new[] { "CodeSwitchX", "ContentAutomatorX", "DiffusionNexus", "RawCutX" }
+            .Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
+        var before = vm.PulseTimers;
+
+        vm.IsMuted = true; // hushed: the answer was not heard, and counts in its chat, which is gone
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.PulseTimers.ShouldBe(before);
+    }
 }
