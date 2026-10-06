@@ -88,6 +88,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
+            if (_onDefault && _audioOutput.DeviceId is null)
+            {
+                return; // the choice gone back to the Windows default after it failed mid-reply: speech is there already
+            }
+
             var buffer = _buffer;
             StopLocked();
             try
@@ -184,7 +189,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on on the Windows
             // default, once. Only what the failed device held, a tenth of a second, is lost.
             var buffer = _buffer!;
-            var reopen = e.Exception is not null && !_onDefault;
+            var reopen = e.Exception is not null && !_onDefault && buffer.BufferedBytes > 0;
             StopLocked();
             if (!reopen)
             {

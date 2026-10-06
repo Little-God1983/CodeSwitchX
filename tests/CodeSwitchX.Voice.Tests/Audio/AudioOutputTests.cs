@@ -111,6 +111,17 @@ public sealed class AudioOutputTests
     }
 
     [Fact]
+    public void An_output_chosen_that_is_not_active_hands_its_sound_to_the_Windows_default()
+    {
+        var devices = new Devices { Asleep = "id-tv" };
+        devices.Output.DeviceId = "id-tv";
+
+        devices.Output.Open(new SilenceProvider(new WaveFormat(44100, 16, 2)), 300);
+
+        devices.Players.Single().Device.ShouldBeNull();
+    }
+
+    [Fact]
     public void When_the_default_will_not_start_either_the_error_comes_out_and_nothing_is_left_open()
     {
         var devices = new Devices { FailingInInit = "id-tv", DefaultFailsInInit = true };
@@ -188,6 +199,41 @@ public sealed class AudioOutputTests
         devices.Players.Count.ShouldBe(2);
         devices.Players[1].Disposed.ShouldBeTrue();
         speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // The headset gone from the listing a moment later sets the choice back to the Windows default: speech is there already
+    // and plays on, rather than cut a second time by a move to where it is (review of #183).
+    [Fact]
+    public void After_a_fallback_the_choice_going_back_to_the_default_moves_nothing()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
+        devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
+
+        devices.Output.DeviceId = null;
+
+        devices.Players.Count.ShouldBe(2);
+        devices.Players[1].Disposed.ShouldBeFalse();
+        ReadsTheMark(devices.Players[1]).ShouldBeTrue();
+    }
+
+    // The reply played out, the player feeds silence through its tail: nothing queued is worth waking the default for.
+    [Fact]
+    public void A_device_error_with_nothing_queued_opens_no_other_output()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[0].Source!.Read(new byte[4800], 0, 4800);
+
+        devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
+
+        devices.Players.Count.ShouldBe(1);
+        devices.Players[0].Disposed.ShouldBeTrue();
     }
 
     [Fact]
@@ -285,8 +331,8 @@ public sealed class AudioOutputTests
         {
             Output = new AudioOutput(
                 NullLogger<AudioOutput>.Instance,
-                (id, _) => id == Gone
-                    ? throw new COMException("Element not found", unchecked((int)0x80070490))
+                (id, _) => id == Gone ? throw new COMException("Element not found", unchecked((int)0x80070490))
+                    : id == Asleep ? null
                     : Add(new FakePlayer(id, this, id == FailingInInit)),
                 _ => Add(new FakePlayer(null, this, DefaultFailsInInit)));
         }
@@ -300,6 +346,9 @@ public sealed class AudioOutputTests
 
         /// <summary>The device unplugged since it was listed.</summary>
         public string? Gone { get; init; }
+
+        /// <summary>The device listed but not active (a headset asleep).</summary>
+        public string? Asleep { get; init; }
 
         public bool DefaultFailsInInit { get; init; }
 
