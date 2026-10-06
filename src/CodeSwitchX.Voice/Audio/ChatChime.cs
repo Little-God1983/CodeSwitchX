@@ -36,9 +36,8 @@ public sealed class ChatChime : IChatChime
         IWavePlayer? output = null;
         try
         {
-            output = _audioOutput.Create(120);
+            output = _audioOutput.Open(new RawSourceWaveStream(Pcm, 0, Pcm.Length, new WaveFormat(SampleRate, 16, 1)), 120);
             var playing = output;
-            output.Init(new RawSourceWaveStream(Pcm, 0, Pcm.Length, new WaveFormat(SampleRate, 16, 1)));
             output.PlaybackStopped += (_, _) => playing.Dispose();
             output.Play();
         }

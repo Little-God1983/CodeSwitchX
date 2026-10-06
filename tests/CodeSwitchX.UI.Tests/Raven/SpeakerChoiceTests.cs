@@ -211,6 +211,8 @@ public sealed class SpeakerChoiceTests
         public event EventHandler? Changed;
 #pragma warning restore CS0067
 
-        public NAudio.Wave.IWavePlayer Create(int latencyMs) => throw new NotSupportedException();
+        public NAudio.Wave.IWavePlayer Open(NAudio.Wave.IWaveProvider source, int latencyMs) => throw new NotSupportedException();
+
+        public NAudio.Wave.IWavePlayer OpenDefault(NAudio.Wave.IWaveProvider source, int latencyMs) => throw new NotSupportedException();
     }
 }

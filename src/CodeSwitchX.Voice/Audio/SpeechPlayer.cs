@@ -33,6 +33,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private readonly Lock _lock = new();
     private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
+    private bool _onDefault; // reopened on the Windows default after the output failed mid-reply: a second failure ends it
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
     {
@@ -91,11 +92,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             StopLocked();
             try
             {
-                Open(buffer);
+                Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Speech could not move to the output chosen; the next chunk tries again");
+                _logger.LogWarning(ex, "Speech could not move to the output chosen nor to the Windows default; the next chunk tries again");
             }
         }
     }
@@ -113,12 +114,12 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         });
     }
 
-    private void Open(BufferedWaveProvider buffer)
+    private void Open(BufferedWaveProvider buffer, bool onDefault = false)
     {
-        var output = _audioOutput.Create(120);
+        var meter = new Meter(buffer, this);
+        var output = onDefault ? _audioOutput.OpenDefault(meter, 120) : _audioOutput.Open(meter, 120);
         try
         {
-            output.Init(new Meter(buffer, this));
             output.PlaybackStopped += OnPlaybackStopped;
             output.Play();
         }
@@ -131,6 +132,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
         _buffer = buffer;
         _output = output;
+        _onDefault = onDefault;
     }
 
     public void Stop()
@@ -174,9 +176,29 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         lock (_lock)
         {
             // An output replaced meanwhile (a new sample rate, the next reply) is not this one: it plays on.
-            if (ReferenceEquals(sender, _output))
+            if (!ReferenceEquals(sender, _output))
             {
-                StopLocked();
+                return;
+            }
+
+            // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on on the Windows
+            // default, once. Only what the failed device held, a tenth of a second, is lost.
+            var buffer = _buffer!;
+            var reopen = e.Exception is not null && !_onDefault;
+            StopLocked();
+            if (!reopen)
+            {
+                return;
+            }
+
+            try
+            {
+                Open(buffer, onDefault: true);
+                _logger.LogInformation("Speech goes on on the Windows default");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Speech could not go on on the Windows default either; the rest of the reply is dropped");
             }
         }
     }

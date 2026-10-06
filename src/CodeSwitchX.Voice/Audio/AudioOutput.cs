@@ -14,10 +14,16 @@ public interface IAudioOutput
     event EventHandler? Changed;
 
     /// <summary>
-    /// A player not yet initialised, on the device chosen while it is there, on the Windows default otherwise. Opened on
-    /// the calling thread, which should then Init it.
+    /// A player initialised with <paramref name="source"/>, not yet playing: on the device chosen while it is there and
+    /// starts, on the Windows default otherwise (gone, not active, or held by another app in exclusive mode). Opened on the
+    /// calling thread; throws only when the default fails too.
     /// </summary>
-    IWavePlayer Create(int latencyMs);
+    IWavePlayer Open(IWaveProvider source, int latencyMs);
+
+    /// <summary>
+    /// The same on the Windows default whatever is chosen: for what was queued on an output that failed while it played.
+    /// </summary>
+    IWavePlayer OpenDefault(IWaveProvider source, int latencyMs);
 }
 
 /// <summary>
@@ -28,11 +34,21 @@ public interface IAudioOutput
 public sealed class AudioOutput : IAudioOutput
 {
     private readonly ILogger<AudioOutput> _logger;
+    private readonly Func<string, int, IWavePlayer> _openChosen;
+    private readonly Func<int, IWavePlayer> _openDefault;
     private string? _deviceId;
 
     public AudioOutput(ILogger<AudioOutput> logger)
+        : this(logger, OpenWasapi, latencyMs => new WaveOutEvent { DesiredLatency = latencyMs })
+    {
+    }
+
+    /// <summary>The players stand in for the devices in the tests; <paramref name="openChosen"/> throws for one not there.</summary>
+    internal AudioOutput(ILogger<AudioOutput> logger, Func<string, int, IWavePlayer> openChosen, Func<int, IWavePlayer> openDefault)
     {
         _logger = logger;
+        _openChosen = openChosen;
+        _openDefault = openDefault;
     }
 
     public event EventHandler? Changed;
@@ -49,30 +65,66 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer Create(int latencyMs)
+    public IWavePlayer Open(IWaveProvider source, int latencyMs)
     {
         if (DeviceId is { } id)
         {
+            IWavePlayer? chosen = null;
             try
             {
-                using var enumerator = new MMDeviceEnumerator();
-                var device = enumerator.GetDevice(id);
-                if (device.State == DeviceState.Active)
-                {
-                    return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
-                }
-
-                device.Dispose();
-                _logger.LogInformation("The output chosen is not active; playing on the Windows default");
+                chosen = _openChosen(id, latencyMs);
+                chosen.Init(source); // where a device listed as active still refuses: AUDCLNT_E_DEVICE_IN_USE
+                return chosen;
             }
             catch (Exception ex)
             {
-                // Unplugged since it was listed, or gone for good: the default plays rather than nothing.
-                _logger.LogWarning(ex, "The output chosen could not be opened; playing on the Windows default");
+                // Unplugged since it was listed, gone for good, or busy: the default plays rather than nothing.
+                DisposeQuietly(chosen);
+                _logger.LogWarning(ex, "The output chosen could not be used; playing on the Windows default");
             }
         }
 
-        return new WaveOutEvent { DesiredLatency = latencyMs };
+        return OpenDefault(source, latencyMs);
+    }
+
+    public IWavePlayer OpenDefault(IWaveProvider source, int latencyMs)
+    {
+        var player = _openDefault(latencyMs);
+        try
+        {
+            player.Init(source);
+            return player;
+        }
+        catch
+        {
+            DisposeQuietly(player);
+            throw;
+        }
+    }
+
+    private static IWavePlayer OpenWasapi(string id, int latencyMs)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var device = enumerator.GetDevice(id);
+        if (device.State is var state and not DeviceState.Active)
+        {
+            device.Dispose();
+            throw new InvalidOperationException($"The output chosen is {state}, not active.");
+        }
+
+        return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
+    }
+
+    private static void DisposeQuietly(IWavePlayer? player)
+    {
+        try
+        {
+            player?.Dispose();
+        }
+        catch
+        {
+            // Best effort: a player that half started.
+        }
     }
 }
 

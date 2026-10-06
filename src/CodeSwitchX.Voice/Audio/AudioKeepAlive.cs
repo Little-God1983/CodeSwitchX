@@ -107,8 +107,7 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
         IWavePlayer? output = null;
         try
         {
-            output = _audioOutput.Create(300);
-            output.Init(new SilenceProvider(new WaveFormat(44100, 16, 2)));
+            output = _audioOutput.Open(new SilenceProvider(new WaveFormat(44100, 16, 2)), 300);
             output.PlaybackStopped += OnPlaybackStopped;
             output.Play();
             _output = output;
