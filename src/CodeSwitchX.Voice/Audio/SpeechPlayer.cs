@@ -33,14 +33,24 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private readonly Lock _lock = new();
     private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
+    private string? _openedFor; // the output chosen when it opened: a move to where it plays already is none
     private bool _onDefault; // plays on the Windows default: none chosen, or the one chosen could not be used
     private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
+        : this(audioOutput, logger, move => ThreadPool.QueueUserWorkItem(_ => move()))
+    {
+    }
+
+    /// <param name="offThread">
+    /// Runs a move away from the thread that picked the output, the UI thread: opening a device takes tens of milliseconds,
+    /// a waking Bluetooth one longer, and the lock may be held by a chunk opening one already (#177). Inline in the tests.
+    /// </param>
+    internal WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger, Action<Action> offThread)
     {
         _audioOutput = audioOutput;
         _logger = logger;
-        _audioOutput.Changed += (_, _) => Move();
+        _audioOutput.Changed += (_, _) => offThread(Move);
     }
 
     public event EventHandler<float>? LevelChanged;
@@ -89,9 +99,12 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
-            if (_onDefault && _audioOutput.DeviceId is null)
+            var target = _audioOutput.DeviceId;
+            if (target == _openedFor || (_onDefault && target is null))
             {
-                return; // the choice gone back to the Windows default (the headset left the list): speech is there already
+                // Opened since on the output picked (two picks in a row, the first move done after both), or the choice gone
+                // back to the Windows default where speech plays already (the headset left the list).
+                return;
             }
 
             var buffer = _buffer;
@@ -123,6 +136,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private void Open(BufferedWaveProvider buffer, bool afterFailure = false)
     {
         var meter = new Meter(buffer, this);
+        var openedFor = _audioOutput.DeviceId;
         var output = _audioOutput.Open(meter, 120, out var onDefault);
         try
         {
@@ -138,6 +152,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
         _buffer = buffer;
         _output = output;
+        _openedFor = openedFor;
         _onDefault = onDefault;
         _reopened = afterFailure;
     }

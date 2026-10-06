@@ -39,7 +39,7 @@ public sealed class AudioOutputTests
     public void The_orb_s_level_comes_about_twenty_times_a_second_however_often_the_output_reads()
     {
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         var levels = 0;
         speech.LevelChanged += (_, _) => levels++;
         speech.Enqueue(new SpeechChunk(new byte[24000 * 2], 24000)); // a second of speech
@@ -57,7 +57,7 @@ public sealed class AudioOutputTests
     public void Another_output_chosen_mid_reply_plays_the_rest_there()
     {
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -74,7 +74,7 @@ public sealed class AudioOutputTests
     public void With_nothing_playing_a_new_output_opens_nothing()
     {
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
 
         devices.Output.DeviceId = "id-headphones";
 
@@ -169,7 +169,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices { FailingInInit = "id-tv" };
         devices.Output.DeviceId = "id-tv";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
 
         speech.Enqueue(MarkedSpeech());
 
@@ -183,7 +183,7 @@ public sealed class AudioOutputTests
     public void A_move_to_an_output_that_will_not_start_goes_on_on_the_Windows_default()
     {
         var devices = new Devices { FailingInInit = "id-tv" };
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -203,7 +203,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -222,7 +222,7 @@ public sealed class AudioOutputTests
     public void When_the_default_fails_mid_reply_too_the_rest_is_dropped_rather_than_tried_forever()
     {
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
 
@@ -240,7 +240,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -258,7 +258,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
         devices.Gone = "id-headphones";
@@ -278,7 +278,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices { Gone = "id-headphones" };
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
 
         devices.Output.DeviceId = null;
@@ -293,7 +293,7 @@ public sealed class AudioOutputTests
     public void Following_the_default_a_device_error_mid_reply_goes_on_on_the_new_default()
     {
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -309,7 +309,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[4800], 0, 4800);
 
@@ -324,7 +324,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         devices.Output.DeviceId = "id-headphones";
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = Speech(devices);
         speech.Enqueue(MarkedSpeech());
         devices.Gone = "id-headphones";
         devices.Players[0].Fail(new COMException("AUDCLNT_E_DEVICE_INVALIDATED"));
@@ -352,6 +352,47 @@ public sealed class AudioOutputTests
         devices.Players[^1].Device.ShouldBeNull();
         devices.Players[^1].Source.ShouldNotBeNull();
     }
+
+    // A pick on the panel mid-reply opened the new device on the UI thread, inside the player's lock: the window froze while a
+    // Bluetooth device woke, or while a chunk opened one in Enqueue (#177).
+    [Fact]
+    public async Task A_pick_mid_reply_opens_the_new_output_off_the_thread_that_picked_it()
+    {
+        var devices = new Devices();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        speech.Enqueue(MarkedSpeech());
+        var opened = devices.Opened("id-headphones");
+        var picker = Environment.CurrentManagedThreadId;
+
+        devices.Output.DeviceId = "id-headphones";
+
+        var moved = await opened.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        moved.OpenedOn.ShouldNotBe(picker);
+    }
+
+    // Two picks in a row: the first move runs after both and opens on the second; the second then has nothing left to do.
+    [Fact]
+    public void Two_picks_in_a_row_move_the_speech_once()
+    {
+        var devices = new Devices();
+        var moves = new List<Action>();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
+
+        devices.Output.DeviceId = "id-tv";
+        devices.Output.DeviceId = "id-headphones";
+        moves.ForEach(move => move());
+
+        devices.Players.Count.ShouldBe(2);
+        devices.Players[1].Device.ShouldBe("id-headphones");
+        devices.Players[1].Disposed.ShouldBeFalse();
+        ReadsTheMark(devices.Players[1]).ShouldBeTrue();
+    }
+
+    /// <summary>The speech player with its moves run inline, so a test sees them done when the pick returns.</summary>
+    private static WaveOutSpeechPlayer Speech(Devices devices) =>
+        new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, move => move());
 
     /// <summary>A tenth of a second of silence with one loud byte at 4000, to find where the rest of it plays.</summary>
     private static SpeechChunk MarkedSpeech()
@@ -441,11 +482,29 @@ public sealed class AudioOutputTests
         /// <summary>Set by the first player that plays.</summary>
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private readonly List<(string? Device, TaskCompletionSource<FakePlayer> Opened)> _awaited = [];
+
+        /// <summary>Completes with the first player opened on <paramref name="device"/> from now on, on whatever thread opens it.</summary>
+        public Task<FakePlayer> Opened(string? device)
+        {
+            var opened = new TaskCompletionSource<FakePlayer>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (Players)
+            {
+                _awaited.Add((device, opened));
+            }
+
+            return opened.Task;
+        }
+
         private FakePlayer Add(FakePlayer player)
         {
             lock (Players)
             {
                 Players.Add(player);
+                foreach (var (device, opened) in _awaited.Where(a => a.Device == player.Device))
+                {
+                    opened.TrySetResult(player);
+                }
             }
 
             return player;
@@ -456,6 +515,8 @@ public sealed class AudioOutputTests
     private sealed class FakePlayer(string? device, Devices devices, bool failsInInit) : IWavePlayer
     {
         public string? Device => device;
+
+        public int OpenedOn { get; } = Environment.CurrentManagedThreadId;
 
         public IWaveProvider? Source { get; private set; }
 
