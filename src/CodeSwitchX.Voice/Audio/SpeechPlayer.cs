@@ -34,7 +34,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
     private bool _onDefault; // plays on the Windows default: none chosen, or the one chosen could not be used
-    private bool _reopened; // reopened after the output failed mid-reply: a second failure ends the reply
+    private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
     {
@@ -123,8 +123,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private void Open(BufferedWaveProvider buffer, bool afterFailure = false)
     {
         var meter = new Meter(buffer, this);
-        var onDefault = true;
-        var output = afterFailure ? _audioOutput.OpenDefault(meter, 120) : _audioOutput.Open(meter, 120, out onDefault);
+        var output = _audioOutput.Open(meter, 120, out var onDefault);
         try
         {
             output.PlaybackStopped += OnPlaybackStopped;
@@ -189,8 +188,9 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
-            // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on on the Windows
-            // default, once. Only what the failed device held, a tenth of a second, is lost.
+            // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on, once, on the output
+            // chosen if it is still there (a driver reset), on the Windows default if not (unplugged). Only what the failed
+            // device held, a tenth of a second, is lost.
             var buffer = _buffer!;
             var reopen = e.Exception is not null && !_reopened && buffer.BufferedBytes > 0;
             StopLocked();
@@ -202,11 +202,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             try
             {
                 Open(buffer, afterFailure: true);
-                _logger.LogInformation("Speech goes on on the Windows default");
+                _logger.LogInformation("Speech goes on on {Output}", _onDefault ? "the Windows default" : "the output chosen");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Speech could not go on on the Windows default either; the rest of the reply is dropped");
+                _logger.LogWarning(ex, "Speech could not go on on any output; what was queued is dropped, the next chunk tries again");
             }
         }
     }

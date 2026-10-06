@@ -19,15 +19,10 @@ public interface IAudioOutput
     /// starts, on the Windows default otherwise (gone, not active, or held by another app in exclusive mode). Opened on the
     /// calling thread; throws only when the default fails too.
     /// </summary>
-    IWavePlayer Open(IWaveProvider source, int latencyMs);
+    IWavePlayer Open(IWaveProvider source, int latencyMs) => Open(source, latencyMs, out _);
 
     /// <summary>The same, saying whether it plays on the Windows default: none chosen, or the one chosen could not be used.</summary>
     IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault);
-
-    /// <summary>
-    /// The same on the Windows default whatever is chosen: for what was queued on an output that failed while it played.
-    /// </summary>
-    IWavePlayer OpenDefault(IWaveProvider source, int latencyMs);
 }
 
 /// <summary>
@@ -74,8 +69,6 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer Open(IWaveProvider source, int latencyMs) => Open(source, latencyMs, out _);
-
     public IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault)
     {
         if (DeviceId is { } id && OpenChosen(id, source, latencyMs) is { } chosen)
@@ -121,7 +114,7 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer OpenDefault(IWaveProvider source, int latencyMs)
+    private IWavePlayer OpenDefault(IWaveProvider source, int latencyMs)
     {
         var player = _openDefault(latencyMs);
         try
@@ -141,21 +134,13 @@ public sealed class AudioOutput : IAudioOutput
     {
         using var enumerator = new MMDeviceEnumerator();
         var device = enumerator.GetDevice(id);
-        try
+        if (device.State != DeviceState.Active)
         {
-            if (device.State == DeviceState.Active)
-            {
-                return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs), device);
-            }
-        }
-        catch
-        {
-            device.Dispose(); // gone between the lookup and the activation
-            throw;
+            device.Dispose();
+            return null;
         }
 
-        device.Dispose();
-        return null;
+        return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
     }
 
     private static void DisposeQuietly(IWavePlayer? player)
@@ -179,13 +164,10 @@ public sealed class AudioOutput : IAudioOutput
 internal sealed class StoppedOffThread : IWavePlayer
 {
     private readonly IWavePlayer _inner;
-    private readonly IDisposable? _device;
 
-    /// <param name="device">Let go with the player: WasapiOut keeps it but does not dispose it.</param>
-    public StoppedOffThread(IWavePlayer inner, IDisposable? device = null)
+    public StoppedOffThread(IWavePlayer inner)
     {
         _inner = inner;
-        _device = device;
         _inner.PlaybackStopped += (_, e) => ThreadPool.QueueUserWorkItem(_ => PlaybackStopped?.Invoke(this, e));
     }
 
@@ -209,9 +191,5 @@ internal sealed class StoppedOffThread : IWavePlayer
 
     public void Stop() => _inner.Stop();
 
-    public void Dispose()
-    {
-        _inner.Dispose();
-        _device?.Dispose();
-    }
+    public void Dispose() => _inner.Dispose();
 }
