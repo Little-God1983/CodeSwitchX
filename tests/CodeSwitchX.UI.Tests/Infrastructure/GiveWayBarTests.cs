@@ -1,7 +1,7 @@
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using CodeSwitchX.UI.Infrastructure;
 using Shouldly;
 
@@ -16,6 +16,21 @@ public sealed class GiveWayBarTests
     [InlineData(700.5, 700.0, false)]
     [InlineData(10_000.0, double.PositiveInfinity, true)]
     public void A_row_fits_its_width_give_or_take_rounding(double row, double width, bool fits) => GiveWayBar.Fits(row, width).ShouldBe(fits);
+
+    [Theory]
+    [InlineData(800.0, 0)]
+    [InlineData(640.0, 0)] // just fits
+    [InlineData(639.0, 1)]
+    [InlineData(560.0, 1)]
+    [InlineData(559.0, 2)]
+    [InlineData(410.0, 2)]
+    [InlineData(409.0, 3)]
+    [InlineData(100.0, 3)] // even all folded it is too wide: all of them fold
+    [InlineData(double.PositiveInfinity, 0)]
+    public void It_folds_the_fewest_steps_that_fit(double width, int folded) => GiveWayBar.StepsFor(width, 640, [80, 150, 100]).ShouldBe(folded);
+
+    [Fact]
+    public void With_nothing_to_fold_it_folds_nothing() => GiveWayBar.StepsFor(10, 640, []).ShouldBe(0);
 
     /// <summary>
     /// Shaped like the bottom bar: a name inside a link on the right (step 1), the sparkline (step 2) and the cost (step 3)
@@ -37,10 +52,24 @@ public sealed class GiveWayBarTests
         Lay(bar, width);
 
         bar.Folded.ShouldBe(folded);
-        parts.Name.Visibility.ShouldBe(folded >= 1 ? Visibility.Collapsed : Visibility.Visible);
-        parts.Sparkline.Visibility.ShouldBe(folded >= 2 ? Visibility.Collapsed : Visibility.Visible);
-        parts.Cost.Visibility.ShouldBe(folded >= 3 ? Visibility.Collapsed : Visibility.Visible);
+        IsFolded(parts.Name).ShouldBe(folded >= 1);
+        IsFolded(parts.Sparkline).ShouldBe(folded >= 2);
+        IsFolded(parts.Cost).ShouldBe(folded >= 3);
         Row(bar).ShouldBeLessThanOrEqualTo(width, "the row itself, not only the bar, fits: nothing runs into anything");
+    });
+
+    /// <summary>Folded, an item takes no room and shows nothing, and its content's own Visibility is left alone.</summary>
+    [Fact]
+    public Task A_folded_item_takes_no_room_and_shows_nothing() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+
+        Lay(bar, 300);
+
+        var cost = (GiveWay)parts.Cost.Parent;
+        cost.DesiredSize.Width.ShouldBe(0);
+        LayoutInformation.GetLayoutClip(cost).ShouldBe(Geometry.Empty);
+        parts.Cost.Visibility.ShouldBe(Visibility.Visible);
     });
 
     /// <summary>
@@ -59,7 +88,7 @@ public sealed class GiveWayBarTests
             Row(bar).ShouldBeLessThanOrEqualTo(width, $"at {width}");
         }
 
-        parts.Name.Visibility.ShouldBe(Visibility.Visible);
+        IsFolded(parts.Name).ShouldBeFalse();
     });
 
     /// <summary>An item that grows (the cost passes another digit) folds the next step at the same width.</summary>
@@ -77,108 +106,102 @@ public sealed class GiveWayBarTests
     });
 
     /// <summary>
-    /// A row that keeps its fold changes no element when it measures again (a number on the bar changing): nothing shown
-    /// and hidden again on every update.
+    /// An item that shrinks while folded (the voice switched off leaves "voice" for "voice · Qwen3-TTS", the cost back to
+    /// $0.00 at midnight) comes back at the same width as soon as it fits.
     /// </summary>
     [Fact]
-    public Task Measured_again_at_the_same_fold_it_shows_and_hides_nothing() => StaThread.RunAsync(() =>
+    public Task A_folded_item_that_shrinks_comes_back_once_it_fits() => StaThread.RunAsync(() =>
     {
         var bar = Bar(out var parts);
-        Lay(bar, 450);
-        bar.Folded.ShouldBe(2);
-        var changes = 0;
-        var visibility = DependencyPropertyDescriptor.FromProperty(UIElement.VisibilityProperty, typeof(UIElement));
-        foreach (var element in new[] { parts.Name, parts.Sparkline, parts.Cost })
-        {
-            visibility.AddValueChanged(element, (_, _) => changes++);
-        }
+        Lay(bar, 600);
+        bar.Folded.ShouldBe(1);
 
-        parts.Tokens.Width = 110;
+        parts.Name.Width = 10; // the row unfolded is now 570
         bar.UpdateLayout();
-        Lay(bar, 455);
 
+        bar.Folded.ShouldBe(0);
+        IsFolded(parts.Name).ShouldBeFalse();
+    });
+
+    /// <summary>A folded item that grows while folded stays folded, and the row it would need is judged anew.</summary>
+    [Fact]
+    public Task A_folded_item_that_grows_while_folded_stays_folded() => StaThread.RunAsync(() =>
+    {
+        var bar = Bar(out var parts);
+        Lay(bar, 500);
         bar.Folded.ShouldBe(2);
-        changes.ShouldBe(0);
+
+        parts.Sparkline.Width = 400;
+        bar.UpdateLayout();
+        Lay(bar, 640);
+
+        bar.Folded.ShouldBe(2, "shown, the sparkline would need 890");
+        Lay(bar, 890);
+        bar.Folded.ShouldBe(0);
     });
 
-    /// <summary>
-    /// A marked element with a Visibility of its own (the 5-hour bar shows only with a budget) keeps its binding through a
-    /// fold: unfolded, it follows the binding again.
-    /// </summary>
+    /// <summary>A step changed after the bar was laid out counts at once.</summary>
     [Fact]
-    public Task A_folded_element_keeps_its_own_visibility_binding() => StaThread.RunAsync(() =>
+    public Task A_step_changed_later_counts() => StaThread.RunAsync(() =>
     {
         var bar = Bar(out var parts);
-        var source = new Shown { Visibility = Visibility.Visible };
-        BindingOperations.SetBinding(parts.Cost, UIElement.VisibilityProperty, new Binding(nameof(Shown.Visibility)) { Source = source });
+        Lay(bar, 409);
+        IsFolded(parts.Cost).ShouldBeTrue();
 
-        Lay(bar, 300);
-        parts.Cost.Visibility.ShouldBe(Visibility.Collapsed);
-        Lay(bar, 900);
-        parts.Cost.Visibility.ShouldBe(Visibility.Visible);
+        ((GiveWay)parts.Cost.Parent).Step = 0;
+        bar.UpdateLayout();
 
-        source.Visibility = Visibility.Collapsed;
-        parts.Cost.Visibility.ShouldBe(Visibility.Collapsed, "the binding still holds after the fold");
-        Lay(bar, 300);
-        Lay(bar, 900);
-        parts.Cost.Visibility.ShouldBe(Visibility.Collapsed, "unfolding gives it back its own value, not Visible");
+        IsFolded(parts.Cost).ShouldBeFalse("it no longer folds");
+        IsFolded(parts.Sparkline).ShouldBeTrue();
     });
 
-    /// <summary>A step set or cleared after the bar was laid out counts at once.</summary>
+    /// <summary>An item put into the row later folds with it; one taken out is shown again and no longer the bar's.</summary>
     [Fact]
-    public Task A_step_set_or_cleared_later_counts() => StaThread.RunAsync(() =>
+    public Task Items_added_or_taken_out_later_count() => StaThread.RunAsync(() =>
     {
         var bar = Bar(out var parts);
-        Lay(bar, 300);
-        parts.Cost.Visibility.ShouldBe(Visibility.Collapsed);
+        Lay(bar, 600);
+        var row = (StackPanel)parts.Tokens.Parent;
 
-        GiveWayBar.SetStep(parts.Cost, 0);
-        Lay(bar, 300);
-        parts.Cost.Visibility.ShouldBe(Visibility.Visible, "no longer marked, it is shown again");
+        var late = new GiveWay { Step = 1, Child = new Border { Width = 50 } };
+        row.Children.Add(late);
+        bar.UpdateLayout();
+        late.IsFolded.ShouldBeTrue("the row is 610 with step 1 folded and it shown");
 
-        GiveWayBar.SetStep(parts.Tokens, 3);
+        var cost = (GiveWay)parts.Cost.Parent;
         Lay(bar, 300);
-        parts.Tokens.Visibility.ShouldBe(Visibility.Collapsed, "newly marked, it folds");
+        cost.IsFolded.ShouldBeTrue();
+        row.Children.Remove(cost);
+        bar.UpdateLayout();
+        cost.IsFolded.ShouldBeFalse("taken out, it is no longer folded by the bar");
     });
-
-    private sealed class Shown : INotifyPropertyChanged
-    {
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        public Visibility Visibility
-        {
-            get;
-            set
-            {
-                field = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Visibility)));
-            }
-        }
-    }
 
     private sealed record Parts(FrameworkElement Name, FrameworkElement Sparkline, FrameworkElement Cost, FrameworkElement Tokens);
 
     private static GiveWayBar Bar(out Parts parts)
     {
         var name = new Border { Width = 80 };
-        GiveWayBar.SetStep(name, 1);
         var link = new Button
         {
             Template = new ControlTemplate(typeof(Button)) { VisualTree = new FrameworkElementFactory(typeof(ContentPresenter)) },
-            Content = new StackPanel { Orientation = Orientation.Horizontal, Children = { name, new Border { Width = 50 } } },
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Children = { new GiveWay { Step = 1, Child = name }, new Border { Width = 50 } } },
         };
         DockPanel.SetDock(link, Dock.Right);
 
         var tokens = new Border { Width = 100 };
         var sparkline = new Border { Width = 150 };
-        GiveWayBar.SetStep(sparkline, 2);
         var cost = new Border { Width = 100 };
-        GiveWayBar.SetStep(cost, 3);
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Children = { tokens, cost, sparkline, new Border { Width = 160 } } };
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { tokens, new GiveWay { Step = 3, Child = cost }, new GiveWay { Step = 2, Child = sparkline }, new Border { Width = 160 } },
+        };
 
         parts = new Parts(name, sparkline, cost, tokens);
         return new GiveWayBar { Child = new DockPanel { Children = { link, row } } };
     }
+
+    private static bool IsFolded(FrameworkElement content) => ((GiveWay)content.Parent).IsFolded;
 
     /// <summary>The row's own width: the bar reports at most its constraint, so only the row shows an overlap.</summary>
     private static double Row(GiveWayBar bar) => bar.Child.DesiredSize.Width;

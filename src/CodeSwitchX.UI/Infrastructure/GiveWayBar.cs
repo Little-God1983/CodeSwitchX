@@ -6,37 +6,19 @@ using System.Windows.Media.Media3D;
 namespace CodeSwitchX.UI.Infrastructure;
 
 /// <summary>
-/// A row that gives way on a narrow window instead of running its items into each other (#168): the elements inside it
-/// marked with a <see cref="StepProperty"/> fold (collapse) in that order, step 1 first, each step only when the row would
-/// not fit the width without it. A wide row folds nothing. The row is measured unlimited in width, so what folds comes
-/// from the width the bar is given and the items' own widths, never from the row's folded size. Marked elements are found
-/// in the bar's logical tree (its content, not inside templates). Folding sets a current value, so an element's own
-/// Visibility binding or style is kept and comes back when it unfolds.
+/// A row that gives way on a narrow window instead of running its items into each other (#168): the
+/// <see cref="GiveWay"/> items inside it fold in the order of their steps, step 1 first, each step only when the row would
+/// not fit the width without it. A wide row folds nothing. Folded items still measure their content, so each measure
+/// knows the row's width at every step without showing or hiding anything to find out: what folds comes from the width
+/// the bar is given and the items' widths now, never from an earlier fold. The items sit side by side in the row, so a
+/// step folded takes exactly its items' widths off it.
 /// </summary>
 public sealed class GiveWayBar : Decorator
 {
-    public static readonly DependencyProperty StepProperty = DependencyProperty.RegisterAttached("Step", typeof(int), typeof(GiveWayBar),
-        new PropertyMetadata(0, OnStepChanged));
-
     /// <summary>Within this much a row still fits: layout rounding (125 % scaling) can leave a sum a hair over the width.</summary>
     private const double Slack = 0.01;
 
-    /// <summary>The marked elements, found once; a new child or a step set later finds them again.</summary>
-    private List<UIElement>? _marked;
-
-    /// <summary>The elements this bar collapsed, to give back their own Visibility when they unfold.</summary>
-    private readonly HashSet<UIElement> _folded = [];
-
-    /// <summary>
-    /// How much narrower the row got when each step last folded, by step: a measure judges from it whether the step would
-    /// fit again, without unfolding it to see.
-    /// </summary>
-    private double[] _saved = [];
-
-    /// <summary>When the element folds: 1 first, then 2, and so on; 0 (the default) never.</summary>
-    public static int GetStep(DependencyObject element) => (int)element.GetValue(StepProperty);
-
-    public static void SetStep(DependencyObject element, int value) => element.SetValue(StepProperty, value);
+    private readonly List<GiveWay> _items = [];
 
     /// <summary>How many steps the last measure folded: 0 none.</summary>
     public int Folded { get; private set; }
@@ -44,16 +26,58 @@ public sealed class GiveWayBar : Decorator
     /// <summary>Whether a row this wide fits the width, give or take layout rounding.</summary>
     internal static bool Fits(double row, double width) => row <= width + Slack;
 
-    protected override void OnVisualChildrenChanged(DependencyObject visualAdded, DependencyObject visualRemoved)
+    /// <summary>
+    /// The fewest steps to fold for the row to fit <paramref name="width"/>, given its width with nothing folded and each
+    /// step's width (<paramref name="steps"/>[0] is step 1); all of them when even that is too wide.
+    /// </summary>
+    internal static int StepsFor(double width, double unfolded, IReadOnlyList<double> steps)
     {
-        base.OnVisualChildrenChanged(visualAdded, visualRemoved);
-        Forget();
+        var row = unfolded;
+        for (var folded = 0; folded < steps.Count; folded++)
+        {
+            if (Fits(row, width))
+            {
+                return folded;
+            }
+
+            row -= steps[folded];
+        }
+
+        return steps.Count;
     }
 
-    /// <summary>
-    /// Starts from the steps the last measure folded: folds the next while the row is too wide, and unfolds the last while
-    /// what it saved would fit again. A row that keeps its fold measures once and changes no element.
-    /// </summary>
+    /// <summary>The nearest bar above <paramref name="node"/>, if any.</summary>
+    internal static GiveWayBar? Above(DependencyObject node)
+    {
+        for (var up = ParentOf(node); up is not null; up = ParentOf(up))
+        {
+            if (up is GiveWayBar bar)
+            {
+                return bar;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The visual parent, or the logical one where the visual tree is not made yet (a button's content before its template).</summary>
+    internal static DependencyObject? ParentOf(DependencyObject node) =>
+        (node is Visual or Visual3D ? VisualTreeHelper.GetParent(node) : null) ?? LogicalTreeHelper.GetParent(node);
+
+    internal void Join(GiveWay item)
+    {
+        _items.Add(item);
+        InvalidateMeasure();
+    }
+
+    internal void Leave(GiveWay item)
+    {
+        if (_items.Remove(item))
+        {
+            InvalidateMeasure();
+        }
+    }
+
     protected override Size MeasureOverride(Size constraint)
     {
         if (Child is not { } child)
@@ -61,139 +85,46 @@ public sealed class GiveWayBar : Decorator
             return default;
         }
 
-        var marked = _marked ??= Marked(child);
-        var steps = marked.Count == 0 ? 0 : marked.Max(GetStep);
-        if (_saved.Length != steps + 1)
-        {
-            Array.Resize(ref _saved, steps + 1);
-        }
-
         // Measured unlimited in width, the row's desired width is never cut to the constraint, so an item that grows later
-        // still reaches this measure and folds the next step.
+        // still reaches this measure. Its items join the bar as they measure.
         var unlimited = new Size(double.PositiveInfinity, constraint.Height);
-        double RowWith(int folded)
+        child.Measure(unlimited);
+        // A row taken out with its items in it: they are no longer this bar's.
+        foreach (var gone in _items.Where(item => Above(item) != this).ToList())
         {
-            Fold(marked, folded);
+            _items.Remove(gone);
+            gone.LetGo();
+        }
+
+        var steps = new double[_items.Count == 0 ? 0 : _items.Max(item => item.Step)];
+        var unfolded = child.DesiredSize.Width;
+        foreach (var item in _items)
+        {
+            if (item.Step > 0)
+            {
+                steps[item.Step - 1] += item.Natural;
+            }
+
+            if (item.IsFolded)
+            {
+                unfolded += item.Natural;
+            }
+        }
+
+        Folded = StepsFor(constraint.Width, unfolded, steps);
+        var changed = false;
+        foreach (var item in _items)
+        {
+            var fold = item.Step > 0 && item.Step <= Folded;
+            changed |= fold != item.IsFolded;
+            item.IsFolded = fold;
+        }
+
+        if (changed)
+        {
             child.Measure(unlimited);
-            return child.DesiredSize.Width;
         }
 
-        var width = constraint.Width;
-        var folded = Math.Min(Folded, steps);
-        var row = RowWith(folded);
-        while (folded < steps && !Fits(row, width))
-        {
-            var narrower = RowWith(folded + 1);
-            _saved[folded + 1] = row - narrower;
-            row = narrower;
-            folded++;
-        }
-
-        while (folded > 0 && Fits(row + _saved[folded], width))
-        {
-            var wider = RowWith(folded - 1);
-            if (!Fits(wider, width))
-            {
-                // What it saved has grown since it folded: it stays folded, and the next measure knows.
-                _saved[folded] = wider - row;
-                row = RowWith(folded);
-                break;
-            }
-
-            row = wider;
-            folded--;
-        }
-
-        Folded = folded;
-        return new Size(Math.Min(row, width), child.DesiredSize.Height);
-    }
-
-    private static void OnStepChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
-    {
-        for (var up = ParentOf(element); up is not null; up = ParentOf(up))
-        {
-            if (up is GiveWayBar bar)
-            {
-                bar.Forget();
-                return;
-            }
-        }
-    }
-
-    /// <summary>Gives every folded element back its own Visibility and finds the marked elements again on the next measure.</summary>
-    private void Forget()
-    {
-        foreach (var element in _folded)
-        {
-            element.InvalidateProperty(VisibilityProperty);
-        }
-
-        _folded.Clear();
-        _marked = null;
-        _saved = [];
-        Folded = 0;
-        InvalidateMeasure();
-    }
-
-    /// <summary>Folds the marked elements of the first <paramref name="folded"/> steps and gives the rest their own Visibility.</summary>
-    private void Fold(List<UIElement> marked, int folded)
-    {
-        foreach (var element in marked)
-        {
-            if (GetStep(element) <= folded)
-            {
-                // Already collapsed by its own binding there is nothing to fold; shown again by it, it folds once more.
-                if (element.Visibility == Visibility.Collapsed)
-                {
-                    continue;
-                }
-
-                element.SetCurrentValue(VisibilityProperty, Visibility.Collapsed);
-                _folded.Add(element);
-            }
-            else if (_folded.Remove(element))
-            {
-                element.InvalidateProperty(VisibilityProperty);
-            }
-            else
-            {
-                continue;
-            }
-
-            // A changed element marks only its parent for a new measure: everything up to the bar must measure again, or a
-            // parent that was not marked returns its old size.
-            for (var up = ParentOf(element); up is not null && up != this; up = ParentOf(up))
-            {
-                (up as UIElement)?.InvalidateMeasure();
-            }
-        }
-    }
-
-    /// <summary>The visual parent, or the logical one where the visual tree is not made yet (a button's content before its template).</summary>
-    private static DependencyObject? ParentOf(DependencyObject node) =>
-        (node is Visual or Visual3D ? VisualTreeHelper.GetParent(node) : null) ?? LogicalTreeHelper.GetParent(node);
-
-    private static List<UIElement> Marked(DependencyObject root)
-    {
-        var marked = new List<UIElement>();
-        Collect(root, marked);
-        return marked;
-    }
-
-    /// <summary>The logical tree, so a button's content counts before its template has made the visual tree.</summary>
-    private static void Collect(DependencyObject node, List<UIElement> marked)
-    {
-        if (node is UIElement element && GetStep(element) > 0)
-        {
-            marked.Add(element);
-        }
-
-        foreach (var child in LogicalTreeHelper.GetChildren(node))
-        {
-            if (child is DependencyObject next)
-            {
-                Collect(next, marked);
-            }
-        }
+        return new Size(Math.Min(child.DesiredSize.Width, constraint.Width), child.DesiredSize.Height);
     }
 }

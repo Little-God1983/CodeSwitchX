@@ -47,7 +47,9 @@
                   Command="{Binding DataContext.OpenSettingsAtCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                   CommandParameter="{x:Static settings:SettingsPage.Voice}">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Style="{StaticResource Label}" Text="{Binding Voice.SpeechName}" Margin="0,0,6,0" infra:GiveWayBar.Step="1" />
+              <infra:GiveWay Step="1">
+                <TextBlock Style="{StaticResource Label}" Text="{Binding Voice.SpeechName}" Margin="0,0,6,0" />
+              </infra:GiveWay>
               <voice:ModelLampView DataContext="{Binding Voice.Speech}" AutomationProperties.ItemType="Raven's voice" />
             </StackPanel>
           </Button>
@@ -55,7 +57,9 @@
                   Command="{Binding DataContext.OpenSettingsAtCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                   CommandParameter="{x:Static settings:SettingsPage.Listening}">
             <StackPanel Orientation="Horizontal">
-              <TextBlock Style="{StaticResource Label}" Text="{Binding Voice.ListeningName}" Margin="0,0,6,0" infra:GiveWayBar.Step="1" />
+              <infra:GiveWay Step="1">
+                <TextBlock Style="{StaticResource Label}" Text="{Binding Voice.ListeningName}" Margin="0,0,6,0" />
+              </infra:GiveWay>
               <voice:ModelLampView DataContext="{Binding Voice.Listening}" AutomationProperties.ItemType="Speech to text" />
             </StackPanel>
           </Button>
@@ -63,20 +67,24 @@
         <StackPanel Orientation="Horizontal" Visibility="{Binding IsExpanded, Converter={StaticResource BoolVisible}}">
           <TextBlock Style="{StaticResource Label}" Text="tokens today" />
           <TextBlock Style="{StaticResource Value}" Text="{Binding TokensTodayText}" />
-          <StackPanel Orientation="Horizontal" infra:GiveWayBar.Step="3">
-            <TextBlock Style="{StaticResource Label}" Text="cost today" />
-            <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table; a model without a rule adds tokens but no cost" />
-          </StackPanel>
+          <infra:GiveWay Step="3">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Style="{StaticResource Label}" Text="cost today" />
+              <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table; a model without a rule adds tokens but no cost" />
+            </StackPanel>
+          </infra:GiveWay>
           <TextBlock Style="{StaticResource Label}" Text="5-hour window" />
           <TextBlock Style="{StaticResource Value}" Text="{Binding FiveHourText}" Margin="0,0,6,0" />
           <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,20,0" VerticalAlignment="Center"
                        Visibility="{Binding HasBudget, Converter={StaticResource BoolVisible}}" />
-          <StackPanel Orientation="Horizontal" infra:GiveWayBar.Step="2">
-            <TextBlock Style="{StaticResource Label}" Text="rate (60 min)" />
-            <Canvas x:Name="Sparkline" Width="120" Height="18" Margin="0,0,20,0" VerticalAlignment="Center" ClipToBounds="True">
-              <Polyline x:Name="SparklinePath" Stroke="#3B82F6" StrokeThickness="1.5" StrokeLineJoin="Round" />
-            </Canvas>
-          </StackPanel>
+          <infra:GiveWay Step="2">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Style="{StaticResource Label}" Text="rate (60 min)" />
+              <Canvas x:Name="Sparkline" Width="120" Height="18" Margin="0,0,20,0" VerticalAlignment="Center" ClipToBounds="True">
+                <Polyline x:Name="SparklinePath" Stroke="#3B82F6" StrokeThickness="1.5" StrokeLineJoin="Round" />
+              </Canvas>
+            </StackPanel>
+          </infra:GiveWay>
           <TextBlock Style="{StaticResource Label}" Text="active chats" />
           <TextBlock Style="{StaticResource Value}" Text="{Binding ActiveSessions}" />
           <TextBlock Style="{StaticResource Label}" Text="waiting" />
