@@ -972,7 +972,7 @@
               <DataTemplate DataType="{x:Type raven:RavenChat}">
                 <Button Command="{Binding DataContext.OpenChatCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                         CommandParameter="{Binding}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,3"
-                        ToolTip="{Binding Tip}" AutomationProperties.Name="{Binding Tip, StringFormat='Open chat {0}'}"
+                        ToolTip="{Binding Tip}" AutomationProperties.Name="{Binding Tip, StringFormat='Show Raven chat {0}'}"
                         FocusVisualStyle="{StaticResource RoundFocusRing}">
                   <Button.Template>
                     <ControlTemplate TargetType="Button">
