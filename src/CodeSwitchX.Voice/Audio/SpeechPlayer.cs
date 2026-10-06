@@ -33,6 +33,8 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private readonly Lock _lock = new();
     private IWavePlayer? _output;
     private BufferedWaveProvider? _buffer;
+    private bool _onDefault; // plays on the Windows default: none chosen, or the one chosen could not be used
+    private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
     {
@@ -87,15 +89,20 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
+            if (_onDefault && _audioOutput.DeviceId is null)
+            {
+                return; // the choice gone back to the Windows default (the headset left the list): speech is there already
+            }
+
             var buffer = _buffer;
             StopLocked();
             try
             {
-                Open(buffer);
+                Open(buffer); // on the default when the one chosen fails to start: the rest is heard there
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Speech could not move to the output chosen; the next chunk tries again");
+                _logger.LogWarning(ex, "Speech could not move to the output chosen nor to the Windows default; the next chunk tries again");
             }
         }
     }
@@ -113,12 +120,12 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         });
     }
 
-    private void Open(BufferedWaveProvider buffer)
+    private void Open(BufferedWaveProvider buffer, bool afterFailure = false)
     {
-        var output = _audioOutput.Create(120);
+        var meter = new Meter(buffer, this);
+        var output = _audioOutput.Open(meter, 120, out var onDefault);
         try
         {
-            output.Init(new Meter(buffer, this));
             output.PlaybackStopped += OnPlaybackStopped;
             output.Play();
         }
@@ -131,6 +138,8 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
 
         _buffer = buffer;
         _output = output;
+        _onDefault = onDefault;
+        _reopened = afterFailure;
     }
 
     public void Stop()
@@ -174,9 +183,30 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         lock (_lock)
         {
             // An output replaced meanwhile (a new sample rate, the next reply) is not this one: it plays on.
-            if (ReferenceEquals(sender, _output))
+            if (!ReferenceEquals(sender, _output))
             {
-                StopLocked();
+                return;
+            }
+
+            // Speech comes faster than it plays, so seconds of the reply can still be queued: they go on, once, on the output
+            // chosen if it is still there (a driver reset), on the Windows default if not (unplugged). Only what the failed
+            // device held, a tenth of a second, is lost.
+            var buffer = _buffer!;
+            var reopen = e.Exception is not null && !_reopened && buffer.BufferedBytes > 0;
+            StopLocked();
+            if (!reopen)
+            {
+                return;
+            }
+
+            try
+            {
+                Open(buffer, afterFailure: true);
+                _logger.LogInformation("Speech goes on on {Output}", _onDefault ? "the Windows default" : "the output chosen");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Speech could not go on on any output; what was queued is dropped, the next chunk tries again");
             }
         }
     }

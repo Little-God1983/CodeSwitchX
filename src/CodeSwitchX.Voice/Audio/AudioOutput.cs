@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -14,10 +15,14 @@ public interface IAudioOutput
     event EventHandler? Changed;
 
     /// <summary>
-    /// A player not yet initialised, on the device chosen while it is there, on the Windows default otherwise. Opened on
-    /// the calling thread, which should then Init it.
+    /// A player initialised with <paramref name="source"/>, not yet playing: on the device chosen while it is there and
+    /// starts, on the Windows default otherwise (gone, not active, or held by another app in exclusive mode). Opened on the
+    /// calling thread; throws only when the default fails too.
     /// </summary>
-    IWavePlayer Create(int latencyMs);
+    IWavePlayer Open(IWaveProvider source, int latencyMs) => Open(source, latencyMs, out _);
+
+    /// <summary>The same, saying whether it plays on the Windows default: none chosen, or the one chosen could not be used.</summary>
+    IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault);
 }
 
 /// <summary>
@@ -27,12 +32,27 @@ public interface IAudioOutput
 /// </summary>
 public sealed class AudioOutput : IAudioOutput
 {
+    private const int DeviceInUse = unchecked((int)0x8889000A); // AUDCLNT_E_DEVICE_IN_USE: held in exclusive mode
+
     private readonly ILogger<AudioOutput> _logger;
+    private readonly Func<string, int, IWavePlayer?> _openChosen;
+    private readonly Func<int, IWavePlayer> _openDefault;
     private string? _deviceId;
 
     public AudioOutput(ILogger<AudioOutput> logger)
+        : this(logger, OpenWasapi, latencyMs => new WaveOutEvent { DesiredLatency = latencyMs })
+    {
+    }
+
+    /// <summary>
+    /// The players stand in for the devices in the tests; <paramref name="openChosen"/> gives null for a device not active
+    /// and throws for one not there.
+    /// </summary>
+    internal AudioOutput(ILogger<AudioOutput> logger, Func<string, int, IWavePlayer?> openChosen, Func<int, IWavePlayer> openDefault)
     {
         _logger = logger;
+        _openChosen = openChosen;
+        _openDefault = openDefault;
     }
 
     public event EventHandler? Changed;
@@ -49,30 +69,90 @@ public sealed class AudioOutput : IAudioOutput
         }
     }
 
-    public IWavePlayer Create(int latencyMs)
+    public IWavePlayer Open(IWaveProvider source, int latencyMs, out bool onDefault)
     {
-        if (DeviceId is { } id)
+        if (DeviceId is { } id && OpenChosen(id, source, latencyMs) is { } chosen)
         {
-            try
-            {
-                using var enumerator = new MMDeviceEnumerator();
-                var device = enumerator.GetDevice(id);
-                if (device.State == DeviceState.Active)
-                {
-                    return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
-                }
-
-                device.Dispose();
-                _logger.LogInformation("The output chosen is not active; playing on the Windows default");
-            }
-            catch (Exception ex)
-            {
-                // Unplugged since it was listed, or gone for good: the default plays rather than nothing.
-                _logger.LogWarning(ex, "The output chosen could not be opened; playing on the Windows default");
-            }
+            onDefault = false;
+            return chosen;
         }
 
-        return new WaveOutEvent { DesiredLatency = latencyMs };
+        onDefault = true;
+        return OpenDefault(source, latencyMs);
+    }
+
+    /// <summary>The device chosen, initialised; null when it cannot be used, which is logged: the default plays rather than nothing.</summary>
+    private IWavePlayer? OpenChosen(string id, IWaveProvider source, int latencyMs)
+    {
+        IWavePlayer? chosen = null;
+        try
+        {
+            chosen = _openChosen(id, latencyMs);
+            if (chosen is null)
+            {
+                // A headset asleep or unplugged: an ordinary state, not worth a warning on every chime.
+                _logger.LogInformation("The output chosen is not active; playing on the Windows default");
+                return null;
+            }
+
+            chosen.Init(source); // where a device listed as active still refuses: AUDCLNT_E_DEVICE_IN_USE
+            return chosen;
+        }
+        catch (COMException ex) when (ex.HResult == DeviceInUse)
+        {
+            // Lasts as long as the other app holds it: as ordinary as a device asleep.
+            DisposeQuietly(chosen);
+            _logger.LogInformation("The output chosen is held by another app; playing on the Windows default");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            // Unplugged since it was listed, or gone for good.
+            DisposeQuietly(chosen);
+            _logger.LogWarning(ex, "The output chosen could not be used; playing on the Windows default");
+            return null;
+        }
+    }
+
+    private IWavePlayer OpenDefault(IWaveProvider source, int latencyMs)
+    {
+        var player = _openDefault(latencyMs);
+        try
+        {
+            player.Init(source);
+            return player;
+        }
+        catch
+        {
+            DisposeQuietly(player);
+            throw;
+        }
+    }
+
+    /// <summary>The device chosen through WASAPI; null when it is listed but not active.</summary>
+    private static IWavePlayer? OpenWasapi(string id, int latencyMs)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var device = enumerator.GetDevice(id);
+        if (device.State != DeviceState.Active)
+        {
+            device.Dispose();
+            return null;
+        }
+
+        return new StoppedOffThread(new WasapiOut(device, AudioClientShareMode.Shared, useEventSync: true, latencyMs));
+    }
+
+    private static void DisposeQuietly(IWavePlayer? player)
+    {
+        try
+        {
+            player?.Dispose();
+        }
+        catch
+        {
+            // Best effort: a player that half started.
+        }
     }
 }
 

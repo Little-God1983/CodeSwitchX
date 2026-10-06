@@ -26,10 +26,9 @@ public sealed class VoiceSamples(IAudioOutput audioOutput) : IVoiceSamples
         await using var clip = typeof(VoiceSamples).Assembly.GetManifestResourceStream(ResourceName(engine, voice))
             ?? throw new InvalidOperationException($"No sample of {engine}'s voice {voice}.");
         await using var reader = new WaveFileReader(clip);
-        using var output = audioOutput.Create(300);
+        using var output = audioOutput.Open(reader, 300);
         var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         output.PlaybackStopped += (_, _) => ended.TrySetResult();
-        output.Init(reader);
         output.Play();
         await using (ct.Register(output.Stop))
         {
