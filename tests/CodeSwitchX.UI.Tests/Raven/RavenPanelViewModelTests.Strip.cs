@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -191,5 +192,70 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.ShouldNotContain(e => e.Chat == ChatNumbered(vm, 3));
         ChatNumbered(vm, 3).IsWaiting.ShouldBeTrue("the card still waits for its answer");
+    }
+    // Review round 2 of #175: a collapsed switch cleared the marks at once, though its catch-up could still be dropped.
+    [Fact]
+    public async Task Collapsed_a_catch_up_dropped_by_another_switch_leaves_the_chat_s_marks()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        vm.IsOpen = false;
+        var two = ChatNumbered(vm, 2);
+
+        vm.SelectedChat = two;
+        two.Unread.ShouldBe(2, "the catch-up waits for the floor; nothing is said yet");
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        two.Unread.ShouldBe(2);
+        _teller.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Collapsed_a_catch_up_said_counts_the_chat_as_seen()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        vm.IsOpen = false;
+        var two = ChatNumbered(vm, 2);
+
+        vm.SelectedChat = two;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+        two.Unread.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Collapsed_the_news_of_the_chat_talked_to_said_aloud_is_heard_and_not_told_again()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        var two = ChatNumbered(vm, 2);
+        vm.SelectedChat = two;
+        vm.IsOpen = false;
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await WithinAsync(_voice.WhenQuietAsync());
+        two.Unread.ShouldBe(0, "the digest said it");
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.SelectedChat = two;
+        await GraceAsync(vm);
+        _teller.Asked.ShouldHaveSingleItem("no catch-up repeats what the digest said");
+    }
+
+    [Fact]
+    public async Task Collapsed_with_no_voice_ready_raven_s_answer_is_only_written_so_it_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _speech.Report(new global::CodeSwitchX.Voice.Speech.TextToSpeechStatus(global::CodeSwitchX.Voice.Speech.TextToSpeechState.Failed));
+        vm.IsOpen = false;
+
+        Type(vm, "How many chats run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
     }
 }

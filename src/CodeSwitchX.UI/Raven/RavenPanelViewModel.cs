@@ -1996,6 +1996,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_catchUpDue is { } due)
         {
             _catchUpDue = null;
+            if (!IsOpen && due.Chat == CurrentChat && VoiceSpeaks)
+            {
+                Seen(due.Chat); // collapsed, the catch-up is how the user learns what came (#173): a dropped one leaves the marks
+            }
+
             _catchUpTelling = _digest;
             _conversation = TellCatchUpAsync(_conversation, due.Chat, due.Lines, _digest.Token);
         }
@@ -2567,6 +2572,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             var taken = _time.GetUtcNow();
+            var appended = new Dictionary<RavenChat, RavenLogEntry>();
 
             // A card per window, in that window's chat: the news of a chat is read where its window's other cards are.
             // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
@@ -2576,7 +2582,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 var ofWindow = group.ToList();
                 var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
-                Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
+                appended[group.Key] = Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
                 Summarize(group.Key);
                 foreach (var line in ofWindow)
                 {
@@ -2595,6 +2601,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
 
                 return;
+            }
+
+            if (appended.TryGetValue(CurrentChat, out var told))
+            {
+                Heard(told); // collapsed, the news of the chat talked to is said now: not to be counted, nor told again by a catch-up
             }
 
             _voice.Expect();
@@ -3201,7 +3212,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them.</summary>
-    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && !IsMuted && entry.Kind == RavenLogKind.Raven && entry.Chat == CurrentChat;
+    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && VoiceSpeaks && entry.Kind == RavenLogKind.Raven && entry.Chat == CurrentChat;
+
+    /// <summary>What Raven says is heard: not muted, and a voice ready (one that is off starts and says it). Otherwise it is only written.</summary>
+    private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off;
+
+    /// <summary>Collapsed, an entry counted unread is said aloud after all: it is heard, and its count goes.</summary>
+    private void Heard(RavenLogEntry entry)
+    {
+        if (IsOpen || !entry.IsUnread || !VoiceSpeaks)
+        {
+            return;
+        }
+
+        entry.IsUnread = false;
+        entry.Chat.Unread -= UnreadLines(entry);
+        entry.Chat.IsNewsPulsing &= entry.Chat.Unread > 0;
+    }
 
     /// <summary>How long a badge pulses when a line comes (#173): three beats, then it stays steady.</summary>
     internal static readonly TimeSpan NewsPulse = TimeSpan.FromSeconds(2.4);
@@ -3343,8 +3370,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // What came while the user was away, before Seen forgets which lines those were.
         List<RavenLogEntry> away = CatchUp && !value.IsActivity ? [.. Log.Where(e => e.IsUnread && e.Chat == value)] : [];
-        // Collapsed, nothing shows the chat (#173): its marks stay on the strip, unless the catch-up says what came there.
-        if (!value.IsActivity && (IsOpen || CatchUpSays(value, away)))
+        // Collapsed, nothing shows the chat (#173): its marks stay on the strip, until Raven opens or the catch-up is said.
+        if (!value.IsActivity && IsOpen)
         {
             Seen(value);
         }
@@ -3401,11 +3428,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// That holds with <see cref="TrafficWatcher.OwnNewsWaits"/> on too: dropped, it would never be said, as the switch has
     /// marked its lines seen.
     /// </summary>
-    /// <summary>Whether a switch to the chat says aloud what came there while the user was away.</summary>
-    private bool CatchUpSays(RavenChat chat, List<RavenLogEntry> away) => away.Count > 0 && CatchUpSays(chat, CatchUpLines(away));
-
-    private bool CatchUpSays<T>(RavenChat chat, IReadOnlyCollection<T> lines) => lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null;
-
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
         if (away.Count == 0)
@@ -3421,7 +3443,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        var catchUp = CatchUpSays(chat, lines); // a muted chat's cards are still read
+        var catchUp = lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null; // a muted chat's cards are still read
         if (catchUp)
         {
             _catchUpDue = (chat, lines);
