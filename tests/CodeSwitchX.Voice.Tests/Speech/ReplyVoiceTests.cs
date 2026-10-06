@@ -590,7 +590,7 @@ public sealed class ReplyVoiceTests : IDisposable
 
         public List<string> Log { get; } = [];
 
-        public void Enqueue(SpeechChunk chunk)
+        public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
         {
             Enqueuing = true;
             Opening?.Task.Wait();

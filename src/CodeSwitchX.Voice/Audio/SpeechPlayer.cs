@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using CodeSwitchX.Voice.Speech;
 using Microsoft.Extensions.Logging;
@@ -8,8 +9,14 @@ namespace CodeSwitchX.Voice.Audio;
 /// <summary>Plays speech as it comes, chunk after chunk, on the output chosen (<see cref="IAudioOutput"/>).</summary>
 public interface ISpeechPlayer : IDisposable
 {
-    /// <summary>Plays the chunk after those queued before it; the first one opens the device. Any thread.</summary>
-    void Enqueue(SpeechChunk chunk);
+    /// <summary>
+    /// Plays the chunk after those queued before it; the first one opens the device, and throws when none opens. Any thread.
+    /// </summary>
+    /// <param name="hushed">
+    /// Whether the reply is hushed: a device that finishes opening after that is let go unheard, so a hush that waits for
+    /// this call to return (the reply voice's gate) is not heard on it a moment first (#186).
+    /// </param>
+    void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null);
 
     /// <summary>
     /// How much of the queued audio is still to be heard; zero when it is done. Any thread, and never waits: the UI thread's
@@ -40,6 +47,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private bool _reopened; // reopened after the output failed mid-reply: a second failure drops what is queued
     private int _generation; // a stop, a new queue, a move or a reopen: a device opened for an older one is let go unheard
     private bool _opening; // a device is opening for the queue of this generation
+    private string? _openingFor; // the output chosen when it began to open: a move there is none
     private int _movePending; // a move queued and not yet started: picks in a row (arrowing through the list) queue one
 
     public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
@@ -73,7 +81,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     /// Queues the chunk; the first of a reply (or of another sample rate) opens the device, on this thread and outside the
     /// lock: a stop or a move meanwhile never waits for it, and the chunks after it queue at once.
     /// </summary>
-    public void Enqueue(SpeechChunk chunk)
+    public void Enqueue(SpeechChunk chunk, Func<bool>? hushed = null)
     {
         IWavePlayer? old = null;
         BufferedWaveProvider? toOpen = null;
@@ -97,15 +105,10 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             _buffer.AddSamples(segment.Array!, segment.Offset, segment.Count);
         }
 
-        if (old is not null)
-        {
-            Close(old);
-            RestTheOrb();
-        }
-
+        Retire(old);
         if (toOpen is not null)
         {
-            OpenFor(toOpen, generation, afterFailure: false, throwOnFailure: true);
+            OpenFor(toOpen, generation, afterFailure: false, throwOnFailure: true, hushed);
         }
     }
 
@@ -135,9 +138,10 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 // Plays where the choice points already: two picks in a row (the first move ran after both), or the choice
                 // gone back to the Windows default that speech fell back to (the headset left the list).
                 if (_buffer is not { } queued || (_output is null && !_opening)
-                    || (_output is not null && _audioOutput.DeviceId == _playsOn))
+                    || (_output is not null && _audioOutput.DeviceId == _playsOn)
+                    || (_output is null && _audioOutput.DeviceId == _openingFor))
                 {
-                    return;
+                    return; // or opening there already: a waking headset is not woken twice
                 }
 
                 old = DetachLocked(); // the queue stays: Remaining reads on through the move
@@ -145,12 +149,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 generation = NextGenerationLocked(opening: true);
             }
 
-            if (old is not null)
-            {
-                Close(old);
-            }
-
-            RestTheOrb(); // while the new device wakes
+            Retire(old); // the orb rests while the new device wakes
             OpenFor(buffer, generation, afterFailure: false, throwOnFailure: false); // on the default when the one chosen fails
         }
         catch (Exception ex)
@@ -164,7 +163,8 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     /// or a reopen came meanwhile: then it is let go unheard. One that fails (none there, or busy) drops the queue, so the
     /// next chunk tries again instead of filling a buffer nothing plays.
     /// </summary>
-    private void OpenFor(BufferedWaveProvider buffer, int generation, bool afterFailure, bool throwOnFailure)
+    private void OpenFor(BufferedWaveProvider buffer, int generation, bool afterFailure, bool throwOnFailure,
+        Func<bool>? hushed = null)
     {
         IWavePlayer output;
         string? playsOn;
@@ -174,19 +174,19 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         }
         catch (Exception ex)
         {
-            Failed(generation);
-            if (throwOnFailure)
-            {
-                throw;
-            }
-
-            _logger.LogWarning(ex, "Speech found no output, nor the Windows default; what was queued is dropped, the next chunk tries again");
+            Fail(generation, ex, throwOnFailure);
             return;
         }
 
+        Exception? wontPlay = null;
         bool played;
         lock (_lock)
         {
+            if (hushed?.Invoke() == true && generation == _generation)
+            {
+                StopLocked(); // hushed while it opened: the stop waiting for the caller would come after it played a moment
+            }
+
             played = generation == _generation;
             if (played)
             {
@@ -194,19 +194,16 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 try
                 {
                     output.Play();
-                }
-                catch
-                {
-                    output.PlaybackStopped -= OnPlaybackStopped;
-                    played = false;
-                }
-
-                if (played)
-                {
                     _output = output;
                     _playsOn = playsOn;
                     _reopened = afterFailure;
                     _opening = false;
+                }
+                catch (Exception ex)
+                {
+                    output.PlaybackStopped -= OnPlaybackStopped;
+                    played = false;
+                    wontPlay = ex;
                 }
             }
         }
@@ -214,6 +211,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         if (!played)
         {
             Close(output); // stopped, replaced or moved while it opened: never heard
+            if (wontPlay is not null)
+            {
+                Fail(generation, wontPlay, throwOnFailure);
+            }
+
             return;
         }
 
@@ -223,8 +225,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         }
     }
 
-    /// <summary>The open for <paramref name="generation"/> failed: unless something came after it, nothing plays the queue.</summary>
-    private void Failed(int generation)
+    /// <summary>
+    /// The device for <paramref name="generation"/> would not open or play: nothing plays the queue, which is dropped, so
+    /// the next chunk tries again. Unless a move or a reopen took the queue over meanwhile: that one plays it.
+    /// </summary>
+    private void Fail(int generation, Exception error, bool rethrow)
     {
         lock (_lock)
         {
@@ -233,12 +238,16 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
                 return;
             }
 
-            _buffer = null;
-            _opening = false;
-            NextGenerationLocked(opening: false);
+            StopLocked();
         }
 
         RestTheOrb();
+        if (rethrow)
+        {
+            ExceptionDispatchInfo.Throw(error);
+        }
+
+        _logger.LogWarning(error, "Speech found no output, nor the Windows default; what was queued is dropped, the next chunk tries again");
     }
 
     public void Stop()
@@ -246,22 +255,33 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         IWavePlayer? old;
         lock (_lock)
         {
-            old = DetachLocked();
-            _buffer = null;
-            NextGenerationLocked(opening: false); // a device opening now is let go unheard
+            old = StopLocked();
         }
 
-        if (old is not null)
+        Retire(old);
+        if (old is null)
         {
-            Close(old);
+            RestTheOrb();
         }
+    }
 
-        RestTheOrb();
+    /// <summary>
+    /// Drops the queue, emptied first: a device another thread still closes (a move, a reopen) plays silence from here on.
+    /// A device opening now is let go unheard. Returns the one that played, to close outside the lock.
+    /// </summary>
+    private IWavePlayer? StopLocked()
+    {
+        var old = DetachLocked();
+        _buffer?.ClearBuffer();
+        _buffer = null;
+        NextGenerationLocked(opening: false);
+        return old;
     }
 
     private int NextGenerationLocked(bool opening)
     {
         _opening = opening;
+        _openingFor = opening ? _audioOutput.DeviceId : null;
         return ++_generation;
     }
 
@@ -288,6 +308,16 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "A speech level listener failed");
+        }
+    }
+
+    /// <summary>Lets go of a device taken out of play, if any, and rests the orb once it is quiet.</summary>
+    private void Retire(IWavePlayer? output)
+    {
+        if (output is not null)
+        {
+            Close(output);
+            RestTheOrb();
         }
     }
 
@@ -348,8 +378,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
             }
         }
 
-        Close(dead!);
-        RestTheOrb(); // while the other device opens
+        Retire(dead); // the orb rests while the other device opens
         if (buffer is not null)
         {
             OpenFor(buffer, generation, afterFailure: true, throwOnFailure: false);

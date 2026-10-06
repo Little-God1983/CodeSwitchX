@@ -339,7 +339,7 @@ public sealed class ReplyVoice : IDisposable
                         return;
                     }
 
-                    _player.Enqueue(chunk);
+                    _player.Enqueue(chunk, () => IsHushed(reply.Number));
                     audio += TimeSpan.FromSeconds(chunk.Pcm16.Length / 2.0 / chunk.SampleRate);
                 }
                 finally

@@ -702,6 +702,108 @@ public sealed class AudioOutputTests
         ReadsTheMark(headphones, skip: 0).ShouldBeTrue();
     }
 
+    // Review of #190: a device that opened but would not play left the queue standing with nothing to play it, silently.
+    [Fact]
+    public void A_device_that_opens_but_will_not_play_drops_the_queue_and_the_chunk_says_so()
+    {
+        var devices = new Devices { WontPlay = "id-headphones" };
+        devices.Output.DeviceId = "id-headphones";
+        using var speech = Speech(devices);
+
+        Should.Throw<InvalidOperationException>(() => speech.Enqueue(MarkedSpeech()));
+
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+        devices.Players.Single().Disposed.ShouldBeTrue();
+        devices.WontPlay = null;
+        speech.Enqueue(MarkedSpeech());
+        devices.Players[^1].Playing.ShouldBeTrue("the next chunk tries again");
+    }
+
+    // Review of #190: the first open failing after a move had taken the queue over threw, and the reply was dropped while the
+    // move played it.
+    [Fact]
+    public async Task A_first_open_that_fails_after_a_move_took_over_does_not_fail_the_chunk()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices { FailingInInit = "id-tv", DefaultFailsInInit = true };
+        devices.Output.DeviceId = "id-tv";
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opens = 0;
+        devices.WhileOpening = () =>
+        {
+            if (Interlocked.Increment(ref opens) == 1)
+            {
+                opening.TrySetResult();
+                waking.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        using var speech = Speech(devices);
+        var enqueue = Task.Run(() => speech.Enqueue(MarkedSpeech()), TestContext.Current.CancellationToken);
+
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            devices.Output.DeviceId = "id-headphones"; // the move, inline, plays the queue there
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await enqueue.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); // does not throw
+        devices.Players.Single(p => p.Device == "id-headphones").Playing.ShouldBeTrue();
+        speech.Remaining.ShouldBeGreaterThan(TimeSpan.Zero);
+    }
+
+    // Review of #190: the reply voice holds its gate while a chunk is queued, and a hush waits for it: the device that
+    // finished opening after the hush played a moment before the stop came.
+    [Fact]
+    public void A_device_that_opens_after_its_reply_was_hushed_is_never_heard()
+    {
+        var devices = new Devices();
+        devices.Output.DeviceId = "id-headphones";
+        var hushed = false;
+        devices.WhileOpening = () => hushed = true; // the hush comes while it opens
+        using var speech = Speech(devices);
+
+        speech.Enqueue(MarkedSpeech(), () => hushed);
+
+        var player = devices.Players.Single();
+        (player.PlayedEver, player.Disposed).ShouldBe((false, true));
+        speech.Remaining.ShouldBe(TimeSpan.Zero);
+    }
+
+    // Review of #190: a pick made just before the first chunk opened its device on the same output woke that output twice.
+    [Fact]
+    public async Task A_move_to_where_the_first_device_is_opening_already_opens_nothing_more()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices();
+        var moves = new List<Action>();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        devices.Output.DeviceId = "id-headphones"; // the pick: its move waits on the thread pool
+        var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        devices.WhileOpening = () =>
+        {
+            opening.TrySetResult();
+            waking.Wait(TimeSpan.FromSeconds(10));
+        };
+        var enqueue = Task.Run(() => speech.Enqueue(MarkedSpeech()), TestContext.Current.CancellationToken);
+
+        try
+        {
+            await opening.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            moves.Single()();
+        }
+        finally
+        {
+            waking.Set();
+        }
+
+        await enqueue.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        devices.Players.ShouldHaveSingleItem().Playing.ShouldBeTrue();
+    }
+
     private static async Task UntilAsync(Func<bool> done)
     {
         for (var i = 0; i < 250 && !done(); i++)
@@ -813,6 +915,9 @@ public sealed class AudioOutputTests
 
         public bool DefaultFailsInInit { get; init; }
 
+        /// <summary>The device that opens but throws on Play.</summary>
+        public string? WontPlay { get; set; }
+
         /// <summary>Runs while a chosen device opens: a pick meanwhile, or a device slow to wake.</summary>
         public Action? WhileOpening { get; set; }
 
@@ -836,7 +941,7 @@ public sealed class AudioOutputTests
         private FakePlayer Opening(string id)
         {
             WhileOpening?.Invoke();
-            return Add(new FakePlayer(id, this, id == FailingInInit));
+            return Add(new FakePlayer(id, this, id == FailingInInit) { WontPlay = id == WontPlay });
         }
 
         private FakePlayer Add(FakePlayer player)
@@ -878,8 +983,15 @@ public sealed class AudioOutputTests
         public void Init(IWaveProvider waveProvider) =>
             Source = failsInInit ? throw new COMException("AUDCLNT_E_DEVICE_IN_USE", DeviceInUse) : waveProvider;
 
+        public bool WontPlay { get; init; }
+
         public void Play()
         {
+            if (WontPlay)
+            {
+                throw new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED");
+            }
+
             Playing = PlayedEver = true;
             devices.Started.TrySetResult();
         }
