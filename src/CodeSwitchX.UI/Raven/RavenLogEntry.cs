@@ -79,6 +79,19 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
     /// <summary>It is in its chat's unread count.</summary>
     public bool IsUnread => Unread > 0;
 
+    /// <summary>A news card's lines said aloud and heard to their end while collapsed; none for any other entry (UI thread).</summary>
+    private HashSet<ChatNewsLine>? _heard;
+
+    /// <summary>The news line was said aloud and heard to its end: it no longer counts, nor is it told again (#179).</summary>
+    public bool WasHeard(ChatNewsLine line) => _heard?.Contains(line) == true;
+
+    /// <summary>Notes the lines heard; returns how many of them were not heard before.</summary>
+    public int MarkHeard(IEnumerable<ChatNewsLine> lines)
+    {
+        _heard ??= new HashSet<ChatNewsLine>(ReferenceEqualityComparer.Instance); // a line is the one in this card
+        return lines.Count(_heard.Add);
+    }
+
     /// <summary>An action card's tool call came back failed.</summary>
     [ObservableProperty]
     private bool _failed;

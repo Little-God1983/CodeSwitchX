@@ -628,4 +628,127 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.PulseTimers.ShouldBe(before - 1);
     }
+
+    /// <summary>
+    /// Chat 2, collapsed and talked to, gets a card of two lines: "a" (stale, older than two minutes) and "a2" (fresh,
+    /// <paramref name="fresh"/>), and its digest is told and heard. The teller says <paramref name="telling"/>.
+    /// </summary>
+    private async Task<RavenPanelViewModel> DigestHeardWithAStaleLineAsync(string telling, SessionState fresh = SessionState.Idle)
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        _teller.Answer = _ => [new BrainText(telling)];
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        vm.IsOpen = false;
+        _brain.Gate = new TaskCompletionSource(); // the floor is held: the news waits
+        Type(vm, "Long question");
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(ChatNews.MaximumAge + TimeSpan.FromSeconds(1));
+        Changes("a2", SessionState.Working, fresh);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+        return vm;
+    }
+
+    // Review of #188: a card whose fresh line a digest said kept its stale line unread, so a catch-up said the fresh line
+    // again and took the stale one off in its place.
+    [Fact]
+    public async Task After_a_digest_a_switch_back_tells_nothing_again_and_the_stale_line_still_counts()
+    {
+        var vm = await DigestHeardWithAStaleLineAsync("Task a2 finished.");
+        var two = ChatNumbered(vm, 2);
+        two.Unread.ShouldBe(1);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.SelectedChat = two;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        _teller.Asked.ShouldNotContain(q => q.StartsWith("Catch-up:", StringComparison.Ordinal), "the stale line is never said, the fresh one was");
+        two.Unread.ShouldBe(1);
+    }
+
+    // Review of #188: a failure said aloud kept the red mark while its card still had a stale line.
+    [Fact]
+    public async Task A_failure_heard_in_a_digest_leaves_no_red_mark_beside_a_stale_line()
+    {
+        var vm = await DigestHeardWithAStaleLineAsync("Task a2 failed.", SessionState.Errored);
+        var two = ChatNumbered(vm, 2);
+
+        (two.Unread, two.HasFailed).ShouldBe((1, false));
+    }
+
+    // Review of #188: a switch away and back while the digest still spoke caught up on the same news after it.
+    [Fact]
+    public async Task A_switch_back_while_the_digest_speaks_does_not_tell_it_again()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _teller.Answer = _ => [new BrainText("Task a finished.")];
+        var two = ChatNumbered(vm, 2);
+        vm.SelectedChat = two;
+        vm.IsOpen = false;
+        _speech.Gate = new TaskCompletionSource(); // the digest has not played yet
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.SelectedChat = two;
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldNotContain(q => q.StartsWith("Catch-up:", StringComparison.Ordinal));
+        two.Unread.ShouldBe(0);
+    }
+
+    // Review of #188: opened on another chat while the digest played, the chat it was heard in kept its badge.
+    [Fact]
+    public async Task A_digest_heard_while_raven_opened_on_another_chat_clears_its_own()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("Task a finished.")];
+        var two = ChatNumbered(vm, 2);
+        vm.SelectedChat = two;
+        vm.IsOpen = false;
+        _speech.Gate = new TaskCompletionSource();
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.OpenChatCommand.Execute(ChatNumbered(vm, 3));
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        two.Unread.ShouldBe(0);
+    }
+
+    // Review of #188: the fallback says only how many things came, not what: it took every line off.
+    [Fact]
+    public async Task Collapsed_a_catch_up_that_could_only_say_how_many_things_came_leaves_the_marks()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [];
+        vm.IsOpen = false;
+        var two = ChatNumbered(vm, 2);
+
+        vm.SelectedChat = two;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.Log.ShouldContain(e => e.Text == "While you were away, 2 things came in here.");
+        two.Unread.ShouldBe(2);
+    }
 }
