@@ -641,6 +641,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void TogglePanel() => IsOpen = !IsOpen;
 
+    /// <summary>A number on the collapsed strip (#173): Raven opens on that chat, which is seen then.</summary>
+    [RelayCommand]
+    private void OpenChat(RavenChat chat)
+    {
+        SelectedChat = chat; // chosen first: opening must not count the chat shown before as seen
+        IsOpen = true;
+    }
+
+    /// <summary>Opened: the chat shown is seen. Collapsed, no chat is: what comes is counted on the strip's numbers.</summary>
+    partial void OnIsOpenChanged(bool value)
+    {
+        if (value && !SelectedChat.IsActivity)
+        {
+            Seen(SelectedChat);
+        }
+    }
+
     [RelayCommand]
     private void ToggleMute() => IsMuted = !IsMuted;
 
@@ -3140,7 +3157,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void Mark(RavenLogEntry entry)
     {
         var chat = entry.Chat;
-        var elsewhere = chat != SelectedChat;
+        var elsewhere = !IsOpen || chat != SelectedChat; // collapsed, the user sees no chat
         if (entry.Ask is { IsOpen: true } card)
         {
             card.PropertyChanged += (_, e) =>
@@ -3169,7 +3186,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void CountUnread(RavenLogEntry entry)
     {
-        if (entry.IsUnread || IsShown(entry))
+        if (entry.IsUnread || (IsOpen && IsShown(entry)))
         {
             return;
         }
@@ -3177,6 +3194,41 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var lines = UnreadLines(entry);
         entry.IsUnread = lines > 0;
         entry.Chat.Unread += lines;
+        if (lines > 0)
+        {
+            PulseNews(entry.Chat);
+        }
+    }
+
+    /// <summary>How long a badge pulses when a line comes (#173): three beats, then it stays steady.</summary>
+    internal static readonly TimeSpan NewsPulse = TimeSpan.FromSeconds(2.4);
+
+    /// <summary>Each chat's timer for the end of its badge's pulse, and when that is (UI thread).</summary>
+    private readonly Dictionary<RavenChat, (ITimer Timer, DateTimeOffset At)> _pulseEnds = [];
+
+    /// <summary>Starts the chat's badge pulsing, from the first beat again if it already pulses.</summary>
+    private void PulseNews(RavenChat chat)
+    {
+        chat.IsNewsPulsing = false; // a trigger starts its animation on the change to true only
+        chat.IsNewsPulsing = true;
+        var at = _time.GetUtcNow() + NewsPulse;
+        if (_pulseEnds.TryGetValue(chat, out var end))
+        {
+            _pulseEnds[chat] = (end.Timer, at);
+            end.Timer.Change(NewsPulse, Timeout.InfiniteTimeSpan);
+            return;
+        }
+
+        var timer = _time.CreateTimer(_ => _dispatcher.Post(() =>
+        {
+            // An end posted just before a new line restarted the pulse is not this pulse's end.
+            if (_time.GetUtcNow() >= _pulseEnds[chat].At)
+            {
+                chat.IsNewsPulsing = false;
+            }
+        }), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _pulseEnds[chat] = (timer, at);
+        timer.Change(NewsPulse, Timeout.InfiniteTimeSpan);
     }
 
     private static int UnreadLines(RavenLogEntry entry) => entry.Kind switch
@@ -3202,6 +3254,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         chat.Unread = 0;
+        chat.IsNewsPulsing = false;
         chat.HasFailed = false;
         chat.IsWaitingUnseen = false;
     }

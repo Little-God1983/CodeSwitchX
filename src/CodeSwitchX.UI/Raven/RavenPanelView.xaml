@@ -565,6 +565,99 @@
         <TextBlock Grid.Column="1" FontSize="13" Foreground="#F59E0B" TextWrapping="Wrap" Text="{Binding Text}" />
       </Grid>
     </DataTemplate>
+
+    <!-- A chat's number on its dot, with its marks: the chat list's rows and the collapsed strip's numbers. -->
+    <DataTemplate x:Key="ChatNumber" DataType="{x:Type raven:RavenChat}">
+      <Grid VerticalAlignment="Center">
+        <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
+          <Grid>
+            <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+            <!-- Activity has no number: a list of everything. -->
+            <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
+          </Grid>
+        </Border>
+        <!--
+          A card waits for the user: an amber ring until it is answered, blinking gently until the chat is opened.
+          With Windows' "Show animations" off it stays steady (SystemParameters tells its bindings when it changes).
+        -->
+        <Border Margin="-3" CornerRadius="15" BorderThickness="2" BorderBrush="#F59E0B" IsHitTestVisible="False"
+                Visibility="{Binding IsWaiting, Converter={StaticResource BoolVisible}}">
+          <Border.Style>
+            <Style TargetType="Border">
+              <Style.Triggers>
+                <MultiDataTrigger>
+                  <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsWaitingUnseen}" Value="True" />
+                    <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
+                  </MultiDataTrigger.Conditions>
+                  <MultiDataTrigger.EnterActions>
+                    <BeginStoryboard x:Name="Blink">
+                      <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.2" Duration="0:0:0.8" />
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </MultiDataTrigger.EnterActions>
+                  <MultiDataTrigger.ExitActions>
+                    <StopStoryboard BeginStoryboardName="Blink" />
+                  </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+        </Border>
+        <!-- The chat failed: a red mark at the lower left until it is opened. -->
+        <Ellipse Width="9" Height="9" Fill="#EF4444" Stroke="#0B1220" StrokeThickness="1.5" IsHitTestVisible="False"
+                 HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-3,0,0,-3"
+                 Visibility="{Binding HasFailed, Converter={StaticResource BoolVisible}}" />
+        <!-- Lines that came while the user was elsewhere: their count at the upper right. -->
+        <Border MinWidth="15" Height="15" CornerRadius="7.5" Background="#3B82F6" Padding="3,0" IsHitTestVisible="False"
+                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-7,0" RenderTransformOrigin="0.5,0.5">
+          <Border.RenderTransform>
+            <ScaleTransform />
+          </Border.RenderTransform>
+          <Border.Style>
+            <Style TargetType="Border">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Unread}" Value="0">
+                  <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <!-- A line just came (#173): three beats, then steady. Steady with Windows' "Show animations" off. -->
+                <MultiDataTrigger>
+                  <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsNewsPulsing}" Value="True" />
+                    <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
+                  </MultiDataTrigger.Conditions>
+                  <MultiDataTrigger.EnterActions>
+                    <BeginStoryboard x:Name="Pulse">
+                      <Storyboard RepeatBehavior="3x">
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)"
+                                         From="1" To="1.45" Duration="0:0:0.4" AutoReverse="True" />
+                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)"
+                                         From="1" To="1.45" Duration="0:0:0.4" AutoReverse="True" />
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </MultiDataTrigger.EnterActions>
+                  <MultiDataTrigger.ExitActions>
+                    <StopStoryboard BeginStoryboardName="Pulse" />
+                  </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+          <TextBlock Text="{Binding UnreadText}" FontSize="9.5" FontWeight="Bold" Foreground="White"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
+      </Grid>
+      <DataTemplate.Triggers>
+        <!-- A window's chat wears its tile's colour. -->
+        <DataTrigger Binding="{Binding Tile, Converter={StaticResource IsNull}}" Value="False">
+          <Setter TargetName="Dot" Property="BorderBrush" Value="{Binding Tile.AccentColor, Converter={StaticResource HexBrush}}" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
   </UserControl.Resources>
 
   <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
@@ -692,76 +785,13 @@
                         <MenuItem Header="{Binding MuteText}" Command="{Binding ToggleMuteCommand}" />
                       </ContextMenu>
                     </Grid.ContextMenu>
-                    <!-- The number's dot and its marks: they show on the folded list in the Cab too. -->
-                    <Grid VerticalAlignment="Center">
-                      <Border x:Name="Dot" Width="24" Height="24" CornerRadius="12" BorderThickness="1" BorderBrush="#4B5563">
-                        <Grid>
-                          <TextBlock Text="{Binding Tag}" FontSize="12" FontWeight="SemiBold" Foreground="#D1D5DB"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
-                          <!-- Activity has no number: a list of everything. -->
-                          <TextBlock Text="&#xE81C;" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#9CA3AF"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                                     Visibility="{Binding IsActivity, Converter={StaticResource BoolVisible}}" />
-                        </Grid>
-                      </Border>
-                      <!--
-                        A card waits for the user: an amber ring until it is answered, blinking gently until the chat is opened.
-                        With Windows' "Show animations" off it stays steady (SystemParameters tells its bindings when it changes).
-                      -->
-                      <Border Margin="-3" CornerRadius="15" BorderThickness="2" BorderBrush="#F59E0B" IsHitTestVisible="False"
-                              Visibility="{Binding IsWaiting, Converter={StaticResource BoolVisible}}">
-                        <Border.Style>
-                          <Style TargetType="Border">
-                            <Style.Triggers>
-                              <MultiDataTrigger>
-                                <MultiDataTrigger.Conditions>
-                                  <Condition Binding="{Binding IsWaitingUnseen}" Value="True" />
-                                  <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
-                                </MultiDataTrigger.Conditions>
-                                <MultiDataTrigger.EnterActions>
-                                  <BeginStoryboard x:Name="Blink">
-                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
-                                      <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.2" Duration="0:0:0.8" />
-                                    </Storyboard>
-                                  </BeginStoryboard>
-                                </MultiDataTrigger.EnterActions>
-                                <MultiDataTrigger.ExitActions>
-                                  <StopStoryboard BeginStoryboardName="Blink" />
-                                </MultiDataTrigger.ExitActions>
-                              </MultiDataTrigger>
-                            </Style.Triggers>
-                          </Style>
-                        </Border.Style>
-                      </Border>
-                      <!-- The chat failed: a red mark at the lower left until it is opened. -->
-                      <Ellipse Width="9" Height="9" Fill="#EF4444" Stroke="#0B1220" StrokeThickness="1.5" IsHitTestVisible="False"
-                               HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-3,0,0,-3"
-                               Visibility="{Binding HasFailed, Converter={StaticResource BoolVisible}}" />
-                      <!-- Lines that came while the user was elsewhere: their count at the upper right. -->
-                      <Border MinWidth="15" Height="15" CornerRadius="7.5" Background="#3B82F6" Padding="3,0" IsHitTestVisible="False"
-                              HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-7,0">
-                        <Border.Style>
-                          <Style TargetType="Border">
-                            <Style.Triggers>
-                              <DataTrigger Binding="{Binding Unread}" Value="0">
-                                <Setter Property="Visibility" Value="Collapsed" />
-                              </DataTrigger>
-                            </Style.Triggers>
-                          </Style>
-                        </Border.Style>
-                        <TextBlock Text="{Binding UnreadText}" FontSize="9.5" FontWeight="Bold" Foreground="White"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                      </Border>
-                    </Grid>
+                    <!-- The number's dot and its marks: they show on the folded list in the Cab, and on the collapsed strip. -->
+                    <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ChatNumber}" VerticalAlignment="Center" />
                     <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                     <Button x:Name="ChatMute" Grid.Column="2" Style="{StaticResource ChatMuteButton}" Margin="4,0,0,0" VerticalAlignment="Center" />
                   </Grid>
                   <DataTemplate.Triggers>
-                    <!-- A window's chat wears its tile's colour. -->
-                    <DataTrigger Binding="{Binding Tile, Converter={StaticResource IsNull}}" Value="False">
-                      <Setter TargetName="Dot" Property="BorderBrush" Value="{Binding Tile.AccentColor, Converter={StaticResource HexBrush}}" />
-                    </DataTrigger>
                     <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
                       <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
                       <Setter TargetName="ChatMute" Property="Visibility" Value="Collapsed" />
@@ -903,54 +933,66 @@
         </Grid>
       </Grid>
 
-      <!-- Collapsed: a 58 px rail that keeps the orb and the mic. -->
-      <StackPanel HorizontalAlignment="Center" Margin="0,14,0,14"
-                  Visibility="{Binding IsOpen, Converter={StaticResource BoolCollapsed}}">
-        <Button Style="{StaticResource IconButton}" Content="&#xE76C;" Command="{Binding TogglePanelCommand}"
-                ToolTip="Expand Raven (Ctrl+Alt+J)" AutomationProperties.Name="Expand Raven" HorizontalAlignment="Center" />
-        <!-- Chats' questions that still wait for an answer here: a click opens the panel to answer them. -->
-        <Button Command="{Binding TogglePanelCommand}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,10,0,0"
-                ToolTip="{Binding OpenQuestions, StringFormat='Questions and permission prompts waiting for you: {0}. Click to answer.'}"
-                AutomationProperties.Name="{Binding OpenQuestions, StringFormat='{}{0} asks waiting'}" FocusVisualStyle="{StaticResource RoundFocusRing}">
-          <Button.Style>
-            <Style TargetType="Button">
-              <Style.Triggers>
-                <DataTrigger Binding="{Binding OpenQuestions}" Value="0">
-                  <Setter Property="Visibility" Value="Collapsed" />
-                </DataTrigger>
-              </Style.Triggers>
-            </Style>
-          </Button.Style>
-          <Button.Template>
-            <ControlTemplate TargetType="Button">
-              <Border Width="22" Height="22" CornerRadius="11" Background="#F59E0B">
-                <TextBlock Text="{Binding OpenQuestions}" FontSize="11" FontWeight="SemiBold" Foreground="#111827"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-              </Border>
-            </ControlTemplate>
-          </Button.Template>
-        </Button>
-        <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
-                        State="{Binding State}" Level="{Binding Level}">
-          <raven:RavenOrb.Style>
-            <!-- At this size the idle breath is under a pixel: only listening, transcribing, thinking and speaking animate here. -->
-            <Style TargetType="raven:RavenOrb">
-              <Setter Property="IsAnimating" Value="True" />
-              <Style.Triggers>
-                <DataTrigger Binding="{Binding State}" Value="Idle">
-                  <Setter Property="IsAnimating" Value="False" />
-                </DataTrigger>
-                <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
-                  <Setter Property="IsAnimating" Value="False" />
-                </DataTrigger>
-              </Style.Triggers>
-            </Style>
-          </raven:RavenOrb.Style>
-        </raven:RavenOrb>
-        <Button Style="{StaticResource MicButton}" Width="38" Height="38" FontSize="16" Margin="0,16,0,0" HorizontalAlignment="Center"
-                PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
-                PreviewKeyDown="OnMicKey" />
-      </StackPanel>
+      <!-- Collapsed: a 58 px rail that keeps the orb, the mic and the chats' numbers (#173). -->
+      <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolCollapsed}}">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel HorizontalAlignment="Center" Margin="0,14,0,0">
+          <Button Style="{StaticResource IconButton}" Content="&#xE76C;" Command="{Binding TogglePanelCommand}"
+                  ToolTip="Expand Raven (Ctrl+Alt+J)" AutomationProperties.Name="Expand Raven" HorizontalAlignment="Center" />
+          <raven:RavenOrb Width="34" Height="34" Margin="0,16,0,0" HorizontalAlignment="Center"
+                          State="{Binding State}" Level="{Binding Level}">
+            <raven:RavenOrb.Style>
+              <!-- At this size the idle breath is under a pixel: only listening, transcribing, thinking and speaking animate here. -->
+              <Style TargetType="raven:RavenOrb">
+                <Setter Property="IsAnimating" Value="True" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding State}" Value="Idle">
+                    <Setter Property="IsAnimating" Value="False" />
+                  </DataTrigger>
+                  <DataTrigger Binding="{Binding State}" Value="AttendingPaused">
+                    <Setter Property="IsAnimating" Value="False" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </raven:RavenOrb.Style>
+          </raven:RavenOrb>
+          <Button Style="{StaticResource MicButton}" Width="38" Height="38" FontSize="16" Margin="0,16,0,0" HorizontalAlignment="Center"
+                  PreviewMouseLeftButtonDown="OnMicDown" PreviewMouseLeftButtonUp="OnMicUp" LostMouseCapture="OnMicCaptureLost"
+                  PreviewKeyDown="OnMicKey" />
+        </StackPanel>
+
+        <!-- Each chat's number with its marks; a click opens Raven on that chat. More than fit scroll under the mic. -->
+        <ScrollViewer Grid.Row="1" Margin="0,14,0,10" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                      Focusable="False">
+          <ItemsControl ItemsSource="{Binding Chats}" Focusable="False" AutomationProperties.Name="Raven chats, collapsed">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="{x:Type raven:RavenChat}">
+                <Button Command="{Binding DataContext.OpenChatCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                        CommandParameter="{Binding}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,3"
+                        ToolTip="{Binding Tip}" AutomationProperties.Name="{Binding Tip, StringFormat='Open chat {0}'}"
+                        FocusVisualStyle="{StaticResource RoundFocusRing}">
+                  <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                      <Border x:Name="Hover" Width="40" Height="40" CornerRadius="20" Background="Transparent">
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ChatNumber}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                          <Setter TargetName="Hover" Property="Background" Value="#1F2937" />
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Button.Template>
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </Grid>
     </Grid>
   </Border>
 </UserControl>

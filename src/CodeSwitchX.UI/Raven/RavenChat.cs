@@ -78,6 +78,10 @@ public sealed partial class RavenChat : ObservableObject
         _ => Unread.ToString(System.Globalization.CultureInfo.InvariantCulture),
     };
 
+    /// <summary>A line just came that the user does not see: the badge pulses a few times (#173), then stays steady.</summary>
+    [ObservableProperty]
+    private bool _isNewsPulsing;
+
     /// <summary>A Claude chat of it failed since the user last opened it: a red mark.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Status))]
