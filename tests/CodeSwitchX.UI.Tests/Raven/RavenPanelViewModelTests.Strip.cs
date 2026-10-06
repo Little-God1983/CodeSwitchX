@@ -1,3 +1,4 @@
+using CodeSwitchX.Conductor;
 using CodeSwitchX.UI.Raven;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -129,5 +130,66 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.ShouldBe(vm.ActivityChat);
         ChatNumbered(vm, 3).Unread.ShouldBe(1, "Activity opens no chat: its cards are answered in their own");
+    }
+    // Review of #175: a chat switch while collapsed (hotkey, voice, the Cab) cleared marks nobody had seen.
+    [Fact]
+    public async Task A_switch_while_collapsed_keeps_the_chat_s_marks_until_raven_opens()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        vm.IsOpen = false;
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        var three = ChatNumbered(vm, 3);
+
+        vm.SelectedChat = three; // as the chat hotkey does, which leaves Raven collapsed
+
+        (three.Unread, three.IsWaitingUnseen).ShouldBe((1, true), "collapsed, nothing shows the chat");
+        vm.IsOpen = true;
+        (three.Unread, three.IsWaitingUnseen).ShouldBe((0, false));
+    }
+
+    [Fact]
+    public async Task Collapsed_raven_s_spoken_answer_in_the_chat_talked_to_is_heard_not_news()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        vm.IsOpen = false;
+
+        Type(vm, "How many chats run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(0);
+        vm.YardChat.IsNewsPulsing.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Collapsed_and_muted_raven_s_answer_is_only_written_so_it_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        vm.IsMuted = true;
+        vm.IsOpen = false;
+
+        Type(vm, "How many chats run?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review of #175: with the strip's amber total gone, a card whose log entry rolled out had no mark anywhere.
+    [Fact]
+    public async Task A_card_still_waiting_keeps_its_ring_after_the_log_drops_its_entry()
+    {
+        var (vm, asks) = await ChatsVmAsync();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+
+        for (var i = 0; i < RavenPanelViewModel.MaximumLogEntries; i++)
+        {
+            vm.Note("A note.");
+        }
+
+        vm.Log.ShouldNotContain(e => e.Chat == ChatNumbered(vm, 3));
+        ChatNumbered(vm, 3).IsWaiting.ShouldBeTrue("the card still waits for its answer");
     }
 }

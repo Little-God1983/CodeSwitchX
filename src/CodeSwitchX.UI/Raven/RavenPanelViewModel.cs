@@ -3186,7 +3186,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void CountUnread(RavenLogEntry entry)
     {
-        if (entry.IsUnread || (IsOpen && IsShown(entry)))
+        if (entry.IsUnread || (IsOpen && IsShown(entry)) || HeardCollapsed(entry))
         {
             return;
         }
@@ -3200,35 +3200,38 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them.</summary>
+    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && !IsMuted && entry.Kind == RavenLogKind.Raven && entry.Chat == CurrentChat;
+
     /// <summary>How long a badge pulses when a line comes (#173): three beats, then it stays steady.</summary>
     internal static readonly TimeSpan NewsPulse = TimeSpan.FromSeconds(2.4);
 
-    /// <summary>Each chat's timer for the end of its badge's pulse, and when that is (UI thread).</summary>
-    private readonly Dictionary<RavenChat, (ITimer Timer, DateTimeOffset At)> _pulseEnds = [];
+    /// <summary>Each chat's timer for the end of its badge's pulse, and which pulse that is (UI thread).</summary>
+    private readonly Dictionary<RavenChat, (ITimer Timer, int Pulse)> _pulseEnds = [];
 
-    /// <summary>Starts the chat's badge pulsing, from the first beat again if it already pulses.</summary>
+    /// <summary>
+    /// Starts the chat's badge pulsing, from the first beat again if it already pulses. Each pulse has a timer of its own
+    /// for its end, which knows which pulse it ends: an end posted just before a new line restarted the pulse is ignored.
+    /// </summary>
     private void PulseNews(RavenChat chat)
     {
         chat.IsNewsPulsing = false; // a trigger starts its animation on the change to true only
         chat.IsNewsPulsing = true;
-        var at = _time.GetUtcNow() + NewsPulse;
-        if (_pulseEnds.TryGetValue(chat, out var end))
+        var pulse = 0;
+        if (_pulseEnds.TryGetValue(chat, out var last))
         {
-            _pulseEnds[chat] = (end.Timer, at);
-            end.Timer.Change(NewsPulse, Timeout.InfiniteTimeSpan);
-            return;
+            pulse = last.Pulse + 1;
+            last.Timer.Dispose();
         }
 
         var timer = _time.CreateTimer(_ => _dispatcher.Post(() =>
         {
-            // An end posted just before a new line restarted the pulse is not this pulse's end.
-            if (_time.GetUtcNow() >= _pulseEnds[chat].At)
+            if (_pulseEnds.TryGetValue(chat, out var now) && now.Pulse == pulse)
             {
                 chat.IsNewsPulsing = false;
             }
-        }), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        _pulseEnds[chat] = (timer, at);
-        timer.Change(NewsPulse, Timeout.InfiniteTimeSpan);
+        }), null, NewsPulse, Timeout.InfiniteTimeSpan);
+        _pulseEnds[chat] = (timer, pulse);
     }
 
     private static int UnreadLines(RavenLogEntry entry) => entry.Kind switch
@@ -3241,7 +3244,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Whether a card in the chat still waits; with none, nothing blinks.</summary>
     private void CountWaiting(RavenChat chat)
     {
-        chat.IsWaiting = Log.Any(e => e.Chat == chat && e.Ask is { IsOpen: true });
+        chat.IsWaiting = WaitingIn(chat) > 0; // the cards themselves: the log drops old entries, a card still waits
         chat.IsWaitingUnseen &= chat.IsWaiting;
     }
 
@@ -3340,7 +3343,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // What came while the user was away, before Seen forgets which lines those were.
         List<RavenLogEntry> away = CatchUp && !value.IsActivity ? [.. Log.Where(e => e.IsUnread && e.Chat == value)] : [];
-        if (!value.IsActivity)
+        // Collapsed, nothing shows the chat (#173): its marks stay on the strip, unless the catch-up says what came there.
+        if (!value.IsActivity && (IsOpen || CatchUpSays(value, away)))
         {
             Seen(value);
         }
@@ -3397,6 +3401,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// That holds with <see cref="TrafficWatcher.OwnNewsWaits"/> on too: dropped, it would never be said, as the switch has
     /// marked its lines seen.
     /// </summary>
+    /// <summary>Whether a switch to the chat says aloud what came there while the user was away.</summary>
+    private bool CatchUpSays(RavenChat chat, List<RavenLogEntry> away) => away.Count > 0 && CatchUpSays(chat, CatchUpLines(away));
+
+    private bool CatchUpSays<T>(RavenChat chat, IReadOnlyCollection<T> lines) => lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null;
+
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
         if (away.Count == 0)
@@ -3412,7 +3421,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = CatchUpLines(away);
-        var catchUp = lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null; // a muted chat's cards are still read
+        var catchUp = CatchUpSays(chat, lines); // a muted chat's cards are still read
         if (catchUp)
         {
             _catchUpDue = (chat, lines);
