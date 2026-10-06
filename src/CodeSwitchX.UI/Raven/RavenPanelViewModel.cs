@@ -1931,7 +1931,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
-                            reply = AddEntry(RavenLogKind.Raven, start, chat);
+                            reply = AddSaid(start, chat, Says(spoken));
                             said = true;
                             spoken.Add(start);
                         }
@@ -2242,8 +2242,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        AddEntry(RavenLogKind.Raven, line, ChatOfAsk(proposal.Ask));
-        if (IsMuted || _tts.Status.State != TextToSpeechState.Ready)
+        var speaks = !IsMuted && _tts.Status.State == TextToSpeechState.Ready; // not one that is off: it is not started for this
+        AddSaid(line, ChatOfAsk(proposal.Ask), speaks && !_openSpeech);
+        if (!speaks)
         {
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
             return;
@@ -2339,8 +2340,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             TakeFloor();
         }
 
-        AddEntry(RavenLogKind.Raven, said, chat);
         var spoken = _voice.Begin(silent: _openSpeech);
+        AddSaid(said, chat, Says(spoken));
         spoken.Add(said);
         spoken.Complete();
     }
@@ -2698,7 +2699,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (!said && !floor.IsCancellationRequested)
             {
                 var sentence = FallbackSentence(own);
-                AddEntry(RavenLogKind.Raven, sentence, chat);
+                AddSaid(sentence, chat, Says(spoken));
                 spoken.Add(sentence);
             }
 
@@ -3206,6 +3207,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenLogEntry AddEntry(RavenLogKind kind, string text, RavenChat? chat = null) =>
         Append(new RavenLogEntry(kind, text, _time.GetUtcNow()), chat);
 
+    /// <summary>Raven's line in <paramref name="chat"/>, and whether it is said aloud as well as written.</summary>
+    private RavenLogEntry AddSaid(string text, RavenChat chat, bool said) =>
+        Append(new RavenLogEntry(RavenLogKind.Raven, text, _time.GetUtcNow()) { Said = said }, chat);
+
+    /// <summary>Whether what goes into <paramref name="spoken"/> is said aloud: not begun silent, and the voice speaks.</summary>
+    private bool Says(ReplyVoice.SpokenReply spoken) => !spoken.IsSilent && VoiceSpeaks;
+
     private RavenLogEntry Append(RavenLogEntry entry, RavenChat? chat = null)
     {
         entry.Chat = chat ?? CurrentChat;
@@ -3287,8 +3295,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them.</summary>
-    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && VoiceSpeaks && entry.Kind == RavenLogKind.Raven && entry.Chat == CurrentChat;
+    /// <summary>
+    /// Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them. One only
+    /// written is (#178).
+    /// </summary>
+    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && entry.Said && entry.Chat == CurrentChat;
 
     /// <summary>What Raven says is heard: not muted, and a voice ready (one that is off starts and says it). Otherwise it is only written.</summary>
     private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off;
@@ -3603,7 +3614,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // The teller failed or said nothing: the user still hears that something came, and reads it in the chat.
                 var sentence = lines.Count == 1 ? "While you were away, one thing came in here." : $"While you were away, {lines.Count} things came in here.";
-                AddEntry(RavenLogKind.Raven, sentence, chat);
+                AddSaid(sentence, chat, Says(spoken));
                 spoken.Add(sentence);
             }
         }

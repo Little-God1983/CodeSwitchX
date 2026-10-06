@@ -63,6 +63,12 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
     /// <summary>A question or permission card's ask; null for every other kind.</summary>
     public ChatAskCard? Ask { get; set; }
 
+    /// <summary>
+    /// Raven's line is said aloud as it is written. Collapsed, one said in the chat talked to is heard and not counted; one
+    /// only written (muted, no voice ready, the user talking in Open mic) counts (#178).
+    /// </summary>
+    public bool Said { get; init; }
+
     /// <summary>It is in its chat's unread count (<see cref="RavenChat.Unread"/>): a reply that grows is counted once.</summary>
     public bool IsUnread { get; set; }
 

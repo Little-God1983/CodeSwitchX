@@ -1,6 +1,8 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
+using CodeSwitchX.Voice.Speech;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -273,5 +275,61 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
 
         (two.Unread, two.HasFailed).ShouldBe((0, false));
+    }
+
+    // #178: the read-back is spoken only by a voice that is ready; one that is off counted as speaking, so a read-back only
+    // written counted as heard.
+    [Fact]
+    public async Task Collapsed_with_the_voice_off_the_read_back_is_only_written_so_it_counts()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        _speech.Report(new TextToSpeechStatus(TextToSpeechState.Off));
+        vm.IsOpen = false;
+
+        asks.Propose("p1");
+
+        vm.Log.Last().Text.ShouldBe("Run npm test in ContentAutomatorX? Say yes.");
+        chat.Unread.ShouldBe(1, "written, not said");
+        _speech.Spoken.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Collapsed_with_the_voice_ready_the_read_back_is_heard()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var chat = vm.CurrentChat;
+        vm.IsOpen = false;
+
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+
+        chat.Unread.ShouldBe(0);
+    }
+
+    // #178: while the user talks in Open mic, Raven's answer is only written; collapsed it counted as heard.
+    [Fact]
+    public async Task Collapsed_an_answer_only_written_while_the_user_talks_in_Open_mic_counts()
+    {
+        var transcript = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcript.Task);
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        var vm = await InOpenMicAsync();
+        vm.IsOpen = false;
+        _openMic.Speak();
+        _openMic.EndTurn();
+
+        _openMic.Speak(); // the user's next turn has started
+        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        var answer = vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
+        _speech.Spoken.ShouldBeEmpty("the user is talking");
+        answer.Chat.Unread.ShouldBe(1, "written, not said");
     }
 }

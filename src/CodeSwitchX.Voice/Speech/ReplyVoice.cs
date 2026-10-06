@@ -569,6 +569,9 @@ public sealed class ReplyVoice : IDisposable
 
         internal long Number { get; }
 
+        /// <summary>Only written: begun muted or silent (the user talking in Open mic), so nothing of it is spoken.</summary>
+        public bool IsSilent => _muted;
+
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
 
         /// <summary>
