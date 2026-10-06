@@ -7,7 +7,7 @@
     <Deterministic>true</Deterministic>
     <Company>CodeSwitchX</Company>
     <Product>CodeSwitchX</Product>
-    <Version>0.1.0.12</Version>
+    <Version>0.1.0.13</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <!--
