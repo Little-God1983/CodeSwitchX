@@ -3230,14 +3230,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
     {
         var entry = AddSaid(text, chat, !spoken.IsSilent && VoiceSpeaks);
-        if (entry.Said && !(IsOpen && IsShown(entry)))
+        if (!entry.Said)
         {
-            if (!_saidUnseen.ContainsKey(spoken))
+            _saidUnseen.Remove(spoken); // the voice stopped between its lines: this one counts for the reply, once
+        }
+        else if (!(IsOpen && IsShown(entry)))
+        {
+            var first = !_saidUnseen.ContainsKey(spoken);
+            _saidUnseen[spoken] = entry; // before the check: a reply hushed already settles it at once, on this thread
+            if (first)
             {
-                PendingHeardCheck = CountUnlessHeardAsync(spoken);
+                PendingHeardCheck = Task.WhenAll(PendingHeardCheck, CountUnlessHeardAsync(spoken));
             }
-
-            _saidUnseen[spoken] = entry;
         }
 
         return entry;
@@ -3245,7 +3249,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private async Task CountUnlessHeardAsync(ReplyVoice.SpokenReply spoken)
     {
-        var heard = await spoken.Played.ConfigureAwait(false) && !spoken.IsCut;
+        var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
         _dispatcher.Post(() =>
         {
             // Not when seen since (the panel opened on its chat), nor when the log has let it go: nothing would clear it.
@@ -3342,7 +3346,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Collapsed, Raven's answers in the chat the user talks to are heard as they are spoken: not news to them. One only
     /// written is (#178).
     /// </summary>
-    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && entry.Said && entry.Chat == CurrentChat;
+    private bool HeardCollapsed(RavenLogEntry entry) => !IsOpen && entry.Said && VoiceSpeaks && entry.Chat == CurrentChat; // muted since: the rest is only written
 
     /// <summary>
     /// What Raven says is heard: not muted, and a voice ready. Otherwise it is only written: one that is off (asleep) starts
@@ -3419,9 +3423,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
         }
 
-        foreach (var reply in _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList())
+        // Read now, heard or not; collapsed (a catch-up said), nothing was read.
+        foreach (var reply in IsOpen ? _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList() : [])
         {
-            _saidUnseen.Remove(reply); // read now, heard or not
+            _saidUnseen.Remove(reply);
         }
 
         chat.Unread = 0;

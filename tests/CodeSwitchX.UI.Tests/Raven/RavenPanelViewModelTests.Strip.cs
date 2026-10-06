@@ -466,4 +466,43 @@ public sealed partial class RavenPanelViewModelTests
         asks.IsHeard(proposal).ShouldBeFalse();
         await Until(() => chat.Unread == 1);
     }
+
+    // Review round 3 of #187: a reply hushed before its first words settled at once, before its line was tracked.
+    [Fact]
+    public async Task Collapsed_an_answer_whose_reply_was_hushed_before_its_first_words_counts()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Two chats.")];
+        _brain.Gate = new TaskCompletionSource();
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => _brain.Sent.Count == 1);
+
+        vm.IsMuted = true; // hushes the reply begun for the answer
+        vm.IsMuted = false;
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        _speech.Spoken.ShouldBeEmpty();
+        vm.YardChat.Unread.ShouldBe(1);
+    }
+
+    // Review round 3 of #187: begun in the open panel, then collapsed and muted, the rest of the answer is only written.
+    [Fact]
+    public async Task An_answer_begun_open_counts_when_muted_after_collapsing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainText("Let me look."), new BrainText(" There are two chats.")];
+        _brain.Pause = new TaskCompletionSource();
+        Type(vm, "How many chats run?");
+        await Until(() => vm.Log.Any(e => e.Text.StartsWith("Let me look.", StringComparison.Ordinal)));
+
+        vm.IsOpen = false;
+        vm.IsMuted = true;
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.YardChat.Unread.ShouldBe(1);
+    }
 }
