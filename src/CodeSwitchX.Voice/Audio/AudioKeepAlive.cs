@@ -43,6 +43,7 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
     private MMDeviceEnumerator? _enumerator;
     private DeviceChangeListener? _listener;
     private IWavePlayer? _output;
+    private bool _inPlaceOfChosen; // _output is the Windows default, standing in for the output chosen
     private bool _shouldRun;
     private bool _disposed;
     private int _restartPending;
@@ -173,7 +174,8 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
 
         StopStreamLocked();
         _output = next;
-        if (wanted is not null && playsOn is null)
+        _inPlaceOfChosen = wanted is not null && playsOn is null;
+        if (_inPlaceOfChosen)
         {
             _retry.Change(RetryEvery, Timeout.InfiniteTimeSpan); // on the default in place of the output chosen
             _logger.LogInformation("Audio keep-alive keeps the Windows default awake in place of the output chosen");
@@ -200,8 +202,8 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
     }
 
     /// <summary>
-    /// Nothing plays (no output would start): starts on whatever opens. On the default in place of the output chosen:
-    /// moves there once it opens.
+    /// On the default in place of the output chosen: moves there once it opens. Otherwise (nothing plays, or a switch failed
+    /// and an output no longer chosen plays on): starts on whatever opens now.
     /// </summary>
     private void Retry()
     {
@@ -209,14 +211,24 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
         {
             if (_shouldRun)
             {
-                SwitchLocked(onlyToChosen: _output is not null && _audioOutput.DeviceId is not null);
+                SwitchLocked(onlyToChosen: _output is not null && _inPlaceOfChosen);
             }
+        }
+    }
+
+    /// <summary>The switch a pick starts after its debounce, at once.</summary>
+    internal void SwitchNowForTests()
+    {
+        lock (_lock)
+        {
+            SwitchLocked(onlyToChosen: false);
         }
     }
 
     private void StopStreamLocked()
     {
         _retry.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _inPlaceOfChosen = false;
         if (_output is null)
         {
             return;
@@ -236,25 +248,30 @@ public sealed class AudioKeepAlive : IAudioKeepAlive
         _output = null;
     }
 
-    private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
+    /// <summary>
+    /// The device went or failed: try again shortly on whatever is the default by then. On the thread pool: the default's
+    /// WaveOutEvent raises it on its own playback thread, which must not wait for the lock a device open holds.
+    /// </summary>
+    private void OnPlaybackStopped(object? sender, StoppedEventArgs e) => ThreadPool.QueueUserWorkItem(_ =>
     {
-        // The device went or failed: try again shortly on whatever is the default by then. The dead one is let go now:
-        // kept, a start that fails would leave it standing for one that plays.
-        if (e.Exception is not null)
-        {
-            _logger.LogWarning(e.Exception, "Audio keep-alive stopped unexpectedly");
-        }
-
         lock (_lock)
         {
-            if (ReferenceEquals(sender, _output) && !_disposed)
+            if (!ReferenceEquals(sender, _output) || _disposed)
             {
-                StopStreamLocked();
+                return; // one replaced meanwhile: the one playing now is fine
             }
+
+            if (e.Exception is not null)
+            {
+                _logger.LogWarning(e.Exception, "Audio keep-alive stopped unexpectedly");
+            }
+
+            // The dead one is let go now: kept, a start that fails would leave it standing for one that plays.
+            StopStreamLocked();
         }
 
         RestartSoon();
-    }
+    });
 
     /// <summary>Debounced: the default-device change comes once per role, and errors come in bursts.</summary>
     private void RestartSoon()

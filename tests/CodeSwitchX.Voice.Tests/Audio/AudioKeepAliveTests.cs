@@ -140,7 +140,7 @@ public sealed class AudioKeepAliveTests : IDisposable
         _keepAlive.Start();
 
         _output.DeviceId = "id-headphones";
-        await RestartedAsync(() => _output.Players.Count == 2);
+        await RestartedAsync(() => _output.Count == 2 && _output.Players[1].Playing && _output.Players[0].Disposed);
 
         (_output.Players[1].Device, _output.Players[1].Playing).ShouldBe(("id-headphones", true));
         _output.Players[0].Disposed.ShouldBeTrue();
@@ -153,9 +153,49 @@ public sealed class AudioKeepAliveTests : IDisposable
         _keepAlive.Start();
 
         _output.Players[0].Fail();
-        await RestartedAsync(() => _output.Players.Count == 2);
+        await RestartedAsync(() => _output.Count == 2 && _output.Players[1].Playing);
 
         _output.Players[1].Playing.ShouldBeTrue();
+    }
+
+    // Review round 3 of #189: a stop raised late by a player already replaced restarted the one playing.
+    [Fact]
+    public async Task A_late_stop_from_a_replaced_player_restarts_nothing()
+    {
+        _output.Busy = false;
+        _keepAlive.Start();
+        _output.DeviceId = "id-headphones";
+        await RestartedAsync(() => _output.Count == 2 && _output.Players[1].Playing && _output.Players[0].Disposed);
+
+        _output.Players[0].FailLate();
+        for (var i = 0; i < 10; i++)
+        {
+            _time.Advance(TimeSpan.FromSeconds(2));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        _output.Count.ShouldBe(2);
+        _output.Players[1].Playing.ShouldBeTrue();
+    }
+
+    // Review round 3 of #189: after a switch that failed, the output that played on was taken for the default, and the
+    // default the retry opened was thrown away.
+    [Fact]
+    public void After_a_pick_that_failed_the_retry_moves_off_the_output_no_longer_chosen()
+    {
+        _output.Busy = false;
+        _keepAlive.Start(); // on the TV
+        _output.Busy = true;
+        _output.DefaultFails = true;
+        _output.Picked("id-headphones"); // held, and no default either: the TV plays on
+        _keepAlive.SwitchNowForTests();
+        _output.Players.ShouldHaveSingleItem().Playing.ShouldBeTrue();
+
+        _output.DefaultFails = false;
+        _time.Advance(AudioKeepAlive.RetryEvery);
+
+        (_output.Players[^1].Device, _output.Players[^1].Playing).ShouldBe((null, true), "the default, where the speech goes now");
+        _output.Players[0].Disposed.ShouldBeTrue();
     }
 
     /// <summary>Advances the clock by the restart's debounce until <paramref name="done"/>: the restart waits on the thread pool.</summary>
@@ -173,7 +213,33 @@ public sealed class AudioKeepAliveTests : IDisposable
     /// <summary>An output whose chosen device is held by another app while <see cref="Busy"/>; a null device is the default.</summary>
     private sealed class Output : IAudioOutput
     {
-        public List<Player> Players { get; } = [];
+        private readonly List<Player> _players = [];
+
+        /// <summary>A copy: the keep-alive opens players on the thread pool.</summary>
+        public List<Player> Players
+        {
+            get
+            {
+                lock (_players)
+                {
+                    return [.. _players];
+                }
+            }
+        }
+
+        public int Count
+        {
+            get
+            {
+                lock (_players)
+                {
+                    return _players.Count;
+                }
+            }
+        }
+
+        /// <summary>A pick that raises no restart: the test switches the keep-alive itself.</summary>
+        public void Picked(string? id) => _deviceId = id;
 
         public bool Busy { get; set; }
 
@@ -207,7 +273,11 @@ public sealed class AudioKeepAliveTests : IDisposable
 
             var player = new Player(playsOn, playsOn is not null && ChosenWillNotPlay);
             player.Init(source);
-            Players.Add(player);
+            lock (_players)
+            {
+                _players.Add(player);
+            }
+
             return player;
         }
     }
@@ -221,6 +291,12 @@ public sealed class AudioKeepAliveTests : IDisposable
         public bool Disposed { get; private set; }
 
         public event EventHandler<StoppedEventArgs>? PlaybackStopped;
+
+        private EventHandler<StoppedEventArgs>? _handlerAtPlay;
+
+        /// <summary>A stop already on its way when the keep-alive let go of the player: raised to the handler it had then.</summary>
+        public void FailLate() =>
+            _handlerAtPlay?.Invoke(this, new StoppedEventArgs(new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED")));
 
         /// <summary>The device went while playing.</summary>
         public void Fail()
@@ -237,7 +313,11 @@ public sealed class AudioKeepAliveTests : IDisposable
 
         public void Init(IWaveProvider waveProvider) => OutputWaveFormat = waveProvider.WaveFormat;
 
-        public void Play() => Playing = willNotPlay ? throw new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED") : true;
+        public void Play()
+        {
+            Playing = willNotPlay ? throw new InvalidOperationException("AUDCLNT_E_DEVICE_INVALIDATED") : true;
+            _handlerAtPlay = PlaybackStopped;
+        }
 
         public void Pause() => Playing = false;
 
