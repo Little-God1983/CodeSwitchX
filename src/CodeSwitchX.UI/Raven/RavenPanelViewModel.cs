@@ -493,7 +493,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     internal Task PendingAnswers => _conversation;
 
     /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
-    internal Task PendingHeardCheck { get; private set; } = Task.CompletedTask;
+    internal Task PendingHeardCheck => Task.WhenAll(_pendingCounts, _pendingReads);
+
+    /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178; UI thread).</summary>
+    private Task _pendingCounts = Task.CompletedTask;
 
     /// <summary>The window chats being summed up for chat 0.</summary>
     internal Task PendingSummaries => _summaries;
@@ -1896,9 +1899,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="question">Marked sent once the brain has it; null for a digest.</param>
     /// <param name="quiet">The teller's: what it says about itself goes to the app's log, not the panel's (the fallback sentence covers a failure).</param>
     /// <param name="chat">Where the reply, its cards and what is said about it go.</param>
+    /// <param name="whole">Set when the answer came to its end with no failure: a teller that failed midway said only part (#179).</param>
     private async Task<bool> StreamAnswerAsync(IConductorBrain brain, string text, ReplyVoice.SpokenReply spoken, CancellationToken floor,
-        RavenChat chat, Question? question = null, bool quiet = false)
+        RavenChat chat, Question? question = null, bool quiet = false, StrongBox<bool>? whole = null)
     {
+        var failedMidway = false;
         RavenLogEntry? reply = null;
         var said = false;
         var began = _time.GetUtcNow();
@@ -1963,6 +1968,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainNotice or BrainFailed when quiet:
                         _logger.LogWarning("Raven's news teller: {What}", e);
+                        failedMidway |= e is BrainFailed or BrainNotice { Warning: true };
                         break;
                     case BrainNotice notice:
                         AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
@@ -1976,6 +1982,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (reply is not null)
             {
                 reply.Text = reply.Text.TrimEnd();
+            }
+
+            if (whole is not null)
+            {
+                whole.Value = !failedMidway;
             }
         }
         catch (OperationCanceledException) when (floor.IsCancellationRequested)
@@ -2065,6 +2076,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
+        var catchUp = _catchUpDue is { } due && CatchUpCovers(due.Away).Count > 0 ? _catchUpDue : null;
+        if (_catchUpDue is not null && catchUp is null)
+        {
+            DropCatchUp(); // a digest heard since the switch said it all
+            if (_news is not { HasNews: true } && _untold.Count == 0)
+            {
+                return;
+            }
+        }
+
         // A question takes the floor from it, and a press stops it too.
         _digest?.Dispose();
         _digest = CancellationTokenSource.CreateLinkedTokenSource(_floor.Token);
@@ -2072,16 +2093,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         UpdateState();
         // The catch-up of the chat just switched to goes first, then its cards; a chat's question goes before the news: the
         // chat is stopped on it. The news follows once the floor is free again.
-        if (_catchUpDue is { } due)
+        if (catchUp is { } told)
         {
             _catchUpDue = null;
-            if (!IsOpen && due.Chat == CurrentChat && VoiceSpeaks)
-            {
-                Seen(due.Chat); // collapsed, the catch-up is how the user learns what came (#173): a dropped one leaves the marks
-            }
-
             _catchUpTelling = _digest;
-            _conversation = TellCatchUpAsync(_conversation, due.Chat, due.Lines, _digest.Token);
+            _conversation = TellCatchUpAsync(_conversation, told.Chat, told.Away, _digest.Token);
         }
         else
         {
@@ -2683,11 +2699,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (appended.TryGetValue(CurrentChat, out var told))
-            {
-                Heard(told); // collapsed, the news of the chat talked to is said now: not to be counted, nor told again by a catch-up
-            }
-
             _voice.Expect();
             var asking = default(DateTimeOffset);
             _newsChat = CurrentChat; // muted, it stops (#153)
@@ -2698,7 +2709,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             asking = _time.GetUtcNow();
             // Spoken, the selected chat's news is the announcement: other chats' news is only marked.
             var chat = CurrentChat;
-            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(own), spoken, floor, chat, quiet: true);
+            var whole = new StrongBox<bool>();
+            var said = _teller is not null && await StreamAnswerAsync(_teller, DigestPrompt(own), spoken, floor, chat, quiet: true, whole: whole);
+            if (said && whole.Value && appended.TryGetValue(chat, out var told))
+            {
+                // Collapsed, the card of the chat talked to is told: once heard to its end its fresh lines no longer count,
+                // nor are told again by a catch-up. Its stale lines are shown, never said: they still count. The fallback
+                // sentence says only that news came, not what: it reads nothing.
+                ReadOnceHeard(spoken, [(told, own)]);
+            }
+
             if (!said && !floor.IsCancellationRequested)
             {
                 var sentence = FallbackSentence(own);
@@ -3215,6 +3235,45 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Append(new RavenLogEntry(RavenLogKind.Raven, text, _time.GetUtcNow()) { Said = said }, chat);
 
     /// <summary>
+    /// Once <paramref name="spoken"/> is heard to its end, the lines it said of each entry no longer count; a reply cut off
+    /// leaves every mark (#179).
+    /// </summary>
+    private void ReadOnceHeard(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
+    {
+        if (said.Count > 0)
+        {
+            _pendingReads = Task.WhenAll(_pendingReads, ReadOnceHeardAsync(spoken, said));
+        }
+    }
+
+    /// <summary>The reads waiting for their reply to be heard: a catch-up is worded once they are done (UI thread).</summary>
+    private Task _pendingReads = Task.CompletedTask;
+
+    private async Task ReadOnceHeardAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
+    {
+        if (await spoken.HeardWholeAsync().ConfigureAwait(false))
+        {
+            _dispatcher.Post(() =>
+            {
+                // Only a chat where a failure was heard: one shown while it came (in Activity) was never counted, nor said.
+                var failedHeard = new HashSet<RavenChat>();
+                foreach (var (entry, lines) in said)
+                {
+                    if (Read(entry, lines))
+                    {
+                        failedHeard.Add(entry.Chat);
+                    }
+                }
+
+                foreach (var chat in failedHeard)
+                {
+                    MarkFailures(chat);
+                }
+            });
+        }
+    }
+
+    /// <summary>
     /// Each reply written as said and not seen, with its latest line (UI thread): should the reply turn out not heard to
     /// its end, that line counts. One count a reply, however many lines its cards split it into: its earlier lines were
     /// said before it.
@@ -3240,7 +3299,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _saidUnseen[spoken] = entry; // before the check: a reply hushed already settles it at once, on this thread
             if (first)
             {
-                PendingHeardCheck = Task.WhenAll(PendingHeardCheck, CountUnlessHeardAsync(spoken));
+                _pendingCounts = Task.WhenAll(_pendingCounts, CountUnlessHeardAsync(spoken));
             }
         }
 
@@ -3276,7 +3335,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (dropped.IsUnread)
             {
-                dropped.Chat.Unread -= UnreadLines(dropped); // opening the chat would not show it any more
+                dropped.Chat.Unread -= dropped.Unread; // opening the chat would not show it any more
+                dropped.Unread = 0;
             }
         }
 
@@ -3334,7 +3394,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var lines = UnreadLines(entry);
-        entry.IsUnread = lines > 0;
+        entry.Unread = lines;
         entry.Chat.Unread += lines;
         if (lines > 0)
         {
@@ -3354,21 +3414,41 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready;
 
-    /// <summary>Collapsed, an entry counted unread is said aloud after all: it is heard, and its count goes.</summary>
-    private void Heard(RavenLogEntry entry)
+    /// <summary>
+    /// Collapsed, what was said aloud of an entry counted unread and heard to the end no longer counts: the news lines
+    /// given, or all of it (a warning) for none. Only those: a stale news line is shown, never said, and still counts, and
+    /// a line heard before is not taken off twice (#179). Returns whether a failure was heard: then the chat's red mark is
+    /// for the caller to look at again.
+    /// </summary>
+    private static bool Read(RavenLogEntry entry, IReadOnlyList<ChatNewsLine>? lines)
     {
-        if (IsOpen || !entry.IsUnread || !VoiceSpeaks)
+        int heard;
+        if (lines is null)
         {
-            return;
+            entry.MarkHeard(); // seen or not, it is not told again
+            heard = entry.Unread;
+        }
+        else
+        {
+            heard = entry.MarkHeard(lines);
+        }
+
+        if (!entry.IsUnread)
+        {
+            return false; // its chat was opened meanwhile and seen whole, or the log let it go
         }
 
         var chat = entry.Chat;
-        entry.IsUnread = false;
-        chat.Unread -= UnreadLines(entry);
+        var read = Math.Min(heard, entry.Unread);
+        entry.Unread -= read;
+        chat.Unread -= read;
         chat.IsNewsPulsing &= chat.Unread > 0;
-        // A failure said aloud is heard too: the red mark stays only for one still unread.
-        chat.HasFailed = Log.Any(e => e.Chat == chat && e.IsUnread && e.Lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true);
+        return lines?.Any(l => l.Kind == ChatNewsKind.Failed) == true;
     }
+
+    /// <summary>A failure said aloud is heard too: the chat's red mark stays only for a failed line still unread.</summary>
+    private void MarkFailures(RavenChat chat) =>
+        chat.HasFailed = Log.Any(e => e.Chat == chat && e.IsUnread && e.Lines?.Any(l => l.Kind == ChatNewsKind.Failed && !e.WasHeard(l)) == true);
 
     /// <summary>How long a badge pulses when a line comes (#173): three beats, then it stays steady.</summary>
     internal static readonly TimeSpan NewsPulse = TimeSpan.FromSeconds(2.4);
@@ -3376,12 +3456,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Each chat's timer for the end of its badge's pulse, and which pulse that is (UI thread).</summary>
     private readonly Dictionary<RavenChat, (ITimer Timer, int Pulse)> _pulseEnds = [];
 
+    /// <summary>How many chats have a pulse timer: a removed chat's goes with it (#179).</summary>
+    internal int PulseTimers => _pulseEnds.Count;
+
     /// <summary>
     /// Starts the chat's badge pulsing, from the first beat again if it already pulses. Each pulse has a timer of its own
     /// for its end, which knows which pulse it ends: an end posted just before a new line restarted the pulse is ignored.
     /// </summary>
     private void PulseNews(RavenChat chat)
     {
+        if (!Chats.Contains(chat))
+        {
+            return; // removed with its window: its entries stay in Activity, its badge is gone
+        }
+
         chat.IsNewsPulsing = false; // a trigger starts its animation on the change to true only
         chat.IsNewsPulsing = true;
         var pulse = 0;
@@ -3420,13 +3508,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         foreach (var entry in Log.Where(e => e.IsUnread && e.Chat == chat))
         {
-            entry.IsUnread = false; // a reply still growing counts anew for what comes after the user leaves again
+            entry.Unread = 0; // a reply still growing counts anew for what comes after the user leaves again
         }
 
-        // Read now, heard or not; collapsed (a catch-up said), nothing was read.
-        foreach (var reply in IsOpen ? _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList() : [])
+        foreach (var reply in _saidUnseen.Where(p => p.Value.Chat == chat).Select(p => p.Key).ToList())
         {
-            _saidUnseen.Remove(reply);
+            _saidUnseen.Remove(reply); // read now, heard or not
         }
 
         chat.Unread = 0;
@@ -3558,7 +3645,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly List<ChatAskCard> _catchUpCards = [];
 
     /// <summary>The catch-up waiting for the floor: the chat switched to and what to word it from (UI thread).</summary>
-    private (RavenChat Chat, List<string> Lines)? _catchUpDue;
+    private (RavenChat Chat, List<RavenLogEntry> Away)? _catchUpDue;
 
     /// <summary>The telling of the catch-up being said, and its reply; null when none is (UI thread).</summary>
     private CancellationTokenSource? _catchUpTelling;
@@ -3588,11 +3675,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _catchUpCards.Add(card);
         }
 
-        var lines = CatchUpLines(away);
-        var catchUp = lines.Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null; // a muted chat's cards are still read
+        var catchUp = CatchUpCovers(away).Count > 0 && !IsMuted && !chat.IsMuted && _teller is not null; // a muted chat's cards are still read
         if (catchUp)
         {
-            _catchUpDue = (chat, lines);
+            _catchUpDue = (chat, away); // worded when it is said: a digest heard meanwhile has told some of it
         }
 
         if (_teller is not null && !IsMuted && (catchUp || (SpeakNews && _untold.Any(PermissionLine.NeedsTeller))))
@@ -3634,12 +3720,41 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// The lines a catch-up is worded from, the news in the order it came, then the warnings. Raven's answers were spoken as they
     /// came, wherever the user was, and the cards are read out on their own.
     /// </summary>
-    internal static List<string> CatchUpLines(IReadOnlyList<RavenLogEntry> away)
+    internal static List<string> CatchUpLines(IReadOnlyList<RavenLogEntry> away) => CatchUpLines(CatchUpCovers(away));
+
+    /// <summary>The lines worded from what the catch-up covers, so that what is read is what was said.</summary>
+    private static List<string> CatchUpLines(IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> covered) =>
+    [
+        // The news of all its cards at once, so two chats of one title in two cards are numbered apart.
+        .. DigestLines([.. covered.SelectMany(c => c.Lines ?? [])]),
+        .. covered.Where(c => c.Lines is null).Select(c => $"- A warning: {c.Entry.Text}"),
+    ];
+
+    /// <summary>
+    /// What a catch-up says of each entry: a news card's lines still to tell, a warning not told yet. Raven's answers only
+    /// written, the cards (read out on their own) and stale lines (shown, never said, as in the news) it leaves to be read
+    /// (#179).
+    /// </summary>
+    private static List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> CatchUpCovers(IReadOnlyList<RavenLogEntry> away) =>
+    [
+        .. away.Where(e => e.Kind == RavenLogKind.News)
+            .Select(e => (e, (IReadOnlyList<ChatNewsLine>?)ToTell(e).ToList()))
+            .Where(c => c.Item2!.Count > 0),
+        .. away.Where(e => e.Kind == RavenLogKind.Warning && !e.IsHeard).Select(e => (e, (IReadOnlyList<ChatNewsLine>?)null)),
+    ];
+
+    /// <summary>A news card's lines still to be told: fresh, and not heard already (in a digest, or a catch-up before).</summary>
+    private static IEnumerable<ChatNewsLine> ToTell(RavenLogEntry card) => (card.Lines ?? []).Where(l => !l.Stale && !card.WasHeard(l));
+
+    /// <summary>
+    /// The catch-up due, worded from what is still untold of what came while the user was away; null when nothing is left
+    /// (a digest heard meanwhile said it all). Seen is not told: opened, the switch itself has seen the chat.
+    /// </summary>
+    private static (List<string> Lines, List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> Covered)? CatchUpLeft(
+        IReadOnlyList<RavenLogEntry> away)
     {
-        // The news of all its cards at once, so two chats of one title in two cards are numbered apart. A stale line is
-        // shown, never spoken, as in the news.
-        var news = away.Where(e => e.Kind == RavenLogKind.News).SelectMany(e => e.Lines ?? []).Where(l => !l.Stale).ToList();
-        return [.. DigestLines(news), .. away.Where(e => e.Kind == RavenLogKind.Warning).Select(e => $"- A warning: {e.Text}")];
+        var covered = CatchUpCovers(away);
+        return covered.Count == 0 ? null : (CatchUpLines(covered), covered);
     }
 
     /// <summary>What the teller is given for a catch-up: the lines, and how to begin.</summary>
@@ -3652,20 +3767,32 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// Says the catch-up in the chat switched to, once the floor is free; a press, a question or another switch stops it.
     /// Never faults.
     /// </summary>
-    private async Task TellCatchUpAsync(Task previous, RavenChat chat, IReadOnlyList<string> lines, CancellationToken stop)
+    private async Task TellCatchUpAsync(Task previous, RavenChat chat, IReadOnlyList<RavenLogEntry> away, CancellationToken stop)
     {
         ReplyVoice.SpokenReply? spoken = null;
         try
         {
             await previous;
-            if (stop.IsCancellationRequested)
+            // Worded now, once what was heard before (a digest, a catch-up hushed at its last sentence) is noted: none of it
+            // is told again.
+            await _pendingReads;
+            if (stop.IsCancellationRequested || CatchUpLeft(away) is not var (lines, covered))
             {
                 return;
             }
 
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin();
-            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true);
+            var whole = new StrongBox<bool>();
+            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true, whole: whole);
+            if (said && whole.Value)
+            {
+                // Collapsed, the catch-up is how the user learns what came (#173): heard to its end, what it said no longer
+                // counts. A dropped or cut one leaves the marks, as does the fallback, which says only how many things
+                // came; the cards blink until they are read.
+                ReadOnceHeard(spoken, covered);
+            }
+
             if (!said && !stop.IsCancellationRequested)
             {
                 // The teller failed or said nothing: the user still hears that something came, and reads it in the chat.
@@ -3716,6 +3843,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             gone.PropertyChanged -= OnChatPropertyChanged; // kept by the log's entries, it is muted no more
+            if (_pulseEnds.Remove(gone, out var pulse))
+            {
+                pulse.Timer.Dispose();
+            }
             if (gone.WorkspaceId is { } retired)
             {
                 _brains?.Retire(retired); // its process, config and conversation go with it

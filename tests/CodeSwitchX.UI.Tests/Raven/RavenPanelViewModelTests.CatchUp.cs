@@ -373,6 +373,24 @@ public sealed partial class RavenPanelViewModelTests
         lines.ShouldBe(["- A warning: The voice failed."], "Raven's answers were heard as they came; cards are read on their own");
     }
 
+    // Review round 2 of #188: a warning had no heard mark, so a catch-up worded again said it again.
+    [Fact]
+    public void What_was_heard_already_is_not_in_the_catch_up()
+    {
+        var at = DateTimeOffset.UnixEpoch;
+        var workspace = Guid.NewGuid();
+        var heard = new ChatNewsLine("s1", workspace, "CodeSwitchX", "Weather discussion", ChatNewsKind.Finished, null, null, false);
+        var untold = new ChatNewsLine("s2", workspace, "CodeSwitchX", "Release notes", ChatNewsKind.Failed, null, null, false);
+        var news = new RavenLogEntry(RavenLogKind.News, "Chat news", at) { Lines = [heard, untold] };
+        news.MarkHeard([heard]);
+        var warning = new RavenLogEntry(RavenLogKind.Warning, "The voice failed.", at);
+        warning.MarkHeard();
+
+        var lines = RavenPanelViewModel.CatchUpLines([news, warning]);
+
+        lines.ShouldBe(["- CodeSwitchX, chat \"Release notes\": failed"]);
+    }
+
     /// <summary>Two chats of one title in two news cards are told apart, as in one card.</summary>
     [Fact]
     public void Twin_chats_in_two_news_cards_are_numbered()
