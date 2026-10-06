@@ -85,6 +85,12 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
     /// <summary>The news line was said aloud and heard to its end: it no longer counts, nor is it told again (#179).</summary>
     public bool WasHeard(ChatNewsLine line) => _heard?.Contains(line) == true;
 
+    /// <summary>All of it was said aloud and heard to its end while collapsed (a warning in a catch-up): it is not told again.</summary>
+    public bool IsHeard { get; private set; }
+
+    /// <summary>Notes all of it heard.</summary>
+    public void MarkHeard() => IsHeard = true;
+
     /// <summary>Notes the lines heard; returns how many of them were not heard before.</summary>
     public int MarkHeard(IEnumerable<ChatNewsLine> lines)
     {

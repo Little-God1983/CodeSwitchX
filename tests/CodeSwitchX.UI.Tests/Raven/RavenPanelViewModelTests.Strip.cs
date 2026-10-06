@@ -702,11 +702,11 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => _speech.Spoken.Count > 0);
         vm.SelectedChat = ChatNumbered(vm, 3);
         vm.SelectedChat = two;
-        _speech.Gate.SetResult();
+        _speech.Gate.SetResult(); // the catch-up waits for the digest's read, however soon the floor is free
         await WithinAsync(_voice.WhenQuietAsync());
-        await WithinAsync(vm.PendingHeardCheck);
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
 
         _teller.Asked.ShouldNotContain(q => q.StartsWith("Catch-up:", StringComparison.Ordinal));
         two.Unread.ShouldBe(0);
