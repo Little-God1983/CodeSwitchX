@@ -24,6 +24,8 @@ public static class VoiceServiceCollectionExtensions
         services.AddSingleton<IWhisperModelStore, WhisperModelStore>();
         services.AddSingleton<IDictationService, WhisperDictationService>();
         services.AddSingleton<IMicrophoneCatalog, WasapiMicrophoneCatalog>();
+        services.AddSingleton<ISpeakerCatalog, WasapiSpeakerCatalog>();
+        services.AddSingleton<IAudioOutput, AudioOutput>();
         services.AddSingleton<IMicrophoneRecorder, WasapiMicrophoneRecorder>();
 
         // Open mic: listens until stopped; its two models are fetched the first time the user switches to it.

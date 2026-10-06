@@ -286,7 +286,7 @@ public sealed class AppSettings : IAppSettings
                     return name == "None" ? "Raven answers in text only now." : "A voice not on this PC yet is installed the first time Raven speaks.";
                 }),
             new(new("voice", Title(SettingsPage.Voice), "The voice Raven speaks with, one of the engine's voices.", null), SettingsPage.Voice,
-                ["voices", "speaker"],
+                ["voices"], // "speaker" is the output Raven speaks on (#172)
                 () => CurrentVoices() is { } voices ? voices.FirstOrDefault(x => x.Id == CurrentVoiceId())?.Name ?? CurrentVoiceId() : "none: Raven speaks with no engine",
                 v =>
                 {
@@ -363,8 +363,9 @@ public sealed class AppSettings : IAppSettings
             Toggle("push to talk", SettingsPage.Listening, "On, the user holds a key or the mic button to talk; off, open mic: Raven "
                     + "listens all the time.", () => R.MicMode != MicMode.OpenMic,
                 v => R.ChooseMicModeCommand.Execute(v ? MicMode.PushToTalk : MicMode.OpenMic), "push-to-talk"),
-            new(new("microphone", Title(SettingsPage.Listening), "The microphone Raven hears.", null), SettingsPage.Listening, ["mic", "input"],
-                () => R.SelectedMicrophone?.Name ?? "none",
+            new(new("microphone", Title(SettingsPage.Listening), "The microphone Raven starts with and hears, unless another is being "
+                    + "tried on Raven's panel. Setting it also ends that trial.", null), SettingsPage.Listening, ["mic", "input"],
+                () => R.DefaultMicrophone?.Name ?? "none",
                 v =>
                 {
                     if (R.Microphones.Count == 0)
@@ -373,10 +374,25 @@ public sealed class AppSettings : IAppSettings
                     }
 
                     var name = OneOf("the microphone", v, [.. R.Microphones.Select(m => m.Name)]);
-                    R.SelectedMicrophone = R.Microphones.First(m => m.Name == name);
+                    R.ChooseDefaultMicrophone(R.Microphones.First(m => m.Name == name)); // the same default again still ends a trial
                     return null;
                 },
                 () => [.. R.Microphones.Select(m => m.Name)]),
+            new(new("speaker", Title(SettingsPage.Voice), "The output Raven speaks on, unless another is being tried on Raven's panel. "
+                    + "Setting it also ends that trial.", null), SettingsPage.Voice, ["speakers", "audio output", "output", "headphones"],
+                () => R.Speakers?.DefaultSpeaker?.Name ?? "none",
+                v =>
+                {
+                    if (R.Speakers is not { Speakers.Count: > 0 } speakers)
+                    {
+                        throw new YardActionException("No output is listed right now: Windows reports none. Nothing was changed.");
+                    }
+
+                    var name = OneOf("the speaker", v, [.. speakers.Speakers.Select(s => s.Name)]);
+                    speakers.ChooseDefault(speakers.Speakers.First(s => s.Name == name)); // the same default again still ends a trial
+                    return null;
+                },
+                () => [.. R.Speakers?.Speakers.Select(s => s.Name) ?? []]),
             Toggle("talk over Raven", SettingsPage.Listening, "In open mic, the user talking over Raven stops it; off, open mic ignores "
                 + "speech while Raven speaks (Raven heard on speakers).", () => S.RavenBargeIn, v => S.RavenBargeIn = v, "barge in", "interrupt"),
             new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: Tiny, "

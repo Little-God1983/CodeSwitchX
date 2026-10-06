@@ -744,6 +744,19 @@
               </DockPanel>
             </StackPanel>
           </Border>
+
+          <!-- The output Raven speaks on (#172): the default, saved; the panel's picker only tries another. -->
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Speaker" />
+              <TextBlock Style="{StaticResource Help}" Text="Where Raven speaks: its answers, chat news, the chats' sound and the samples above. To try another, pick it on Raven's panel: that pick isn't saved, and picking here ends it." />
+              <ContentControl Style="{StaticResource FieldWidth}">
+                <ComboBox FontSize="14" AutomationProperties.Name="Default speaker"
+                          ItemsSource="{Binding DataContext.Raven.Speakers.Speakers, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
+                          SelectedItem="{Binding DataContext.Raven.Speakers.DefaultSpeaker, RelativeSource={RelativeSource AncestorType=Window}}" />
+              </ContentControl>
+            </StackPanel>
+          </Border>
         </StackPanel>
 
         <!-- Listening -->
@@ -751,11 +764,11 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Microphone" />
-              <TextBlock Style="{StaticResource Help}" Text="The mic Raven hears. The level moves while Raven listens. Push to talk or Open mic is switched on Raven's panel, where you talk." />
+              <TextBlock Style="{StaticResource Help}" Text="The mic Raven starts with. To try another, pick it on Raven's panel: that pick isn't saved, and picking here ends it. The level moves while Raven listens. Push to talk or Open mic is switched on Raven's panel, where you talk." />
               <ContentControl Style="{StaticResource FieldWidth}">
-                <ComboBox FontSize="14" AutomationProperties.Name="Microphone"
+                <ComboBox FontSize="14" AutomationProperties.Name="Default microphone"
                           ItemsSource="{Binding DataContext.Raven.Microphones, RelativeSource={RelativeSource AncestorType=Window}}" DisplayMemberPath="Name"
-                          SelectedItem="{Binding DataContext.Raven.SelectedMicrophone, RelativeSource={RelativeSource AncestorType=Window}}" />
+                          SelectedItem="{Binding DataContext.Raven.DefaultMicrophone, RelativeSource={RelativeSource AncestorType=Window}}" />
               </ContentControl>
               <ContentControl Style="{StaticResource FieldWidth}" Margin="0,12,0,0">
               <DockPanel>
