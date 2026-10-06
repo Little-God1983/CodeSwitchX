@@ -70,8 +70,14 @@ public sealed partial class RavenLogEntry(RavenLogKind kind, string text, DateTi
     /// </summary>
     public bool Said { get; set; }
 
-    /// <summary>It is in its chat's unread count (<see cref="RavenChat.Unread"/>): a reply that grows is counted once.</summary>
-    public bool IsUnread { get; set; }
+    /// <summary>
+    /// How many of its lines are in its chat's unread count (<see cref="RavenChat.Unread"/>): all that count when it comes
+    /// unseen, fewer once a digest or a catch-up has said some of them (#179). A reply that grows is counted once.
+    /// </summary>
+    public int Unread { get; set; }
+
+    /// <summary>It is in its chat's unread count.</summary>
+    public bool IsUnread => Unread > 0;
 
     /// <summary>An action card's tool call came back failed.</summary>
     [ObservableProperty]
