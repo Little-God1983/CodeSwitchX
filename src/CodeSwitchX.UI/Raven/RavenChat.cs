@@ -42,8 +42,8 @@ public sealed partial class RavenChat : ObservableObject
     private string _name;
 
     /// <summary>
-    /// The workspace's tile: the chat's header shows its colour and where its repositories stand, and its rows say whether
-    /// a Claude chat of the window works (#182). Null for the Yard and Activity.
+    /// The workspace's tile: the chat's header shows its colour and where its repositories stand, and the chat mirrors its
+    /// <see cref="WorkspaceTileViewModel.IsWorking"/> (#182). Null for the Yard and Activity.
     /// </summary>
     [ObservableProperty]
     private WorkspaceTileViewModel? _tile;
@@ -55,7 +55,7 @@ public sealed partial class RavenChat : ObservableObject
     [NotifyPropertyChangedFor(nameof(Tip))]
     private bool _isAnswering;
 
-    /// <summary>A Claude chat of its window works or starts, as its tile says (#182).</summary>
+    /// <summary>A Claude chat of its window works, as its tile says (#182).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsWorking))]
     [NotifyPropertyChangedFor(nameof(Status))]

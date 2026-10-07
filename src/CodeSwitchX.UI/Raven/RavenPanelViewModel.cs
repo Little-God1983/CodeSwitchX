@@ -1751,10 +1751,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var takenText = "";
         List<RavenLogEntry> takenEntries = [.. entries ?? []];
         List<Question> own = [];
+        List<RavenChat> taken = [];
         foreach (var waiting in Unsent())
         {
             waiting.Merged = true;
-            Answering(waiting.Chat); // its own question, or the new one, says again (#182)
+            taken.Add(waiting.Chat);
             if (BrainOf(waiting.Chat) != BrainOf(chat))
             {
                 // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
@@ -1791,6 +1792,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Enqueue(question, ended, floor);
+        foreach (var left in taken.Distinct())
+        {
+            Answering(left); // once the new questions are queued: a chat whose words went along with another's is at rest (#182)
+        }
     }
 
     /// <summary>
@@ -2523,7 +2528,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Their own turns end at once; their words go again, with the news of the yes.
             waiting.Merged = true;
-            Answering(waiting.Chat);
             AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries);
         }
         else

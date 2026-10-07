@@ -40,9 +40,6 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>Whether a chat's state was ever shown; a tab alone has none.</summary>
     private bool _hasSession;
 
-    /// <summary>A chat's state was shown: its <see cref="State"/> is a chat's, not a tab's alone.</summary>
-    public bool HasSession => _hasSession;
-
     /// <summary>Whether a tab alone has a time to show: when its chat was last written in.</summary>
     private bool _timed;
 
