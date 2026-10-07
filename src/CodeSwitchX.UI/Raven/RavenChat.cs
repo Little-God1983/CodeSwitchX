@@ -82,9 +82,9 @@ public sealed partial class RavenChat : ObservableObject
 
     private void OnTilePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(WorkspaceTileViewModel.IsWorking) && sender is WorkspaceTileViewModel tile)
+        if (e.PropertyName == nameof(WorkspaceTileViewModel.IsWorking))
         {
-            HasWorkingChat = tile.IsWorking;
+            HasWorkingChat = Tile?.IsWorking == true; // the tile it has, whatever raised it
         }
     }
 

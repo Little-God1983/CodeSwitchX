@@ -355,4 +355,55 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         three.IsWorking.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task A_question_that_fails_before_it_goes_in_leaves_its_chat_at_rest()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.FailsBeforeSent = true;
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+
+        Type(vm, "Is the retry test green?");
+        await WithinAsync(vm.PendingAnswers);
+
+        three.IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_question_interrupted_by_the_next_leaves_its_chat_at_rest()
+    {
+        // Asked in chat 3 and taken in; the next words, in chat 1, take the floor: chat 3's turn ends, chat 1 works.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+        three.IsWorking.ShouldBeTrue();
+
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "What's the branch here?");
+
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.IsWorking.ShouldBeFalse();
+        ChatNumbered(vm, 1).IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_removed_while_Raven_answers_in_it_works_at_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        three.IsWorking.ShouldBeFalse();
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.IsWorking.ShouldBeFalse();
+    }
 }

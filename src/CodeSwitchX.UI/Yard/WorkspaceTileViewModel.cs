@@ -94,7 +94,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     }
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
-    public int AttentionRank => NeedsAttention ? 0 : Chats.Any(Works) ? 1 : 2;
+    public int AttentionRank => NeedsAttention ? 0 : IsWorking ? 1 : 2;
 
     /// <summary>A chat that works: what ranks a tile second under "Needs me first", and marks its Raven chat (#182).</summary>
     private static bool Works(ChatRowViewModel chat) => chat.State == SessionState.Working;

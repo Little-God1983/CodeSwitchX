@@ -622,10 +622,14 @@
           <Ellipse.Style>
             <Style TargetType="Ellipse">
               <Style.Triggers>
-                <!-- Breathes only while it shows: a clock for a dot that is not there would tick on. -->
+                <!--
+                  Breathes only while it is seen: the list's row and the strip's number both hold one, and only one of them
+                  is shown; a clock for a dot nobody sees would tick on.
+                -->
                 <MultiDataTrigger>
                   <MultiDataTrigger.Conditions>
                     <Condition Binding="{Binding IsWorking}" Value="True" />
+                    <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True" />
                     <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
                   </MultiDataTrigger.Conditions>
                   <MultiDataTrigger.EnterActions>
