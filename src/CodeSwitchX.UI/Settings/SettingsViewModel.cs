@@ -64,6 +64,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The model chat 0, the overview, answers with, and its chat summaries are worded with (#124).</summary>
     [ObservableProperty] private string _ravenOverviewModel = BrainSettings.DefaultOverviewModel;
 
+    /// <summary>
+    /// The effort all of Raven's brains think at, or <see cref="ClaudeDefault"/> (#201); a change takes effect with the
+    /// next question, which carries the conversation on.
+    /// </summary>
+    [ObservableProperty] private string _ravenEffort = ClaudeDefault;
+
     /// <summary>What a chat Raven starts runs with unless said otherwise: an alias name or model id, or <see cref="ClaudeDefault"/>.</summary>
     [ObservableProperty] private string _ravenChatModel = ClaudeDefault;
 
@@ -414,6 +420,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenOverviewModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenOverviewModel, "chat 0's model", ct) is { Length: > 0 } overview
                 ? overview
                 : BrainSettings.DefaultOverviewModel;
+            RavenEffort = OrDefault(ChatModels.ResolveEffort(await LoadOrDefaultAsync<string>(SettingKeys.RavenEffort, "Raven's effort", ct)));
             RavenModelAliases = await LoadOrDefaultAsync<string>(SettingKeys.RavenModelAliases, "the model aliases", ct) is { Length: > 0 } aliases
                 ? aliases
                 : ChatModels.FormatAliases(ChatModels.DefaultAliases);
@@ -689,6 +696,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _brain.Model = value;
         Persist(SettingKeys.RavenBrainModel, value);
+    }
+
+    /// <summary>Stored as the level the brain runs at: blank for Claude Code's default, and for anything that is no level.</summary>
+    partial void OnRavenEffortChanged(string value)
+    {
+        _brain.Effort = value;
+        if (OrDefault(_brain.Effort) is var shown && shown != value)
+        {
+            RavenEffort = shown; // "extra high" shows as its level, which the picker has; this runs again and stores it
+            return;
+        }
+
+        Persist(SettingKeys.RavenEffort, _brain.Effort ?? "");
     }
 
     /// <summary>As <see cref="OnRavenBrainModelChanged"/>, for chat 0.</summary>

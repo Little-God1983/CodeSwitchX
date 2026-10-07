@@ -13,6 +13,7 @@ public static class SettingKeys
     public const string RavenSpeaker = "raven.speaker";
     public const string RavenBrainModel = "raven.brainModel";
     public const string RavenOverviewModel = "raven.overviewModel";
+    public const string RavenEffort = "raven.effort";
     public const string RavenChatModel = "raven.chatModel";
     public const string RavenChatEffort = "raven.chatEffort";
     public const string RavenModelAliases = "raven.modelAliases";

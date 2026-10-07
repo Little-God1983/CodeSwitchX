@@ -861,7 +861,7 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Raven's brain" />
-              <TextBlock Style="{StaticResource Help}" Text="The model Raven answers with, through the Yard's tools only. A faster model answers sooner. A change starts a new conversation." />
+              <TextBlock Style="{StaticResource Help}" Text="The model Raven answers with, through the Yard's tools only. A faster model answers sooner. A change of model starts a new conversation." />
               <TextBlock Style="{StaticResource Label}" Text="Window chats" />
               <ContentControl Style="{StaticResource FieldWidth}">
                 <ComboBox IsEditable="True" FontFamily="{StaticResource Mono}" FontSize="13.5" AutomationProperties.Name="Raven model"
@@ -876,6 +876,10 @@
                           Text="{Binding RavenOverviewModel, UpdateSourceTrigger=PropertyChanged, Delay=600}"
                           ToolTip="Chat 0 knows each window's chat by a short summary, worded with this model too. A small model is enough." />
               </ContentControl>
+              <TextBlock Style="{StaticResource Label}" Text="Effort" Margin="0,18,0,6" />
+              <ListBox Style="{StaticResource Segmented}" ItemsSource="{Binding EffortChoices, Mode=OneTime}" SelectedItem="{Binding RavenEffort}"
+                       AutomationProperties.Name="Raven effort"
+                       ToolTip="How hard all of Raven's chats think before they answer. Higher follows its rules more reliably and answers later. Default leaves it to Claude Code; a change keeps the conversation." />
             </StackPanel>
           </Border>
 

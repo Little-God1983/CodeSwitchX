@@ -313,6 +313,72 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task An_effort_in_the_settings_runs_the_brain_at_it_and_keeps_the_conversation()
+    {
+        // #201: the effort is a flag of the process, so it starts again, and picks the conversation up.
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Started[^1].Arguments.ShouldNotContain("--effort", "default leaves it to Claude Code");
+        var first = _launcher.Last;
+
+        _settings.Effort = "extra high";
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        first.Disposed.ShouldBeTrue();
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("xhigh");
+        _launcher.Started[^1].Arguments.ShouldContain("--resume", "the conversation carries on");
+        events[0].ShouldBe(new BrainNotice("Raven now thinks at extra high effort.", false));
+        Reply(events).ShouldBe("Hi.");
+
+        _settings.Effort = "default";
+        events.Clear();
+        await foreach (var e in brain.AskAsync("Three", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        _launcher.Started[^1].Arguments.ShouldNotContain("--effort");
+        events[0].ShouldBe(new BrainNotice("Raven now thinks at Claude Code's default effort.", false));
+    }
+
+    [Fact]
+    public async Task A_warm_up_after_an_effort_change_lets_a_turn_of_its_own_end_first()
+    {
+        // The mic pressed while a chat's message is being answered: the restart for the new effort waits for that turn.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.PeerTaken("Which F keys fail?"));
+        _launcher.Last.Emit(StreamJson.Text("The bug report chat asks which F keys fail."));
+
+        // Whichever reads the turn, the watcher or the warm-up, the restart waits for its result.
+        _settings.Effort = "medium";
+        brain.WarmUp();
+        _launcher.Last.Emit(StreamJson.Result("The bug report chat asks which F keys fail."));
+
+        await WaitUntil(() => _launcher.Started.Count == 2);
+        told.ShouldHaveSingleItem().Failure.ShouldBeNull("it ended, and was not cut off");
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium");
+    }
+
+    [Fact]
+    public void The_effort_is_a_level_as_said_or_none()
+    {
+        var settings = new BrainSettings { Effort = "Extra high" };
+        settings.Effort.ShouldBe("xhigh");
+        settings.Effort = "hard";
+        settings.Effort.ShouldBeNull("no level: Claude Code's default");
+        settings.Effort = "medium";
+        settings.Effort.ShouldBe("medium");
+        settings.Effort = null;
+        settings.Effort.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Without_Claude_Code_the_turn_says_how_to_get_it()
     {
         _claude = null;
