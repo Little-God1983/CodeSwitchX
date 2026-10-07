@@ -143,11 +143,13 @@ public sealed class ClaudeLiveSessions
     }
 
     /// <summary>
-    /// Whether the session messaged through <paramref name="socket"/> runs right now, anywhere (a VS Code tab, a terminal,
-    /// <c>claude -p</c>), in <paramref name="folder"/>: how a chat's message is told to come from one of Raven's brains, which
-    /// run in Raven's own folder (#181). Read afresh. Any thread; never throws.
+    /// Whether the session messaged through <paramref name="socket"/> ran in <paramref name="folder"/>, anywhere (a VS Code
+    /// tab, a terminal, <c>claude -p</c>): how a chat's message is told to come from one of Raven's brains, which run in
+    /// Raven's own folder (#181). Whether it still runs does not matter: a message waits in a busy chat's inbox, and the
+    /// brain that sent it may be rested by then. Each process has a socket of its own, and a killed one leaves its record
+    /// behind. Read afresh. Any thread; never throws.
     /// </summary>
-    public bool RunsIn(string socket, string folder)
+    public bool RanIn(string socket, string folder)
     {
         try
         {
@@ -161,7 +163,7 @@ public sealed class ClaudeLiveSessions
             {
                 if (int.TryParse(Path.GetFileNameWithoutExtension(file), out var pid) && ReadRecord(file, inTab: null) is { } record && record.Pid == pid
                     && string.Equals(record.Socket, socket, StringComparison.OrdinalIgnoreCase)
-                    && record.Cwd is { } cwd && string.Equals(Folder(cwd), wanted, StringComparison.OrdinalIgnoreCase) && Runs(record))
+                    && record.Cwd is { } cwd && string.Equals(Folder(cwd), wanted, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }

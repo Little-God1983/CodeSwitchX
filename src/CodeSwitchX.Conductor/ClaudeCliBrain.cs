@@ -428,16 +428,34 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }
 
     /// <summary>
-    /// Reads a turn the brain took on its own to its end, if one has begun, and tells what it said. Left in the pipe, its
-    /// lines would be read as the next question's answer, and that question's as the one after it. Lines that begin no
-    /// turn are dropped. Holding <see cref="_turns"/>.
+    /// A turn of its own read in part: a question waiting behind it was cancelled. The rest is read later, by the watcher or
+    /// the next question, and the turn is told whole. Touched while holding <see cref="_turns"/>.
+    /// </summary>
+    private UnaskedRead? _unaskedRead;
+
+    /// <summary>What has been read so far of a turn the brain took on its own.</summary>
+    private sealed class UnaskedRead(IBrainProcess process)
+    {
+        public IBrainProcess Process { get; } = process;
+
+        public StringBuilder Said { get; } = new();
+
+        public List<BrainToolCall> Calls { get; } = [];
+
+        public bool Begun { get; set; }
+    }
+
+    /// <summary>
+    /// Reads a turn the brain took on its own to its end, if one has begun, and tells what it said and did. Left in the
+    /// pipe, its lines would be read as the next question's answer, and that question's as the one after it. Lines that
+    /// begin no turn are dropped. A turn that does not end with its result (its process went, or went quiet) is told as
+    /// not answered: what it said so far is no answer to pass off as whole. Holding <see cref="_turns"/>.
     /// </summary>
     /// <param name="ct">A question waiting behind it was cancelled: it stops waiting, and the rest of the turn is read later.</param>
     private async Task ReadUnaskedAsync(IBrainProcess process, CancellationToken ct = default)
     {
-        var said = new StringBuilder();
-        var tools = new List<string>();
-        var begun = false;
+        var turn = _unaskedRead is { } part && ReferenceEquals(part.Process, process) ? part : new UnaskedRead(process);
+        _unaskedRead = turn;
         string? failed = null;
         while (true)
         {
@@ -446,8 +464,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 line = ready;
             }
-            else if (!begun)
+            else if (!turn.Begun)
             {
+                _unaskedRead = null;
                 return;
             }
             else
@@ -456,17 +475,19 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 if (timedOut)
                 {
                     Lose(process, $"gave no answer for {Silence.TotalSeconds:0} s in a turn of its own");
+                    failed = $"its brain gave no answer for {Silence.TotalSeconds:0} s and was stopped.";
                     break;
                 }
 
                 if (line is null)
                 {
-                    break; // it went: the next question starts it again, and says so
+                    failed = "its brain stopped in the middle of it."; // the next question starts it again, and says so
+                    break;
                 }
             }
 
             var read = ClaudeStream.Read(line);
-            begun |= read is not null;
+            turn.Begun |= read is not null;
             if (read is ClaudeTurnOver over)
             {
                 failed = over.Error;
@@ -479,16 +500,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 {
                     if (e is BrainText text)
                     {
-                        said.Append(text.Delta);
+                        turn.Said.Append(text.Delta);
                     }
                     else if (e is BrainToolCall call)
                     {
-                        tools.Add(call.Tool);
+                        turn.Calls.Add(call);
                     }
                 }
             }
         }
 
+        _unaskedRead = null;
         _lastTurnAt = _time.GetUtcNow();
         // The turn is in the conversation, which the user may go on with: a start after a rest picks it up while it is young.
         if (_chat is not null && !_disposed && ReferenceEquals(process, _process) && _started is { } held)
@@ -497,19 +519,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             _chat.Sessions.Save(_chat.Key, _session);
         }
 
-        var words = said.ToString().Trim();
+        var words = turn.Said.ToString().Trim();
         _logger.LogInformation("{Brain}{Chat} took a turn of its own, as for a message from another session; it called {Tools} and said {Length} characters{Failed}",
-            _name, _chat is null ? "" : $" of chat {_chat.Key}", tools.Count == 0 ? "nothing" : string.Join(", ", tools), words.Length,
-            failed is null ? "" : $", and failed: {failed}");
+            _name, _chat is null ? "" : $" of chat {_chat.Key}", turn.Calls.Count == 0 ? "nothing" : string.Join(", ", turn.Calls.Select(c => c.Tool)),
+            words.Length, failed is null ? "" : $", and failed: {failed}");
         if (failed is not null)
         {
-            // Cut off, what it said so far is no answer to pass off as whole.
             words = $"Raven could not answer a message from another chat: {failed}";
         }
 
-        if (words.Length > 0)
+        if (words.Length > 0 || turn.Calls.Count > 0)
         {
-            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words));
+            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words, turn.Calls));
         }
     }
 

@@ -12,6 +12,8 @@ public sealed class UnaskedTurns
     public void Report(UnaskedTurn turn) => Taken?.Invoke(turn);
 }
 
-/// <summary>A turn a brain took on its own, and what it said in it.</summary>
+/// <summary>A turn a brain took on its own, what it said in it and what it did with its tools.</summary>
 /// <param name="WorkspaceId">The window whose Raven chat's brain took it; null for chat 0, the Yard.</param>
-public sealed record UnaskedTurn(Guid? WorkspaceId, string Text);
+/// <param name="Text">What it said; empty when it said nothing.</param>
+/// <param name="Calls">The tools it called, in order: what a chat's message made Raven do is never done unseen.</param>
+public sealed record UnaskedTurn(Guid? WorkspaceId, string Text, IReadOnlyList<BrainToolCall> Calls);

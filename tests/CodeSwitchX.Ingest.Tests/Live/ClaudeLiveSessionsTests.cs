@@ -311,8 +311,8 @@ public class ClaudeLiveSessionsTests : IDisposable
         // A brain is claude -p, not a chat in a VS Code tab: its record is read all the same.
         SessionRecord(41000, RavenFolder, RavenSocket);
 
-        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeTrue();
-        _live.RunsIn(RavenSocket.ToUpperInvariant(), RavenFolder.ToLowerInvariant() + @"\").ShouldBeTrue("Windows paths match whatever their case");
+        _live.RanIn(RavenSocket, RavenFolder).ShouldBeTrue();
+        _live.RanIn(RavenSocket.ToUpperInvariant(), RavenFolder.ToLowerInvariant() + @"\").ShouldBeTrue("Windows paths match whatever their case");
     }
 
     [Fact]
@@ -322,7 +322,7 @@ public class ClaudeLiveSessionsTests : IDisposable
         SessionRecord(41000, @"e:\Repos\raven", RavenSocket);
         SessionRecord(42000, RavenFolder, @"\\.\pipe\LOCAL\cc-msg-other");
 
-        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeFalse();
+        _live.RanIn(RavenSocket, RavenFolder).ShouldBeFalse();
     }
 
     [Fact]
@@ -331,16 +331,17 @@ public class ClaudeLiveSessionsTests : IDisposable
         SessionRecord(10, "", @"\\.\pipe\LOCAL\cc-msg-other"); // listed before the brain's
         SessionRecord(41000, RavenFolder, RavenSocket);
 
-        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeTrue();
+        _live.RanIn(RavenSocket, RavenFolder).ShouldBeTrue();
     }
 
     [Fact]
-    public void A_brain_whose_process_is_gone_is_not_found()
+    public void A_brain_stopped_since_it_sent_the_message_is_still_found()
     {
+        // The message waited in a busy chat's inbox while the pool rested the brain that sent it.
         SessionRecord(41000, RavenFolder, RavenSocket);
         _processes.Gone.Add(41000);
 
-        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeFalse();
+        _live.RanIn(RavenSocket, RavenFolder).ShouldBeTrue();
     }
 
     private void SessionRecord(int pid, string cwd, string socket) =>

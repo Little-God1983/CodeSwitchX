@@ -232,7 +232,7 @@ public partial class App : Application
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
         // A chat that Raven's brain messages is told to ask the user, not Raven (#181); its brains run in Raven's folder.
-        services.AddSingleton(sp => new RavenMessages(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<ClaudeLiveSessions>().RunsIn));
+        services.AddSingleton(sp => new RavenMessages(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<ClaudeLiveSessions>().RanIn));
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
             sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IYardActions>().StartedByRaven(id),
             sp.GetRequiredService<ClaudeLiveSessions>().NameOf));

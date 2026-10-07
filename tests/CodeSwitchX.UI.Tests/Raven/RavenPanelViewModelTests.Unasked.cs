@@ -23,7 +23,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, unasked) = await UnaskedVmAsync();
         vm.SelectedChat = ChatNumbered(vm, 1);
 
-        unasked.Report(new UnaskedTurn(ContentAutomatorX, "The bug report chat asks which F keys fail."));
+        unasked.Report(new UnaskedTurn(ContentAutomatorX, "The bug report chat asks which F keys fail.", []));
 
         var entry = vm.Log.ShouldHaveSingleItem();
         entry.Kind.ShouldBe(RavenLogKind.Raven);
@@ -35,11 +35,23 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_tool_a_brain_called_in_a_turn_of_its_own_gets_its_card_in_that_window_s_chat()
+    {
+        var (vm, unasked) = await UnaskedVmAsync();
+
+        unasked.Report(new UnaskedTurn(ContentAutomatorX, "", [new BrainToolCall("toolu_9", "stop_chat", """{"chat":"issues"}""")]));
+
+        var card = vm.Log.ShouldHaveSingleItem("it said nothing: no empty line");
+        (card.Kind, card.Text, card.Chat).ShouldBe((RavenLogKind.Action, "stop_chat", ChatNumbered(vm, 3)));
+        card.Detail.ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task What_chat_0_s_brain_says_in_a_turn_of_its_own_is_written_in_the_yard()
     {
         var (vm, unasked) = await UnaskedVmAsync();
 
-        unasked.Report(new UnaskedTurn(null, "A chat sent Raven a message."));
+        unasked.Report(new UnaskedTurn(null, "A chat sent Raven a message.", []));
 
         vm.Log.ShouldHaveSingleItem().Chat.ShouldBe(vm.YardChat);
     }

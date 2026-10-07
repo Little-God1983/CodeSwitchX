@@ -629,7 +629,9 @@ public sealed class ClaudeCliBrainTests : IDisposable
         }
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
-        told.ShouldBe([new UnaskedTurn(window, "The ContentAutomatorX chat needs a few details: which F keys?")]);
+        var turn = told.ShouldHaveSingleItem();
+        (turn.WorkspaceId, turn.Text).ShouldBe((window, "The ContentAutomatorX chat needs a few details: which F keys?"));
+        turn.Calls.ShouldBeEmpty();
         (await ReplyTo(brain, "What's waiting?")).ShouldBe("Hi.", "its own turn is not read as the next question's answer");
         _launcher.Started.Count.ShouldBe(1);
     }
@@ -679,6 +681,62 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
         new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(window.ToString("N"))!.LastTurnAt.ShouldBe(_time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task What_a_turn_of_its_own_did_with_its_tools_is_told_too()
+    {
+        // A chat's message must not make Raven act where the user cannot see it.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.ToolUse("toolu_9", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""));
+        _launcher.Last.Emit(StreamJson.ToolResult("toolu_9"));
+        _launcher.Last.Emit(StreamJson.Result(""));
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        var call = told[0].Calls.ShouldHaveSingleItem();
+        (call.Tool, call.Input).ShouldBe(("stop_chat", """{"chat":"issues"}"""));
+        told[0].Text.ShouldBeEmpty("it said nothing, and is told all the same");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_cut_off_by_its_process_going_says_so()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("I've told the issues chat to"));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+        _launcher.Last.Die(1);
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        told[0].Text.ShouldBe("Raven could not answer a message from another chat: its brain stopped in the middle of it.");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_read_in_part_by_a_question_that_was_cancelled_is_told_whole()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("The first half, "));
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("Two", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        _launcher.Last.Emit(StreamJson.Text("and the second."));
+        _launcher.Last.Emit(StreamJson.Result());
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        told[0].Text.ShouldBe("The first half, and the second.");
     }
 
     [Fact]

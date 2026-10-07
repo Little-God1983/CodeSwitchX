@@ -10,8 +10,8 @@ namespace CodeSwitchX.Ingest.Hooks;
 /// <c>AskUserQuestion</c>, which comes to the window's Raven chat as a card. A brain is told by where it runs, Raven's own
 /// folder, not by its name: a workspace folder named raven gets a name like <c>raven-72</c> too.
 /// </summary>
-/// <param name="runsIn">Whether the session messaged through a socket runs now in a folder (<c>ClaudeLiveSessions.RunsIn</c>).</param>
-public sealed class RavenMessages(AppPaths paths, Func<string, string, bool> runsIn)
+/// <param name="ranIn">Whether the session messaged through a socket ran in a folder (<c>ClaudeLiveSessions.RanIn</c>).</param>
+public sealed class RavenMessages(AppPaths paths, Func<string, string, bool> ranIn)
 {
     /// <summary>What the chat reads as the hook's <c>additionalContext</c>.</summary>
     public const string Context =
@@ -24,7 +24,7 @@ public sealed class RavenMessages(AppPaths paths, Func<string, string, bool> run
     public string? ContextFor(HookEvent hookEvent) =>
         hookEvent is { EventName: "UserPromptSubmit", AgentId: null }
         && CrossSessionMessage.SenderOf(hookEvent.Prompt) is { } sender
-        && runsIn(sender, paths.RavenDirectory)
+        && ranIn(sender, paths.RavenDirectory)
             ? Context
             : null;
 }
