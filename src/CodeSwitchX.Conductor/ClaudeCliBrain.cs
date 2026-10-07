@@ -109,6 +109,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>This turn's process is to be replaced once the turn is over: its Yard tools failed.</summary>
     private bool _replaceAfterTurn;
 
+    /// <summary>
+    /// The process is to be replaced, as its Yard tools failed, once a chat's turn it runs has ended: before the next
+    /// question goes in (#196). Touched while holding <see cref="_turns"/>.
+    /// </summary>
+    private bool _replaceBeforeQuestion;
+
     /// <summary>When the last turn ended, or the process started.</summary>
     private DateTimeOffset _lastTurnAt;
 
@@ -370,6 +376,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 await ReadUnaskedAsync(held, ct).ConfigureAwait(false);
             }
 
+            if (_replaceBeforeQuestion)
+            {
+                // The chat's turn that held it was read to its end above: the replacement the warning promised is done now.
+                _replaceBeforeQuestion = false;
+                _yardRetries++;
+                Stop();
+            }
+
             var failure = EnsureRunning();
             foreach (var notice in _notices)
             {
@@ -547,14 +561,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
 
             // Left before its echo came (cancelled, say): how the tools of the process still running stand is told with the
-            // next turn, and a failure replaces it after this one (#196), unless a chat's turn was left running on it: that
-            // turn is not cut off, and the next turn's own init replaces it. A process lost meanwhile is no more to tell of.
+            // next turn, and a failure replaces it after this one (#196). A chat's turn left running on it is not cut off:
+            // the replacement waits until before the next question, when that turn has been read to its end. A process
+            // lost meanwhile is no more to tell of.
             if (!taken && early is not null && process is not null && ReferenceEquals(process, _process))
             {
                 _notices.AddRange(Report(early));
-                if (_unaskedRead is not null)
+                if (_unaskedRead is not null && _replaceAfterTurn)
                 {
                     _replaceAfterTurn = false;
+                    _replaceBeforeQuestion = true;
                 }
             }
 
@@ -1346,6 +1362,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _processModel = null;
         _processEffort = null;
         _started = null;
+        _replaceBeforeQuestion = false; // replaced already
         Unfollow();
         process?.Dispose();
     }

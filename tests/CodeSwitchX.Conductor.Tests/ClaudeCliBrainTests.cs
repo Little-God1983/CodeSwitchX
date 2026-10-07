@@ -836,8 +836,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
     [Fact]
     public async Task A_chat_s_turn_left_running_by_a_cancelled_question_is_not_cut_off_for_a_failed_Yard()
     {
-        // The question waited behind a chat's turn, whose init said the Yard failed: the warning comes with the next
-        // question, and the chat's turn runs to its end; the process is replaced after the next question's turn.
+        // The question waited behind a chat's turn, whose init said the Yard failed: the chat's turn runs to its end, and
+        // the process is replaced before the next question, which brings the warning.
         var (brain, told) = Telling(Guid.NewGuid());
         await ReplyTo(brain, "One");
         string? question = null;
@@ -854,15 +854,17 @@ public sealed class ClaudeCliBrainTests : IDisposable
         first.Emit(StreamJson.Result("The bug report chat asks"));
         await WaitUntil(() => Copy(told).Count == 1);
         Copy(told)[0].Failure.ShouldBeNull();
-        first.Answer = written => [StreamJson.Init(status: "failed"), StreamJson.Taken(written), StreamJson.Text("Hi."), StreamJson.Result("Hi.")];
         var events = new List<BrainEvent>();
         await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
         {
             events.Add(e);
         }
 
-        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
-        first.Disposed.ShouldBeTrue("replaced after the next question's turn");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(
+            "Raven cannot see the Yard: its tools did not connect (failed). Its answers can only guess. Raven tries again with the next question.");
+        first.Disposed.ShouldBeTrue("replaced before the next question, as the warning says");
+        _launcher.Started.Count.ShouldBe(2);
+        Reply(events).ShouldBe("Hi.");
     }
 
     [Fact]
@@ -875,6 +877,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Answer = _ => [StreamJson.Init(status: "failed")];
         var lost = _launcher.Last;
         var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => lost.Written.Count == 2); // its failed init is in the pipe
         await Task.Delay(100, TestContext.Current.CancellationToken);
         lost.Die(1);
         await answer;
