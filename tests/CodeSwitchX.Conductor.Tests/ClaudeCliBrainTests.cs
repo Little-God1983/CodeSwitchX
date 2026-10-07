@@ -842,6 +842,51 @@ public sealed class ClaudeCliBrainTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task A_chat_s_turn_the_interrupt_of_a_cancelled_question_ends_is_told(bool cutOff)
+    {
+        // #195: a chat's turn had begun (its init came) when the question went in, and the question is cancelled before
+        // either echo: the interrupt ends the chat's turn, which is told, not read away unseen.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (!StreamJson.IsInterrupt(written))
+            {
+                question = written;
+                return [StreamJson.Init()];
+            }
+
+            return
+            [
+                StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks"), StreamJson.InterruptAck(written),
+                cutOff ? StreamJson.InterruptedResult : StreamJson.Result("The bug report chat asks"),
+                // The question stays queued (still_queued) and is taken in next: unheard, it does nothing, and is not told.
+                StreamJson.Init(), StreamJson.Taken(question!), StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
+            ];
+        };
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("What colour is the sky?", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => question is not null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks", cutOff ? ClaudeCliBrain.CutOff : null));
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        told.ShouldHaveSingleItem("the cancelled question's own turn is not told");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task A_question_cancelled_behind_a_chat_s_turn_leaves_that_turn_be_and_is_answered_unheard(bool uuidEchoed)
     {
         // An interrupt would end the chat's turn, which is no question's to end: the question stays queued, and once it
