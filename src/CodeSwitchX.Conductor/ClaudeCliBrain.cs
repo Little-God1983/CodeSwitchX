@@ -164,18 +164,59 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Where the turns it takes on its own are told; null tells them nowhere (they are still read).</summary>
     private readonly UnaskedTurns? _unasked;
 
+    /// <summary>Where it says when it is in its user's question (#193); null for nowhere.</summary>
+    private readonly AskedChats? _asked;
+
+    /// <summary>Its chat as its tool calls name it (<see cref="Header"/>); null for a brain that names none.</summary>
+    private readonly string? _askedKey;
+
+    /// <summary>It has said it is in its user's question, and not yet that it is out of it.</summary>
+    private bool _inQuestion;
+
+    /// <summary>
+    /// Says whether the process runs a turn of its user's question (#193): the Yard's tools that act refuse its chat
+    /// otherwise, as a message from another session started the turn. Touched while holding <see cref="_turns"/>.
+    /// </summary>
+    private void InQuestion(bool now)
+    {
+        if (_asked is null || _askedKey is null || now == _inQuestion)
+        {
+            return;
+        }
+
+        _inQuestion = now;
+        if (now)
+        {
+            _asked.Begin(_askedKey);
+        }
+        else
+        {
+            _asked.End(_askedKey);
+        }
+    }
+
+    /// <summary>
+    /// What its tool calls send as <see cref="YardMcp.ChatHeader"/>: a window's chat names its window, chat 0 itself the
+    /// overview; null for a brain that names none.
+    /// </summary>
+    private string? Header => _chat?.WorkspaceId?.ToString("D") ?? (_role == BrainRole.Overview ? YardMcp.OverviewChat : null);
+
     /// <summary>The process whose unasked turns are watched for (<see cref="WatchAsync"/>): one watcher a process.</summary>
     private IBrainProcess? _watched;
 
     /// <param name="role">Raven itself, with the Yard's tools; chat 0's overview; or the teller of chat news or the summarizer, with none.</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     /// <param name="unasked">Where the turns it takes on its own are told (#181); null for nowhere.</param>
+    /// <param name="asked">Where it says when it is in its user's question, so the Yard's tools act for that only (#193); null for nowhere.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
-        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null, UnaskedTurns? unasked = null)
+        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null, UnaskedTurns? unasked = null,
+        AskedChats? asked = null)
     {
         _role = role;
         _unasked = unasked;
         _chat = Toolless ? null : chat;
+        _asked = Toolless ? null : asked;
+        _askedKey = Header;
         _name = role switch
         {
             BrainRole.Teller => "Raven's news teller",
@@ -238,6 +279,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // good (a write blocked in the pipe sees no token): it is waited for from outside, for Silence, and a process
             // that took no line by then is given up, which kills it and ends the write.
             ct.ThrowIfCancellationRequested();
+            // In its user's question from before it goes in: a tool call it makes must find its chat asked (#193).
+            InQuestion(true);
             sent = await WithinAsync(SendAsync(process, text, id), Silence).ConfigureAwait(false);
 
             if (!sent)
@@ -301,12 +344,20 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                     if (read is null || TakeOther(process, read, id))
                     {
+                        // Another turn's echo: a chat's message, or a question cancelled before. Until the question's
+                        // own echo comes, what the brain does is that turn's, and no question of its user's.
+                        if (read is ClaudeTaken)
+                        {
+                            InQuestion(false);
+                        }
+
                         continue;
                     }
 
                     // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
+                    InQuestion(true);
                     TellOther(null);
                     if (early is not null)
                     {
@@ -360,6 +411,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         finally
         {
+            InQuestion(false);
             if (_abandon)
             {
                 _abandon = false;
@@ -864,7 +916,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         string? mcpConfig = null;
         // A window's chat names its window to the tools; chat 0 names itself the overview, which reads no card.
-        var header = _chat?.WorkspaceId?.ToString("D") ?? (_role == BrainRole.Overview ? YardMcp.OverviewChat : null);
+        var header = Header;
         if (header is not null)
         {
             mcpConfig = Path.Combine(_paths.RavenDirectory, "mcp", (_chat?.Key ?? YardMcp.OverviewChat) + ".json");

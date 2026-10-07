@@ -38,6 +38,7 @@ public sealed class EventApiService : IHostedService
     private readonly ChatAsks? _asks;
     private readonly IAppSettings? _settings;
     private readonly RavenMessages? _ravenMessages;
+    private readonly AskedChats? _asked;
     private WebApplication? _app;
 
     /// <summary>What a relay that hands a stop on sends along (CodeSwitchX.Hook's <c>Relay.StopsHeader</c>).</summary>
@@ -47,10 +48,12 @@ public sealed class EventApiService : IHostedService
     /// <param name="asks">Where what chats ask is held while the user answers it here; null leaves every ask to VS Code.</param>
     /// <param name="settings">The app's settings as the brain reads and changes them (#126); null for no settings tools.</param>
     /// <param name="ravenMessages">What a chat is told along with a message from Raven (#181); null tells it nothing.</param>
+    /// <param name="asked">The Raven chats in their user's question now (#193): the tools that act refuse the others; null refuses none.</param>
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
         ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null,
-        ChatAsks? asks = null, IAppSettings? settings = null, RavenMessages? ravenMessages = null)
+        ChatAsks? asks = null, IAppSettings? settings = null, RavenMessages? ravenMessages = null, AskedChats? asked = null)
     {
+        _asked = asked;
         _ravenMessages = ravenMessages;
         _paths = paths;
         _bus = bus;
@@ -113,6 +116,11 @@ public sealed class EventApiService : IHostedService
             if (_asks is not null)
             {
                 builder.Services.AddSingleton(_asks);
+            }
+
+            if (_asked is not null)
+            {
+                builder.Services.AddSingleton(_asked);
             }
 
             var mcp = builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })

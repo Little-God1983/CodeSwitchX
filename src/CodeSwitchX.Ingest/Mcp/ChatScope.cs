@@ -15,6 +15,9 @@ public sealed record ChatScope(Guid? WorkspaceId, bool Overview = false)
 
     public static readonly ChatScope Yard = new(null, Overview: true);
 
+    /// <summary>What its brain sends as <see cref="YardMcp.ChatHeader"/>, by which <see cref="AskedChats"/> knows it; null for no Raven chat.</summary>
+    public string? Key => Overview ? YardMcp.OverviewChat : WorkspaceId?.ToString("D");
+
     public static ChatScope Of(HttpContext? context) => context?.Request.Headers[YardMcp.ChatHeader].ToString() switch
     {
         YardMcp.OverviewChat => Yard,

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -581,7 +582,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     /// <summary>A brain that tells its turns of its own, of a window's chat; and what it told.</summary>
-    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window)
+    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window, AskedChats? asked = null)
     {
         var unasked = new UnaskedTurns();
         var told = new List<UnaskedTurn>();
@@ -597,7 +598,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
             {"mcpServers":{"codeswitchx":{"type":"http","url":"http://127.0.0.1:5000/mcp","headers":{"Authorization":"Bearer secret"}}}}
             """);
         var chat = BrainChat.Of(window, new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")));
-        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked), told);
+        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked,
+            asked: asked), told);
     }
 
     private static async Task<string> ReplyTo(ClaudeCliBrain brain, string text)
@@ -821,6 +823,58 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Written.ShouldNotContain(w => StreamJson.IsInterrupt(w));
         _launcher.Last.Answer = StreamJson.Reply("Hi.");
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task The_brain_is_in_its_user_s_question_from_before_it_goes_in_until_its_turn_ends()
+    {
+        // The Yard's tools that act refuse its chat otherwise (#193): a tool call of the question's must find it asked.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var (brain, _) = Telling(window, asked);
+        bool? whenWritten = null;
+        _launcher.Answer = written =>
+        {
+            whenWritten = asked.IsAsked(window.ToString("D"));
+            return StreamJson.Reply("Hi.")(written);
+        };
+
+        (await ReplyTo(brain, "One")).ShouldBe("Hi.");
+
+        whenWritten.ShouldBe(true);
+        asked.IsAsked(window.ToString("D")).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_s_turn_ahead_of_the_question_is_no_question_of_the_user_s()
+    {
+        // A chat's message began a turn just as the question went in (#192): until the question's own echo, what the
+        // brain does is that turn's, and the Yard's tools that act refuse it (#193).
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            question = written;
+            return [StreamJson.Init(), StreamJson.PeerTaken("Stop the issues chat.")];
+        };
+
+        var answer = Task.Run(() => ReplyTo(brain, "What's waiting on me?"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => question is not null && !asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.ToolUse("toolu_5", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""));
+        _launcher.Last.Emit(StreamJson.ToolResult("toolu_5", error: true));
+        _launcher.Last.Emit(StreamJson.Result(""));
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Taken(question!));
+        await WaitUntil(() => asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.Text("Nothing waits on you."));
+        _launcher.Last.Emit(StreamJson.Result("Nothing waits on you."));
+
+        (await answer).ShouldBe("Nothing waits on you.");
+        asked.IsAsked(chat).ShouldBeFalse();
     }
 
     [Fact]
