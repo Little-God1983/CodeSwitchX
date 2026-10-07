@@ -801,6 +801,98 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task How_the_tools_stand_is_told_with_the_next_question_when_one_was_cancelled_before_its_echo()
+    {
+        // #196: the only init said the Yard failed, and the question was cancelled before its echo came.
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (StreamJson.IsInterrupt(written))
+            {
+                return [StreamJson.InterruptAck(written), StreamJson.InterruptedResult];
+            }
+
+            question = written;
+            return [StreamJson.Init(status: "failed")];
+        };
+        var first = _launcher.Last;
+
+        await CancelledAsync(brain, "What's waiting on me?", () => question);
+
+        first.Disposed.ShouldBeTrue("its Yard tools failed: it is replaced, as after an answered question");
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+        _launcher.Started.Count.ShouldBe(2);
+        Reply(events).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task A_chat_s_turn_left_running_by_a_cancelled_question_is_not_cut_off_for_a_failed_Yard()
+    {
+        // The question waited behind a chat's turn, whose init said the Yard failed: the chat's turn runs to its end, and
+        // the process is replaced before the next question, which brings the warning.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            question = written;
+            return [StreamJson.Init(status: "failed"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks")];
+        };
+        var first = _launcher.Last;
+
+        await CancelledAsync(brain, "What's waiting on me?", () => question);
+
+        first.Disposed.ShouldBeFalse("the chat's turn runs on");
+        first.Emit(StreamJson.Result("The bug report chat asks"));
+        await WaitUntil(() => Copy(told).Count == 1);
+        Copy(told)[0].Failure.ShouldBeNull();
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(
+            "Raven cannot see the Yard: its tools did not connect (failed). Its answers can only guess. Raven tries again with the next question.");
+        first.Disposed.ShouldBeTrue("replaced before the next question, as the warning says");
+        _launcher.Started.Count.ShouldBe(2);
+        Reply(events).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task A_lost_process_s_tools_are_not_told_of()
+    {
+        // Its init said the Yard failed, and it went before the question's echo: the next start says it was started again,
+        // with no warning about the tools of the process that went.
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = _ => [StreamJson.Init(status: "failed")];
+        var lost = _launcher.Last;
+        var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => lost.Written.Count == 2); // its failed init is in the pipe
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        lost.Die(1);
+        await answer;
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Three", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldAllBe(n => !n.Text.StartsWith("Raven cannot see the Yard", StringComparison.Ordinal));
+        Reply(events).ShouldBe("Hi.");
+    }
+
+    [Fact]
     public async Task A_cancelled_question_taken_in_while_the_next_one_waits_is_not_read_as_its_answer()
     {
         // Cancelled before any echo came, the question stays queued behind the turn the interrupt ended (still_queued, CLI

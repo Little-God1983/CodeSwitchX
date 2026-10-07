@@ -106,7 +106,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Processes replaced in a row because their Yard tools failed; back to 0 once they connect.</summary>
     private int _yardRetries;
 
-    /// <summary>This turn's process is to be replaced once the turn is over: its Yard tools failed.</summary>
+    /// <summary>
+    /// The process is to be replaced, as its Yard tools failed, once it is idle: after the turn, or, when a chat's turn
+    /// runs on it, once that has ended (<see cref="ReplaceForYardWhenIdle"/>). A process started since needs none.
+    /// Touched while holding <see cref="_turns"/>.
+    /// </summary>
     private bool _replaceAfterTurn;
 
     /// <summary>When the last turn ended, or the process started.</summary>
@@ -357,6 +361,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var sent = false;
         var id = Guid.NewGuid().ToString("D"); // the question's line's uuid, which its echo carries back
         var taken = false; // its echo came: what follows is its answer
+        // The init before its echo: how this process's tools stand, told with the answer, or, when none comes, with the next
+        // turn (#196).
+        ClaudeInit? early = null;
         try
         {
             // A turn it took on its own just now, which the watcher has not come to yet: read before the question goes in,
@@ -365,6 +372,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             if (!Toolless && !_resuming && _process is { } held)
             {
                 await ReadUnaskedAsync(held, ct).ConfigureAwait(false);
+            }
+
+            // A chat's turn that held it up was read to its end above: the replacement the warning promised is done now.
+            // One that exited on its own is EnsureRunning's to tell of as lost.
+            if (_process is { Exited.IsCompleted: false })
+            {
+                ReplaceForYardWhenIdle();
             }
 
             var failure = EnsureRunning();
@@ -404,9 +418,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // a turn just as the question went in, so the pre-read above did not see it. That turn's echo comes first; the
             // question then waits for its result, or is folded into it at a tool call, and its own echo comes mid-turn.
             // Either way, what follows the question's echo is its answer (TakeOther). An init that comes meanwhile says how
-            // this process's tools stand, whoever's turn it begins, so the latest is told with the answer. A Claude Code
-            // that echoes nothing answers with no echo before it.
-            ClaudeInit? early = null;
+            // this process's tools stand, whoever's turn it begins, so the latest is told with the answer, or with the next
+            // turn when no answer comes (see finally). A Claude Code that echoes nothing answers with no echo before it.
             ForgetStale(process);
             while (true)
             {
@@ -544,12 +557,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 Stop();
             }
 
-            if (_replaceAfterTurn)
+            // Left before its echo came (cancelled, say): how the tools of the process still running stand is told with the
+            // next turn, and a failure replaces it (#196). A process lost meanwhile is no more to tell of.
+            if (!taken && early is not null && process is not null && ReferenceEquals(process, _process))
             {
-                _replaceAfterTurn = false;
-                _yardRetries++;
-                Stop();
+                _notices.AddRange(Report(early));
             }
+
+            ReplaceForYardWhenIdle();
 
             // Each digest stands on its own: what earlier chats said must not stay in the teller's mind to sway the next.
             // Each summary too: what one window's chat said must not reach the summary of another.
@@ -590,6 +605,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     }
 
                     await ReadUnaskedAsync(process).ConfigureAwait(false);
+                    ReplaceForYardWhenIdle(); // a chat's turn that held a replacement up has ended
                 }
                 finally
                 {
@@ -1099,6 +1115,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         _processModel = model;
         _processEffort = effort;
+        _replaceAfterTurn = false; // a new process: one whose tools failed was replaced, whatever ended it
         _lastTurnAt = _session?.LastTurnAt ?? _time.GetUtcNow();
         if (session is { } started)
         {
@@ -1135,6 +1152,21 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         ["uuid"] = id,
         ["message"] = new JsonObject { ["role"] = "user", ["content"] = text },
     }.ToJsonString());
+
+    /// <summary>
+    /// Replaces the process whose Yard tools failed (<see cref="_replaceAfterTurn"/>) when no chat's turn runs on it: one
+    /// that does is not cut off, and the watcher or the next question does it once that turn has ended (#196). Holding
+    /// <see cref="_turns"/>.
+    /// </summary>
+    private void ReplaceForYardWhenIdle()
+    {
+        if (_replaceAfterTurn && _unaskedRead is null)
+        {
+            _replaceAfterTurn = false;
+            _yardRetries++;
+            Stop();
+        }
+    }
 
     /// <summary>
     /// What a question's turn tells of its init. Every turn's init says how the tools stand; a failure is told once, and
