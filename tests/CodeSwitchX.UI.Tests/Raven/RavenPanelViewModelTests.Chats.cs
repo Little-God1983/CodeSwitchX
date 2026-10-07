@@ -110,16 +110,11 @@ public sealed partial class RavenPanelViewModelTests
         vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe([(RavenLogKind.Note, "Continued in chat 3, ContentAutomatorX: Raven started a chat there.")]);
         ChatNumbered(vm, 1).Unread.ShouldBe(0, "nothing of it is left unread there");
 
-        // The next question there is told what was moved: its brain is another.
+        // One brain for every chat here: it answered the question itself, and is not told of it again.
         vm.SelectedChat = ChatNumbered(vm, 3);
         Type(vm, "open it");
         await WithinAsync(vm.PendingAnswers);
-        _brain.Asked[^1].ShouldStartWith("[The user asked this in chat 1, CodeSwitchX, and was moved here when Raven started a chat in this window: "
-            + "\"In ContentAutomatorX, create a bug report chat for the F keys\"]");
-        _brain.Asked[^1].ShouldEndWith("open it");
-        Type(vm, "and then?");
-        await WithinAsync(vm.PendingAnswers);
-        _brain.Asked[^1].ShouldNotContain("moved here", Case.Insensitive, "told once");
+        _brain.Asked[^1].ShouldNotContain("moved here", Case.Insensitive);
     }
 
     [Fact]
@@ -146,7 +141,7 @@ public sealed partial class RavenPanelViewModelTests
         Type(vm, "In ContentAutomatorX");
         Type(vm, "create a bug report chat");
         _brain.BeforeSent.SetResult();
-        await Task.Delay(50, TestContext.Current.CancellationToken);
+        await WithinAsync(UntilAsync(() => _brain.Sent.Count == 1));
         vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
@@ -160,22 +155,55 @@ public sealed partial class RavenPanelViewModelTests
         ]);
     }
 
-    [Fact]
-    public async Task A_moved_question_is_told_only_while_it_is_fresh()
+    private static async Task UntilAsync(Func<bool> condition)
     {
+        while (!condition())
+        {
+            await Task.Delay(10);
+        }
+    }
+
+    [Fact]
+    public async Task A_second_chat_started_in_the_same_answer_moves_the_question_on()
+    {
+        // "A bug chat in ContentAutomatorX and a docs chat in CodeSwitchX", asked in chat 0: the question follows each.
         var (vm, _) = await ChatsVmAsync();
         _brain.Gate = new TaskCompletionSource();
-        vm.SelectedChat = ChatNumbered(vm, 1);
-        Type(vm, "In ContentAutomatorX, create a bug report chat");
-        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
+        _brain.Answer = _ => [new BrainText("Both started.")];
+
+        Type(vm, "Start a bug chat in ContentAutomatorX and a docs chat in CodeSwitchX");
+        vm.FollowWork(YardMcp.OverviewChat, ContentAutomatorX);
+        vm.FollowWork(YardMcp.OverviewChat, CodeSwitchX);
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
 
-        _time.Advance(RavenPanelViewModel.CarriedLifetime + TimeSpan.FromMinutes(1));
-        Type(vm, "open it");
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
+        [
+            (RavenLogKind.Note, "Asked in chat 0, the Yard."),
+            (RavenLogKind.You, "Start a bug chat in ContentAutomatorX and a docs chat in CodeSwitchX"),
+            (RavenLogKind.Raven, "Both started."),
+        ]);
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 1, CodeSwitchX: Raven started a chat there."]);
+        vm.SelectedChat = vm.YardChat;
+        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 3, ContentAutomatorX: Raven started a chat there."]);
+    }
+
+    [Fact]
+    public async Task A_chat_started_in_the_window_the_user_is_in_moves_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        vm.SelectedChat = ChatNumbered(vm, 3);
+
+        Type(vm, "Create a bug report chat");
+        vm.FollowWork(YardMcp.ChatKey(ContentAutomatorX, overview: false)!, ContentAutomatorX);
+        _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
 
-        _brain.Asked[^1].ShouldNotContain("moved here", Case.Insensitive);
+        vm.Log.ShouldAllBe(e => e.Kind != RavenLogKind.Note);
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
     }
 
     [Fact]

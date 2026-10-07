@@ -1772,7 +1772,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // Asked in another chat: it keeps saying where, or "stop it" there would mean the window the user is in now.
                 takenEarlier += waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {NameOf(waiting.Chat)}:] " + waiting.Text + "\n";
-                takenEntries.AddRange(waiting.Entries);
+                // Its lines stay in the chat they were said in: moved, they would leave that chat with no word why.
             }
         }
 
@@ -1824,11 +1824,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        if (_questions.FirstOrDefault(q => q.Sent && !q.Ended && q.Chat == from) is { } question)
+        // The question the asking chat's brain answers now; moved before in this turn, it is in another chat already.
+        if (_questions.FirstOrDefault(q => q.Sent && !q.Ended && q.AskedIn == from) is { } question && question.Chat != to)
         {
-            var fromName = NameOf(from);
+            var current = question.Chat;
             question.Chat = to;
-            foreach (var entry in question.Entries)
+            var moved = 0;
+            foreach (var entry in question.Entries.Where(Log.Contains))
             {
                 if (entry.IsUnread && IsOpen)
                 {
@@ -1839,33 +1841,48 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 {
                     entry.Chat.Unread -= entry.Unread; // collapsed: still unread, in the chat it is in now
                     to.Unread += entry.Unread;
+                    moved += entry.Unread;
                 }
 
                 entry.Chat = to;
             }
 
-            from.IsNewsPulsing &= from.Unread > 0;
-            // Placed above the question, and so of its time: the log is in time order.
-            var at = question.Entries.Count > 0 ? question.Entries[0].At : _time.GetUtcNow();
-            var origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {fromName}.", at) { Chat = to };
-            var first = question.Entries.Count > 0 ? Log.IndexOf(question.Entries[0]) : -1;
-            if (first >= 0)
+            current.IsNewsPulsing &= current.Unread > 0;
+            if (moved > 0)
             {
-                Log.Insert(first, origin);
-            }
-            else
-            {
-                Log.Add(origin);
+                PulseNews(to);
             }
 
-            AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", from);
-            _carried[to] = ($"[The user asked this in chat {from.Number}, {fromName}, and was moved here when Raven started a chat in this "
-                + $"window: \"{question.Text}\"]\n", _time.GetUtcNow());
-            _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", from.Number, to.Number);
+            if (question.Origin is null)
+            {
+                // Placed above the question, and so of its time: the log is in time order. A question whose first lines the
+                // log has let go of is noted above what is left of it.
+                var first = question.Entries.Select(Log.IndexOf).Where(i => i >= 0).DefaultIfEmpty(-1).Min();
+                var at = first >= 0 ? Log[first].At : _time.GetUtcNow();
+                question.Origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {NameOf(from)}.", at) { Chat = to };
+                question.Entries.Insert(0, question.Origin);
+                Log.Insert(first >= 0 ? first : Log.Count, question.Origin);
+            }
+
+            AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", current);
+            if (BrainOf(to) != BrainOf(from))
+            {
+                // That chat's brain is another, and knows nothing of the question: its next question is told.
+                _carried[to] = ($"[The user asked this in chat {from.Number}, {NameOf(from)}, and was moved here when Raven started a chat in this "
+                    + $"window: \"{question.Text}\"]\n", _time.GetUtcNow());
+            }
+
+            _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", current.Number, to.Number);
         }
 
-        SelectedChat = to;
-        ShowSelected(); // the entries moved, also when the chat was shown already
+        if (SelectedChat == to)
+        {
+            ShowSelected(); // the entries moved into the chat shown
+        }
+        else
+        {
+            SelectedChat = to;
+        }
     }
 
     /// <summary>The question goes to its chat's brain after those before it, on the floor it was given (UI thread).</summary>
@@ -1902,6 +1919,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         /// <summary>The chat it was asked in, whose brain answers it, wherever the answer goes.</summary>
         public RavenChat AskedIn { get; } = chat;
+
+        /// <summary>The note above it saying where it was asked, once it was moved (<see cref="FollowWork"/>); moves with it.</summary>
+        public RavenLogEntry? Origin { get; set; }
 
         /// <summary>Its entries in the log so far: the words asked, the replies and the cards; what moves with it.</summary>
         public List<RavenLogEntry> Entries { get; } = [];
@@ -1974,8 +1994,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
             // And only while the user is still in that chat: one who moved on is not answering it.
-            // Not once the user was moved to another chat with it (#180): its brain is not that chat's, and would not hear.
-            _brainAsked = !floor.IsCancellationRequested && question.Chat == question.AskedIn && CurrentChat == question.Chat
+            // Not once the user was moved to a chat of another brain with it (#180): that brain did not ask, and would not hear.
+            _brainAsked = !floor.IsCancellationRequested && BrainOf(question.Chat) == BrainOf(question.AskedIn) && CurrentChat == question.Chat
                 && Log.Skip(before is null ? 0 : Log.IndexOf(before) + 1).LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
                 && said.Text.TrimEnd().EndsWith('?');
         }

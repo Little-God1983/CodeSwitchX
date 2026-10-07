@@ -120,9 +120,10 @@ public sealed class RavenActions : IYardActions
         _claim(chat.SessionId, workspace.Id);
         _started[chat.SessionId] = true;
         _ui.Post(() => _shell().MarkVoice(chat.SessionId, Label(modelId, level)));
-        if (askedIn is not null && askedIn != YardMcp.ChatKey(workspace.Id, overview: false))
+        if (askedIn is not null)
         {
-            // Asked elsewhere: the user follows the work to the window's chat, where the chat's news comes (#180).
+            // The user follows the work to the window's chat, where the chat's news comes (#180); the panel knows whether
+            // that is where they are.
             _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id));
         }
 
