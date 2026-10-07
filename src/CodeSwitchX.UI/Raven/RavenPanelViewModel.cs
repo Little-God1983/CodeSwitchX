@@ -1809,72 +1809,61 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
-    /// (#180): the user follows the work. The question running there, its words and its answer so far, moves to that
-    /// window's Raven chat, where the rest of the answer and the new chat's news come, and the panel shows that chat. A
-    /// note in each chat says where the question went and where it came from. Nothing moves when no question of that
-    /// chat's runs, or the window has no chat; the panel still shows the window's chat. UI thread.
+    /// (#180): the user follows the work. The question whose turn is starting it, its words and its answer so far, moves
+    /// to that window's Raven chat, where the rest of the answer and the new chat's news come, and the panel shows that
+    /// chat. A note in each chat says where the question went and where it came from. Nothing happens when no question of
+    /// that chat's is starting a chat (one asked since, say), the window has no chat, or it is the user's own. UI thread.
     /// </summary>
     public void FollowWork(string askedIn, Guid workspaceId)
     {
         var to = Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == workspaceId);
         var from = askedIn == YardMcp.OverviewChat ? YardChat
-            : Chats.FirstOrDefault(c => c.WorkspaceId is { } id && YardMcp.ChatKey(id, overview: false) == askedIn);
-        if (to is null || from is null || from == to)
+            : Guid.TryParse(askedIn, out var window) ? Chats.FirstOrDefault(c => c.WorkspaceId == window) : null;
+        // The question whose turn is starting the chat: not one asked since in that chat, while a slow start went on.
+        var question = _questions.FirstOrDefault(q => q.Sent && !q.Ended && q.StartingChat && q.AskedIn == from);
+        if (to is null || from is null || from == to || question is null || question.Chat == to)
         {
             return;
         }
 
-        // The question the asking chat's brain answers now; moved before in this turn, it is in another chat already.
-        if (_questions.FirstOrDefault(q => q.Sent && !q.Ended && q.AskedIn == from) is { } question && question.Chat != to)
+        var current = question.Chat;
+        question.Chat = to;
+        _carried.Remove(current); // moved on: the chat it was in is told nothing of it
+        var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
+        foreach (var (entry, _) in kept)
         {
-            var current = question.Chat;
-            question.Chat = to;
-            var moved = 0;
-            foreach (var entry in question.Entries.Where(Log.Contains))
+            if (entry.IsUnread)
             {
-                if (entry.IsUnread && IsOpen)
-                {
-                    entry.Chat.Unread -= entry.Unread; // shown now, where the user is moved to
-                    entry.Unread = 0;
-                }
-                else if (entry.IsUnread)
-                {
-                    entry.Chat.Unread -= entry.Unread; // collapsed: still unread, in the chat it is in now
-                    to.Unread += entry.Unread;
-                    moved += entry.Unread;
-                }
-
-                entry.Chat = to;
+                // The user is moved to the chat with it: its lines are shown to them, not come while they were away.
+                entry.Chat.Unread -= entry.Unread;
+                entry.Unread = 0;
             }
 
-            current.IsNewsPulsing &= current.Unread > 0;
-            if (moved > 0)
-            {
-                PulseNews(to);
-            }
-
-            if (question.Origin is null)
-            {
-                // Placed above the question, and so of its time: the log is in time order. A question whose first lines the
-                // log has let go of is noted above what is left of it.
-                var first = question.Entries.Select(Log.IndexOf).Where(i => i >= 0).DefaultIfEmpty(-1).Min();
-                var at = first >= 0 ? Log[first].At : _time.GetUtcNow();
-                question.Origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {NameOf(from)}.", at) { Chat = to };
-                question.Entries.Insert(0, question.Origin);
-                Log.Insert(first >= 0 ? first : Log.Count, question.Origin);
-            }
-
-            AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", current);
-            if (BrainOf(to) != BrainOf(from))
-            {
-                // That chat's brain is another, and knows nothing of the question: its next question is told.
-                _carried[to] = ($"[The user asked this in chat {from.Number}, {NameOf(from)}, and was moved here when Raven started a chat in this "
-                    + $"window: \"{question.Text}\"]\n", _time.GetUtcNow());
-            }
-
-            _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", current.Number, to.Number);
+            entry.Chat = to;
         }
 
+        current.IsNewsPulsing &= current.Unread > 0;
+        if (question.Origin is null)
+        {
+            // Placed above the question, and so of its time: the log is in time order. A question whose first lines the
+            // log has let go of is noted above what is left of it.
+            var first = kept.Count > 0 ? kept[0].At : -1;
+            var at = first >= 0 ? Log[first].At : _time.GetUtcNow();
+            question.Origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {NameOf(from)}.", at) { Chat = to };
+            question.Entries.Insert(0, question.Origin);
+            Log.Insert(first >= 0 ? first : Log.Count, question.Origin);
+            TrimLog();
+        }
+
+        AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", current);
+        if (BrainOf(to) != BrainOf(from))
+        {
+            // That chat's brain is another, and knows nothing of the question: its next question is told.
+            _carried[to] = ($"[The user asked this in chat {from.Number}, {NameOf(from)}, and was moved here when Raven started a chat in this "
+                + $"window: \"{question.Text}\"]\n", _time.GetUtcNow());
+        }
+
+        _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", current.Number, to.Number);
         if (SelectedChat == to)
         {
             ShowSelected(); // the entries moved into the chat shown
@@ -1922,6 +1911,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         /// <summary>The note above it saying where it was asked, once it was moved (<see cref="FollowWork"/>); moves with it.</summary>
         public RavenLogEntry? Origin { get; set; }
+
+        /// <summary>Its turn is in a start_chat call: the one a move of the user is for (<see cref="FollowWork"/>).</summary>
+        public bool StartingChat { get; set; }
 
         /// <summary>Its entries in the log so far: the words asked, the replies and the cards; what moves with it.</summary>
         public List<RavenLogEntry> Entries { get; } = [];
@@ -2086,6 +2078,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         spoken.Add(piece);
                         break;
                     case BrainToolCall call:
+                        if (question is not null)
+                        {
+                            question.StartingChat = call.Tool == "start_chat"; // the app moves the user while it runs (#180)
+                        }
+
                         spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
                         // The part of the reply before the card is done: "Let me check.\n\n" keeps no empty lines.
                         if (reply is not null)
@@ -2100,6 +2097,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainToolResult { Failed: true, Id: var id } when cards.TryGetValue(id, out var failed):
                         failed.Failed = true;
+                        if (question is not null)
+                        {
+                            question.StartingChat = false;
+                        }
+
+                        break;
+                    case BrainToolResult when question is not null:
+                        question.StartingChat = false;
                         break;
                     case BrainNotice or BrainFailed when quiet:
                         _logger.LogWarning("Raven's news teller: {What}", e);
@@ -3473,23 +3478,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenLogEntry Append(RavenLogEntry entry, RavenChat? chat = null)
     {
         entry.Chat = chat ?? CurrentChat;
-        while (Log.Count >= MaximumLogEntries)
-        {
-            var dropped = Log[0];
-            Shown.Remove(dropped);
-            Log.RemoveAt(0);
-            if (dropped.Ask is { IsOpen: true })
-            {
-                CountWaiting(dropped.Chat);
-            }
-
-            if (dropped.IsUnread)
-            {
-                dropped.Chat.Unread -= dropped.Unread; // opening the chat would not show it any more
-                dropped.Unread = 0;
-            }
-        }
-
+        TrimLog(1);
         Log.Add(entry);
         if (IsShown(entry))
         {
@@ -3962,6 +3951,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _telling = false;
             RestTellerIfIdle();
             UpdateState(); // then the chat's cards, one at a time, once it is quiet
+        }
+    }
+
+    /// <summary>Drops the oldest entries until <paramref name="room"/> more fit under <see cref="MaximumLogEntries"/>.</summary>
+    private void TrimLog(int room = 0)
+    {
+        while (Log.Count + room > MaximumLogEntries)
+        {
+            var dropped = Log[0];
+            Shown.Remove(dropped);
+            Log.RemoveAt(0);
+            if (dropped.Ask is { IsOpen: true })
+            {
+                CountWaiting(dropped.Chat);
+            }
+
+            if (dropped.IsUnread)
+            {
+                dropped.Chat.Unread -= dropped.Unread; // opening the chat would not show it any more
+                dropped.Unread = 0;
+            }
         }
     }
 

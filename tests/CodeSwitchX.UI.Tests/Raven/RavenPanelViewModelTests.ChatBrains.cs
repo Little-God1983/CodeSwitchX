@@ -407,11 +407,9 @@ public sealed partial class RavenPanelViewModelTests
     private async Task<(RavenPanelViewModel Vm, FakeChatBrains Brains)> MovedToChat3Async()
     {
         var (vm, brains) = await ChatBrainsVmAsync();
-        var one = brains.Windows[CodeSwitchX] = new FakeBrain { Gate = new TaskCompletionSource(), Answer = _ => [new BrainText("Started.")] };
+        brains.Windows[CodeSwitchX] = new FakeBrain { Answer = _ => StartingIn(vm, CodeSwitchX, ContentAutomatorX, "On it.", " Started.") };
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "In ContentAutomatorX, create a bug report chat for the F keys");
-        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
-        one.Gate!.SetResult();
         await WithinAsync(vm.PendingAnswers);
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         return (vm, brains);
