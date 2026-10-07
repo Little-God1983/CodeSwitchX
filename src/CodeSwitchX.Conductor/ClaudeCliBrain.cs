@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using CodeSwitchX.Core.Yard;
@@ -17,6 +18,8 @@ namespace CodeSwitchX.Conductor;
 /// A Raven chat's brain (<see cref="BrainChat"/>) keeps its conversation as a Claude Code session: a process rested by the
 /// pool or ended with the app is started again with it (<c>--resume</c>) while it is younger than the quiet reset; it is
 /// not shown in VS Code's chat list, which lists only VS Code's own sessions. Any other brain saves nothing.
+/// Another session can message it (a chat's <c>SendMessage</c> back to Raven), which starts a turn no question asked for:
+/// such a turn is read as it comes, between questions, and what it said is told (<see cref="UnaskedTurns"/>, #181).
 /// </summary>
 public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 {
@@ -158,12 +161,20 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>This turn's conversation is to be left once the turn is over: picked up again, it could not go on.</summary>
     private bool _abandon;
 
+    /// <summary>Where the turns it takes on its own are told; null tells them nowhere (they are still read).</summary>
+    private readonly UnaskedTurns? _unasked;
+
+    /// <summary>The process whose unasked turns are watched for (<see cref="WatchAsync"/>): one watcher a process.</summary>
+    private IBrainProcess? _watched;
+
     /// <param name="role">Raven itself, with the Yard's tools; chat 0's overview; or the teller of chat news or the summarizer, with none.</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
+    /// <param name="unasked">Where the turns it takes on its own are told (#181); null for nowhere.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
-        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null)
+        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null, UnaskedTurns? unasked = null)
     {
         _role = role;
+        _unasked = unasked;
         _chat = Toolless ? null : chat;
         _name = role switch
         {
@@ -197,6 +208,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var sent = false;
         try
         {
+            // A turn it took on its own just now, which the watcher has not come to yet: read before the question goes in,
+            // so it is not read as this one's answer. Not while it picks a conversation up again: what it said then is the
+            // question's to read (a session that is gone ends it at once).
+            if (!Toolless && !_resuming && _process is { } held)
+            {
+                await ReadUnaskedAsync(held).ConfigureAwait(false);
+            }
+
             var failure = EnsureRunning();
             foreach (var notice in _notices)
             {
@@ -363,8 +382,117 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 Stop();
             }
 
+            // From its first turn on, a process is watched for turns it takes on its own between questions.
+            if (!Toolless && _process is { } current && !ReferenceEquals(current, _watched))
+            {
+                _watched = current;
+                _ = WatchAsync(current);
+            }
+
             _lastTurnAt = _time.GetUtcNow();
             _turns.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reads the turns the process takes on its own while no question runs, for as long as it is the brain's: a message
+    /// from another Claude session starts one (#181). Lines read by a question's turn meanwhile are that turn's; the
+    /// watcher only takes the pipe between turns. Never throws.
+    /// </summary>
+    private async Task WatchAsync(IBrainProcess process)
+    {
+        try
+        {
+            while (await process.Lines.WaitToReadAsync().ConfigureAwait(false))
+            {
+                await _turns.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    if (!ReferenceEquals(process, _process))
+                    {
+                        return; // stopped or replaced meanwhile: its successor is watched once it answered a question
+                    }
+
+                    await ReadUnaskedAsync(process).ConfigureAwait(false);
+                }
+                finally
+                {
+                    _turns.Release();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Watching {Brain} for turns of its own failed", _name);
+        }
+    }
+
+    /// <summary>
+    /// Reads a turn the brain took on its own to its end, if one has begun, and tells what it said. Left in the pipe, its
+    /// lines would be read as the next question's answer, and that question's as the one after it. Lines that begin no
+    /// turn are dropped. Holding <see cref="_turns"/>.
+    /// </summary>
+    private async Task ReadUnaskedAsync(IBrainProcess process)
+    {
+        var said = new StringBuilder();
+        var tools = new List<string>();
+        var begun = false;
+        while (true)
+        {
+            string? line;
+            if (process.Lines.TryRead(out var ready))
+            {
+                line = ready;
+            }
+            else if (!begun)
+            {
+                return;
+            }
+            else
+            {
+                (line, var timedOut) = await NextLineAsync(process, CancellationToken.None).ConfigureAwait(false);
+                if (timedOut)
+                {
+                    Lose(process, $"gave no answer for {Silence.TotalSeconds:0} s in a turn of its own");
+                    break;
+                }
+
+                if (line is null)
+                {
+                    break; // it went: the next question starts it again, and says so
+                }
+            }
+
+            var read = ClaudeStream.Read(line);
+            begun |= read is not null;
+            if (read is ClaudeTurnOver)
+            {
+                break;
+            }
+
+            if (read is ClaudeEvents { Events: var events })
+            {
+                foreach (var e in events)
+                {
+                    if (e is BrainText text)
+                    {
+                        said.Append(text.Delta);
+                    }
+                    else if (e is BrainToolCall call)
+                    {
+                        tools.Add(call.Tool);
+                    }
+                }
+            }
+        }
+
+        _lastTurnAt = _time.GetUtcNow();
+        var words = said.ToString().Trim();
+        _logger.LogInformation("{Brain}{Chat} took a turn of its own, as for a message from another session; it called {Tools} and said {Length} characters",
+            _name, _chat is null ? "" : $" of chat {_chat.Key}", tools.Count == 0 ? "nothing" : string.Join(", ", tools), words.Length);
+        if (words.Length > 0)
+        {
+            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words));
         }
     }
 

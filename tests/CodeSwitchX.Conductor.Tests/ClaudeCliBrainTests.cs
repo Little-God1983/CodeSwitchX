@@ -578,6 +578,113 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Disposed.ShouldBeTrue();
     }
 
+    /// <summary>A brain that tells its turns of its own, of a window's chat; and what it told.</summary>
+    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window)
+    {
+        var unasked = new UnaskedTurns();
+        var told = new List<UnaskedTurn>();
+        unasked.Taken += turn =>
+        {
+            lock (told)
+            {
+                told.Add(turn);
+            }
+        };
+        // A window's chat writes its own MCP config from the app's.
+        File.WriteAllText(_paths.McpConfigFile, """
+            {"mcpServers":{"codeswitchx":{"type":"http","url":"http://127.0.0.1:5000/mcp","headers":{"Authorization":"Bearer secret"}}}}
+            """);
+        var chat = BrainChat.Of(window, new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")));
+        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked), told);
+    }
+
+    private static async Task<string> ReplyTo(ClaudeCliBrain brain, string text)
+    {
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync(text, TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        return Reply(events);
+    }
+
+    /// <summary>What a brain wrote for a chat's message to it on 2026-10-06 (#181), between two of the user's questions.</summary>
+    private static readonly string[] ChatAsksRaven =
+    [
+        StreamJson.Init(), StreamJson.Text("The ContentAutomatorX chat needs a few details: "), StreamJson.Text("which F keys?"),
+        StreamJson.AssistantText("The ContentAutomatorX chat needs a few details: which F keys?"), StreamJson.Result("The ContentAutomatorX chat needs a few details: which F keys?"),
+    ];
+
+    [Fact]
+    public async Task A_turn_the_brain_takes_on_its_own_between_questions_is_told_in_its_window_s_chat()
+    {
+        var window = Guid.NewGuid();
+        var (brain, told) = Telling(window);
+        (await ReplyTo(brain, "Start a bug report chat in ContentAutomatorX")).ShouldBe("Hi.");
+
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        told.ShouldBe([new UnaskedTurn(window, "The ContentAutomatorX chat needs a few details: which F keys?")]);
+        (await ReplyTo(brain, "What's waiting?")).ShouldBe("Hi.", "its own turn is not read as the next question's answer");
+        _launcher.Started.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_comes_just_before_a_question_is_read_before_the_question_goes_in()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        // Asked at once: whichever comes to it first, the watcher or the question, the lines are its own turn's.
+        (await ReplyTo(brain, "Two")).ShouldBe("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        told.ShouldHaveSingleItem().Text.ShouldEndWith("which F keys?");
+    }
+
+    [Fact]
+    public async Task Lines_between_questions_that_begin_no_turn_are_dropped_without_waiting_for_one()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit("""{"type":"system","subtype":"status","status":"idle"}""");
+        _launcher.Last.Emit("not json");
+
+        (await ReplyTo(brain, "Two")).ShouldBe("Hi.");
+        told.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_never_ends_gives_the_process_up_and_the_next_question_starts_another()
+    {
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+        _time.Advance(ClaudeCliBrain.Silence);
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldContain("in a turn of its own");
+        Reply(events).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(2);
+    }
+
     private static string Value(IReadOnlyList<string> arguments, string option)
     {
         var index = arguments.ToList().IndexOf(option);

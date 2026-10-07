@@ -302,6 +302,52 @@ public class ClaudeLiveSessionsTests : IDisposable
         _live.ShowsPrompt("not-a-chat").ShouldBeNull();
     }
 
+    private const string RavenFolder = @"C:\Users\Little God\AppData\Local\CodeSwitchX\raven";
+    private const string RavenSocket = @"\\.\pipe\LOCAL\cc-msg-4fbd2cd19fc698d8b7ce1d73eef30688";
+
+    [Fact]
+    public void A_brain_running_in_raven_s_folder_is_found_by_the_socket_it_messages_from()
+    {
+        // A brain is claude -p, not a chat in a VS Code tab: its record is read all the same.
+        SessionRecord(41000, RavenFolder, RavenSocket);
+
+        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeTrue();
+        _live.RunsIn(RavenSocket.ToUpperInvariant(), RavenFolder.ToLowerInvariant() + @"\").ShouldBeTrue("Windows paths match whatever their case");
+    }
+
+    [Fact]
+    public void A_session_in_another_folder_or_with_another_socket_is_not_found()
+    {
+        // A workspace folder named raven gets a name like raven-72 too: the folder is what tells a brain.
+        SessionRecord(41000, @"e:\Repos\raven", RavenSocket);
+        SessionRecord(42000, RavenFolder, @"\\.\pipe\LOCAL\cc-msg-other");
+
+        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_brain_whose_process_is_gone_is_not_found()
+    {
+        SessionRecord(41000, RavenFolder, RavenSocket);
+        _processes.Gone.Add(41000);
+
+        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeFalse();
+    }
+
+    private void SessionRecord(int pid, string cwd, string socket) =>
+        File.WriteAllText(Path.Combine(_sessions, $"{pid}.json"), System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["pid"] = pid,
+            ["sessionId"] = Guid.NewGuid().ToString("D"),
+            ["cwd"] = cwd,
+            ["procStart"] = FakeProcesses.StartOfEach.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["kind"] = "print",
+            ["entrypoint"] = "sdk-cli",
+            ["messagingSocketPath"] = socket,
+            ["name"] = "raven-72",
+            ["updatedAt"] = 1_000,
+        }));
+
     /// <summary>Every process started at <see cref="StartOfEach"/>, as its record says, unless set otherwise.</summary>
     private sealed class FakeProcesses
     {

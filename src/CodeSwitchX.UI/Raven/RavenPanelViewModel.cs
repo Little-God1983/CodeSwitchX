@@ -277,7 +277,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
         IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatChime? chime = null,
-        SpeakerChoice? speakers = null)
+        SpeakerChoice? speakers = null, UnaskedTurns? unasked = null)
     {
         Speakers = speakers;
         _catalog = catalog;
@@ -298,6 +298,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Traffic = new TrafficWatcher(time);
         Chats = [YardChat, ActivityChat];
         _selectedChat = YardChat;
+        if (unasked is not null)
+        {
+            unasked.Taken += turn => _dispatcher.Post(() => ShowUnasked(turn));
+        }
 
         _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
@@ -3997,6 +4001,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
+    /// <summary>
+    /// What a brain said in a turn of its own, started by a chat's message to it (#181): written in its Raven chat, never
+    /// said aloud, as it comes unasked; the chat's badge counts it like any line the user has not seen.
+    /// </summary>
+    private void ShowUnasked(UnaskedTurn turn) => AddSaid(turn.Text, ChatOf(turn.WorkspaceId), said: false);
+
     private RavenChat ChatOf(Guid? workspaceId) =>
         workspaceId is { } id ? Chats.FirstOrDefault(c => c.WorkspaceId == id) ?? YardChat : YardChat;
 

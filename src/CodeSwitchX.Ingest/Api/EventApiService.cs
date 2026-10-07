@@ -37,6 +37,7 @@ public sealed class EventApiService : IHostedService
     private readonly TurnStops? _stops;
     private readonly ChatAsks? _asks;
     private readonly IAppSettings? _settings;
+    private readonly RavenMessages? _ravenMessages;
     private WebApplication? _app;
 
     /// <summary>What a relay that hands a stop on sends along (CodeSwitchX.Hook's <c>Relay.StopsHeader</c>).</summary>
@@ -45,10 +46,12 @@ public sealed class EventApiService : IHostedService
     /// <param name="stops">The stops asked for chats' turns, handed to their hook relay in its answer; null for none.</param>
     /// <param name="asks">Where what chats ask is held while the user answers it here; null leaves every ask to VS Code.</param>
     /// <param name="settings">The app's settings as the brain reads and changes them (#126); null for no settings tools.</param>
+    /// <param name="ravenMessages">What a chat is told along with a message from Raven (#181); null tells it nothing.</param>
     public EventApiService(AppPaths paths, IEventBus bus, AccessTokenStore tokens, TimeProvider time,
         ILoggerFactory loggerFactory, EventApiOptions options, IYardDirectory? yard = null, IYardActions? actions = null, TurnStops? stops = null,
-        ChatAsks? asks = null, IAppSettings? settings = null)
+        ChatAsks? asks = null, IAppSettings? settings = null, RavenMessages? ravenMessages = null)
     {
+        _ravenMessages = ravenMessages;
         _paths = paths;
         _bus = bus;
         _tokens = tokens;
@@ -161,6 +164,12 @@ public sealed class EventApiService : IHostedService
             }
 
             _bus.Publish(new HookEventReceived(hookEvent));
+
+            // A prompt is no step, so it never carries a stop: what it may carry is what the chat is told along with it.
+            if (_ravenMessages?.ContextFor(hookEvent) is { } told)
+            {
+                return Results.Ok(new { context = told });
+            }
 
             // The relay waits for this answer anyway: a stop asked for the chat's turn travels in it, if the relay hands it on.
             if (_stops is null)

@@ -84,7 +84,7 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
     {
         private const int ErrorLinesKept = 20;
         private readonly Process _process;
-        private readonly Channel<string> _lines = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+        private readonly Channel<string> _lines = Channel.CreateUnbounded<string>(); // a turn reads it while the watcher for unasked turns waits on it
         private readonly Queue<string> _errors = new();
         private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
