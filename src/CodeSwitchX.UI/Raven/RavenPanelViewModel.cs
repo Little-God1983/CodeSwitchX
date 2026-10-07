@@ -1792,6 +1792,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Enqueue(question, ended, floor);
     }
 
+    /// <summary>Whether Raven still answers a question in the chat (#182); a question that ended may leave another running.</summary>
+    private void Answering(RavenChat chat) => chat.IsAnswering = _questions.Any(q => !q.Ended && q.Chat == chat);
+
     /// <summary>The chat as the brain is told of it: "the Yard" for chat 0.</summary>
     private string NameOf(RavenChat chat) => chat == YardChat ? "the Yard" : chat.Name;
 
@@ -1828,6 +1831,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var current = question.Chat;
         question.Chat = to;
+        to.IsAnswering = true; // the work goes on there now (#182)
+        Answering(current);
         _carried.Remove(current); // moved on: the chat it was in is told nothing of it
         var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
         foreach (var (entry, _) in kept)
@@ -1878,6 +1883,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void Enqueue(Question question, DateTimeOffset ended, CancellationToken floor)
     {
         _questions.Add(question);
+        question.Chat.IsAnswering = true; // the chat's number shows work goes on (#182)
         _asking++;
         UpdateState();
         var asked = new StrongBox<DateTimeOffset>();
@@ -2004,6 +2010,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             question.Ended = true;
             _questions.Remove(question);
+            Answering(question.Chat);
+            if (question.AskedIn != question.Chat)
+            {
+                Answering(question.AskedIn);
+            }
+
             spoken.Complete();
             _asking--;
             UpdateState();

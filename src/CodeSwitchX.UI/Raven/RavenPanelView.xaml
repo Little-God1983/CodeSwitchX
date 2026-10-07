@@ -612,6 +612,32 @@
         <Ellipse Width="9" Height="9" Fill="#EF4444" Stroke="#0B1220" StrokeThickness="1.5" IsHitTestVisible="False"
                  HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-3,0,0,-3"
                  Visibility="{Binding HasFailed, Converter={StaticResource BoolVisible}}" />
+        <!--
+          Work goes on in it (#182): Raven answers there, or a Claude chat of its window works. A green dot at the lower
+          right, breathing; steady with Windows' "Show animations" off.
+        -->
+        <Ellipse Width="9" Height="9" Fill="#22C55E" Stroke="#0B1220" StrokeThickness="1.5" IsHitTestVisible="False"
+                 HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-3,-3"
+                 Visibility="{Binding IsWorking, Converter={StaticResource BoolVisible}}">
+          <Ellipse.Style>
+            <Style TargetType="Ellipse">
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True">
+                  <DataTrigger.EnterActions>
+                    <BeginStoryboard x:Name="Breathe">
+                      <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                        <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.35" Duration="0:0:0.9" />
+                      </Storyboard>
+                    </BeginStoryboard>
+                  </DataTrigger.EnterActions>
+                  <DataTrigger.ExitActions>
+                    <StopStoryboard BeginStoryboardName="Breathe" />
+                  </DataTrigger.ExitActions>
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Ellipse.Style>
+        </Ellipse>
         <!-- Lines that came while the user was elsewhere: their count at the upper right. -->
         <Border MinWidth="15" Height="15" CornerRadius="7.5" Background="#3B82F6" Padding="3,0" IsHitTestVisible="False"
                 HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-6,-7,0" RenderTransformOrigin="0.5,0.5">
