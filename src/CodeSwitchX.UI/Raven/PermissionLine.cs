@@ -1,4 +1,5 @@
 using System.Text;
+using CodeSwitchX.Core;
 using CodeSwitchX.Core.Sessions;
 
 namespace CodeSwitchX.UI.Raven;
@@ -53,7 +54,7 @@ internal static class PermissionLine
     /// </summary>
     public static string? WithTellersWords(ChatAskCard card, string words)
     {
-        var text = string.Join(' ', words.Replace("`", "").Replace("*", "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var text = TextCut.OneLine(words.Replace("`", "").Replace("*", ""));
         // "CodeSwitchX, chat "Fix it" wants to run a script …": what follows is its part.
         const string wantsToRun = "wants to run ";
         if (text.LastIndexOf(wantsToRun, StringComparison.OrdinalIgnoreCase) is var at and >= 0)

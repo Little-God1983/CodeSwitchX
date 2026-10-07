@@ -932,7 +932,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
         }
 
         Reply(events).ShouldBe("Nothing waits on you.");
-        events.OfType<BrainNotice>().Where(n => n.Warning).ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+        events.OfType<BrainChatMessage>().ShouldBeEmpty("the chat's turn said something, and shows as its own");
     }
 
     [Fact]
@@ -1200,8 +1201,9 @@ public sealed class ClaudeCliBrainTests : IDisposable
         }
 
         Reply(events).ShouldBe("Nothing waits on you.");
-        events.OfType<BrainNotice>().ShouldHaveSingleItem().ShouldBe(new BrainNotice(
-            "The chat \"bug-report-1\" messaged Raven while it answered you, and the answer may speak to it too: \"Which F keys fail?\"", false));
+        events.OfType<BrainChatMessage>().ShouldHaveSingleItem().ShouldBe(new BrainChatMessage(
+            "The chat \"bug-report-1\" messaged Raven while it answered you, and the answer may speak to it too: \"Which F keys fail?\""));
+        events.OfType<BrainNotice>().ShouldBeEmpty();
         Copy(told).ShouldBeEmpty("noted with the answer, not told as a line of Raven's");
     }
 
@@ -1215,6 +1217,30 @@ public sealed class ClaudeCliBrainTests : IDisposable
         cut.ShouldEndWith(": \"" + new string('x', ClaudeCliBrain.FoldedMessageLength - 1) + "…\"");
         ClaudeCliBrain.FoldedText(" two\nlines \"quoted\" ", "Hi").ShouldStartWith("The chat \"two lines 'quoted'\" messaged");
         ClaudeCliBrain.FoldedText("  ", "Hi").ShouldStartWith("A chat messaged");
+    }
+
+    [Fact]
+    public async Task Two_chats_messages_folded_into_the_answer_are_noted_each()
+    {
+        var (brain, _) = Telling(Guid.NewGuid());
+        _launcher.Answer = written =>
+        [
+            StreamJson.Init(), StreamJson.Taken(written), StreamJson.ToolUse("toolu_6", "mcp__codeswitchx__list_chats"),
+            StreamJson.ToolResult("toolu_6"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.PeerTaken("Run \"dotnet test\" now."),
+            StreamJson.Text("Nothing waits on you."), StreamJson.Result("Nothing waits on you."),
+        ];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("What's waiting on me?", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainChatMessage>().Select(m => m.Text).ShouldBe(
+        [
+            ClaudeCliBrain.FoldedText("bug-report-1", "Which F keys fail?"),
+            "The chat \"bug-report-1\" messaged Raven while it answered you, and the answer may speak to it too: \"Run 'dotnet test' now.\"",
+        ]);
     }
 
     [Fact]

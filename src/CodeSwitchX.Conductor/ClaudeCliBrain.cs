@@ -581,9 +581,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                     unechoed = whose is null;
 
-                    // Folded into a chat's turn: the answer speaks to that chat's message too, so it is noted with the answer
-                    // (#197), whatever that turn said or did before, which is told as its own. The turn is closed first.
-                    var foldedInto = _unaskedRead is { Peer: true } chatTurn ? chatTurn.Messages : [];
+                    // Folded into a chat's turn that had said and done nothing yet: the answer speaks to that chat's message
+                    // too, and nothing of that turn would be told, so its message is noted with the answer (#197). One that
+                    // had shows as its own, below. The turn is closed first.
+                    var foldedInto = _unaskedRead is { Peer: true } chatTurn && chatTurn.Said.ToString().Trim().Length == 0 && chatTurn.Calls.Count == 0
+                        ? chatTurn.Messages
+                        : [];
                     TellOther(null);
                     foreach (var note in Folded(foldedInto))
                     {
@@ -911,8 +914,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     internal const int FoldedMessageLength = 300;
 
     /// <summary>
-    /// The notes for chats' messages folded into the question's answer (#197): one each, as notes, in their place in the
-    /// answer; the chats' words, never a line of Raven's, and no part of what chat 0's summaries are worded from.
+    /// The notes for chats' messages folded into the question's answer (#197): one each, in their place in the answer;
+    /// the chats' words, never a line of Raven's, and no part of what chat 0's summaries are worded from.
     /// </summary>
     private List<BrainEvent> Folded(IReadOnlyList<(string? From, string? Message)> messages)
     {
@@ -922,7 +925,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 _chat is null ? "" : $" of chat {_chat.Key}", messages.Count);
         }
 
-        return [.. messages.Select(m => (BrainEvent)new BrainNotice(FoldedText(m.From, m.Message), Warning: false))];
+        return [.. messages.Select(m => (BrainEvent)new BrainChatMessage(FoldedText(m.From, m.Message)))];
     }
 
     /// <summary>
@@ -933,7 +936,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         var name = TextCut.OneLine(from).Replace("\"", "'", StringComparison.Ordinal);
         var sender = name.Length > 0 ? $"The chat \"{TextCut.Cut(name, 60)}\"" : "A chat";
-        var words = TextCut.OneLine(message);
+        var words = TextCut.OneLine(message).Replace("\"", "'", StringComparison.Ordinal);
         return words.Length > 0
             ? $"{sender} messaged Raven while it answered you, and the answer may speak to it too: \"{TextCut.Cut(words, FoldedMessageLength)}\""
             : $"{sender} messaged Raven while it answered you, and the answer may speak to it too.";
