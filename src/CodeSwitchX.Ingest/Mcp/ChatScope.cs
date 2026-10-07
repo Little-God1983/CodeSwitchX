@@ -9,16 +9,21 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// particular, and it knows the window chats by their summaries only, so it is shown no card's text and answers none.
 /// </summary>
 /// <param name="Overview">Chat 0's: cards are named, not read, and are answered in their window's chat.</param>
-public sealed record ChatScope(Guid? WorkspaceId, bool Overview = false)
+/// <param name="Unknown">A chat header was sent that names no Raven chat: it acts on no window, and is refused what acts (#193).</param>
+public sealed record ChatScope(Guid? WorkspaceId, bool Overview = false, bool Unknown = false)
 {
     public static readonly ChatScope None = new((Guid?)null);
 
     public static readonly ChatScope Yard = new(null, Overview: true);
 
+    /// <summary>What its brain sends as <see cref="YardMcp.ChatHeader"/>, by which <see cref="AskedChats"/> knows it; null for no Raven chat.</summary>
+    public string? Key => YardMcp.ChatKey(WorkspaceId, Overview);
+
     public static ChatScope Of(HttpContext? context) => context?.Request.Headers[YardMcp.ChatHeader].ToString() switch
     {
+        null or "" => None,
         YardMcp.OverviewChat => Yard,
-        { Length: > 0 } header when Guid.TryParse(header, out var id) => new ChatScope(id),
-        _ => None,
+        var header when Guid.TryParse(header, out var id) => new ChatScope(id),
+        _ => new ChatScope(null, Unknown: true),
     };
 }

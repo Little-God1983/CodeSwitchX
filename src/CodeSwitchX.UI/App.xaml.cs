@@ -215,10 +215,13 @@ public partial class App : Application
             ChatMcpConfig.Clear(Path.Combine(paths.RavenDirectory, "mcp")); // a crash left them; each brain writes its own
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
                 () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
-                window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>()));
+                window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>(),
+                sp.GetRequiredService<AskedChats>()));
         });
         // What a brain says in a turn of its own (a chat messaged it, #181), shown in its Raven chat.
         services.AddSingleton<UnaskedTurns>();
+        // Which Raven chats are in their user's question: the Yard's tools act for those only (#193).
+        services.AddSingleton<AskedChats>();
         services.AddSingleton<IChatBrains>(sp => sp.GetRequiredService<ChatBrains>());
         services.AddSingleton<IConductorBrain>(sp => sp.GetRequiredService<ChatBrains>().For(null));
         // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the

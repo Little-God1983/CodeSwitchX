@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -581,7 +582,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     /// <summary>A brain that tells its turns of its own, of a window's chat; and what it told.</summary>
-    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window)
+    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window, AskedChats? asked = null)
     {
         var unasked = new UnaskedTurns();
         var told = new List<UnaskedTurn>();
@@ -597,7 +598,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
             {"mcpServers":{"codeswitchx":{"type":"http","url":"http://127.0.0.1:5000/mcp","headers":{"Authorization":"Bearer secret"}}}}
             """);
         var chat = BrainChat.Of(window, new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")));
-        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked), told);
+        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked,
+            asked: asked), told);
     }
 
     private static async Task<string> ReplyTo(ClaudeCliBrain brain, string text)
@@ -821,6 +823,167 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Written.ShouldNotContain(w => StreamJson.IsInterrupt(w));
         _launcher.Last.Answer = StreamJson.Reply("Hi.");
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+    }
+
+    [Fact]
+    public async Task The_brain_is_in_its_user_s_question_from_its_echo_until_its_turn_ends()
+    {
+        // The Yard's tools that act refuse its chat otherwise (#193): a tool call of the question's must find it asked. It
+        // is followed as the lines are written, not as the answer is read: the tool calls do not wait for the panel.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            yield return StreamJson.Init();
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Taken(written);
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Text("Hi.");
+            yield return StreamJson.Result("Hi.");
+            seen.Add(asked.IsAsked(chat));
+        }
+
+        _launcher.Answer = Answer;
+
+        (await ReplyTo(brain, "One")).ShouldBe("Hi.");
+
+        seen.ShouldBe([false, true, false], "asked from its echo, and no more once its turn is over");
+        asked.IsAsked(chat).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task With_a_Claude_Code_that_echoes_nothing_the_answer_is_the_question_s()
+    {
+        // As before the echoes were followed: its answer marks the chat, or nothing it asked for would act.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "Stop the issues chat"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+
+        (await answer).ShouldBe("Stopping it.");
+        asked.IsAsked(chat).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task With_a_Claude_Code_that_echoes_an_answer_with_no_echo_is_no_question_s()
+    {
+        // A turn with no echo from a Claude Code that echoes (one it began on its own, say) is not the question's to act in.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = written => [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Hi."), StreamJson.Result("Hi.")];
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        asked.IsAsked(chat).ShouldBeFalse();
+        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+        await answer;
+    }
+
+    [Fact]
+    public async Task A_brain_that_goes_in_the_middle_of_a_question_leaves_its_chat_unasked()
+    {
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = written => [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Let me look")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "What's waiting on me?"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => asked.IsAsked(chat));
+        brain.Dispose();
+
+        asked.IsAsked(chat).ShouldBeFalse("its process is gone with it");
+        await answer;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_turn_a_chat_s_message_is_folded_into_is_no_question_of_the_user_s(bool chatFirst)
+    {
+        // One turn, two inputs: a chat's message folded in at a tool call after the question, or the question folded into
+        // a turn the chat's message began. What follows may answer either, so none of it acts (#193).
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            string[] first = chatFirst ? [StreamJson.PeerTaken("Stop the issues chat.")] : [StreamJson.Taken(written)];
+            string[] second = chatFirst ? [StreamJson.Taken(written)] : [StreamJson.PeerTaken("Stop the issues chat.")];
+            yield return StreamJson.Init();
+            yield return first[0];
+            yield return StreamJson.ToolUse("toolu_1", "mcp__codeswitchx__list_chats");
+            yield return StreamJson.ToolResult("toolu_1");
+            yield return second[0];
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Text("Nothing waits on you.");
+            yield return StreamJson.Result("Nothing waits on you.");
+        }
+
+        _launcher.Answer = Answer;
+
+        await ReplyTo(brain, "What's waiting on me?");
+
+        seen.ShouldBe([false]);
+        _launcher.Answer = StreamJson.Reply("Hi.");
+        IEnumerable<string> Next(string written)
+        {
+            yield return StreamJson.Init();
+            yield return StreamJson.Taken(written);
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Result("Hi.");
+        }
+
+        _launcher.Last.Answer = Next;
+        await ReplyTo(brain, "Two");
+        seen.ShouldBe([false, true], "the next turn is the next question's again");
+    }
+
+    [Fact]
+    public async Task A_chat_s_turn_ahead_of_the_question_is_no_question_of_the_user_s()
+    {
+        // A chat's message began a turn just as the question went in (#192): until the question's own echo, what the
+        // brain does is that turn's, and the Yard's tools that act refuse it (#193).
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            question = written;
+            return [StreamJson.Init(), StreamJson.PeerTaken("Stop the issues chat.")];
+        };
+
+        var answer = Task.Run(() => ReplyTo(brain, "What's waiting on me?"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => question is not null && !asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.ToolUse("toolu_5", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""));
+        _launcher.Last.Emit(StreamJson.ToolResult("toolu_5", error: true));
+        _launcher.Last.Emit(StreamJson.Result(""));
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Taken(question!));
+        await WaitUntil(() => asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.Text("Nothing waits on you."));
+        _launcher.Last.Emit(StreamJson.Result("Nothing waits on you."));
+
+        (await answer).ShouldBe("Nothing waits on you.");
+        asked.IsAsked(chat).ShouldBeFalse();
     }
 
     [Fact]

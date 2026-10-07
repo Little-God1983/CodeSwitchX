@@ -18,6 +18,9 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public ChannelReader<string> Lines => _lines.Reader;
 
+    /// <summary>Given each line as it writes it, as the real one's reading thread does.</summary>
+    public Action<string>? LineRead { get; set; }
+
     public Task<int> Exited => _exited.Task;
 
     public string ErrorTail => "error: something broke";
@@ -47,13 +50,17 @@ internal sealed class FakeBrainProcess : IBrainProcess
         Written.Add(line);
         foreach (var answer in Answer(line))
         {
-            _lines.Writer.TryWrite(answer);
+            Emit(answer);
         }
 
         return Task.CompletedTask;
     }
 
-    public void Emit(string line) => _lines.Writer.TryWrite(line);
+    public void Emit(string line)
+    {
+        LineRead?.Invoke(line);
+        _lines.Writer.TryWrite(line);
+    }
 
     public bool InputClosed { get; private set; }
 
@@ -99,14 +106,14 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
     public FakeBrainProcess Last => Started[^1].Process;
 
     public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
-        IReadOnlyDictionary<string, string?>? environment = null)
+        IReadOnlyDictionary<string, string?>? environment = null, Action<string>? lineRead = null)
     {
         if (Failure is not null)
         {
             throw Failure;
         }
 
-        var process = new FakeBrainProcess { Answer = Answer };
+        var process = new FakeBrainProcess { Answer = Answer, LineRead = lineRead };
         Started.Add((executable, arguments, workingDirectory, process));
         Environments.Add(environment);
         return process;

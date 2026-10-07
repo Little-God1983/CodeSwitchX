@@ -164,18 +164,164 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Where the turns it takes on its own are told; null tells them nowhere (they are still read).</summary>
     private readonly UnaskedTurns? _unasked;
 
+    /// <summary>Where it says when it is in its user's question (#193); null for nowhere.</summary>
+    private readonly AskedChats? _asked;
+
+    /// <summary>
+    /// Guards what follows the process's turns: the process's reading thread and the turns both touch it, and so does
+    /// <see cref="Stop"/> from any thread.
+    /// </summary>
+    private readonly Lock _questionGate = new();
+
+    /// <summary>Which process <see cref="Follow"/> follows: one started or stopped since is no more. Changed holding <see cref="_questionGate"/>.</summary>
+    private long _generation;
+
+    /// <summary>The uuid of the question whose turn is waited for; null between questions.</summary>
+    private string? _question;
+
+    /// <summary>It has said it is in its user's question, and not yet that it is out of it.</summary>
+    private bool _inQuestion;
+
+    /// <summary>Another session's message is in the turn the process runs: none of it is the user's question.</summary>
+    private bool _peerInTurn;
+
+    /// <summary>The process has echoed a line: an answer with no echo before it is no question's answer then.</summary>
+    private bool _echoes;
+
+    /// <summary>
+    /// Follows, line by line as the process of <paramref name="generation"/> writes them, whether its turn is its user's
+    /// question (#193); the Yard's tools that act refuse its chat otherwise. It is from the question's echo on, unless
+    /// another session's message is in that turn: one folded in before it or after it makes the rest of the turn the
+    /// message's too, which no question of the user's asked for. A turn's end is the end of it. Followed as the lines are
+    /// read, not as the answer is: the brain's tool calls do not wait for the panel. On the process's reading thread.
+    /// </summary>
+    private void Follow(string line, long generation)
+    {
+        // Only echoes and results matter; the many stream events are not parsed twice.
+        if (!line.Contains("isReplay", StringComparison.Ordinal) && !line.Contains("\"result\"", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var read = ClaudeStream.Read(line);
+        lock (_questionGate)
+        {
+            if (generation != _generation)
+            {
+                return; // stopped meanwhile: its lines say nothing of the brain's turns any more
+            }
+
+            switch (read)
+            {
+                case ClaudeTaken { FromPeer: true }:
+                    _echoes = true;
+                    _peerInTurn = true;
+                    InQuestion(false);
+                    break;
+                case ClaudeTaken echo:
+                    // Its echo, by its uuid or, from a Claude Code that does not echo the uuid back, as no other's; any
+                    // other is an earlier question's, cancelled, that no one waits for.
+                    _echoes = true;
+                    InQuestion(_question is { } id && (echo.Id is null || echo.Id == id) && !_peerInTurn);
+                    break;
+                case ClaudeTurnOver:
+                    _peerInTurn = false;
+                    InQuestion(false);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Says whether it is in its user's question now. Holding <see cref="_questionGate"/>.</summary>
+    private void InQuestion(bool now)
+    {
+        if (_asked is null || Header is not { } chat || now == _inQuestion)
+        {
+            return;
+        }
+
+        _inQuestion = now;
+        if (now)
+        {
+            _asked.Begin(chat);
+        }
+        else
+        {
+            _asked.End(chat);
+        }
+    }
+
+    /// <summary>A process starts: it is followed from its first line on, as the one of the generation returned.</summary>
+    private long StartFollowing()
+    {
+        lock (_questionGate)
+        {
+            _peerInTurn = false;
+            _echoes = false;
+            return ++_generation;
+        }
+    }
+
+    /// <summary>The process is gone: none of its turns is its user's question any more, nor holds a chat's message.</summary>
+    private void Unfollow()
+    {
+        lock (_questionGate)
+        {
+            _generation++;
+            _peerInTurn = false;
+            InQuestion(false);
+        }
+    }
+
+    /// <summary>
+    /// The question's answer came with no echo before it. From a Claude Code that echoes nothing, its turn is the question's
+    /// from here on, as it always was before the echoes were followed (#192); from one that echoes, it is no question's.
+    /// </summary>
+    private void TakenWithoutEcho(string id)
+    {
+        lock (_questionGate)
+        {
+            if (_question == id && !_peerInTurn && !_echoes)
+            {
+                InQuestion(true);
+            }
+        }
+    }
+
+    /// <summary>The question written with <paramref name="id"/> is waited for, or, for null, none is: it is out of it then.</summary>
+    private void Question(string? id)
+    {
+        lock (_questionGate)
+        {
+            _question = id;
+            if (id is null)
+            {
+                InQuestion(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// What its tool calls send as <see cref="YardMcp.ChatHeader"/>: a window's chat names its window, chat 0 itself the
+    /// overview; null for a brain that names none.
+    /// </summary>
+    private string? Header => YardMcp.ChatKey(_chat?.WorkspaceId, _role == BrainRole.Overview);
+
     /// <summary>The process whose unasked turns are watched for (<see cref="WatchAsync"/>): one watcher a process.</summary>
     private IBrainProcess? _watched;
 
     /// <param name="role">Raven itself, with the Yard's tools; chat 0's overview; or the teller of chat news or the summarizer, with none.</param>
     /// <param name="chat">The Raven chat it is the brain of: its conversation is kept, and its tools act on its window.</param>
     /// <param name="unasked">Where the turns it takes on its own are told (#181); null for nowhere.</param>
+    /// <param name="asked">Where it says when it is in its user's question, so the Yard's tools act for that only (#193); null for nowhere.</param>
     public ClaudeCliBrain(AppPaths paths, BrainSettings settings, IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time,
-        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null, UnaskedTurns? unasked = null)
+        ILogger<ClaudeCliBrain> logger, BrainRole role = BrainRole.Raven, BrainChat? chat = null, UnaskedTurns? unasked = null,
+        AskedChats? asked = null)
     {
         _role = role;
         _unasked = unasked;
         _chat = Toolless ? null : chat;
+        _asked = Toolless ? null : asked;
         _name = role switch
         {
             BrainRole.Teller => "Raven's news teller",
@@ -238,6 +384,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // good (a write blocked in the pipe sees no token): it is waited for from outside, for Silence, and a process
             // that took no line by then is given up, which kills it and ends the write.
             ct.ThrowIfCancellationRequested();
+            Question(id); // its echo puts its chat in its user's question (#193)
             sent = await WithinAsync(SendAsync(process, text, id), Silence).ConfigureAwait(false);
 
             if (!sent)
@@ -307,6 +454,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
+                    if (read is not ClaudeTaken)
+                    {
+                        TakenWithoutEcho(id);
+                    }
+
                     TellOther(null);
                     if (early is not null)
                     {
@@ -360,6 +512,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         finally
         {
+            Question(null);
             if (_abandon)
             {
                 _abandon = false;
@@ -864,7 +1017,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         string? mcpConfig = null;
         // A window's chat names its window to the tools; chat 0 names itself the overview, which reads no card.
-        var header = _chat?.WorkspaceId?.ToString("D") ?? (_role == BrainRole.Overview ? YardMcp.OverviewChat : null);
+        var header = Header;
         if (header is not null)
         {
             mcpConfig = Path.Combine(_paths.RavenDirectory, "mcp", (_chat?.Key ?? YardMcp.OverviewChat) + ".json");
@@ -885,7 +1038,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         try
         {
             Directory.CreateDirectory(_paths.RavenDirectory);
-            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory);
+            // Followed from its first line (a chat's message may be waiting for it), and only while it is the brain's: one
+            // stopped may still have lines on their way.
+            var generation = StartFollowing();
+            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory,
+                lineRead: _asked is null || Header is null ? null : line => Follow(line, generation));
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -1120,6 +1277,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var process = Interlocked.Exchange(ref _process, null);
         _processModel = null;
         _started = null;
+        Unfollow();
         process?.Dispose();
     }
 
