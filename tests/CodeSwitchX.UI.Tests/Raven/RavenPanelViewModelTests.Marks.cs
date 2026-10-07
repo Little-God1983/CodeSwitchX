@@ -291,36 +291,51 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public void A_chat_works_while_a_Claude_chat_of_its_window_does()
+    public void A_chat_works_while_its_tile_says_a_Claude_chat_does()
     {
-        // #182: the window's tile rows say so; the chat follows rows as they come and go, and the tile as it changes.
+        // #182: the tile sums its rows up; the chat follows the tile it has, and lets go of one it had.
         var yard = ShellTestHarness.CreateYardWithoutInit();
         var tile = new WorkspaceTileViewModel(new Workspace { Name = "A", RootPath = @"c:\a" }, yard);
         var chat = RavenChat.Of(Guid.NewGuid(), 3, "A");
         chat.Tile = tile;
         chat.IsWorking.ShouldBeFalse();
 
-        var row = new ChatRowViewModel("s1") { State = SessionState.Working };
-        tile.Chats.Add(row);
+        tile.IsWorking = true;
         chat.IsWorking.ShouldBeTrue();
         chat.Status.ShouldBe("working");
-        row.State = SessionState.Waiting;
+        tile.IsWorking = false;
         chat.IsWorking.ShouldBeFalse();
-        row.State = SessionState.Starting;
-        chat.IsWorking.ShouldBeTrue();
 
-        tile.Chats.Remove(row);
-        chat.IsWorking.ShouldBeFalse();
-        row.State = SessionState.Working;
-        chat.IsWorking.ShouldBeFalse("a row taken off is followed no more");
-
-        tile.Chats.Add(row);
-        chat.IsWorking.ShouldBeTrue();
+        var other = new WorkspaceTileViewModel(new Workspace { Name = "B", RootPath = @"c:\b" }, yard) { IsWorking = true };
+        chat.Tile = other;
+        chat.IsWorking.ShouldBeTrue("the tile it has now");
+        tile.IsWorking = true;
+        other.IsWorking = false;
+        chat.IsWorking.ShouldBeFalse("the tile it had says nothing to it");
         chat.Tile = null;
-        chat.IsWorking.ShouldBeFalse("no tile, no rows");
-        row.State = SessionState.Waiting;
-        row.State = SessionState.Working;
-        chat.IsWorking.ShouldBeFalse("a tile let go of is followed no more");
+        other.IsWorking = true;
+        chat.IsWorking.ShouldBeFalse("no tile, no work of a chat's");
+    }
+
+    [Fact]
+    public async Task A_question_taken_along_by_another_chat_s_leaves_its_chat_at_rest()
+    {
+        // Asked in chat 3, not yet sent; then asked in chat 0, whose question takes it along: chat 0 works, chat 3 not.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.BeforeSent = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+        three.IsWorking.ShouldBeTrue();
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "and what's waiting on me?");
+
+        three.IsWorking.ShouldBeFalse();
+        vm.YardChat.IsWorking.ShouldBeTrue();
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        vm.YardChat.IsWorking.ShouldBeFalse();
     }
 
     [Fact]

@@ -622,18 +622,23 @@
           <Ellipse.Style>
             <Style TargetType="Ellipse">
               <Style.Triggers>
-                <DataTrigger Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True">
-                  <DataTrigger.EnterActions>
+                <!-- Breathes only while it shows: a clock for a dot that is not there would tick on. -->
+                <MultiDataTrigger>
+                  <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsWorking}" Value="True" />
+                    <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
+                  </MultiDataTrigger.Conditions>
+                  <MultiDataTrigger.EnterActions>
                     <BeginStoryboard x:Name="Breathe">
                       <Storyboard RepeatBehavior="Forever" AutoReverse="True">
                         <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0.35" Duration="0:0:0.9" />
                       </Storyboard>
                     </BeginStoryboard>
-                  </DataTrigger.EnterActions>
-                  <DataTrigger.ExitActions>
+                  </MultiDataTrigger.EnterActions>
+                  <MultiDataTrigger.ExitActions>
                     <StopStoryboard BeginStoryboardName="Breathe" />
-                  </DataTrigger.ExitActions>
-                </DataTrigger>
+                  </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
               </Style.Triggers>
             </Style>
           </Ellipse.Style>

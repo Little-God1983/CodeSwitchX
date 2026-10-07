@@ -1754,6 +1754,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         foreach (var waiting in Unsent())
         {
             waiting.Merged = true;
+            Answering(waiting.Chat); // its own question, or the new one, says again (#182)
             if (BrainOf(waiting.Chat) != BrainOf(chat))
             {
                 // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
@@ -1792,8 +1793,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Enqueue(question, ended, floor);
     }
 
-    /// <summary>Whether Raven still answers a question in the chat (#182); a question that ended may leave another running.</summary>
-    private void Answering(RavenChat chat) => chat.IsAnswering = _questions.Any(q => !q.Ended && q.Chat == chat);
+    /// <summary>
+    /// Whether Raven answers a question in the chat (#182): one queued or running there, not one taken along by another
+    /// (merged) or ended. Called wherever that changes.
+    /// </summary>
+    private void Answering(RavenChat chat) => chat.IsAnswering = _questions.Any(q => !q.Ended && !q.Merged && q.Chat == chat);
 
     /// <summary>The chat as the brain is told of it: "the Yard" for chat 0.</summary>
     private string NameOf(RavenChat chat) => chat == YardChat ? "the Yard" : chat.Name;
@@ -1831,7 +1835,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var current = question.Chat;
         question.Chat = to;
-        to.IsAnswering = true; // the work goes on there now (#182)
+        Answering(to); // the work goes on there now (#182)
         Answering(current);
         _carried.Remove(current); // moved on: the chat it was in is told nothing of it
         var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
@@ -1883,7 +1887,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void Enqueue(Question question, DateTimeOffset ended, CancellationToken floor)
     {
         _questions.Add(question);
-        question.Chat.IsAnswering = true; // the chat's number shows work goes on (#182)
+        Answering(question.Chat); // the chat's number shows work goes on (#182)
         _asking++;
         UpdateState();
         var asked = new StrongBox<DateTimeOffset>();
@@ -2519,6 +2523,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Their own turns end at once; their words go again, with the news of the yes.
             waiting.Merged = true;
+            Answering(waiting.Chat);
             AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries);
         }
         else
@@ -4015,6 +4020,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             gone.PropertyChanged -= OnChatPropertyChanged; // kept by the log's entries, it is muted no more
+            gone.Tile = null; // and follows no tile
             if (_pulseEnds.Remove(gone, out var pulse))
             {
                 pulse.Timer.Dispose();

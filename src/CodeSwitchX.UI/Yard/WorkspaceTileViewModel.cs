@@ -77,6 +77,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
+    /// <summary>A chat of the window works or starts (#182): Raven's chat list marks the window's chat with it.</summary>
+    [ObservableProperty]
+    private bool _isWorking;
+
     /// <summary>
     /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
     /// round, and close the tooltip the user has open.
@@ -275,6 +279,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     {
         NeedsAttention = Chats.Any(c => c.NeedsUser);
         HasInferredChats = Chats.Any(c => c.Inferred && c.IsLive);
+        IsWorking = Chats.Any(c => c.HasSession && c.State is SessionState.Working or SessionState.Starting);
         OnPropertyChanged(nameof(AttentionRank));
     }
 

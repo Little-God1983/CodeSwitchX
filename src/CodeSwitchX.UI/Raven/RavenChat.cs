@@ -1,6 +1,4 @@
-using System.Collections.Specialized;
 using System.ComponentModel;
-using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,7 +55,7 @@ public sealed partial class RavenChat : ObservableObject
     [NotifyPropertyChangedFor(nameof(Tip))]
     private bool _isAnswering;
 
-    /// <summary>A Claude chat of its window works or starts, by its tile's rows (#182).</summary>
+    /// <summary>A Claude chat of its window works or starts, as its tile says (#182).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsWorking))]
     [NotifyPropertyChangedFor(nameof(Status))]
@@ -71,58 +69,24 @@ public sealed partial class RavenChat : ObservableObject
     {
         if (oldValue is not null)
         {
-            oldValue.Chats.CollectionChanged -= OnRowsChanged;
-            foreach (var row in oldValue.Chats)
-            {
-                row.PropertyChanged -= OnRowChanged;
-            }
+            oldValue.PropertyChanged -= OnTilePropertyChanged;
         }
 
         if (newValue is not null)
         {
-            newValue.Chats.CollectionChanged += OnRowsChanged;
-            foreach (var row in newValue.Chats)
-            {
-                row.PropertyChanged += OnRowChanged;
-            }
+            newValue.PropertyChanged += OnTilePropertyChanged;
         }
 
-        RefreshWorking();
+        HasWorkingChat = newValue?.IsWorking == true;
     }
 
-    private void OnRowsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void OnTilePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        foreach (var row in e.OldItems?.OfType<ChatRowViewModel>() ?? [])
+        if (e.PropertyName == nameof(WorkspaceTileViewModel.IsWorking) && sender is WorkspaceTileViewModel tile)
         {
-            row.PropertyChanged -= OnRowChanged;
-        }
-
-        foreach (var row in e.NewItems?.OfType<ChatRowViewModel>() ?? [])
-        {
-            row.PropertyChanged += OnRowChanged;
-        }
-
-        if (e.Action == NotifyCollectionChangedAction.Reset && Tile is { } tile)
-        {
-            foreach (var row in tile.Chats)
-            {
-                row.PropertyChanged -= OnRowChanged; // once, whatever was followed before
-                row.PropertyChanged += OnRowChanged;
-            }
-        }
-
-        RefreshWorking();
-    }
-
-    private void OnRowChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(ChatRowViewModel.State))
-        {
-            RefreshWorking();
+            HasWorkingChat = tile.IsWorking;
         }
     }
-
-    private void RefreshWorking() => HasWorkingChat = Tile?.Chats.Any(r => r.State is SessionState.Working or SessionState.Starting) == true;
 
     /// <summary>The header's line under the name, for the Yard and Activity; a window's chat shows its git lines instead.</summary>
     public string? Subtitle => IsActivity ? "Every chat, in time order. Cards are answered in their own chat."

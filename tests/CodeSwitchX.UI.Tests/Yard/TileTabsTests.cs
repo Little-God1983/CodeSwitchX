@@ -84,6 +84,7 @@ public sealed class TileTabsTests
         _yard.Tick(Now);
         App.Chats[0].ElapsedText.ShouldBe("", "nothing is known of when");
         App.NeedsAttention.ShouldBeFalse();
+        App.IsWorking.ShouldBeFalse("a tab alone works at nothing (#182)");
     }
 
     [Fact]
