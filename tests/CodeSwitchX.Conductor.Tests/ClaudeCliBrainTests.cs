@@ -839,6 +839,168 @@ public sealed class ClaudeCliBrainTests : IDisposable
         told.ShouldBeEmpty("it said what no one waits for, and did nothing");
     }
 
+    /// <summary>Asks <paramref name="text"/> and cancels it once its line went in and the lines written for it were read.</summary>
+    private async Task CancelledAsync(ClaudeCliBrain brain, string text, Func<string?> written)
+    {
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync(text, cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => written() is not null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+    }
+
+    private static List<UnaskedTurn> Copy(List<UnaskedTurn> told)
+    {
+        lock (told)
+        {
+            return [.. told];
+        }
+    }
+
+    [Theory]
+    [InlineData("cut off")]
+    [InlineData("ended")]
+    [InlineData("failed")]
+    [InlineData("folded")]
+    public async Task A_chat_s_turn_the_interrupt_of_a_cancelled_question_ends_is_told(string how)
+    {
+        // #195: a chat's turn had begun (its init came) when the question went in, and the question is cancelled before
+        // either echo: the interrupt ends the chat's turn, which is told, not read away unseen.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (!StreamJson.IsInterrupt(written))
+            {
+                question = written;
+                return [StreamJson.Init()];
+            }
+
+            string[] chat = [StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks")];
+            return how == "folded"
+                // Folded in at a tool call: the rest of the turn answers the cancelled question, unheard, and nothing stays queued.
+                ? [.. chat, StreamJson.Taken(question!), StreamJson.Text(" The sky is blue."), StreamJson.InterruptAck(written), StreamJson.InterruptedResult]
+                :
+                [
+                    .. chat, StreamJson.InterruptAck(written),
+                    how switch { "ended" => StreamJson.Result("The bug report chat asks"), "failed" => StreamJson.ErrorResult, _ => StreamJson.InterruptedResult },
+                    // The question stays queued (still_queued) and is taken in next: unheard, it does nothing, and is not told.
+                    StreamJson.Init(), StreamJson.Taken(question!), StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
+                ];
+        };
+
+        await CancelledAsync(brain, "What colour is the sky?", () => question);
+
+        await WaitUntil(() => Copy(told).Count == 1);
+        var turn = Copy(told).ShouldHaveSingleItem();
+        (turn.Text, turn.Failure).ShouldBe(("The bug report chat asks", how switch
+        {
+            "ended" => null,
+            "failed" => "API Error: 529 Overloaded",
+            _ => ClaudeCliBrain.CutOff,
+        }));
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        Copy(told).ShouldHaveSingleItem("the cancelled question's own turn is not told");
+    }
+
+    [Fact]
+    public async Task A_chat_s_message_folded_into_a_cancelled_question_s_turn_is_told()
+    {
+        // The question's echo came, then a chat's message was folded in at a tool call: the interrupt cuts that off too.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = written => StreamJson.IsInterrupt(written)
+            ?
+            [
+                StreamJson.ToolResult("toolu_2"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks"),
+                StreamJson.InterruptAck(written), StreamJson.InterruptedResult,
+            ]
+            : [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Let me look."), StreamJson.ToolUse("toolu_2", "mcp__codeswitchx__list_chats")];
+
+        // Cancelled once the answer began: the question's echo was read, so its own call is its answer's, not told.
+        using var cancel = new CancellationTokenSource();
+        await Should.ThrowAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var e in brain.AskAsync("What's waiting on me?", cancel.Token))
+            {
+                if (e is BrainText)
+                {
+                    await cancel.CancelAsync();
+                }
+            }
+        });
+
+        await WaitUntil(() => Copy(told).Count == 1);
+        var turn = Copy(told)[0];
+        (turn.Text, turn.Failure).ShouldBe(("The bug report chat asks", ClaudeCliBrain.CutOff));
+        turn.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task What_a_cancelled_question_did_before_the_interrupt_ended_it_is_told()
+    {
+        // Its echo came only while the interrupt was read: its answer is unheard, but its tool call shows, as nothing Raven
+        // does goes unseen.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (!StreamJson.IsInterrupt(written))
+            {
+                question = written;
+                return [StreamJson.Init()];
+            }
+
+            return
+            [
+                StreamJson.Taken(question!), StreamJson.Text("Stopping it."),
+                StreamJson.ToolUse("toolu_3", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""), StreamJson.ToolResult("toolu_3", error: true),
+                StreamJson.InterruptAck(written), StreamJson.InterruptedResult,
+            ];
+        };
+
+        await CancelledAsync(brain, "Stop the issues chat", () => question);
+
+        await WaitUntil(() => Copy(told).Count == 1);
+        var turn = Copy(told)[0];
+        (turn.Text, turn.Failure).ShouldBe(("", null), "unheard: no words, and no one waits for its answer");
+        turn.Calls.ShouldHaveSingleItem().Call.Tool.ShouldBe("stop_chat");
+    }
+
+    [Fact]
+    public async Task A_cancelled_answer_with_no_echo_is_read_away_unseen()
+    {
+        // A Claude Code that echoes nothing: the lines the interrupt reads are the question's own, no chat's.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (!StreamJson.IsInterrupt(written))
+            {
+                question = written;
+                return [StreamJson.Init()];
+            }
+
+            return [StreamJson.Text("Half"), StreamJson.InterruptAck(written), StreamJson.InterruptedResult];
+        };
+
+        await CancelledAsync(brain, "What's waiting on me?", () => question);
+
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        Copy(told).ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

@@ -16,7 +16,11 @@ internal sealed record ClaudeInit(string? Model, IReadOnlyDictionary<string, str
 internal sealed record ClaudeEvents(IReadOnlyList<BrainEvent> Events) : ClaudeLine;
 
 /// <summary><c>result</c>: the turn is over; <paramref name="Error"/> says why it failed, null when it did not.</summary>
-internal sealed record ClaudeTurnOver(string? Error) : ClaudeLine;
+/// <param name="Aborted">
+/// An interrupt ended it (<c>terminal_reason</c> "aborted_streaming", CLI 2.1.292); its
+/// <paramref name="Error"/> is then a diagnostic line, no reason to tell.
+/// </param>
+internal sealed record ClaudeTurnOver(string? Error, bool Aborted = false) : ClaudeLine;
 
 /// <summary>An <c>assistant</c> message of the main agent's without a tool call: the model is answering.</summary>
 internal sealed record ClaudeAnswer : ClaudeLine;
@@ -62,7 +66,7 @@ internal static class ClaudeStream
                 "assistant" => (ClaudeLine?)ToolCalls(root) ?? Answer(root),
                 "user" when root.TryGetProperty("isReplay", out var replay) && replay.ValueKind == JsonValueKind.True => Taken(root),
                 "user" => ToolResults(root),
-                "result" => new ClaudeTurnOver(Error(root)),
+                "result" => new ClaudeTurnOver(Error(root), Text(root, "terminal_reason") == "aborted_streaming"),
                 _ => null,
             };
         }
