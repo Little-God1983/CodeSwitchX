@@ -653,7 +653,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task A_turn_of_its_own_that_fails_says_so_rather_than_passing_its_half_answer_off_as_whole()
+    public async Task A_turn_of_its_own_that_fails_says_why_along_with_what_it_said_so_far()
     {
         var (brain, told) = Telling(Guid.NewGuid());
         await ReplyTo(brain, "One");
@@ -662,7 +662,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Emit(StreamJson.ErrorResult);
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
-        told[0].Text.ShouldBe("Raven could not answer a message from another chat: API Error: 529 Overloaded");
+        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks", "API Error: 529 Overloaded"));
     }
 
     [Fact]
@@ -691,12 +691,12 @@ public sealed class ClaudeCliBrainTests : IDisposable
         await ReplyTo(brain, "One");
         _launcher.Last.Emit(StreamJson.Init());
         _launcher.Last.Emit(StreamJson.ToolUse("toolu_9", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""));
-        _launcher.Last.Emit(StreamJson.ToolResult("toolu_9"));
+        _launcher.Last.Emit(StreamJson.ToolResult("toolu_9", error: true));
         _launcher.Last.Emit(StreamJson.Result(""));
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
         var call = told[0].Calls.ShouldHaveSingleItem();
-        (call.Tool, call.Input).ShouldBe(("stop_chat", """{"chat":"issues"}"""));
+        (call.Call.Tool, call.Call.Input, call.Failed).ShouldBe(("stop_chat", """{"chat":"issues"}""", true), "a card that failed says so");
         told[0].Text.ShouldBeEmpty("it said nothing, and is told all the same");
     }
 
@@ -711,7 +711,23 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Die(1);
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
-        told[0].Text.ShouldBe("Raven could not answer a message from another chat: its brain stopped in the middle of it.");
+        (told[0].Text, told[0].Failure).ShouldBe(("I've told the issues chat to", "its brain stopped in the middle of it"));
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_ended_by_the_brain_going_with_its_chat_is_not_told_as_failed()
+    {
+        // The window was retired, or the app is closing: there is no chat left to tell, and nothing failed.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+
+        brain.Dispose();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        told.ShouldBeEmpty();
     }
 
     [Fact]

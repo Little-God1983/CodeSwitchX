@@ -14,6 +14,10 @@ public sealed class UnaskedTurns
 
 /// <summary>A turn a brain took on its own, what it said in it and what it did with its tools.</summary>
 /// <param name="WorkspaceId">The window whose Raven chat's brain took it; null for chat 0, the Yard.</param>
-/// <param name="Text">What it said; empty when it said nothing.</param>
+/// <param name="Text">What it said; empty when it said nothing. Of a failed turn, what it said before it failed.</param>
 /// <param name="Calls">The tools it called, in order: what a chat's message made Raven do is never done unseen.</param>
-public sealed record UnaskedTurn(Guid? WorkspaceId, string Text, IReadOnlyList<BrainToolCall> Calls);
+/// <param name="Failure">Why the turn ended without its answer, in words for the user; null when it did not.</param>
+public sealed record UnaskedTurn(Guid? WorkspaceId, string Text, IReadOnlyList<UnaskedCall> Calls, string? Failure);
+
+/// <summary>A tool a brain called in a turn of its own, and whether the call failed.</summary>
+public sealed record UnaskedCall(BrainToolCall Call, bool Failed);

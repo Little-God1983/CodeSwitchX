@@ -442,6 +442,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
         public List<BrainToolCall> Calls { get; } = [];
 
+        /// <summary>The calls whose result came back failed, by id.</summary>
+        public HashSet<string> Failed { get; } = [];
+
         public bool Begun { get; set; }
     }
 
@@ -449,7 +452,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// Reads a turn the brain took on its own to its end, if one has begun, and tells what it said and did. Left in the
     /// pipe, its lines would be read as the next question's answer, and that question's as the one after it. Lines that
     /// begin no turn are dropped. A turn that does not end with its result (its process went, or went quiet) is told as
-    /// not answered: what it said so far is no answer to pass off as whole. Holding <see cref="_turns"/>.
+    /// failed: what it said so far is no answer to pass off as whole. Nothing is told once the brain is disposed: its chat
+    /// goes with it, and its process was killed, not lost. Holding <see cref="_turns"/>.
     /// </summary>
     /// <param name="ct">A question waiting behind it was cancelled: it stops waiting, and the rest of the turn is read later.</param>
     private async Task ReadUnaskedAsync(IBrainProcess process, CancellationToken ct = default)
@@ -475,13 +479,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 if (timedOut)
                 {
                     Lose(process, $"gave no answer for {Silence.TotalSeconds:0} s in a turn of its own");
-                    failed = $"its brain gave no answer for {Silence.TotalSeconds:0} s and was stopped.";
+                    failed = $"its brain gave no answer for {Silence.TotalSeconds:0} s and was stopped";
                     break;
                 }
 
                 if (line is null)
                 {
-                    failed = "its brain stopped in the middle of it."; // the next question starts it again, and says so
+                    failed = "its brain stopped in the middle of it"; // the next question starts it again, and says so
                     break;
                 }
             }
@@ -506,6 +510,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     {
                         turn.Calls.Add(call);
                     }
+                    else if (e is BrainToolResult { Failed: true } result)
+                    {
+                        turn.Failed.Add(result.Id);
+                    }
                 }
             }
         }
@@ -523,14 +531,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _logger.LogInformation("{Brain}{Chat} took a turn of its own, as for a message from another session; it called {Tools} and said {Length} characters{Failed}",
             _name, _chat is null ? "" : $" of chat {_chat.Key}", turn.Calls.Count == 0 ? "nothing" : string.Join(", ", turn.Calls.Select(c => c.Tool)),
             words.Length, failed is null ? "" : $", and failed: {failed}");
-        if (failed is not null)
+        if (!_disposed && (words.Length > 0 || turn.Calls.Count > 0 || failed is not null))
         {
-            words = $"Raven could not answer a message from another chat: {failed}";
-        }
-
-        if (words.Length > 0 || turn.Calls.Count > 0)
-        {
-            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words, turn.Calls));
+            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words, turn.Calls.Select(c => new UnaskedCall(c, turn.Failed.Contains(c.Id))).ToList(), failed));
         }
     }
 

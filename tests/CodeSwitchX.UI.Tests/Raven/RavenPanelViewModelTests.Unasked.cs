@@ -23,7 +23,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, unasked) = await UnaskedVmAsync();
         vm.SelectedChat = ChatNumbered(vm, 1);
 
-        unasked.Report(new UnaskedTurn(ContentAutomatorX, "The bug report chat asks which F keys fail.", []));
+        unasked.Report(new UnaskedTurn(ContentAutomatorX, "The bug report chat asks which F keys fail.", [], null));
 
         var entry = vm.Log.ShouldHaveSingleItem();
         entry.Kind.ShouldBe(RavenLogKind.Raven);
@@ -39,11 +39,26 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, unasked) = await UnaskedVmAsync();
 
-        unasked.Report(new UnaskedTurn(ContentAutomatorX, "", [new BrainToolCall("toolu_9", "stop_chat", """{"chat":"issues"}""")]));
+        unasked.Report(new UnaskedTurn(ContentAutomatorX, "", [new UnaskedCall(new BrainToolCall("toolu_9", "stop_chat", """{"chat":"issues"}"""), Failed: true)], null));
 
         var card = vm.Log.ShouldHaveSingleItem("it said nothing: no empty line");
         (card.Kind, card.Text, card.Chat).ShouldBe((RavenLogKind.Action, "stop_chat", ChatNumbered(vm, 3)));
         card.Detail.ShouldNotBeNull();
+        card.Failed.ShouldBeTrue("the tool failed: the card says so, as in an answer");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_failed_is_a_warning_after_what_it_said_so_far()
+    {
+        var (vm, unasked) = await UnaskedVmAsync();
+
+        unasked.Report(new UnaskedTurn(ContentAutomatorX, "I've told the issues chat to", [], "API Error: 529 Overloaded"));
+
+        vm.Log.Select(e => (e.Kind, e.Text)).ShouldBe([
+            (RavenLogKind.Raven, "I've told the issues chat to"),
+            (RavenLogKind.Warning, "Raven could not answer a message from another chat: API Error: 529 Overloaded."),
+        ]);
+        vm.Log.ShouldAllBe(e => e.Chat == ChatNumbered(vm, 3));
     }
 
     [Fact]
@@ -51,7 +66,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, unasked) = await UnaskedVmAsync();
 
-        unasked.Report(new UnaskedTurn(null, "A chat sent Raven a message.", []));
+        unasked.Report(new UnaskedTurn(null, "A chat sent Raven a message.", [], null));
 
         vm.Log.ShouldHaveSingleItem().Chat.ShouldBe(vm.YardChat);
     }

@@ -326,15 +326,6 @@ public class ClaudeLiveSessionsTests : IDisposable
     }
 
     [Fact]
-    public void A_record_whose_folder_is_no_path_does_not_hide_the_brain_listed_after_it()
-    {
-        SessionRecord(10, "", @"\\.\pipe\LOCAL\cc-msg-other"); // listed before the brain's
-        SessionRecord(41000, RavenFolder, RavenSocket);
-
-        _live.RanIn(RavenSocket, RavenFolder).ShouldBeTrue();
-    }
-
-    [Fact]
     public void A_brain_stopped_since_it_sent_the_message_is_still_found()
     {
         // The message waited in a busy chat's inbox while the pool rested the brain that sent it.

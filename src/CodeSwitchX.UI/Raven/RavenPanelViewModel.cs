@@ -4003,19 +4003,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// What a brain said in a turn of its own, started by a chat's message to it (#181): written in its Raven chat, never
     /// said aloud, as it comes unasked; the chat's badge counts it like any line the user has not seen. A tool it called
-    /// gets its card, as in an answer: what a chat's message made Raven do is never done unseen.
+    /// gets its card, as in an answer: what a chat's message made Raven do is never done unseen. A turn that failed ends
+    /// with a warning, as an answer that fails does.
     /// </summary>
     private void ShowUnasked(UnaskedTurn turn)
     {
         var chat = ChatOf(turn.WorkspaceId);
-        foreach (var call in turn.Calls)
+        foreach (var (call, failed) in turn.Calls)
         {
-            AddEntry(RavenLogKind.Action, call.Tool, chat).Detail = ActionDetail(call.Input);
+            var card = AddEntry(RavenLogKind.Action, call.Tool, chat);
+            card.Detail = ActionDetail(call.Input);
+            card.Failed = failed;
         }
 
         if (turn.Text.Length > 0)
         {
             AddSaid(turn.Text, chat, said: false);
+        }
+
+        if (turn.Failure is { } failure)
+        {
+            AddEntry(RavenLogKind.Warning, $"Raven could not answer a message from another chat: {failure}.", chat);
         }
     }
 
