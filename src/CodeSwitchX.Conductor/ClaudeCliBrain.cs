@@ -191,6 +191,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     private void Follow(string line)
     {
+        // Only echoes and results matter; the many stream events are not parsed twice.
+        if (!line.Contains("isReplay", StringComparison.Ordinal) && !line.Contains("\"result\"", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         switch (ClaudeStream.Read(line))
         {
             case ClaudeTaken { FromPeer: true }:
@@ -237,6 +243,35 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         else
         {
             _asked.End(_askedKey);
+        }
+    }
+
+    /// <summary>Which process <see cref="Follow"/> follows: one started or stopped since is no more.</summary>
+    private long _generation;
+
+    /// <summary>The process is gone: none of its turns is its user's question any more, nor holds a chat's message.</summary>
+    private void Unfollow()
+    {
+        Interlocked.Increment(ref _generation);
+        lock (_questionGate)
+        {
+            _peerInTurn = false;
+            InQuestion(false);
+        }
+    }
+
+    /// <summary>
+    /// The question's answer came with no echo before it, from a Claude Code that echoes nothing: its turn is the
+    /// question's from here on, as it always was before the echoes were followed (#192).
+    /// </summary>
+    private void TakenWithoutEcho(string id)
+    {
+        lock (_questionGate)
+        {
+            if (_question == id && !_peerInTurn)
+            {
+                InQuestion(true);
+            }
         }
     }
 
@@ -407,6 +442,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
+                    if (read is not ClaudeTaken)
+                    {
+                        TakenWithoutEcho(id);
+                    }
+
                     TellOther(null);
                     if (early is not null)
                     {
@@ -986,24 +1026,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         try
         {
             Directory.CreateDirectory(_paths.RavenDirectory);
-            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory);
-            if (_asked is not null && _askedKey is not null)
-            {
-                lock (_questionGate)
+            // Followed from its first line (a chat's message may be waiting for it), and only while it is the brain's: one
+            // stopped may still have lines on their way.
+            var generation = Interlocked.Increment(ref _generation);
+            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory,
+                lineRead: _asked is null || _askedKey is null ? null : line =>
                 {
-                    _peerInTurn = false; // of the process before
-                }
-
-                // Only the process that is the brain's: one stopped may still have lines on their way.
-                var launched = _process;
-                launched.LineRead += line =>
-                {
-                    if (ReferenceEquals(launched, _process))
+                    if (Volatile.Read(ref _generation) == generation)
                     {
                         Follow(line);
                     }
-                };
-            }
+                });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -1238,6 +1271,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var process = Interlocked.Exchange(ref _process, null);
         _processModel = null;
         _started = null;
+        Unfollow();
         process?.Dispose();
     }
 

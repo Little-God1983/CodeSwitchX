@@ -10,12 +10,6 @@ public interface IBrainProcess : IDisposable
     /// <summary>Standard output, line by line; completes when the process closes it, which it does as it exits.</summary>
     ChannelReader<string> Lines { get; }
 
-    /// <summary>
-    /// Each line of standard output as it is read, before <see cref="Lines"/> has it, however far behind the reader of
-    /// <see cref="Lines"/> is. Raised on the reading thread: a handler must be quick, and never throw.
-    /// </summary>
-    event Action<string>? LineRead;
-
     /// <summary>Completes with the exit code once the process has exited.</summary>
     Task<int> Exited { get; }
 
@@ -32,9 +26,13 @@ public interface IBrainProcess : IDisposable
 public interface IBrainProcessLauncher
 {
     /// <param name="environment">Variables to set on top of the app's environment; a null value leaves one out.</param>
+    /// <param name="lineRead">
+    /// Given each line of standard output as it is read, from the first on, before <see cref="IBrainProcess.Lines"/> has it,
+    /// however far behind the reader of those is. Called on the reading thread: it must be quick, and never throw.
+    /// </param>
     /// <exception cref="System.ComponentModel.Win32Exception">The executable could not be started.</exception>
     IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
-        IReadOnlyDictionary<string, string?>? environment = null);
+        IReadOnlyDictionary<string, string?>? environment = null, Action<string>? lineRead = null);
 }
 
 /// <summary>Starts the real process: no window, UTF-8 both ways, the whole tree killed when it is disposed.</summary>
@@ -47,7 +45,7 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
     private static readonly string[] Inherited = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"];
 
     public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
-        IReadOnlyDictionary<string, string?>? environment = null)
+        IReadOnlyDictionary<string, string?>? environment = null, Action<string>? lineRead = null)
     {
         var start = new ProcessStartInfo(executable)
         {
@@ -83,7 +81,7 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
             }
         }
 
-        return new BrainProcess(Process.Start(start) ?? throw new InvalidOperationException($"{executable} did not start."));
+        return new BrainProcess(Process.Start(start) ?? throw new InvalidOperationException($"{executable} did not start."), lineRead);
     }
 
     private sealed class BrainProcess : IBrainProcess
@@ -94,17 +92,18 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
         private readonly Queue<string> _errors = new();
         private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public BrainProcess(Process process)
+        private readonly Action<string>? _lineRead;
+
+        public BrainProcess(Process process, Action<string>? lineRead)
         {
             _process = process;
+            _lineRead = lineRead; // before the pump starts: it is given every line
             _ = PumpOutputAsync();
             _ = PumpErrorsAsync();
             _ = WaitForExitAsync();
         }
 
         public ChannelReader<string> Lines => _lines.Reader;
-
-        public event Action<string>? LineRead;
 
         public Task<int> Exited => _exited.Task;
 
@@ -143,7 +142,7 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
             {
                 while (await _process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
                 {
-                    LineRead?.Invoke(line);
+                    _lineRead?.Invoke(line);
                     _lines.Writer.TryWrite(line);
                 }
             }

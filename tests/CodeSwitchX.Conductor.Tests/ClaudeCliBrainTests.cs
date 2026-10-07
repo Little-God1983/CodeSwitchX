@@ -854,6 +854,41 @@ public sealed class ClaudeCliBrainTests : IDisposable
         asked.IsAsked(chat).ShouldBeFalse();
     }
 
+    [Fact]
+    public async Task With_a_Claude_Code_that_echoes_nothing_the_answer_is_the_question_s()
+    {
+        // As before the echoes were followed: its answer marks the chat, or nothing it asked for would act.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "Stop the issues chat"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => asked.IsAsked(chat));
+        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+
+        (await answer).ShouldBe("Stopping it.");
+        asked.IsAsked(chat).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_brain_that_goes_in_the_middle_of_a_question_leaves_its_chat_unasked()
+    {
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = written => [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Let me look")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "What's waiting on me?"), TestContext.Current.CancellationToken);
+        await WaitUntil(() => asked.IsAsked(chat));
+        brain.Dispose();
+
+        asked.IsAsked(chat).ShouldBeFalse("its process is gone with it");
+        await answer;
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
