@@ -119,6 +119,14 @@ public sealed class ClaudeStreamTests
     }
 
     [Fact]
+    public void An_interrupt_s_answer_says_which_lines_stay_queued()
+    {
+        const string interrupt = """{"type":"control_request","request_id":"interrupt-1","request":{"subtype":"interrupt"}}""";
+        ClaudeStream.Read(StreamJson.InterruptAck(interrupt, "q1")).ShouldBeOfType<ClaudeInterrupted>().StillQueued.ShouldBe(["q1"]);
+        ClaudeStream.Read(StreamJson.InterruptAck(interrupt)).ShouldBeOfType<ClaudeInterrupted>().StillQueued.ShouldBeEmpty();
+    }
+
+    [Fact]
     public void An_echo_says_its_uuid_and_whether_another_session_sent_it()
     {
         ClaudeStream.Read(StreamJson.Taken("""{"type":"user","uuid":"q1","message":{"role":"user","content":"Add tests."}}"""))

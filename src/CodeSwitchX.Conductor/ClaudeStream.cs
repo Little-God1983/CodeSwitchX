@@ -31,6 +31,12 @@ internal sealed record ClaudeAnswer : ClaudeLine;
 internal sealed record ClaudeTaken(string? Id, bool FromPeer) : ClaudeLine;
 
 /// <summary>
+/// The answer to an interrupt (<c>control_response</c>): the uuids of the lines written that stay queued behind the turn
+/// it ended, to be taken in next (CLI 2.1.292, checked 2026-10-07).
+/// </summary>
+internal sealed record ClaudeInterrupted(IReadOnlyList<string> StillQueued) : ClaudeLine;
+
+/// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
 /// CLI 2.1.285): the reply comes as <c>stream_event</c> text deltas, a tool call in the <c>assistant</c> message that
 /// holds it, its result in the next <c>user</c> message, and the turn ends with a <c>result</c> line. Lines of a
@@ -63,6 +69,7 @@ internal static class ClaudeStream
                 "user" when root.TryGetProperty("isReplay", out var replay) && replay.ValueKind == JsonValueKind.True => Taken(root),
                 "user" => ToolResults(root),
                 "result" => new ClaudeTurnOver(Error(root)),
+                "control_response" => Interrupted(root),
                 _ => null,
             };
         }
@@ -103,6 +110,13 @@ internal static class ClaudeStream
             : null;
         return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"), tools);
     }
+
+    private static ClaudeInterrupted? Interrupted(JsonElement root) =>
+        root.TryGetProperty("response", out var outer) && outer.ValueKind == JsonValueKind.Object
+        && outer.TryGetProperty("response", out var inner) && inner.ValueKind == JsonValueKind.Object
+        && inner.TryGetProperty("still_queued", out var queued) && queued.ValueKind == JsonValueKind.Array
+            ? new ClaudeInterrupted(queued.EnumerateArray().Where(q => q.ValueKind == JsonValueKind.String).Select(q => q.GetString()!).ToList())
+            : null;
 
     private static ClaudeTaken Taken(JsonElement root) =>
         new(Text(root, "uuid"), root.TryGetProperty("origin", out var origin) && Text(origin, "kind") == "peer");

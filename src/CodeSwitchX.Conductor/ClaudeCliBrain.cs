@@ -238,7 +238,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // good (a write blocked in the pipe sees no token): it is waited for from outside, for Silence, and a process
             // that took no line by then is given up, which kills it and ends the write.
             ct.ThrowIfCancellationRequested();
-            sent =await WithinAsync(SendAsync(process, text, id), Silence).ConfigureAwait(false);
+            sent = await WithinAsync(SendAsync(process, text, id), Silence).ConfigureAwait(false);
 
             if (!sent)
             {
@@ -253,16 +253,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // Until the question's echo comes, the lines may be another turn's (#192): a chat's message to Raven that began
             // a turn just as the question went in, so the pre-read above did not see it. That turn's echo comes first; the
             // question then waits for its result, or is folded into it at a tool call, and its own echo comes mid-turn.
-            // Either way, what follows the question's echo is its answer. Only another session's echo (a peer's) begins
-            // another turn; an echo that is not a peer's is the question's, unless it is a cancelled question's (see
-            // _cancelled). The inits that come meanwhile say how this process's tools stand, whoever's turn they begin, so
-            // they are told with the answer. A Claude Code that echoes nothing answers with no echo before it.
+            // Either way, what follows the question's echo is its answer (TakeOther). The inits that come meanwhile say how
+            // this process's tools stand, whoever's turn they begin, so they are told with the answer. A Claude Code that
+            // echoes nothing answers with no echo before it.
             List<ClaudeInit> inits = [];
-            if (_unaskedRead is { } stale && !ReferenceEquals(stale.Process, process))
-            {
-                TellOther("its brain stopped in the middle of it"); // read in part from a process since replaced
-            }
-
+            ForgetStale(process);
             while (true)
             {
                 var (line, timedOut) = await NextLineAsync(process, ct).ConfigureAwait(false);
@@ -298,38 +293,21 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                 if (!taken)
                 {
-                    if (read is ClaudeTaken taking && await DropCancelledAsync(process, taking).ConfigureAwait(false))
+                    if (read is ClaudeInit early)
+                    {
+                        inits.Add(early);
+                        continue;
+                    }
+
+                    if (read is null || TakeOther(process, read))
                     {
                         continue;
                     }
 
-                    switch (read)
-                    {
-                        case ClaudeTaken { FromPeer: false }:
-                            taken = true;
-                            // Folded into another turn: the question's answer is told as such, the rest of the turn with it.
-                            TellOther(null);
-                            break;
-                        case ClaudeTaken:
-                            // Another session's message begins a turn ahead of the question.
-                            (_unaskedRead ??= new UnaskedRead(process)).Take(read);
-                            continue;
-                        case ClaudeTurnOver over when _unaskedRead is not null:
-                            TellOther(over.Error); // the question was queued behind it: its own turn comes next
-                            continue;
-                        case ClaudeInit init:
-                            inits.Add(init);
-                            continue;
-                        case null:
-                            continue;
-                        case { } other when _unaskedRead is { } turn:
-                            turn.Take(other);
-                            continue;
-                        default:
-                            taken = true; // no echo
-                            break;
-                    }
-
+                    // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
+                    // turn, the question's answer is told as such, the rest of that turn with it.
+                    taken = true;
+                    TellOther(null);
                     foreach (var init in inits)
                     {
                         foreach (var notice in Report(init))
@@ -398,22 +376,26 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 _chat.Sessions.Save(_chat.Key, _session);
             }
 
-            // Cancelled before its echo came: a turn of its own that ran ahead of the question is ended by the interrupt
-            // below, so the watcher must not wait for its rest; and the question itself stays queued through the
-            // interrupt (still_queued, CLI 2.1.292), to be taken in later, when it is ended unheard.
-            if (!finished && sent && !taken)
-            {
-                TellOther("it was cut off when a question waiting behind it was cancelled");
-                _cancelled.Add(id);
-            }
-
             // Cancelled, or left before the turn was over: it is interrupted and read to its end, so the brain keeps the
             // conversation and the rest of its lines are not read as the next turn's. One that does not end is stopped.
-            // The teller keeps no conversation: it is stopped below anyway, so it is not interrupted first.
-            if (!finished && sent && !Toolless && process is not null && ReferenceEquals(process, _process)
-                && !await InterruptAsync(process).ConfigureAwait(false))
+            // The teller keeps no conversation: it is stopped below anyway, so it is not interrupted first. An interrupt
+            // ends whichever turn runs: one of its own that the question waits behind is no question's to end, so the
+            // question is left queued, and answered unheard once it is taken in (TakeOther); so is one the interrupt finds
+            // queued behind a turn whose echo had not come (still_queued, CLI 2.1.292).
+            if (!finished && sent && !Toolless && process is not null && ReferenceEquals(process, _process))
             {
-                Stop();
+                if (!taken && _unaskedRead is not null)
+                {
+                    _cancelled.Add(id);
+                }
+                else if (await InterruptAsync(process).ConfigureAwait(false) is not { } queued)
+                {
+                    Stop();
+                }
+                else if (!taken && queued.Contains(id))
+                {
+                    _cancelled.Add(id);
+                }
             }
 
             if (_replaceAfterTurn)
@@ -493,18 +475,20 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         /// <summary>The calls whose result came back failed, by id.</summary>
         public HashSet<string> Failed { get; } = [];
 
-        public bool Begun { get; set; }
-
-        /// <summary>It is a cancelled question's turn, ended unheard: it is read to its end, and not told.</summary>
-        public bool Dropped { get; set; }
-
-        /// <summary>Another session's message began it.</summary>
-        public bool Peer { get; private set; }
+        /// <summary>
+        /// From here on it answers a question that was cancelled: what it says is not told, what it does with its tools
+        /// is, as nothing Raven does goes unseen. Another session's message folded in after it is told again.
+        /// </summary>
+        public bool Unheard { get; set; }
 
         /// <summary>Keeps what the line says it said and did.</summary>
-        public void Take(ClaudeLine? line)
+        public void Take(ClaudeLine line)
         {
-            Peer |= line is ClaudeTaken { FromPeer: true };
+            if (line is ClaudeTaken { FromPeer: true })
+            {
+                Unheard = false;
+            }
+
             if (line is not ClaudeEvents { Events: var events })
             {
                 return;
@@ -512,7 +496,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
             foreach (var e in events)
             {
-                if (e is BrainText text)
+                if (e is BrainText text && !Unheard)
                 {
                     Said.Append(text.Delta);
                 }
@@ -529,18 +513,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }
 
     /// <summary>
-    /// Reads a turn the brain took on its own to its end, if one has begun, and tells what it said and did. Left in the
-    /// pipe, its lines would be read as the next question's answer, and that question's as the one after it. Lines that
-    /// begin no turn are dropped. A turn that does not end with its result (its process went, or went quiet) is told as
-    /// failed: what it said so far is no answer to pass off as whole. Nothing is told once the brain is disposed: its chat
-    /// goes with it, and its process was killed, not lost. Holding <see cref="_turns"/>.
+    /// Reads the turns the brain took on its own to their end, as long as one has begun or lines wait, and tells what each
+    /// said and did. Left in the pipe, their lines would be read as the next question's answer, and that question's as
+    /// the one after it. Lines that begin no turn are dropped. A turn that does not end with its result (its process went,
+    /// or went quiet) is told as failed: what it said so far is no answer to pass off as whole. Nothing is told once the
+    /// brain is disposed: its chat goes with it, and its process was killed, not lost. Holding <see cref="_turns"/>.
     /// </summary>
     /// <param name="ct">A question waiting behind it was cancelled: it stops waiting, and the rest of the turn is read later.</param>
     private async Task ReadUnaskedAsync(IBrainProcess process, CancellationToken ct = default)
     {
-        var turn = _unaskedRead is { } part && ReferenceEquals(part.Process, process) ? part : new UnaskedRead(process);
-        _unaskedRead = turn;
-        string? failed = null;
+        ForgetStale(process);
         while (true)
         {
             string? line;
@@ -548,9 +530,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 line = ready;
             }
-            else if (!turn.Begun)
+            else if (_unaskedRead is null)
             {
-                _unaskedRead = null;
                 return;
             }
             else
@@ -559,34 +540,85 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 if (timedOut)
                 {
                     Lose(process, $"gave no answer for {Silence.TotalSeconds:0} s in a turn of its own");
-                    failed = $"its brain gave no answer for {Silence.TotalSeconds:0} s and was stopped";
-                    break;
+                    TellOther($"its brain gave no answer for {Silence.TotalSeconds:0} s and was stopped");
+                    return;
                 }
 
                 if (line is null)
                 {
-                    failed = "its brain stopped in the middle of it"; // the next question starts it again, and says so
-                    break;
+                    TellOther("its brain stopped in the middle of it"); // the next question starts it again, and says so
+                    return;
                 }
             }
 
-            var read = ClaudeStream.Read(line);
-            turn.Begun |= read is not null;
-            if (read is ClaudeTaken echo && await DropCancelledAsync(process, echo).ConfigureAwait(false))
+            // A line no echo began a turn with is one from a Claude Code that echoes nothing, or a result left over.
+            if (ClaudeStream.Read(line) is { } read && !TakeOther(process, read) && read is not ClaudeTurnOver)
             {
-                continue;
+                (_unaskedRead ??= new UnaskedRead(process)).Take(read);
             }
+        }
+    }
 
-            if (read is ClaudeTurnOver over)
-            {
-                failed = over.Error;
-                break;
-            }
+    /// <summary>
+    /// Reads a line into the turn of its own that runs (<see cref="_unaskedRead"/>), or one it begins: another session's
+    /// message begins one, and so does a cancelled question taken in after all, which is answered unheard. Its result
+    /// ends it, and it is told. False for a line of no such turn: an echo of any other line (a question's), or, while none
+    /// runs, anything but those two echoes. Holding <see cref="_turns"/>.
+    /// </summary>
+    private bool TakeOther(IBrainProcess process, ClaudeLine read)
+    {
+        switch (read)
+        {
+            case ClaudeTaken echo when TakeCancelled(echo):
+                // Folded into another turn, it makes the rest of that turn unheard too: the rest answers it.
+                (_unaskedRead ??= new UnaskedRead(process)).Unheard = true;
+                return true;
+            case ClaudeTaken { FromPeer: true }:
+                (_unaskedRead ??= new UnaskedRead(process)).Take(read);
+                return true;
+            case ClaudeTaken:
+                return false;
+            case ClaudeTurnOver over when _unaskedRead is not null:
+                TellOther(over.Error);
+                return true;
+            case not ClaudeTurnOver when _unaskedRead is { } turn:
+                turn.Take(read);
+                return true;
+            default:
+                return false;
+        }
+    }
 
-            turn.Take(read);
+    /// <summary>
+    /// The uuids of questions cancelled before they were taken in, oldest first: Claude Code takes such a question in
+    /// later. Touched while holding <see cref="_turns"/>.
+    /// </summary>
+    private readonly List<string> _cancelled = [];
+
+    /// <summary>
+    /// Whether the echo is a cancelled question's, which it then forgets: by its uuid, or, from a Claude Code that does not
+    /// echo the uuid back, the oldest one's, as the lines written are taken in in their order.
+    /// </summary>
+    private bool TakeCancelled(ClaudeTaken echo)
+    {
+        var at = echo.FromPeer ? -1 : echo.Id is { } id ? _cancelled.IndexOf(id) : _cancelled.Count > 0 ? 0 : -1;
+        if (at < 0)
+        {
+            return false;
         }
 
-        TellOther(failed);
+        _cancelled.RemoveAt(at);
+        _logger.LogInformation("{Brain} took in a question that was cancelled; it is answered unheard", _name);
+        return true;
+    }
+
+    /// <summary>A turn of its own read in part from a process since replaced is told as cut off.</summary>
+    private void ForgetStale(IBrainProcess process)
+    {
+        if (_unaskedRead is { } stale && !ReferenceEquals(stale.Process, process))
+        {
+            TellOther("its brain stopped in the middle of it");
+        }
     }
 
     /// <summary>
@@ -610,11 +642,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             _chat.Sessions.Save(_chat.Key, _session);
         }
 
-        if (turn.Dropped)
+        if (turn.Unheard)
         {
-            _logger.LogInformation("{Brain}{Chat} ended a cancelled question's turn{Failed}", _name, _chat is null ? "" : $" of chat {_chat.Key}",
-                failed is null ? "" : $": {failed}");
-            return;
+            failed = null; // the cancelled question's: no one waits for its answer
         }
 
         var words = turn.Said.ToString().Trim();
@@ -928,31 +958,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }.ToJsonString());
 
     /// <summary>
-    /// The uuids of questions cancelled before they were taken in: Claude Code keeps such a question queued through the
-    /// interrupt and takes it in later. Touched while holding <see cref="_turns"/>.
-    /// </summary>
-    private readonly HashSet<string> _cancelled = [];
-
-    /// <summary>
-    /// Ends the turn a cancelled question was taken into, unheard: it is interrupted, and read to its end as a turn of its
-    /// own that is not told. False for an echo of any other line. Holding <see cref="_turns"/>.
-    /// </summary>
-    private async Task<bool> DropCancelledAsync(IBrainProcess process, ClaudeTaken echo)
-    {
-        if (echo.FromPeer || echo.Id is not { } id || !_cancelled.Remove(id))
-        {
-            return false;
-        }
-
-        _logger.LogInformation("{Brain} took in a question cancelled before; it is interrupted", _name);
-        var turn = _unaskedRead ??= new UnaskedRead(process);
-        turn.Begun = true;
-        turn.Dropped |= !turn.Peer; // folded into a chat's turn, that turn is ended with it, and told as it is
-        await WithinAsync(WriteAsync(process, InterruptLine()), InterruptTimeout).ConfigureAwait(false);
-        return true;
-    }
-
-    /// <summary>
     /// What a question's turn tells of its init. Every turn's init says how the tools stand; a failure is told once, and
     /// again only after they were seen working in between. "pending" is no failure: the server is still being connected to.
     /// A failure replaces the process after the turn, a few times in a row, since Claude Code does not connect again by
@@ -993,9 +998,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
     /// <summary>
     /// Interrupts the running turn (a control request, as the Agent SDK sends it) and reads it to its <c>result</c>, which
-    /// is not news. True once it ended; false when it did not within <see cref="InterruptTimeout"/>, or the process went.
+    /// is not news. Once it ended, the uuids of the lines that stay queued behind it; null when it did not end within
+    /// <see cref="InterruptTimeout"/>, or the process went.
     /// </summary>
-    private async Task<bool> InterruptAsync(IBrainProcess process)
+    private async Task<IReadOnlyList<string>?> InterruptAsync(IBrainProcess process)
     {
         var line = InterruptLine();
         try
@@ -1005,15 +1011,19 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             if (!await WithinAsync(WriteAsync(process, line), InterruptTimeout).ConfigureAwait(false))
             {
                 _logger.LogWarning("{Brain} did not take the interrupt; it is stopped", _name);
-                return false;
+                return null;
             }
 
+            IReadOnlyList<string> queued = [];
             while (true)
             {
-                var next = await process.Lines.ReadAsync(timeout.Token).ConfigureAwait(false);
-                if (ClaudeStream.Read(next) is ClaudeTurnOver)
+                switch (ClaudeStream.Read(await process.Lines.ReadAsync(timeout.Token).ConfigureAwait(false)))
                 {
-                    return true;
+                    case ClaudeInterrupted interrupted:
+                        queued = interrupted.StillQueued;
+                        break;
+                    case ClaudeTurnOver:
+                        return queued;
                 }
             }
         }
@@ -1021,7 +1031,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             or ObjectDisposedException or InvalidOperationException)
         {
             _logger.LogWarning("{Brain} did not end an interrupted turn; it is stopped", _name);
-            return false;
+            return null;
         }
     }
 
@@ -1068,7 +1078,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         try
         {
-            return (await process.Lines.ReadAsync(ct).AsTask().WaitAsync(Silence, _time, ct).ConfigureAwait(false), false);
+            // The token goes to the read alone: given to the wait too, a cancel could end the wait first and run the
+            // interrupt while the read still waits, which would take the interrupt's answer and lose it. A read left by
+            // the timeout goes with its process, which is given up.
+            return (await process.Lines.ReadAsync(ct).AsTask().WaitAsync(Silence, _time).ConfigureAwait(false), false);
         }
         catch (System.Threading.Channels.ChannelClosedException)
         {

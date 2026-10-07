@@ -191,7 +191,8 @@ internal static class StreamJson
     }
 
     /// <summary>What CLI 2.1.285 answers an interrupt with (captured 2026-10-01).</summary>
-    public static string InterruptAck(string written)
+    /// <param name="stillQueued">The uuids of lines written that stay queued behind the turn it ends (CLI 2.1.292).</param>
+    public static string InterruptAck(string written, params string[] stillQueued)
     {
         using var line = JsonDocument.Parse(written);
         var id = line.RootElement.GetProperty("request_id").GetString();
@@ -202,7 +203,7 @@ internal static class StreamJson
             {
                 ["subtype"] = "success",
                 ["request_id"] = id,
-                ["response"] = new System.Text.Json.Nodes.JsonObject { ["still_queued"] = new System.Text.Json.Nodes.JsonArray() },
+                ["response"] = new System.Text.Json.Nodes.JsonObject { ["still_queued"] = new System.Text.Json.Nodes.JsonArray([.. stillQueued.Select(q => (System.Text.Json.Nodes.JsonNode?)q)]) },
             },
         }.ToJsonString();
     }
