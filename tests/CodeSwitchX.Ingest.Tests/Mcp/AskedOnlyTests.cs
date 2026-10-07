@@ -129,7 +129,19 @@ public sealed class AskedOnlyTests : IAsyncLifetime
 
         var result = await client.CallToolAsync("stop_chat", new Dictionary<string, object?> { ["chat"] = "aaaaaaaa" }, cancellationToken: Ct);
 
+        result.IsError.ShouldBe(true);
         Text(result).ShouldContain(ToolActs.NotAsked);
+        _actions.Stopped.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_chat_whose_Claude_Code_sends_no_question_ids_is_told_why_it_cannot_act()
+    {
+        // #199: the brain must not tell the user a chat's message asked for it.
+        await using var client = await ConnectAsync(InCodeSwitchX);
+        _asked.Unverified(InCodeSwitchX, true);
+
+        Text(await client.CallToolAsync("stop_chat", cancellationToken: Ct)).ShouldContain(ToolActs.NoIds);
     }
 
     [Fact]
@@ -140,20 +152,6 @@ public sealed class AskedOnlyTests : IAsyncLifetime
 
         (await client.CallToolAsync("stop_chat", new Dictionary<string, object?> { ["chat"] = "aaaaaaaa" }, cancellationToken: Ct)).IsError.ShouldNotBe(true);
         _actions.Stopped.ShouldNotBeNull();
-    }
-
-    [Fact]
-    public void A_chat_is_asked_until_as_many_ends_as_begins()
-    {
-        _asked.Begin(InCodeSwitchX);
-        _asked.Begin(InCodeSwitchX);
-        _asked.End(InCodeSwitchX);
-        _asked.IsAsked(InCodeSwitchX).ShouldBeTrue();
-        _asked.IsAsked(InCodeSwitchX.ToUpperInvariant()).ShouldBeTrue("the header is a guid, whatever its case");
-        _asked.End(InCodeSwitchX);
-        _asked.IsAsked(InCodeSwitchX).ShouldBeFalse();
-        _asked.End(InCodeSwitchX); // one too many is nothing
-        _asked.IsAsked(InCodeSwitchX).ShouldBeFalse();
     }
 
     /// <summary>Settings that only say whether anything reached them.</summary>

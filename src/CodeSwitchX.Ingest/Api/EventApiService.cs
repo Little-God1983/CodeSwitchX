@@ -135,7 +135,8 @@ public sealed class EventApiService : IHostedService
 
             if (_asked is not null)
             {
-                // A Raven chat's brain in a turn no question of its user's started is refused every tool that acts (#193).
+                // A Raven chat's brain in a turn no question of its user's started is refused every tool that acts (#193), in
+                // one filter for every tool not marked read-only (#200).
                 var asked = _asked;
                 mcp.WithRequestFilters(filters => filters.AddCallToolFilter(ToolActs.RefuseUnasked(asked)));
             }

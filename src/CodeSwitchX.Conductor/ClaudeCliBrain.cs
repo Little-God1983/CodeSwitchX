@@ -101,14 +101,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     private bool _yardWarned;
 
     /// <summary>
-    /// What Raven says once when its questions come back with no uuid (#199): it cannot tell them from a cancelled
-    /// question's, so the Yard's tools refuse what they ask.
+    /// What Raven says once, for the whole app, when its questions come back with no uuid, or with no echo at all (#199):
+    /// it cannot tell them from a cancelled question's, so the Yard's tools refuse what they ask.
     /// </summary>
     internal const string NoIds = "This Claude Code does not send Raven's question ids back, so Raven cannot tell your questions from "
         + "earlier ones you cancelled: it answers, but does nothing a question asks. Update Claude Code.";
-
-    /// <summary>It was said that this Claude Code echoes no question ids; said once, as an update is what changes it.</summary>
-    private bool _idWarned;
 
     /// <summary>It was said that this Claude Code cannot send to other chats; said once, as an update is what changes it.</summary>
     private bool _sendWarned;
@@ -237,9 +234,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     break;
                 case ClaudeTaken echo:
                     // Only its own echo, by its uuid, lets it act: one with no uuid may be an earlier, cancelled
-                    // question's (#199), and any other is.
+                    // question's (#199), and any other is. One with its uuid shows the ids come back.
                     _echoes = true;
-                    InQuestion(EchoOf(echo, _question) == Echo.Question && !_peerInTurn);
+                    var whose = EchoOf(echo, _question);
+                    InQuestion(whose == Echo.Question && !_peerInTurn);
+                    if (whose == Echo.Question && _asked is not null && Header is { } chat)
+                    {
+                        _asked.Unverified(chat, false);
+                    }
+
                     break;
                 case ClaudeTurnOver:
                     _peerInTurn = false;
@@ -318,18 +321,26 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     }
 
     /// <summary>
-    /// The question's answer came with no echo before it. From a Claude Code that echoes nothing, its turn is the question's
-    /// from here on, as it always was before the echoes were followed (#192); from one that echoes, it is no question's.
+    /// The question's answer came with no echo of its uuid before it: with an echo that has none, or, from a Claude Code
+    /// that has echoed nothing, with none at all. It cannot be told from a cancelled question's, so it does not act, and
+    /// the Yard says why (#199). True when Raven is to say so, the first time in the app. One that echoes but sent no echo
+    /// for this turn (a turn it began on its own) is no question's either, and nothing is said.
     /// </summary>
-    private void TakenWithoutEcho(string id)
+    private bool Unverified(bool echoed)
     {
+        bool unverified;
         lock (_questionGate)
         {
-            if (_question == id && !_peerInTurn && !_echoes)
-            {
-                InQuestion(true);
-            }
+            unverified = echoed || !_echoes;
         }
+
+        if (!unverified || _asked is null || Header is not { } chat)
+        {
+            return false;
+        }
+
+        _asked.Unverified(chat, true);
+        return _asked.FirstTime(nameof(NoIds));
     }
 
     /// <summary>The question written with <paramref name="id"/> is waited for, or, for null, none is: it is out of it then.</summary>
@@ -507,13 +518,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
-                    if (read is not ClaudeTaken)
+                    if (read is not ClaudeTaken { Id: not null } && Unverified(echoed: read is ClaudeTaken))
                     {
-                        TakenWithoutEcho(id);
-                    }
-                    else if (read is ClaudeTaken { Id: null } && !_idWarned)
-                    {
-                        _idWarned = true;
                         yield return new BrainNotice(NoIds, Warning: true);
                     }
 
