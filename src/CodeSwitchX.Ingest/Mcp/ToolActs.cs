@@ -37,10 +37,11 @@ internal static class ToolActs
     /// </summary>
     public static McpRequestFilter<CallToolRequestParams, CallToolResult> RefuseUnasked(AskedChats asked) => next => (request, ct) =>
     {
-        // Closed unless the tool says it only looks: one with no annotations acts as far as this knows.
-        if (request.MatchedPrimitive is not McpServerTool { ProtocolTool.Annotations.ReadOnlyHint: true })
+        // Closed unless the tool says it only looks: one with no annotations acts as far as this knows. A tool that does
+        // not exist is the server's to say so; a call whose services are missing is from no chat this can tell.
+        if (request.MatchedPrimitive is McpServerTool tool && tool.ProtocolTool.Annotations?.ReadOnlyHint != true)
         {
-            AskedOnly(request.Services?.GetService<ChatScope>(), asked);
+            AskedOnly(request.Services is null ? new ChatScope(null, Unknown: true) : request.Services.GetService<ChatScope>(), asked);
         }
 
         return next(request, ct);

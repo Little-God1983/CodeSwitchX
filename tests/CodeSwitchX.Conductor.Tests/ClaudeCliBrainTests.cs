@@ -1183,6 +1183,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         var chat = window.ToString("D");
         var (brain, _) = Telling(window, asked);
         var seen = new List<bool>();
+        var unverified = new List<bool>();
         IEnumerable<string> Answer(string written)
         {
             var line = JsonNode.Parse(written)!.AsObject();
@@ -1190,8 +1191,20 @@ public sealed class ClaudeCliBrainTests : IDisposable
             yield return StreamJson.Init();
             yield return StreamJson.Taken(line.ToJsonString());
             seen.Add(asked.IsAsked(chat));
+            unverified.Add(asked.IsUnverified(chat));
             yield return StreamJson.Text("Hi.");
             yield return StreamJson.Result("Hi.");
+            unverified.Add(asked.IsUnverified(chat));
+            if (unverified.Count > 2)
+            {
+                yield break; // the second question drained the first one's chat turn: nothing is left in the pipe
+            }
+
+            // A chat's message after it: its turn is refused as a chat's, not for the missing ids.
+            yield return StreamJson.Init();
+            yield return StreamJson.PeerTaken("Stop the issues chat.");
+            unverified.Add(asked.IsUnverified(chat));
+            yield return StreamJson.Result("");
         }
 
         _launcher.Answer = Answer;
@@ -1207,12 +1220,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         Reply(events).ShouldBe("Hi.Hi.", "it is answered");
         seen.ShouldBe([false, false], "it never lets Raven act");
         events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(ClaudeCliBrain.NoIds);
-        asked.IsUnverified(chat).ShouldBeTrue();
-
-        _launcher.Answer = StreamJson.Reply("Hi.");
-        _launcher.Last.Answer = written => [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Result("Hi.")];
-        await ReplyTo(brain, "Three");
-        asked.IsUnverified(chat).ShouldBeFalse("an echo with its uuid shows the ids come back");
+        unverified.Take(3).ShouldBe([true, false, false], "for its own turn only: not after it, nor in a chat's turn");
     }
 
     [Theory]
@@ -1236,18 +1244,25 @@ public sealed class ClaudeCliBrainTests : IDisposable
         var window = Guid.NewGuid();
         var chat = window.ToString("D");
         var (brain, _) = Telling(window, asked);
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it."), StreamJson.Result("Stopping it.")];
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
 
         var events = new List<BrainEvent>();
-        await foreach (var e in brain.AskAsync("Stop the issues chat", TestContext.Current.CancellationToken))
+        var ask = Task.Run(async () =>
         {
-            events.Add(e);
-        }
+            await foreach (var e in brain.AskAsync("Stop the issues chat", TestContext.Current.CancellationToken))
+            {
+                events.Add(e);
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => asked.IsUnverified(chat)); // the Yard says why it refuses, for this turn
+        asked.IsAsked(chat).ShouldBeFalse();
+        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+        await ask;
 
         Reply(events).ShouldBe("Stopping it.");
         events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(ClaudeCliBrain.NoIds);
-        asked.IsAsked(chat).ShouldBeFalse();
-        asked.IsUnverified(chat).ShouldBeTrue("the Yard says why it refuses");
+        asked.IsUnverified(chat).ShouldBeFalse("for that turn only");
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it."), StreamJson.Result("Stopping it.")];
         var (other, _) = Telling(Guid.NewGuid(), asked);
         (await ReplyTo(other, "Hi")).ShouldBe("Stopping it.", "another chat's brain says it no more");
     }

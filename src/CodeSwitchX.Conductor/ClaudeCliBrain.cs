@@ -231,22 +231,20 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     _echoes = true;
                     _peerInTurn = true;
                     InQuestion(false);
+                    Unverified(false); // the rest of the turn is a chat's message's
                     break;
                 case ClaudeTaken echo:
                     // Only its own echo, by its uuid, lets it act: one with no uuid may be an earlier, cancelled
-                    // question's (#199), and any other is. One with its uuid shows the ids come back.
+                    // question's (#199), and the Yard says that is why it refuses; any other is an earlier question's.
                     _echoes = true;
                     var whose = EchoOf(echo, _question);
                     InQuestion(whose == Echo.Question && !_peerInTurn);
-                    if (whose == Echo.Question && _asked is not null && Header is { } chat)
-                    {
-                        _asked.Unverified(chat, false);
-                    }
-
+                    Unverified(whose == Echo.QuestionWithoutId && !_peerInTurn);
                     break;
                 case ClaudeTurnOver:
                     _peerInTurn = false;
                     InQuestion(false);
+                    Unverified(false);
                     break;
             }
         }
@@ -317,31 +315,43 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             _generation++;
             _peerInTurn = false;
             InQuestion(false);
+            Unverified(false);
         }
     }
 
     /// <summary>
-    /// The question's answer came with no echo of its uuid before it: with an echo that has none, or, from a Claude Code
-    /// that has echoed nothing, with none at all. It cannot be told from a cancelled question's, so it does not act, and
-    /// the Yard says why (#199). True when Raven is to say so, the first time in the app. One that echoes but sent no echo
-    /// for this turn (a turn it began on its own) is no question's either, and nothing is said.
+    /// Says whether the turn the process runs answers a question it cannot tell from a cancelled one (#199): the Yard
+    /// then refuses what acts for that reason. For that turn only. Holding <see cref="_questionGate"/>.
     /// </summary>
-    private bool Unverified(bool echoed)
+    private void Unverified(bool now)
     {
-        bool unverified;
+        if (_asked is not null && Header is { } chat)
+        {
+            _asked.Unverified(chat, now);
+        }
+    }
+
+    /// <summary>
+    /// The question's answer came with no echo at all, from a Claude Code that has echoed nothing: it cannot be told from a
+    /// cancelled question's, so it does not act, and the Yard says why (#199). False for one that echoes but sent no echo
+    /// for this turn (a turn it began on its own), which is no question's either.
+    /// </summary>
+    private bool UnverifiedWithoutEcho(string id)
+    {
         lock (_questionGate)
         {
-            unverified = echoed || !_echoes;
-        }
+            if (_question != id || _peerInTurn || _echoes)
+            {
+                return false;
+            }
 
-        if (!unverified || _asked is null || Header is not { } chat)
-        {
-            return false;
+            Unverified(true);
+            return true;
         }
-
-        _asked.Unverified(chat, true);
-        return _asked.FirstTime(nameof(NoIds));
     }
+
+    /// <summary>True the first time in the app that Raven is to say its Claude Code sends no question ids back.</summary>
+    private bool FirstNoIds() => _asked is not null && Header is not null && _asked.FirstTime(nameof(NoIds));
 
     /// <summary>The question written with <paramref name="id"/> is waited for, or, for null, none is: it is out of it then.</summary>
     private void Question(string? id)
@@ -518,7 +528,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     // The question's echo, or, from a Claude Code that echoes nothing, its answer. Folded into another
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
-                    if (read is not ClaudeTaken { Id: not null } && Unverified(echoed: read is ClaudeTaken))
+                    var whose = read is ClaudeTaken echo ? EchoOf(echo, id) : (Echo?)null;
+                    if ((whose == Echo.QuestionWithoutId || (whose is null && UnverifiedWithoutEcho(id))) && FirstNoIds())
                     {
                         yield return new BrainNotice(NoIds, Warning: true);
                     }
