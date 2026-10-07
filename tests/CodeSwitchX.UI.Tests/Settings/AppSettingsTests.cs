@@ -130,6 +130,19 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
+    public async Task Raven_s_effort_is_set_by_voice_as_said()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("your effort", "extra high", Ct);
+        _h.Shell.Settings.RavenEffort.ShouldBe("xhigh");
+        (await _settings.GetAsync("Raven's effort", Ct)).Value.ShouldBe("xhigh");
+        await _settings.SetAsync("Raven's effort", "default", Ct);
+        _h.Shell.Settings.RavenEffort.ShouldBe(SettingsViewModel.ClaudeDefault);
+        await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's effort", "hard", Ct));
+    }
+
+    [Fact]
     public async Task A_setting_not_changed_by_voice_is_explained_and_its_page_opened()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

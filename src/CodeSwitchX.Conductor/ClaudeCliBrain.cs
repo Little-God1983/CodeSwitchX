@@ -94,6 +94,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     private IBrainProcess? _process;
     private string? _processModel;
 
+    /// <summary>The effort the running process was started at; null for Claude Code's default.</summary>
+    private string? _processEffort;
+
     /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since; kept across a restart.</summary>
     private bool _yardWarned;
 
@@ -887,7 +890,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The command line, the model aside: see the class summary for why each is there.</summary>
     /// <param name="mcpConfig">A window chat's own MCP config; the app's for null.</param>
     /// <param name="session">The conversation to keep, new or picked up again; none is saved for null.</param>
-    internal IReadOnlyList<string> Arguments(string model, string? mcpConfig = null, (string Id, bool Resume)? session = null)
+    /// <param name="effort">The effort it thinks at; null leaves it to Claude Code.</param>
+    internal IReadOnlyList<string> Arguments(string model, string? mcpConfig = null, (string Id, bool Resume)? session = null, string? effort = null)
     {
         var toolless = Toolless;
         List<string> arguments =
@@ -918,6 +922,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             { } fresh => ["--session-id", fresh.Id],
             null => ["--no-session-persistence"],
         });
+        if (effort is not null)
+        {
+            arguments.AddRange(["--effort", effort]);
+        }
+
         if (!toolless)
         {
             arguments.AddRange(["--allowedTools", AllowedTools]);
@@ -949,6 +958,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         var model = ModelSet;
+        var effort = _settings.Effort;
         if (_process is { } running)
         {
             if (running.Exited.IsCompleted && _resuming)
@@ -959,9 +969,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 Lose(running, $"stopped (exit code {running.Exited.Result})");
             }
-            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset)
+            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset && _processEffort == effort)
             {
                 return null;
+            }
+            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset)
+            {
+                // Another effort is a flag of the process: it is started again, and picks the conversation up (#201).
+                Stop();
+                Notice(effort is null ? "Raven now thinks at Claude Code's default effort." : $"Raven now thinks at {effort} effort.");
             }
             else if (_processModel == model)
             {
@@ -1041,7 +1057,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // Followed from its first line (a chat's message may be waiting for it), and only while it is the brain's: one
             // stopped may still have lines on their way.
             var generation = StartFollowing();
-            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory,
+            _process = _launcher.Start(claude, Arguments(model, mcpConfig, session, effort), _paths.RavenDirectory,
                 lineRead: _asked is null || Header is null ? null : line => Follow(line, generation));
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
@@ -1059,6 +1075,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         _processModel = model;
+        _processEffort = effort;
         _lastTurnAt = _session?.LastTurnAt ?? _time.GetUtcNow();
         if (session is { } started)
         {

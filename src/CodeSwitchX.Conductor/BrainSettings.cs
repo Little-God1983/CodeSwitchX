@@ -1,3 +1,5 @@
+using CodeSwitchX.Core.Yard;
+
 namespace CodeSwitchX.Conductor;
 
 /// <summary>How the brain runs; Settings changes it while the app runs. Read at the start of every turn.</summary>
@@ -14,6 +16,7 @@ public sealed class BrainSettings
 
     private volatile string _model = DefaultModel;
     private volatile string _overviewModel = DefaultOverviewModel;
+    private volatile string? _effort;
 
     /// <summary>A window chat's model: a full model id (aliases move to newer models without notice). Blank means <see cref="DefaultModel"/>.</summary>
     public string Model
@@ -30,6 +33,16 @@ public sealed class BrainSettings
     {
         get => _overviewModel;
         set => _overviewModel = string.IsNullOrWhiteSpace(value) ? DefaultOverviewModel : value.Trim();
+    }
+
+    /// <summary>
+    /// The effort all of Raven's brains think at (#201): low, medium, high, xhigh or max, as said or typed ("extra high");
+    /// null for Claude Code's own default, and so is anything that is no effort level.
+    /// </summary>
+    public string? Effort
+    {
+        get => _effort;
+        set => _effort = ChatModels.ResolveEffort(value);
     }
 
     /// <summary>

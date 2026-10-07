@@ -592,6 +592,23 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Raven_s_effort_is_loaded_into_the_brain_and_a_change_is_stored()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenEffort, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("medium"));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenEffort.ShouldBe("medium");
+        _brain.Effort.ShouldBe("medium");
+
+        _vm.RavenEffort = SettingsViewModel.ClaudeDefault;
+        await FlushAsync();
+
+        _brain.Effort.ShouldBeNull("default leaves it to Claude Code");
+        await _store.Received().SetAsync(SettingKeys.RavenEffort, "", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Defaults_Raven_sets_by_voice_are_shown_used_and_saved()
     {
         await _vm.LoadAsync(CancellationToken.None);

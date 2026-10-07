@@ -415,6 +415,15 @@ public sealed class AppSettings : IAppSettings
             new(new("chat 0's model", Title(SettingsPage.Brain), "The model chat 0, the overview, answers with and words its chat summaries with.",
                     SettingsViewModel.KnownBrainModels), SettingsPage.Brain, ["overview model", "chat zero model", "yard model"],
                 () => S.RavenOverviewModel, v => SetModel(v, m => S.RavenOverviewModel = m)),
+            new(new("Raven's effort", Title(SettingsPage.Brain), "How hard all of Raven's chats think before they answer (\"default\": Claude "
+                    + "Code's own); higher follows its rules more reliably and answers later. The conversation carries on.",
+                    SettingsViewModel.EffortChoices), SettingsPage.Brain, ["your effort", "raven effort", "brain effort", "thinking effort"],
+                () => S.RavenEffort,
+                v =>
+                {
+                    S.RavenEffort = ChatSettings.DefaultEffortOf(v) ?? SettingsViewModel.ClaudeDefault;
+                    return null;
+                }),
             new(new("new chats' model", Title(SettingsPage.Brain), "The model a Claude Code chat Raven starts runs with (\"default\": Claude "
                     + "Code's own).", null), SettingsPage.Brain, ["chat model", "model for new chats", "new chat model"],
                 () => S.RavenChatModel,

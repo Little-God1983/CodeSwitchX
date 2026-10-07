@@ -64,6 +64,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The model chat 0, the overview, answers with, and its chat summaries are worded with (#124).</summary>
     [ObservableProperty] private string _ravenOverviewModel = BrainSettings.DefaultOverviewModel;
 
+    /// <summary>
+    /// The effort all of Raven's brains think at, or <see cref="ClaudeDefault"/> (#201); a change takes effect with the
+    /// next question, which carries the conversation on.
+    /// </summary>
+    [ObservableProperty] private string _ravenEffort = ClaudeDefault;
+
     /// <summary>What a chat Raven starts runs with unless said otherwise: an alias name or model id, or <see cref="ClaudeDefault"/>.</summary>
     [ObservableProperty] private string _ravenChatModel = ClaudeDefault;
 
@@ -414,6 +420,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenOverviewModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenOverviewModel, "chat 0's model", ct) is { Length: > 0 } overview
                 ? overview
                 : BrainSettings.DefaultOverviewModel;
+            RavenEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenEffort, "Raven's effort", ct));
             RavenModelAliases = await LoadOrDefaultAsync<string>(SettingKeys.RavenModelAliases, "the model aliases", ct) is { Length: > 0 } aliases
                 ? aliases
                 : ChatModels.FormatAliases(ChatModels.DefaultAliases);
@@ -689,6 +696,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         _brain.Model = value;
         Persist(SettingKeys.RavenBrainModel, value);
+    }
+
+    partial void OnRavenEffortChanged(string value)
+    {
+        _brain.Effort = Blank(value);
+        Persist(SettingKeys.RavenEffort, Blank(value) ?? "");
     }
 
     /// <summary>As <see cref="OnRavenBrainModelChanged"/>, for chat 0.</summary>
