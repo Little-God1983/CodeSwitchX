@@ -581,6 +581,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                     unechoed = whose is null;
 
+                    // Folded into a chat's turn that had said and done nothing yet: the answer speaks to the chat's message
+                    // too, and nothing of that turn would be told, so its message is shown with the answer (#197).
+                    if (_unaskedRead is { Peer: true, Said.Length: 0, Calls.Count: 0 } chatTurn)
+                    {
+                        yield return new BrainNotice(FoldedText(chatTurn.From, chatTurn.Message), Warning: false);
+                    }
+
                     TellOther(null);
                     if (early is not null)
                     {
@@ -602,8 +609,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         break;
                     case ClaudeTaken { FromPeer: true } peer:
                         // A chat's message folded into the question's turn at a tool call (#197): one turn answers both, so
-                        // the answer goes on, and the message is shown in the window's chat on its own, not lost in it.
-                        FoldedIn(peer);
+                        // the answer goes on, and the message is shown with it, in its place, as a note: the chat's words,
+                        // never a line of Raven's, and no part of what chat 0's summaries are worded from.
+                        _logger.LogInformation("{Brain}{Chat} took a chat's message into the answer it was giving", _name,
+                            _chat is null ? "" : $" of chat {_chat.Key}");
+                        yield return new BrainNotice(FoldedText(peer.From, peer.Message), Warning: false);
                         break;
                     case ClaudeEvents { Events: var events }:
                         foreach (var e in events)
@@ -763,11 +773,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         /// <summary>Another session's message is in it: it is told, failure and all.</summary>
         public bool Peer { get; private set; }
 
+        /// <summary>What the first other session's message in it says, and who sent it (#197).</summary>
+        public string? Message { get; private set; }
+
+        public string? From { get; private set; }
+
         /// <summary>Keeps what the line says it said and did.</summary>
         public void Take(ClaudeLine line)
         {
-            if (line is ClaudeTaken { FromPeer: true })
+            if (line is ClaudeTaken { FromPeer: true } peer)
             {
+                Message ??= peer.Message;
+                From ??= peer.From;
                 Peer = true;
                 Unheard = false;
             }
@@ -891,24 +908,21 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
     }
 
-    /// <summary>
-    /// Shows a chat's message that Claude Code folded into the question's turn, after the question's echo (#197): what
-    /// follows in that turn may answer it as much as the question, and since #193 nothing in it acts. It is told as a turn
-    /// of the brain's own, with the message's words, so the chat's message is seen as the chat's.
-    /// </summary>
-    private void FoldedIn(ClaudeTaken peer)
-    {
-        _logger.LogInformation("{Brain}{Chat} took a chat's message into the answer it was giving", _name, _chat is null ? "" : $" of chat {_chat.Key}");
-        if (!_disposed)
-        {
-            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, FoldedText(peer.Message), [], null));
-        }
-    }
+    /// <summary>The most of a chat's message a note shows (#197): enough to know what it asks.</summary>
+    internal const int FoldedMessageLength = 300;
 
-    /// <summary>What the window's chat shows for a chat's message folded into a question's answer (#197).</summary>
-    internal static string FoldedText(string? message) => message is { Length: > 0 }
-        ? $"A chat messaged Raven while it answered you, and the answer may speak to it too: \"{message.Trim()}\""
-        : "A chat messaged Raven while it answered you, and the answer may speak to it too.";
+    /// <summary>
+    /// What the window's chat notes for a chat's message folded into a question's answer (#197): who sent it, as it is
+    /// messaged by, and its words on one line, cut to <see cref="FoldedMessageLength"/>.
+    /// </summary>
+    internal static string FoldedText(string? from, string? message)
+    {
+        var sender = from is { Length: > 0 } ? $"The chat \"{from.Trim()}\"" : "A chat";
+        var words = string.Join(" ", (message ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return words.Length > 0
+            ? $"{sender} messaged Raven while it answered you, and the answer may speak to it too: \"{TextCut.Cut(words, FoldedMessageLength)}\""
+            : $"{sender} messaged Raven while it answered you, and the answer may speak to it too.";
+    }
 
     /// <summary>Why a turn of its own is told as failed when its process went in the middle of it.</summary>
     internal const string StoppedMidTurn = "its brain stopped in the middle of it";

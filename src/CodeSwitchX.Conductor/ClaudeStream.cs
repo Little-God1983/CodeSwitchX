@@ -33,7 +33,8 @@ internal sealed record ClaudeAnswer : ClaudeLine;
 /// <param name="Id">The line's <c>uuid</c>: the one it was written with, which CLI 2.1.292 echoes back; null for none.</param>
 /// <param name="FromPeer">It came from another session, not from standard input.</param>
 /// <param name="Message">What another session's message says (<c>origin.body</c>); null for a line written to it.</param>
-internal sealed record ClaudeTaken(string? Id, bool FromPeer, string? Message = null) : ClaudeLine;
+/// <param name="From">The name the other session is messaged by (<c>origin.name</c>); null for a line written to it.</param>
+internal sealed record ClaudeTaken(string? Id, bool FromPeer, string? Message = null, string? From = null) : ClaudeLine;
 
 /// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
@@ -112,7 +113,7 @@ internal static class ClaudeStream
     private static ClaudeTaken Taken(JsonElement root)
     {
         var peer = root.TryGetProperty("origin", out var origin) && Text(origin, "kind") == "peer";
-        return new(Text(root, "uuid"), peer, peer ? Text(origin, "body") : null);
+        return new(Text(root, "uuid"), peer, peer ? Text(origin, "body") : null, peer ? Text(origin, "name") : null);
     }
 
     private static ClaudeEvents? Delta(JsonElement root)

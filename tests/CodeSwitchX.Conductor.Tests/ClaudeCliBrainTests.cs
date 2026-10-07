@@ -1171,25 +1171,46 @@ public sealed class ClaudeCliBrainTests : IDisposable
         turn.Calls.ShouldBeEmpty();
     }
 
-    [Fact]
-    public async Task A_chat_s_message_folded_into_the_answer_is_shown_on_its_own()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_chat_s_message_folded_into_the_answer_is_noted_with_it(bool chatFirst)
     {
-        // #197: the question's echo came, then a chat's message was folded in at a tool call. The answer goes on, and the
-        // chat's message is shown in the window's chat, not lost in the answer.
+        // #197: one turn answers the question and a chat's message, folded in after the question's echo at a tool call, or
+        // the question folded into the chat's turn that had said nothing yet. The answer goes on, and the chat's message is
+        // noted in its place: the chat's words, no line of Raven's, told to no one else.
         var (brain, told) = Telling(Guid.NewGuid());
-        _launcher.Answer = written =>
-        [
-            StreamJson.Init(), StreamJson.Taken(written), StreamJson.ToolUse("toolu_4", "mcp__codeswitchx__list_chats"),
-            StreamJson.ToolResult("toolu_4"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("Nothing waits on you."),
-            StreamJson.Result("Nothing waits on you."),
-        ];
+        _launcher.Answer = written => chatFirst
+            ?
+            [
+                StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Taken(written),
+                StreamJson.Text("Nothing waits on you."), StreamJson.Result("Nothing waits on you."),
+            ]
+            :
+            [
+                StreamJson.Init(), StreamJson.Taken(written), StreamJson.ToolUse("toolu_4", "mcp__codeswitchx__list_chats"),
+                StreamJson.ToolResult("toolu_4"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("Nothing waits on you."),
+                StreamJson.Result("Nothing waits on you."),
+            ];
 
-        (await ReplyTo(brain, "What's waiting on me?")).ShouldBe("Nothing waits on you.");
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("What's waiting on me?", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
 
-        var turn = Copy(told).ShouldHaveSingleItem();
-        turn.Text.ShouldBe(ClaudeCliBrain.FoldedText("Which F keys fail?"));
-        turn.Text.ShouldContain("Which F keys fail?");
-        (turn.Calls, turn.Failure).ShouldBe(([], null));
+        Reply(events).ShouldBe("Nothing waits on you.");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().ShouldBe(new BrainNotice(
+            "The chat \"bug-report-1\" messaged Raven while it answered you, and the answer may speak to it too: \"Which F keys fail?\"", false));
+        Copy(told).ShouldBeEmpty("noted with the answer, not told as a line of Raven's");
+    }
+
+    [Fact]
+    public void A_folded_message_is_noted_on_one_line_and_cut()
+    {
+        ClaudeCliBrain.FoldedText(null, "  Line one\n\nline two  ").ShouldEndWith(": \"Line one line two\"");
+        ClaudeCliBrain.FoldedText(null, " \n ").ShouldBe("A chat messaged Raven while it answered you, and the answer may speak to it too.");
+        ClaudeCliBrain.FoldedText("bug-report-1", new string('x', 1000)).Length.ShouldBeLessThan(ClaudeCliBrain.FoldedMessageLength + 120);
     }
 
     [Fact]
