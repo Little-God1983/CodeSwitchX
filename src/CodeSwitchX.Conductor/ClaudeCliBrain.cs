@@ -100,6 +100,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since; kept across a restart.</summary>
     private bool _yardWarned;
 
+    /// <summary>
+    /// What Raven says once when its questions come back with no uuid (#199): it cannot tell them from a cancelled
+    /// question's, so the Yard's tools refuse what they ask.
+    /// </summary>
+    internal const string NoIds = "This Claude Code does not send Raven's question ids back, so Raven cannot tell your questions from "
+        + "earlier ones you cancelled: it answers, but does nothing a question asks. Update Claude Code.";
+
+    /// <summary>It was said that this Claude Code echoes no question ids; said once, as an update is what changes it.</summary>
+    private bool _idWarned;
+
     /// <summary>It was said that this Claude Code cannot send to other chats; said once, as an update is what changes it.</summary>
     private bool _sendWarned;
 
@@ -226,10 +236,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     InQuestion(false);
                     break;
                 case ClaudeTaken echo:
-                    // Its echo, by its uuid or, from a Claude Code that does not echo the uuid back, as no other's; any
-                    // other is an earlier question's, cancelled, that no one waits for.
+                    // Only its own echo, by its uuid, lets it act: one with no uuid may be an earlier, cancelled
+                    // question's (#199), and any other is.
                     _echoes = true;
-                    InQuestion(_question is { } id && (echo.Id is null || echo.Id == id) && !_peerInTurn);
+                    InQuestion(EchoOf(echo, _question) == Echo.Question && !_peerInTurn);
                     break;
                 case ClaudeTurnOver:
                     _peerInTurn = false;
@@ -238,6 +248,33 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
         }
     }
+
+    /// <summary>Whose an echo is, to the question waited for.</summary>
+    internal enum Echo
+    {
+        /// <summary>Another session's message.</summary>
+        Peer,
+
+        /// <summary>The question's, by its uuid.</summary>
+        Question,
+
+        /// <summary>
+        /// No peer's and with no uuid, from a Claude Code that does not echo it back: taken for the question's answer, but
+        /// it cannot be told from an earlier, cancelled question's, so it never lets Raven act (#199).
+        /// </summary>
+        QuestionWithoutId,
+
+        /// <summary>An earlier question's, cancelled before it was taken in, that no one waits for; or any, between questions.</summary>
+        Earlier,
+    }
+
+    /// <summary>Whose <paramref name="echo"/> is, to the question of uuid <paramref name="question"/> (null between questions).</summary>
+    internal static Echo EchoOf(ClaudeTaken echo, string? question) =>
+        echo.FromPeer ? Echo.Peer
+        : question is null ? Echo.Earlier
+        : echo.Id == question ? Echo.Question
+        : echo.Id is null ? Echo.QuestionWithoutId
+        : Echo.Earlier;
 
     /// <summary>Says whether it is in its user's question now. Holding <see cref="_questionGate"/>.</summary>
     private void InQuestion(bool now)
@@ -473,6 +510,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     if (read is not ClaudeTaken)
                     {
                         TakenWithoutEcho(id);
+                    }
+                    else if (read is ClaudeTaken { Id: null } && !_idWarned)
+                    {
+                        _idWarned = true;
+                        yield return new BrainNotice(NoIds, Warning: true);
                     }
 
                     TellOther(null);
@@ -741,7 +783,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         switch (read)
         {
-            case ClaudeTaken { FromPeer: false } echo when question is not null && (echo.Id is null || echo.Id == question):
+            case ClaudeTaken echo when EchoOf(echo, question) is Echo.Question or Echo.QuestionWithoutId:
                 return false;
             case ClaudeTaken echo:
                 var turn = _unaskedRead ??= new UnaskedRead(process);

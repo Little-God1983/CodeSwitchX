@@ -1,5 +1,7 @@
 using CodeSwitchX.Core.Yard;
 using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 
 namespace CodeSwitchX.Ingest.Mcp;
 
@@ -13,7 +15,8 @@ internal static class ToolActs
     /// <summary>
     /// Refuses a tool that acts when the Raven chat calling it is not in its user's question (#193): a message from another
     /// session started its brain's turn. So is a caller whose chat header names no Raven chat. A caller that sends none is
-    /// no Raven chat and is let be, and so is every call while the app keeps no record (<paramref name="asked"/> null).
+    /// no Raven chat and is let be, and so is every call while the app keeps no record (<paramref name="asked"/> null). The
+    /// server calls it for every tool that is not read-only, before the tool runs (<see cref="RefuseUnasked"/>).
     /// </summary>
     public static void AskedOnly(ChatScope? scope, AskedChats? asked)
     {
@@ -22,6 +25,20 @@ internal static class ToolActs
             throw new McpException(NotAsked);
         }
     }
+
+    /// <summary>
+    /// The server's filter for every tool call (#200): a tool not marked read-only is refused as <see cref="AskedOnly"/>
+    /// says, whatever type it is in, so one added later needs nothing of its own.
+    /// </summary>
+    public static McpRequestFilter<CallToolRequestParams, CallToolResult> RefuseUnasked(AskedChats asked) => next => (request, ct) =>
+    {
+        if (request.MatchedPrimitive is McpServerTool { ProtocolTool.Annotations.ReadOnlyHint: not true })
+        {
+            AskedOnly(request.Services?.GetService(typeof(ChatScope)) as ChatScope, asked);
+        }
+
+        return next(request, ct);
+    };
 
     /// <summary>
     /// Runs the action; a <see cref="YardActionException"/> comes back as a tool error in its own words, and a window too busy

@@ -118,11 +118,6 @@ public sealed class EventApiService : IHostedService
                 builder.Services.AddSingleton(_asks);
             }
 
-            if (_asked is not null)
-            {
-                builder.Services.AddSingleton(_asked);
-            }
-
             var mcp = builder.Services.AddMcpServer(mcp => mcp.ServerInfo = new() { Name = "CodeSwitchX", Version = AppVersion.Current })
                 .WithHttpTransport(http => http.Stateless = true)
                 .WithTools<YardTools>();
@@ -136,6 +131,13 @@ public sealed class EventApiService : IHostedService
             {
                 builder.Services.AddSingleton(_settings);
                 mcp.WithTools<SettingsTools>();
+            }
+
+            if (_asked is not null)
+            {
+                // A Raven chat's brain in a turn no question of its user's started is refused every tool that acts (#193).
+                var asked = _asked;
+                mcp.WithRequestFilters(filters => filters.AddCallToolFilter(ToolActs.RefuseUnasked(asked)));
             }
         }
 
