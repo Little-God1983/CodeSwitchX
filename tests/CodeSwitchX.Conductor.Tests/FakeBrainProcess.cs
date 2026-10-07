@@ -23,7 +23,7 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public Task<int> Exited => _exited.Task;
 
-    public string ErrorTail => "error: something broke";
+    public string ErrorTail { get; set; } = "error: something broke";
 
     /// <summary>
     /// Its input is full and it reads no more: a write hangs, deaf to its token as a pipe write blocked in WriteFile is,
@@ -103,6 +103,9 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 
     public Exception? Failure { get; set; }
 
+    /// <summary>What each new process wrote to standard error; null for the fake's own.</summary>
+    public string? ErrorTail { get; set; }
+
     public FakeBrainProcess Last => Started[^1].Process;
 
     public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
@@ -114,6 +117,11 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
         }
 
         var process = new FakeBrainProcess { Answer = Answer, LineRead = lineRead };
+        if (ErrorTail is not null)
+        {
+            process.ErrorTail = ErrorTail;
+        }
+
         Started.Add((executable, arguments, workingDirectory, process));
         Environments.Add(environment);
         return process;

@@ -357,6 +357,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
         _settings.Effort = "max";
         _launcher.Answer = _ => [StreamJson.NoConversation];
+        _launcher.ErrorTail = "error: Effort level 'max' is not supported for claude-haiku-4-5-20251001";
         var events = new List<BrainEvent>();
         await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
         {
@@ -370,6 +371,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         sessions.Load(window.ToString("N")).ShouldNotBeNull().Id.ShouldBe(kept.Id, "the conversation is kept");
 
         _launcher.Answer = StreamJson.Reply("Hi.");
+        _launcher.ErrorTail = null;
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
         _launcher.Started[^1].Arguments.ShouldNotContain("--effort", "the effort before, while max stays set");
         Value(_launcher.Started[^1].Arguments, "--resume").ShouldBe(kept.Id);
@@ -377,6 +379,31 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _settings.Effort = "medium";
         (await ReplyTo(brain, "Four")).ShouldBe("Hi.");
         Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium", "another effort set is tried");
+    }
+
+    [Fact]
+    public async Task A_conversation_that_is_gone_when_the_effort_changed_is_not_taken_for_a_refused_effort()
+    {
+        // #203: a resume that fails for its own reason, with no word of the effort, is the conversation's, as before.
+        var window = Guid.NewGuid();
+        var (brain, _) = Telling(window);
+        await ReplyTo(brain, "One");
+
+        _settings.Effort = "high";
+        _launcher.Answer = _ => [StreamJson.NoConversation];
+        _launcher.ErrorTail = "No conversation found with session ID";
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldStartWith("Raven could not pick this chat's conversation up again");
+        _launcher.ErrorTail = null;
+        _launcher.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("high", "the effort set is kept");
+        _launcher.Started[^1].Arguments.ShouldNotContain("--resume");
     }
 
     [Fact]
@@ -412,8 +439,13 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _settings.Effort = "medium";
         var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
         await Task.Delay(100, TestContext.Current.CancellationToken);
-        _launcher.Started.Count.ShouldBe(1);
-        _time.Advance(TimeSpan.FromSeconds(1));
+        _launcher.Started.Count.ShouldBe(1, "it waits");
+        // However long the question takes to come to its wait, the clock moves on until it has.
+        while (!answer.IsCompleted)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(250));
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
 
         (await answer).ShouldBe("Hi.");
         _launcher.Started.Count.ShouldBe(2);
