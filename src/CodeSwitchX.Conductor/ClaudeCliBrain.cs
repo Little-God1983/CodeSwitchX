@@ -97,18 +97,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The effort the running process was started at; null for Claude Code's default.</summary>
     private string? _processEffort;
 
-    /// <summary>The running process has written a line that is no failed result.</summary>
-    private volatile bool _spoke;
-
     /// <summary>
-    /// The process started again, picking the conversation up, for another effort, and the effort; until it writes a line
-    /// that is no failed result (#203). If it goes before that, it is the effort that failed to start, not the
-    /// conversation, which is kept once. Guarded by <see cref="_questionGate"/>.
+    /// The process started, picking the conversation up, at another effort than the last process was started at, and the
+    /// effort; until it writes a line that is no failed result (#203). If it goes before that, it is the effort that may
+    /// have failed to start, not the conversation, which is kept once. Guarded by <see cref="_questionGate"/>.
     /// </summary>
     private (IBrainProcess Process, string? Effort)? _effortStart;
 
-    /// <summary>The next process is started for another effort (see <see cref="_effortStart"/>). Holding <see cref="_turns"/>.</summary>
-    private bool _effortChanged;
+    /// <summary><see cref="_effortStart"/> is set: the reading thread looks at lines for it, and at no line otherwise.</summary>
+    private volatile bool _watchingStart;
+
+    /// <summary>The effort the last process was started at, also once it is gone; unknown before the first start.</summary>
+    private (bool Known, string? Effort) _startedEffort;
 
     /// <summary>
     /// How long a restart for another model or effort waits for a turn a chat's message is about to begin (#203): its
@@ -231,16 +231,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     private void Follow(string line, long generation)
     {
-        // It started once it writes a line that is no failed result (#203): one that cannot start may still write that
-        // before it ends. Read only until then.
-        if (!_spoke && ClaudeStream.Read(line) is not (null or ClaudeTurnOver { Error: not null }))
+        // A process started at another effort started once it writes a line that is no failed result (#203): one that
+        // cannot start may still write that before it ends. Read only while that is watched for.
+        if (_watchingStart && ClaudeStream.Read(line) is not (null or ClaudeTurnOver { Error: not null }))
         {
             lock (_questionGate)
             {
                 if (generation == _generation)
                 {
-                    _spoke = true;
                     _effortStart = null;
+                    _watchingStart = false;
                 }
             }
         }
@@ -338,7 +338,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         {
             _peerInTurn = false;
             _echoes = false;
-            _spoke = false;
             return ++_generation;
         }
     }
@@ -352,6 +351,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             _peerInTurn = false;
             InQuestion(false);
             Unverified(false);
+            _effortStart = null; // a process stopped before it started holds nothing to keep
+            _watchingStart = false;
         }
     }
 
@@ -551,7 +552,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     yield break;
                 }
 
-                _resuming = false; // it said something: the conversation was picked up
+                if (read is not null)
+                {
+                    _resuming = false; // it said something: the conversation was picked up
+                }
 
                 if (!taken)
                 {
@@ -1111,6 +1115,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             var young = _processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset;
             if (running.Exited.IsCompleted && _resuming)
             {
+                // Started at another effort (a warm-up's) and gone before it started: the question says so, rather than
+                // start again at the same effort straight away (#203).
+                if (KeptOnce(running, ask: true) is { } keptOnce)
+                {
+                    return keptOnce;
+                }
+
                 Notice(ResumeFailed(running, ask: false));
             }
             else if (running.Exited.IsCompleted)
@@ -1123,10 +1134,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
             else if (young)
             {
-                // Another effort is a flag of the process: it is started again, and picks the conversation up (#201).
+                // Another effort is a flag of the process: it is started again, and picks the conversation up (#201); the
+                // start below says so.
                 Stop();
-                _effortChanged = true;
-                Notice($"Raven now thinks at {Spoken(effort)} effort.");
             }
             else if (_processModel == model)
             {
@@ -1208,12 +1218,20 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             var generation = StartFollowing();
             _process = _launcher.Start(claude, Arguments(model, mcpConfig, session, effort), _paths.RavenDirectory,
                 lineRead: line => Follow(line, generation));
-            lock (_questionGate)
+            // At another effort than the last start (or the first since the app started), picking a conversation up: kept
+            // once if it goes before it starts (#203). Another one than a known one is said.
+            var otherEffort = !_startedEffort.Known || _startedEffort.Effort != effort;
+            if (_startedEffort.Known && otherEffort)
             {
-                _effortStart = _effortChanged && resume ? (_process, effort) : null;
+                Notice($"Raven now thinks at {Spoken(effort)} effort.");
             }
 
-            _effortChanged = false;
+            _startedEffort = (true, effort);
+            lock (_questionGate)
+            {
+                _effortStart = otherEffort && resume ? (_process, effort) : null;
+                _watchingStart = _effortStart is not null;
+            }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -1456,23 +1474,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     private string ResumeFailed(IBrainProcess process, bool ask = true)
     {
-        (IBrainProcess Process, string? Effort)? effortStart;
-        lock (_questionGate)
+        if (KeptOnce(process, ask) is { } kept)
         {
-            effortStart = _effortStart;
-            _effortStart = null;
-        }
-
-        if (effortStart is { } started && ReferenceEquals(started.Process, process) && !_spoke)
-        {
-            // Started again for another effort, and gone before it started: the effort may be what failed, so the
-            // conversation is kept, once (#203). Gone again, it is the conversation's, and it is left as below.
-            _logger.LogWarning("{Brain} could not start again at {Effort} effort; its conversation is kept once. Its last errors: {Errors}",
-                _name, started.Effort ?? "the default", process.ErrorTail);
-            _resuming = false;
-            Stop();
-            return $"Raven's brain could not start again at {Spoken(started.Effort)} effort, so this chat's conversation is kept: "
-                + "pick another effort if it happens again." + (ask ? " Ask again." : "");
+            return kept;
         }
 
         _logger.LogWarning("{Brain} could not pick its conversation up again. Its last errors: {Errors}", _name, process.ErrorTail);
@@ -1480,6 +1484,34 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         Stop();
         ForgetSession();
         return "Raven could not pick this chat's conversation up again, so it starts a new one." + (ask ? " Ask again." : "");
+    }
+
+    /// <summary>
+    /// What the user is told when <paramref name="process"/>, started at another effort to pick the conversation up, went
+    /// before it started (#203): the effort may be what failed, so the conversation is kept, once; gone again, it is the
+    /// conversation's. Null for any other process.
+    /// </summary>
+    private string? KeptOnce(IBrainProcess process, bool ask)
+    {
+        (IBrainProcess Process, string? Effort)? effortStart;
+        lock (_questionGate)
+        {
+            effortStart = _effortStart;
+            _effortStart = null;
+            _watchingStart = false;
+        }
+
+        if (effortStart is not { } started || !ReferenceEquals(started.Process, process))
+        {
+            return null;
+        }
+
+        _logger.LogWarning("{Brain} could not start again at {Effort} effort; its conversation is kept once. Its last errors: {Errors}",
+            _name, started.Effort ?? "the default", process.ErrorTail);
+        _resuming = false;
+        Stop();
+        return $"Raven's brain could not start again at {Spoken(started.Effort)} effort, so this chat's conversation is kept: "
+            + "pick another effort if it happens again." + (ask ? " Ask again." : "");
     }
 
     /// <summary>Turns of its own read to their end so far (<see cref="TellOther"/>). Touched while holding <see cref="_turns"/>.</summary>

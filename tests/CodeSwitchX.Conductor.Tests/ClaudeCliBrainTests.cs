@@ -386,6 +386,55 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_warm_up_s_start_at_another_effort_that_went_keeps_the_conversation_and_does_not_start_again()
+    {
+        // #203: the mic warmed it up at the new effort, and that process went before the question came.
+        var window = Guid.NewGuid();
+        var (brain, _) = Telling(window);
+        await ReplyTo(brain, "One");
+
+        _settings.Effort = "max";
+        brain.WarmUp();
+        await WaitUntil(() => _launcher.Started.Count == 2);
+        _launcher.Last.Emit(StreamJson.NoConversation);
+        _launcher.Last.Die(1);
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldStartWith("Raven's brain could not start again at max effort");
+        _launcher.Started.Count.ShouldBe(2, "not started again at the same effort straight away");
+        new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(window.ToString("N")).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task An_effort_changed_while_no_process_ran_is_kept_once_too()
+    {
+        // #203: the brain rested, the effort was changed, and the start at it went before it started.
+        var window = Guid.NewGuid();
+        var (brain, _) = Telling(window);
+        await ReplyTo(brain, "One");
+        var first = _launcher.Last;
+        brain.Rest();
+        await WaitUntil(() => first.Disposed);
+
+        _settings.Effort = "max";
+        _launcher.Answer = _ => [StreamJson.NoConversation];
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldContain(n => n.Text == "Raven now thinks at max effort.");
+        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldStartWith("Raven's brain could not start again at max effort");
+        new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(window.ToString("N")).ShouldNotBeNull();
+    }
+
+    [Fact]
     public async Task A_restart_for_another_effort_waits_for_a_chat_s_turn_about_to_begin()
     {
         // #203: a chat's message reached the process just before the restart, its turn's first line just after.
