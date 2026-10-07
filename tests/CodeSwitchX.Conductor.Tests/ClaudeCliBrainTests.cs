@@ -873,6 +873,26 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task With_a_Claude_Code_that_echoes_an_answer_with_no_echo_is_no_question_s()
+    {
+        // A turn with no echo from a Claude Code that echoes (one it began on its own, say) is not the question's to act in.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        _launcher.Answer = written => [StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Hi."), StreamJson.Result("Hi.")];
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+
+        var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        asked.IsAsked(chat).ShouldBeFalse();
+        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+        await answer;
+    }
+
+    [Fact]
     public async Task A_brain_that_goes_in_the_middle_of_a_question_leaves_its_chat_unasked()
     {
         var asked = new AskedChats();

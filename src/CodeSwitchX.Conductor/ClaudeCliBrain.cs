@@ -167,11 +167,14 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Where it says when it is in its user's question (#193); null for nowhere.</summary>
     private readonly AskedChats? _asked;
 
-    /// <summary>Its chat as its tool calls name it (<see cref="Header"/>); null for a brain that names none.</summary>
-    private readonly string? _askedKey;
-
-    /// <summary>Guards <see cref="_question"/>, <see cref="_inQuestion"/> and <see cref="_peerInTurn"/>: the process's reading thread and the turns both touch them.</summary>
+    /// <summary>
+    /// Guards what follows the process's turns: the process's reading thread and the turns both touch it, and so does
+    /// <see cref="Stop"/> from any thread.
+    /// </summary>
     private readonly Lock _questionGate = new();
+
+    /// <summary>Which process <see cref="Follow"/> follows: one started or stopped since is no more. Changed holding <see cref="_questionGate"/>.</summary>
+    private long _generation;
 
     /// <summary>The uuid of the question whose turn is waited for; null between questions.</summary>
     private string? _question;
@@ -182,14 +185,17 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>Another session's message is in the turn the process runs: none of it is the user's question.</summary>
     private bool _peerInTurn;
 
+    /// <summary>The process has echoed a line: an answer with no echo before it is no question's answer then.</summary>
+    private bool _echoes;
+
     /// <summary>
-    /// Follows, line by line as the process writes them, whether its turn is its user's question (#193); the Yard's tools
-    /// that act refuse its chat otherwise. It is from the question's echo on, unless another session's message is in that
-    /// turn: one folded in before it or after it makes the rest of the turn the message's too, which no question of the
-    /// user's asked for. A turn's end is the end of it. Followed as the lines are read, not as the answer is: the brain's
-    /// tool calls do not wait for the panel. On the process's reading thread.
+    /// Follows, line by line as the process of <paramref name="generation"/> writes them, whether its turn is its user's
+    /// question (#193); the Yard's tools that act refuse its chat otherwise. It is from the question's echo on, unless
+    /// another session's message is in that turn: one folded in before it or after it makes the rest of the turn the
+    /// message's too, which no question of the user's asked for. A turn's end is the end of it. Followed as the lines are
+    /// read, not as the answer is: the brain's tool calls do not wait for the panel. On the process's reading thread.
     /// </summary>
-    private void Follow(string line)
+    private void Follow(string line, long generation)
     {
         // Only echoes and results matter; the many stream events are not parsed twice.
         if (!line.Contains("isReplay", StringComparison.Ordinal) && !line.Contains("\"result\"", StringComparison.Ordinal))
@@ -197,40 +203,39 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             return;
         }
 
-        switch (ClaudeStream.Read(line))
+        var read = ClaudeStream.Read(line);
+        lock (_questionGate)
         {
-            case ClaudeTaken { FromPeer: true }:
-                lock (_questionGate)
-                {
+            if (generation != _generation)
+            {
+                return; // stopped meanwhile: its lines say nothing of the brain's turns any more
+            }
+
+            switch (read)
+            {
+                case ClaudeTaken { FromPeer: true }:
+                    _echoes = true;
                     _peerInTurn = true;
                     InQuestion(false);
-                }
-
-                break;
-            case ClaudeTaken echo:
-                lock (_questionGate)
-                {
+                    break;
+                case ClaudeTaken echo:
                     // Its echo, by its uuid or, from a Claude Code that does not echo the uuid back, as no other's; any
                     // other is an earlier question's, cancelled, that no one waits for.
+                    _echoes = true;
                     InQuestion(_question is { } id && (echo.Id is null || echo.Id == id) && !_peerInTurn);
-                }
-
-                break;
-            case ClaudeTurnOver:
-                lock (_questionGate)
-                {
+                    break;
+                case ClaudeTurnOver:
                     _peerInTurn = false;
                     InQuestion(false);
-                }
-
-                break;
+                    break;
+            }
         }
     }
 
     /// <summary>Says whether it is in its user's question now. Holding <see cref="_questionGate"/>.</summary>
     private void InQuestion(bool now)
     {
-        if (_asked is null || _askedKey is null || now == _inQuestion)
+        if (_asked is null || Header is not { } chat || now == _inQuestion)
         {
             return;
         }
@@ -238,37 +243,45 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _inQuestion = now;
         if (now)
         {
-            _asked.Begin(_askedKey);
+            _asked.Begin(chat);
         }
         else
         {
-            _asked.End(_askedKey);
+            _asked.End(chat);
         }
     }
 
-    /// <summary>Which process <see cref="Follow"/> follows: one started or stopped since is no more.</summary>
-    private long _generation;
+    /// <summary>A process starts: it is followed from its first line on, as the one of the generation returned.</summary>
+    private long StartFollowing()
+    {
+        lock (_questionGate)
+        {
+            _peerInTurn = false;
+            _echoes = false;
+            return ++_generation;
+        }
+    }
 
     /// <summary>The process is gone: none of its turns is its user's question any more, nor holds a chat's message.</summary>
     private void Unfollow()
     {
-        Interlocked.Increment(ref _generation);
         lock (_questionGate)
         {
+            _generation++;
             _peerInTurn = false;
             InQuestion(false);
         }
     }
 
     /// <summary>
-    /// The question's answer came with no echo before it, from a Claude Code that echoes nothing: its turn is the
-    /// question's from here on, as it always was before the echoes were followed (#192).
+    /// The question's answer came with no echo before it. From a Claude Code that echoes nothing, its turn is the question's
+    /// from here on, as it always was before the echoes were followed (#192); from one that echoes, it is no question's.
     /// </summary>
     private void TakenWithoutEcho(string id)
     {
         lock (_questionGate)
         {
-            if (_question == id && !_peerInTurn)
+            if (_question == id && !_peerInTurn && !_echoes)
             {
                 InQuestion(true);
             }
@@ -309,7 +322,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         _unasked = unasked;
         _chat = Toolless ? null : chat;
         _asked = Toolless ? null : asked;
-        _askedKey = Header;
         _name = role switch
         {
             BrainRole.Teller => "Raven's news teller",
@@ -1028,15 +1040,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             Directory.CreateDirectory(_paths.RavenDirectory);
             // Followed from its first line (a chat's message may be waiting for it), and only while it is the brain's: one
             // stopped may still have lines on their way.
-            var generation = Interlocked.Increment(ref _generation);
+            var generation = StartFollowing();
             _process = _launcher.Start(claude, Arguments(model, mcpConfig, session), _paths.RavenDirectory,
-                lineRead: _asked is null || _askedKey is null ? null : line =>
-                {
-                    if (Volatile.Read(ref _generation) == generation)
-                    {
-                        Follow(line);
-                    }
-                });
+                lineRead: _asked is null || Header is null ? null : line => Follow(line, generation));
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
         {

@@ -142,7 +142,16 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
             {
                 while (await _process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
                 {
-                    _lineRead?.Invoke(line);
+                    try
+                    {
+                        _lineRead?.Invoke(line);
+                    }
+                    catch (Exception ex)
+                    {
+                        // It was told never to throw; one that does must not end the pipe the brain reads its answers from.
+                        System.Diagnostics.Debug.WriteLine($"A brain's line handler failed: {ex}");
+                    }
+
                     _lines.Writer.TryWrite(line);
                 }
             }
