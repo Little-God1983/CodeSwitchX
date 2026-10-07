@@ -331,7 +331,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         first.Disposed.ShouldBeTrue();
         Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("xhigh");
         _launcher.Started[^1].Arguments.ShouldContain("--resume", "the conversation carries on");
-        events[0].ShouldBe(new BrainNotice("Raven now thinks at xhigh effort.", false));
+        events[0].ShouldBe(new BrainNotice("Raven now thinks at extra high effort.", false));
         Reply(events).ShouldBe("Hi.");
 
         _settings.Effort = "default";
@@ -343,6 +343,28 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
         _launcher.Started[^1].Arguments.ShouldNotContain("--effort");
         events[0].ShouldBe(new BrainNotice("Raven now thinks at Claude Code's default effort.", false));
+    }
+
+    [Fact]
+    public async Task A_warm_up_after_an_effort_change_lets_a_turn_of_its_own_end_first()
+    {
+        // The mic pressed while a chat's message is being answered: the restart for the new effort waits for that turn.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.PeerTaken("Which F keys fail?"));
+        _launcher.Last.Emit(StreamJson.Text("The bug report chat asks which F keys fail."));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+
+        _settings.Effort = "medium";
+        brain.WarmUp();
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _launcher.Started.Count.ShouldBe(1, "the turn runs on");
+        _launcher.Last.Emit(StreamJson.Result("The bug report chat asks which F keys fail."));
+
+        await WaitUntil(() => _launcher.Started.Count == 2);
+        told.ShouldHaveSingleItem().Failure.ShouldBeNull("it ended, and was not cut off");
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium");
     }
 
     [Fact]

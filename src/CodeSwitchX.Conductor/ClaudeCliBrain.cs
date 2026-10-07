@@ -814,6 +814,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             await _turns.WaitAsync().ConfigureAwait(false);
             try
             {
+                // As a question does: a turn it took on its own is read to its end first, so a restart (another effort,
+                // say) does not cut it off.
+                if (!Toolless && !_resuming && _process is { } held)
+                {
+                    await ReadUnaskedAsync(held).ConfigureAwait(false);
+                }
+
                 // A failure is the turn's to report, when it comes; a restart's notice waits for it too.
                 EnsureRunning();
             }
@@ -978,7 +985,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 // Another effort is a flag of the process: it is started again, and picks the conversation up (#201).
                 Stop();
-                Notice(effort is null ? "Raven now thinks at Claude Code's default effort." : $"Raven now thinks at {effort} effort.");
+                Notice(effort is null ? "Raven now thinks at Claude Code's default effort."
+                    : $"Raven now thinks at {(effort == "xhigh" ? "extra high" : effort)} effort."); // said aloud: no "xhigh"
             }
             else if (_processModel == model)
             {

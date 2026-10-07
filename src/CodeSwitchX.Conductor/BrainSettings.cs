@@ -76,7 +76,9 @@ public sealed class BrainSettings
         + "CodeSwitchX's own settings (\"is open mic on?\", \"turn open mic off\", \"use the Kokoro voice\", \"open the voice "
         + "settings\"): get_setting, set_setting and open_settings, with list_settings when you are unsure of a setting's name. Change "
         + "one only when the user asked for it, and say what you set. One that is not changed by voice (list_settings says why): "
-        + "call open_settings at its page, so the user can do it there, and say why. ";
+        + "call open_settings at its page, so the user can do it there, and say why. How hard you yourself think is the setting "
+        + "\"Raven's effort\" (\"think harder\", \"your effort to medium\"): set_setting, not set_defaults, which is only for the "
+        + "chats you start. ";
 
     private const string Telling =
         "Telling a chat something (\"tell the issues chat to ...\"): find it with list_chats, and call SendMessage with its "

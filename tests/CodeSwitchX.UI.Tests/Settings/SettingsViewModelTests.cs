@@ -606,6 +606,12 @@ public class SettingsViewModelTests : IDisposable
 
         _brain.Effort.ShouldBeNull("default leaves it to Claude Code");
         await _store.Received().SetAsync(SettingKeys.RavenEffort, "", Arg.Any<CancellationToken>());
+
+        _vm.RavenEffort = "extra high";
+        await FlushAsync();
+
+        _brain.Effort.ShouldBe("xhigh");
+        await _store.Received().SetAsync(SettingKeys.RavenEffort, "xhigh", Arg.Any<CancellationToken>());
     }
 
     [Fact]

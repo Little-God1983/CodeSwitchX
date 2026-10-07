@@ -698,10 +698,11 @@ public sealed partial class SettingsViewModel : ObservableObject
         Persist(SettingKeys.RavenBrainModel, value);
     }
 
+    /// <summary>Stored as the level the brain runs at: blank for Claude Code's default, and for anything that is no level.</summary>
     partial void OnRavenEffortChanged(string value)
     {
-        _brain.Effort = Blank(value);
-        Persist(SettingKeys.RavenEffort, Blank(value) ?? "");
+        _brain.Effort = value;
+        Persist(SettingKeys.RavenEffort, _brain.Effort ?? "");
     }
 
     /// <summary>As <see cref="OnRavenBrainModelChanged"/>, for chat 0.</summary>
