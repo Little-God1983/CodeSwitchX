@@ -15,6 +15,7 @@ using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest;
+using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.Ingest.Live;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
@@ -214,8 +215,10 @@ public partial class App : Application
             ChatMcpConfig.Clear(Path.Combine(paths.RavenDirectory, "mcp")); // a crash left them; each brain writes its own
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
                 () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
-                window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions)));
+                window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>()));
         });
+        // What a brain says in a turn of its own (a chat messaged it, #181), shown in its Raven chat.
+        services.AddSingleton<UnaskedTurns>();
         services.AddSingleton<IChatBrains>(sp => sp.GetRequiredService<ChatBrains>());
         services.AddSingleton<IConductorBrain>(sp => sp.GetRequiredService<ChatBrains>().For(null));
         // The teller words chat news with no tools and a conversation of its own: what other chats said never reaches the
@@ -228,6 +231,8 @@ public partial class App : Application
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
+        // A chat that Raven's brain messages is told to ask the user, not Raven (#181); its brains run in Raven's folder.
+        services.AddSingleton(sp => new RavenMessages(sp.GetRequiredService<AppPaths>(), sp.GetRequiredService<ClaudeLiveSessions>().RanIn));
         services.AddSingleton<IYardDirectory>(sp => new YardDirectory(sp.GetRequiredService<YardViewModel>(), sp.GetRequiredService<SessionEngine>().Get,
             sp.GetRequiredService<IUiDispatcher>(), WorkspaceProbe.FoldersOf, id => sp.GetRequiredService<IYardActions>().StartedByRaven(id),
             sp.GetRequiredService<ClaudeLiveSessions>().NameOf));

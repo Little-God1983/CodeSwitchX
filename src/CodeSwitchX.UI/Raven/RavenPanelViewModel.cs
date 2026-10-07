@@ -277,7 +277,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
         IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatChime? chime = null,
-        SpeakerChoice? speakers = null)
+        SpeakerChoice? speakers = null, UnaskedTurns? unasked = null)
     {
         Speakers = speakers;
         _catalog = catalog;
@@ -298,6 +298,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Traffic = new TrafficWatcher(time);
         Chats = [YardChat, ActivityChat];
         _selectedChat = YardChat;
+        if (unasked is not null)
+        {
+            unasked.Taken += turn => _dispatcher.Post(() => ShowUnasked(turn));
+        }
 
         _recorder.BlockCaptured += (_, block) => _dispatcher.Post(() => OnBlock(block));
         _recorder.Failed += (_, error) => _dispatcher.Post(() => OnCaptureFailed(error));
@@ -3993,6 +3997,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 chat.Tile = tile;
             }
+        }
+    }
+
+    /// <summary>
+    /// What a brain said in a turn of its own, started by a chat's message to it (#181): written in its Raven chat, never
+    /// said aloud, as it comes unasked; the chat's badge counts it like any line the user has not seen. A tool it called
+    /// gets its card, as in an answer: what a chat's message made Raven do is never done unseen. A turn that failed ends
+    /// with a warning, as an answer that fails does.
+    /// </summary>
+    private void ShowUnasked(UnaskedTurn turn)
+    {
+        var chat = ChatOf(turn.WorkspaceId);
+        foreach (var (call, failed) in turn.Calls)
+        {
+            var card = AddEntry(RavenLogKind.Action, call.Tool, chat);
+            card.Detail = ActionDetail(call.Input);
+            card.Failed = failed;
+        }
+
+        if (turn.Text.Length > 0)
+        {
+            AddSaid(turn.Text, chat, said: false);
+        }
+
+        if (turn.Failure is { } failure)
+        {
+            AddEntry(RavenLogKind.Warning, $"Raven could not answer a message from another chat: {failure}.", chat);
         }
     }
 

@@ -10,7 +10,8 @@ namespace CodeSwitchX.Hook;
 /// Forwards one Claude Code hook payload (stdin) to the running CodeSwitchX instance.
 /// Never throws and always exits 0, so Claude Code is never disturbed. It writes to stdout only when CodeSwitchX answers
 /// a tool event with a stop for the chat's turn (the user asked Raven to stop it): then it tells Claude Code to end the
-/// turn, and on PreToolUse not to take the step it was about to. Run as <see cref="AskArgument"/> (the PreToolUse hook of
+/// turn, and on PreToolUse not to take the step it was about to; and when it answers a prompt (UserPromptSubmit) with
+/// what the chat is to be told along with it, a message from Raven's (#181). Run as <see cref="AskArgument"/> (the PreToolUse hook of
 /// a chat's question), it hands the question to CodeSwitchX and waits: answered there, it gives Claude Code the answers as
 /// the tool's input; stopped there, it ends the turn as above; otherwise it says nothing, and VS Code asks the question
 /// in the chat's tab. Run as <see cref="PermitArgument"/> (the PermissionRequest hook), it hands the permission prompt over
@@ -40,6 +41,9 @@ internal static class Relay
 
     /// <summary>The events whose answer may carry a stop: the turn's tool steps.</summary>
     private static bool MayStop(string eventName) => eventName is "PreToolUse" or "PostToolUse";
+
+    /// <summary>The event whose answer may carry what the chat is told along with its prompt: a message from Raven's (#181).</summary>
+    internal const string PromptEvent = "UserPromptSubmit";
 
     /// <summary>
     /// Says this relay hands a stop on, so CodeSwitchX can tell the user when the hooks Claude Code runs are an older
@@ -112,9 +116,11 @@ internal static class Relay
 
             using var cts = new CancellationTokenSource(TotalTimeoutMs);
             var answer = await PostAsync(endpoint, token, envelope, new Route("events", TotalTimeoutMs, MaxAnswerBytes), cts.Token).ConfigureAwait(false);
-            if (MayStop(eventName) && StopIn(answer) is { } reason)
+            if ((MayStop(eventName) && StopIn(answer) is { } reason ? StopAnswer(eventName, reason)
+                    : eventName == PromptEvent && ContextIn(answer) is { } context ? ContextAnswer(context)
+                    : null) is { } said)
             {
-                await stdout.WriteAsync(StopAnswer(eventName, reason)).ConfigureAwait(false);
+                await stdout.WriteAsync(said).ConfigureAwait(false);
                 await stdout.FlushAsync().ConfigureAwait(false);
             }
         }
@@ -513,6 +519,42 @@ internal static class Relay
                     ? Truncate(reason)
                     : null;
         }
+    }
+
+    /// <summary>What CodeSwitchX tells the chat along with its prompt (<c>{"context": "…"}</c>); null for none or anything else.</summary>
+    internal static string? ContextIn(string? answer)
+    {
+        if (string.IsNullOrEmpty(answer) || !TryParseJson(answer, out var document))
+        {
+            return null;
+        }
+
+        using (document)
+        {
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("context", out var context)
+                && context.ValueKind == JsonValueKind.String
+                && StringOf(context) is { Length: > 0 } text
+                    ? Truncate(text)
+                    : null;
+        }
+    }
+
+    /// <summary>What has Claude Code give the chat <paramref name="context"/> with its prompt; the prompt goes on as it was.</summary>
+    internal static string ContextAnswer(string context)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartObject("hookSpecificOutput");
+            writer.WriteString("hookEventName", PromptEvent);
+            writer.WriteString("additionalContext", context);
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
     /// <summary>

@@ -578,6 +578,240 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Disposed.ShouldBeTrue();
     }
 
+    /// <summary>A brain that tells its turns of its own, of a window's chat; and what it told.</summary>
+    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window)
+    {
+        var unasked = new UnaskedTurns();
+        var told = new List<UnaskedTurn>();
+        unasked.Taken += turn =>
+        {
+            lock (told)
+            {
+                told.Add(turn);
+            }
+        };
+        // A window's chat writes its own MCP config from the app's.
+        File.WriteAllText(_paths.McpConfigFile, """
+            {"mcpServers":{"codeswitchx":{"type":"http","url":"http://127.0.0.1:5000/mcp","headers":{"Authorization":"Bearer secret"}}}}
+            """);
+        var chat = BrainChat.Of(window, new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")));
+        return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked), told);
+    }
+
+    private static async Task<string> ReplyTo(ClaudeCliBrain brain, string text)
+    {
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync(text, TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        return Reply(events);
+    }
+
+    /// <summary>What a brain wrote for a chat's message to it on 2026-10-06 (#181), between two of the user's questions.</summary>
+    private static readonly string[] ChatAsksRaven =
+    [
+        StreamJson.Init(), StreamJson.Text("The ContentAutomatorX chat needs a few details: "), StreamJson.Text("which F keys?"),
+        StreamJson.AssistantText("The ContentAutomatorX chat needs a few details: which F keys?"), StreamJson.Result("The ContentAutomatorX chat needs a few details: which F keys?"),
+    ];
+
+    [Fact]
+    public async Task A_turn_the_brain_takes_on_its_own_between_questions_is_told_in_its_window_s_chat()
+    {
+        var window = Guid.NewGuid();
+        var (brain, told) = Telling(window);
+        (await ReplyTo(brain, "Start a bug report chat in ContentAutomatorX")).ShouldBe("Hi.");
+
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        var turn = told.ShouldHaveSingleItem();
+        (turn.WorkspaceId, turn.Text).ShouldBe((window, "The ContentAutomatorX chat needs a few details: which F keys?"));
+        turn.Calls.ShouldBeEmpty();
+        (await ReplyTo(brain, "What's waiting?")).ShouldBe("Hi.", "its own turn is not read as the next question's answer");
+        _launcher.Started.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_comes_just_before_a_question_is_read_before_the_question_goes_in()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        // Asked at once: whichever comes to it first, the watcher or the question, the lines are its own turn's.
+        (await ReplyTo(brain, "Two")).ShouldBe("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        told.ShouldHaveSingleItem().Text.ShouldEndWith("which F keys?");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_fails_says_why_along_with_what_it_said_so_far()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("The bug report chat asks"));
+        _launcher.Last.Emit(StreamJson.ErrorResult);
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks", "API Error: 529 Overloaded"));
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_keeps_the_conversation_young_for_the_next_start()
+    {
+        // The user reads what it said and answers it: a rest in between must not start a new conversation without it.
+        var window = Guid.NewGuid();
+        var (brain, told) = Telling(window);
+        await ReplyTo(brain, "One");
+        _time.Advance(TimeSpan.FromMinutes(15));
+
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(window.ToString("N"))!.LastTurnAt.ShouldBe(_time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task What_a_turn_of_its_own_did_with_its_tools_is_told_too()
+    {
+        // A chat's message must not make Raven act where the user cannot see it.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.ToolUse("toolu_9", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""));
+        _launcher.Last.Emit(StreamJson.ToolResult("toolu_9", error: true));
+        _launcher.Last.Emit(StreamJson.Result(""));
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        var call = told[0].Calls.ShouldHaveSingleItem();
+        (call.Call.Tool, call.Call.Input, call.Failed).ShouldBe(("stop_chat", """{"chat":"issues"}""", true), "a card that failed says so");
+        told[0].Text.ShouldBeEmpty("it said nothing, and is told all the same");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_cut_off_by_its_process_going_says_so()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("I've told the issues chat to"));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+        _launcher.Last.Die(1);
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        (told[0].Text, told[0].Failure).ShouldBe(("I've told the issues chat to", "its brain stopped in the middle of it"));
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_ended_by_the_brain_going_with_its_chat_is_not_told_as_failed()
+    {
+        // The window was retired, or the app is closing: there is no chat left to tell, and nothing failed.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+
+        brain.Dispose();
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+
+        told.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_read_in_part_by_a_question_that_was_cancelled_is_told_whole()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("The first half, "));
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("Two", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        _launcher.Last.Emit(StreamJson.Text("and the second."));
+        _launcher.Last.Emit(StreamJson.Result());
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        told[0].Text.ShouldBe("The first half, and the second.");
+    }
+
+    [Fact]
+    public async Task A_question_waiting_behind_a_turn_of_its_own_can_be_cancelled()
+    {
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+        using var cancel = new CancellationTokenSource();
+
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("Two", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(turn.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        _launcher.Last.Written.Count.ShouldBe(1, "the cancelled question never went in");
+    }
+
+    [Fact]
+    public async Task Lines_between_questions_that_begin_no_turn_are_dropped_without_waiting_for_one()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit("""{"type":"system","subtype":"status","status":"idle"}""");
+        _launcher.Last.Emit("not json");
+
+        (await ReplyTo(brain, "Two")).ShouldBe("Hi.");
+        told.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_that_never_ends_gives_the_process_up_and_the_next_question_starts_another()
+    {
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
+        _time.Advance(ClaudeCliBrain.Silence);
+        await WaitUntil(() => _launcher.Started[0].Process.Disposed);
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldContain("in a turn of its own");
+        Reply(events).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(2);
+    }
+
     private static string Value(IReadOnlyList<string> arguments, string option)
     {
         var index = arguments.ToList().IndexOf(option);

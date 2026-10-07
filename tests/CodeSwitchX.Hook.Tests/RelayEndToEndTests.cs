@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Hook;
 using CodeSwitchX.Ingest.Api;
+using CodeSwitchX.Ingest.Hooks;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.Hook.Tests;
@@ -25,7 +26,8 @@ public class RelayEndToEndTests : IAsyncLifetime
         _stops = new TurnStops(_bus, TimeProvider.System);
         _asks = new ChatAsks(_bus, TimeProvider.System);
         _api = new EventApiService(_paths, _bus, new AccessTokenStore(_paths), TimeProvider.System, NullLoggerFactory.Instance,
-            new EventApiOptions { PipeName = "csx-e2e-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, stops: _stops, asks: _asks);
+            new EventApiOptions { PipeName = "csx-e2e-" + Guid.NewGuid().ToString("N"), LoopbackPort = 0 }, stops: _stops, asks: _asks,
+            ravenMessages: new RavenMessages(_paths, (socket, folder) => folder == _paths.RavenDirectory && socket == RavenSocket));
         await _api.StartAsync(CancellationToken.None);
     }
 
@@ -333,6 +335,43 @@ public class RelayEndToEndTests : IAsyncLifetime
 
         code.ShouldBe(0);
         _received.ShouldBeEmpty("a reused PID must not make a stale endpoint.json look alive");
+    }
+
+    /// <summary>The messaging socket of one of Raven's brains, as the fake live sessions above know it.</summary>
+    private const string RavenSocket = @"\\.\pipe\LOCAL\cc-msg-4fbd2cd19fc698d8b7ce1d73eef30688";
+
+    private static string PromptPayload(string prompt) => System.Text.Json.JsonSerializer.Serialize(
+        new { session_id = "s1", hook_event_name = "UserPromptSubmit", prompt });
+
+    private static string MessageFrom(string socket) =>
+        $"Another Claude session sent a message:\n<cross-session-message from=\"uds:{socket}\" from-name=\"raven-72\" from-mode=\"prompting\">\n"
+        + "Create a bug report for F keys not working\n</cross-session-message>";
+
+    [Fact]
+    public async Task A_message_from_raven_has_the_chat_told_to_ask_the_user_rather_than_raven()
+    {
+        // #181: told nothing, the chat sent its questions back to Raven's brain, where the user never saw them.
+        var code = await Relay.RunAsync([Relay.PromptEvent], Stdin(PromptPayload(MessageFrom(RavenSocket))), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        using var answer = System.Text.Json.JsonDocument.Parse(_stdout.ToString());
+        var specific = answer.RootElement.GetProperty("hookSpecificOutput");
+        specific.GetProperty("hookEventName").GetString().ShouldBe("UserPromptSubmit");
+        specific.GetProperty("additionalContext").GetString().ShouldBe(RavenMessages.Context);
+        answer.RootElement.TryGetProperty("continue", out _).ShouldBeFalse("the prompt goes on as it was");
+        _received.ShouldHaveSingleItem().Signal.ShouldBe(SessionSignal.PromptSubmit, "the Yard still hears the chat start its turn");
+    }
+
+    [Theory]
+    [InlineData(@"\\.\pipe\LOCAL\cc-msg-another-chat")]
+    [InlineData(null)]
+    public async Task A_message_from_another_session_or_the_user_s_own_prompt_tells_the_chat_nothing(string? socket)
+    {
+        var code = await Relay.RunAsync([Relay.PromptEvent], Stdin(PromptPayload(socket is null ? "Fix the build" : MessageFrom(socket))), _stdout, _paths.Root);
+
+        code.ShouldBe(0);
+        _stdout.ToString().ShouldBeEmpty();
+        _received.ShouldHaveSingleItem();
     }
 
     [Fact]
