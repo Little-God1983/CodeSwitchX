@@ -114,6 +114,7 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
         }
 
         var process = new FakeBrainProcess { Answer = Answer, LineRead = lineRead };
+
         Started.Add((executable, arguments, workingDirectory, process));
         Environments.Add(environment);
         return process;

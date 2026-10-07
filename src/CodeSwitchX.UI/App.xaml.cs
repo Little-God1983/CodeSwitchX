@@ -216,7 +216,7 @@ public partial class App : Application
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
                 () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
                 window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>(),
-                sp.GetRequiredService<AskedChats>()));
+                sp.GetRequiredService<AskedChats>()) { RestartSettle = TimeSpan.FromSeconds(1) });
         });
         // What a brain says in a turn of its own (a chat messaged it, #181), shown in its Raven chat.
         services.AddSingleton<UnaskedTurns>();
