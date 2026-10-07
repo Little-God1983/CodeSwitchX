@@ -9,6 +9,8 @@ namespace CodeSwitchX.Core.Yard;
 public sealed class AskedChats
 {
     private readonly Dictionary<string, int> _asked = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _unverified = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _said = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 
     /// <summary>The chat's brain is in its user's question's turn, until as many <see cref="End"/>s.</summary>
@@ -43,6 +45,42 @@ public sealed class AskedChats
         lock (_gate)
         {
             return _asked.ContainsKey(chat);
+        }
+    }
+
+    /// <summary>
+    /// The chat's brain answers a question it cannot tell from one the user cancelled, as its Claude Code sends no
+    /// question ids back (#199): what acts is refused for that reason, not for a chat's message. Until it sees one again.
+    /// </summary>
+    public void Unverified(string chat, bool unverified)
+    {
+        lock (_gate)
+        {
+            if (unverified)
+            {
+                _unverified.Add(chat);
+            }
+            else
+            {
+                _unverified.Remove(chat);
+            }
+        }
+    }
+
+    public bool IsUnverified(string chat)
+    {
+        lock (_gate)
+        {
+            return _unverified.Contains(chat);
+        }
+    }
+
+    /// <summary>True the first time it is called for <paramref name="what"/>: a warning said once for the whole app.</summary>
+    public bool FirstTime(string what)
+    {
+        lock (_gate)
+        {
+            return _said.Add(what);
         }
     }
 }

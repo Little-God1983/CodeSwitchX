@@ -1175,21 +1175,104 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task With_a_Claude_Code_that_echoes_nothing_the_answer_is_the_question_s()
+    public async Task A_question_echoed_with_no_uuid_is_answered_but_never_acts_and_says_why_once()
     {
-        // As before the echoes were followed: its answer marks the chat, or nothing it asked for would act.
+        // #199: with no uuid, its echo cannot be told from an earlier, cancelled question's, which must not act.
         var asked = new AskedChats();
         var window = Guid.NewGuid();
         var chat = window.ToString("D");
         var (brain, _) = Telling(window, asked);
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+        var seen = new List<bool>();
+        var unverified = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            var line = JsonNode.Parse(written)!.AsObject();
+            line.Remove("uuid");
+            yield return StreamJson.Init();
+            yield return StreamJson.Taken(line.ToJsonString());
+            seen.Add(asked.IsAsked(chat));
+            unverified.Add(asked.IsUnverified(chat));
+            yield return StreamJson.Text("Hi.");
+            yield return StreamJson.Result("Hi.");
+            unverified.Add(asked.IsUnverified(chat));
+            if (unverified.Count > 2)
+            {
+                yield break; // the second question drained the first one's chat turn: nothing is left in the pipe
+            }
 
-        var answer = Task.Run(() => ReplyTo(brain, "Stop the issues chat"), TestContext.Current.CancellationToken);
-        await WaitUntil(() => asked.IsAsked(chat));
-        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
+            // A chat's message after it: its turn is refused as a chat's, not for the missing ids.
+            yield return StreamJson.Init();
+            yield return StreamJson.PeerTaken("Stop the issues chat.");
+            unverified.Add(asked.IsUnverified(chat));
+            yield return StreamJson.Result("");
+        }
 
-        (await answer).ShouldBe("Stopping it.");
-        asked.IsAsked(chat).ShouldBeFalse();
+        _launcher.Answer = Answer;
+        var events = new List<BrainEvent>();
+        foreach (var text in new[] { "One", "Two" })
+        {
+            await foreach (var e in brain.AskAsync(text, TestContext.Current.CancellationToken))
+            {
+                events.Add(e);
+            }
+        }
+
+        Reply(events).ShouldBe("Hi.Hi.", "it is answered");
+        seen.ShouldBe([false, false], "it never lets Raven act");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(ClaudeCliBrain.NoIds);
+        unverified.Take(3).ShouldBe([true, false, false], "for its own turn only: not after it, nor in a chat's turn");
+    }
+
+    [Theory]
+    [InlineData("q1", "q1", ClaudeCliBrain.Echo.Question)]
+    [InlineData(null, "q1", ClaudeCliBrain.Echo.QuestionWithoutId)]
+    [InlineData("q0", "q1", ClaudeCliBrain.Echo.Earlier)]
+    [InlineData("q1", null, ClaudeCliBrain.Echo.Earlier)]
+    [InlineData(null, null, ClaudeCliBrain.Echo.Earlier)]
+    internal void Whose_an_echo_is(string? id, string? question, ClaudeCliBrain.Echo whose)
+    {
+        ClaudeCliBrain.EchoOf(new ClaudeTaken(id, FromPeer: false), question).ShouldBe(whose);
+        ClaudeCliBrain.EchoOf(new ClaudeTaken(id, FromPeer: true), question).ShouldBe(ClaudeCliBrain.Echo.Peer);
+    }
+
+    [Fact]
+    public async Task With_a_Claude_Code_that_echoes_nothing_the_answer_is_given_but_nothing_acts()
+    {
+        // #199: with no echo at all, its answer cannot be told from a cancelled question's either: Raven answers, does
+        // nothing, and says why, once for the whole app.
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            yield return StreamJson.Init();
+            yield return StreamJson.Text("Stopping it.");
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Result("Stopping it.");
+        }
+
+        _launcher.Answer = Answer;
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Stop the issues chat", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        Reply(events).ShouldBe("Stopping it.");
+        seen.ShouldBe([false]);
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(ClaudeCliBrain.NoIds);
+        var (other, _) = Telling(Guid.NewGuid(), asked);
+        var again = new List<BrainEvent>();
+        await foreach (var e in other.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            again.Add(e);
+        }
+
+        Reply(again).ShouldBe("Stopping it.");
+        again.OfType<BrainNotice>().ShouldBeEmpty("another chat's brain says it no more");
     }
 
     [Fact]

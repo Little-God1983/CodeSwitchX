@@ -15,12 +15,10 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// match them; what cannot be done comes back as a tool error in words the brain can repeat. Asked from a window's Raven
 /// chat (<see cref="ChatScope"/>), a tool given no workspace or chat acts on that window: "stop it" there stops the chat
 /// working in it. Naming another one acts on that one. A Raven chat's brain in a turn no question of its user's started (a
-/// message from another session did) is refused every one of them (<see cref="AskedChats"/>, #193).
+/// message from another session did) is refused every one of them, by the server's filter (<see cref="ToolActs.AskedOnly"/>, #193).
 /// </summary>
-/// <param name="asked">The Raven chats in their user's question now; null refuses none.</param>
 [McpServerToolType]
-public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, ChatAsks? asks = null, ChatScope? scope = null,
-    AskedChats? asked = null)
+public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, ChatAsks? asks = null, ChatScope? scope = null)
 {
     [McpServerTool(Name = "start_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Opens a new, empty Claude Code chat in a tab of the workspace's VS Code window (VS Code is started in the background "
@@ -37,7 +35,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("An effort level for this chat only: low, medium, high, xhigh or max.")] string? effort = null,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         YardWorkspace target;
         YardFolder? named = null;
         if (string.IsNullOrWhiteSpace(workspace))
@@ -74,11 +71,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     public Task<ChatDefaults> SetDefaults(
         [Description("An alias (Fable, Opus, Sonnet, Haiku) or a full id.")] string? model = null,
         [Description("low, medium, high, xhigh or max.")] string? effort = null,
-        CancellationToken cancellationToken = default)
-    {
-        AskedOnly(scope, asked);
-        return Act(() => actions.SetDefaultsAsync(model, effort, cancellationToken));
-    }
+        CancellationToken cancellationToken = default) =>
+        Act(() => actions.SetDefaultsAsync(model, effort, cancellationToken));
 
     [McpServerTool(Name = "open_workspace", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows a workspace's VS Code in CodeSwitchX (\"open it\", \"take me to …\"). Given a chat, it shows the workspace the chat "
@@ -88,7 +82,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("A chat's id from start_chat or list_chats, to show it in the workspace it runs in.")] string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         if (string.IsNullOrWhiteSpace(workspace) && string.IsNullOrWhiteSpace(chat))
         {
             var window = await WindowAsync(cancellationToken).ConfigureAwait(false)
@@ -130,7 +123,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True when the user also asked to open the window (\"open the audio one\").")] bool open = false,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         var target = await NamedChatAsync(chat.Trim(), open, cancellationToken).ConfigureAwait(false);
         return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
     }
@@ -172,7 +164,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("False to unmute.")] bool muted = true,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         int number;
         var said = chat?.Trim() ?? "";
         if (said.Length == 0 || ThisChat(said))
@@ -193,7 +184,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         await Act(async () =>
         {
             await actions.BackToYardAsync(cancellationToken).ConfigureAwait(false);
@@ -210,7 +200,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("minimize, maximize or restore (back to its normal size, in front).")] string state,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         var request = WindowRequestOf(state)
             ?? throw new McpException($"state is minimize, maximize or restore, not '{state}'. Nothing was changed.");
         return Act(() => actions.SetWindowAsync(request, cancellationToken));
@@ -237,7 +226,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True only once the user, told the chat is still working and asked \"Close it anyway?\", said yes.")] bool anyway = false,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
         if (!anyway && (one.State == SessionState.Working || one.NeedsYou))
         {
@@ -259,7 +247,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         var one = string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(c => c.State == SessionState.Working && !c.NeedsYou, "to stop", "is working", cancellationToken).ConfigureAwait(false)
             : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
@@ -288,7 +275,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         NotFromTheOverview();
         var one = string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(Asking(ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
@@ -342,7 +328,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("With deny: the user's words to the chat, when they said more than no.")] string? message = null,
         CancellationToken cancellationToken = default)
     {
-        AskedOnly(scope, asked);
         NotFromTheOverview();
         // An ask id names its prompt, also when two chats of the window ask at once; in a window's chat only among that
         // window's chats: another window's is answered only when the user names it.
