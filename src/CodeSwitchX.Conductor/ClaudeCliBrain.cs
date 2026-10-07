@@ -424,7 +424,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 if (line is null)
                 {
                     finished = true;
-                    TellOther("its brain stopped in the middle of it");
+                    TellOther(StoppedMidTurn);
                     yield return new BrainFailed(_resuming ? ResumeFailed(process)
                         : await LoseAsync(process, "stopped in the middle of an answer").ConfigureAwait(false));
                     yield break;
@@ -539,7 +539,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // no echo read yet, the turn the interrupt ends may still be a chat's that had only begun: it is told, as cut
             // off (#195).
             if (!finished && sent && !Toolless && process is not null && ReferenceEquals(process, _process)
-                && (taken || _unaskedRead is null) && !await InterruptAsync(process, keepOther: !taken).ConfigureAwait(false))
+                && (taken || _unaskedRead is null) && !await InterruptAsync(process).ConfigureAwait(false))
             {
                 Stop();
             }
@@ -696,7 +696,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                 if (line is null)
                 {
-                    TellOther("its brain stopped in the middle of it"); // the next question starts it again, and says so
+                    TellOther(StoppedMidTurn); // the next question starts it again, and says so
                     return;
                 }
             }
@@ -735,7 +735,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                 return true;
             case ClaudeTurnOver over when _unaskedRead is not null:
-                TellOther(over.Error);
+                TellOther(over.Aborted ? CutOff : over.Error); // an interrupt's: its error is a diagnostic line
                 return true;
             case ClaudeTurnOver:
                 return question is null; // between questions, one left over (the interrupted turn's, say) is dropped
@@ -753,6 +753,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
     }
 
+    /// <summary>Why a turn of its own is told as failed when its process went in the middle of it.</summary>
+    internal const string StoppedMidTurn = "its brain stopped in the middle of it";
+
     /// <summary>Why a chat's turn the interrupt of a cancelled question ended is told as failed (#195).</summary>
     internal const string CutOff = "it was cut off when a question was cancelled";
 
@@ -761,7 +764,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         if (_unaskedRead is { } stale && !ReferenceEquals(stale.Process, process))
         {
-            TellOther("its brain stopped in the middle of it");
+            TellOther(StoppedMidTurn);
         }
     }
 
@@ -1170,12 +1173,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>
     /// Interrupts the running turn (a control request, as the Agent SDK sends it) and reads it to its <c>result</c>, which
     /// is not news. True once it ended; false when it did not within <see cref="InterruptTimeout"/>, or the process went.
+    /// The turn it ends may hold a chat's message (#195): one that had only begun when the question was cancelled before
+    /// its echo, or one folded into the question's turn. From a chat's echo on, what it said and did is kept and told, as
+    /// cut off, rather than read away unseen; a line no echo began a turn with is the question's, and is not.
     /// </summary>
-    /// <param name="keepOther">
-    /// The question's echo had not come: the turn the interrupt ends may be a chat's that had only begun (#195). What it
-    /// said and did is kept and told, as cut off when the interrupt ended it, rather than read away unseen.
-    /// </param>
-    private async Task<bool> InterruptAsync(IBrainProcess process, bool keepOther = false)
+    private async Task<bool> InterruptAsync(IBrainProcess process)
     {
         var line = new JsonObject
         {
@@ -1196,23 +1198,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             while (true)
             {
                 var read = ClaudeStream.Read(await process.Lines.ReadAsync(timeout.Token).ConfigureAwait(false));
-                if (read is ClaudeTurnOver over)
-                {
-                    if (keepOther)
-                    {
-                        // The interrupt's own result says the turn was cut off; one that ended before the interrupt reached
-                        // it says how it ended, failed or not.
-                        TellOther(over.Aborted ? CutOff : over.Error);
-                    }
-
-                    return true;
-                }
-
-                if (keepOther && read is not null)
+                if (read is ClaudeTaken || (read is not null && _unaskedRead is not null))
                 {
                     // Read as between questions: a chat's echo begins a turn that is told, a cancelled question's one
-                    // that is unheard, and the rest of the turn follows its echo.
+                    // that is unheard, the rest of the turn follows its echo, and its result tells it.
                     TakeOther(process, read, question: null);
+                }
+
+                if (read is ClaudeTurnOver)
+                {
+                    return true;
                 }
             }
         }
@@ -1220,11 +1215,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             or ObjectDisposedException or InvalidOperationException)
         {
             _logger.LogWarning("{Brain} did not end an interrupted turn; it is stopped", _name);
-            if (keepOther)
-            {
-                TellOther("its brain stopped in the middle of it");
-            }
-
+            TellOther($"its brain did not end it within {InterruptTimeout.TotalSeconds:0} s of a cancel and was stopped");
             return false;
         }
     }
