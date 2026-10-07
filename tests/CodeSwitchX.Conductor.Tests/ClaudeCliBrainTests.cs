@@ -840,9 +840,11 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_chat_s_turn_the_interrupt_of_a_cancelled_question_ends_is_told(bool cutOff)
+    [InlineData("cut off")]
+    [InlineData("ended")]
+    [InlineData("failed")]
+    [InlineData("folded")]
+    public async Task A_chat_s_turn_the_interrupt_of_a_cancelled_question_ends_is_told(string how)
     {
         // #195: a chat's turn had begun (its init came) when the question went in, and the question is cancelled before
         // either echo: the interrupt ends the chat's turn, which is told, not read away unseen.
@@ -859,8 +861,11 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
             return
             [
-                StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks"), StreamJson.InterruptAck(written),
-                cutOff ? StreamJson.InterruptedResult : StreamJson.Result("The bug report chat asks"),
+                StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks"),
+                // Folded in at a tool call: the rest of the turn answers the cancelled question, and is unheard.
+                .. how == "folded" ? new[] { StreamJson.Taken(question!), StreamJson.Text(" The sky is blue.") } : [],
+                StreamJson.InterruptAck(written),
+                how switch { "ended" => StreamJson.Result("The bug report chat asks"), "failed" => StreamJson.ErrorResult, _ => StreamJson.InterruptedResult },
                 // The question stays queued (still_queued) and is taken in next: unheard, it does nothing, and is not told.
                 StreamJson.Init(), StreamJson.Taken(question!), StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
             ];
@@ -878,7 +883,12 @@ public sealed class ClaudeCliBrainTests : IDisposable
         await Should.ThrowAsync<OperationCanceledException>(turn);
 
         await WaitUntil(() => { lock (told) { return told.Count == 1; } });
-        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks", cutOff ? ClaudeCliBrain.CutOff : null));
+        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks", how switch
+        {
+            "ended" => null,
+            "failed" => "API Error: 529 Overloaded",
+            _ => ClaudeCliBrain.CutOff,
+        }));
         _launcher.Last.Answer = StreamJson.Reply("Hi.");
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
         told.ShouldHaveSingleItem("the cancelled question's own turn is not told");

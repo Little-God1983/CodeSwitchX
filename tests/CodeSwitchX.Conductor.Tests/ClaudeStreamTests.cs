@@ -69,6 +69,13 @@ public sealed class ClaudeStreamTests
         ClaudeStream.Read("""{"type":"result","subtype":"error_max_turns","is_error":true}""").ShouldBe(new ClaudeTurnOver("error_max_turns"));
     }
 
+    [Fact]
+    public void A_result_an_interrupt_ended_says_so()
+    {
+        ClaudeStream.Read(StreamJson.InterruptedResult).ShouldBeOfType<ClaudeTurnOver>().Aborted.ShouldBeTrue();
+        ClaudeStream.Read(StreamJson.ErrorResult).ShouldBeOfType<ClaudeTurnOver>().Aborted.ShouldBeFalse();
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not json")]

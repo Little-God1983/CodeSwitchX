@@ -535,7 +535,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // The teller keeps no conversation: it is stopped below anyway, so it is not interrupted first. An interrupt
             // ends whichever turn runs: one of its own that the question waits behind is no question's to end, so it is
             // left be. The question stays queued then, as it does behind any turn an interrupt ends (still_queued, CLI
-            // 2.1.292), and once it is taken in its echo, of a uuid no question waits for, makes its turn unheard.
+            // 2.1.292), and once it is taken in its echo, of a uuid no question waits for, makes its turn unheard. With
+            // no echo read yet, the turn the interrupt ends may still be a chat's that had only begun: it is told, as cut
+            // off (#195).
             if (!finished && sent && !Toolless && process is not null && ReferenceEquals(process, _process)
                 && (taken || _unaskedRead is null) && !await InterruptAsync(process, keepOther: !taken).ConfigureAwait(false))
             {
@@ -1198,20 +1200,19 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 {
                     if (keepOther)
                     {
-                        // A turn that ended before the interrupt reached it was not cut off.
-                        TellOther(over.Error is null ? null : CutOff);
+                        // The interrupt's own result says the turn was cut off; one that ended before the interrupt reached
+                        // it says how it ended, failed or not.
+                        TellOther(over.Aborted ? CutOff : over.Error);
                     }
 
                     return true;
                 }
 
-                if (keepOther && read is ClaudeTaken { FromPeer: true })
+                if (keepOther && read is not null)
                 {
-                    (_unaskedRead ??= new UnaskedRead(process)).Take(read);
-                }
-                else if (keepOther && read is not null && _unaskedRead is { } other)
-                {
-                    other.Take(read);
+                    // Read as between questions: a chat's echo begins a turn that is told, a cancelled question's one
+                    // that is unheard, and the rest of the turn follows its echo.
+                    TakeOther(process, read, question: null);
                 }
             }
         }

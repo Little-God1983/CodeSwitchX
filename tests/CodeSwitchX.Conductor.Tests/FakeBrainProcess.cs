@@ -214,9 +214,9 @@ internal static class StreamJson
         }.ToJsonString();
     }
 
-    /// <summary>The result that ends an interrupted turn (CLI 2.1.285).</summary>
+    /// <summary>The result that ends an interrupted turn (CLI 2.1.292, captured 2026-10-07).</summary>
     public const string InterruptedResult =
-        """{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s"}""";
+        """{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"],"terminal_reason":"aborted_streaming","session_id":"s"}""";
 
     /// <summary>Answers every turn with init, the text in two pieces and the result.</summary>
     public static Func<string, IEnumerable<string>> Reply(string text) =>
