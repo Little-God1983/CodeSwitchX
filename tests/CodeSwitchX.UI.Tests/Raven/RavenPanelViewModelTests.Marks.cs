@@ -1,6 +1,8 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -286,5 +288,122 @@ public sealed partial class RavenPanelViewModelTests
         chat.Status.ShouldBe("waits for you, not seen yet, 3 unread, failed");
         chat.IsWaitingUnseen = false;
         chat.Status.ShouldBe("waits for you, 3 unread, failed");
+    }
+
+    [Fact]
+    public void A_chat_works_while_its_tile_says_a_Claude_chat_does()
+    {
+        // #182: the tile sums its rows up; the chat follows the tile it has, and lets go of one it had.
+        var yard = ShellTestHarness.CreateYardWithoutInit();
+        var tile = new WorkspaceTileViewModel(new Workspace { Name = "A", RootPath = @"c:\a" }, yard);
+        var chat = RavenChat.Of(Guid.NewGuid(), 3, "A");
+        chat.Tile = tile;
+        chat.IsWorking.ShouldBeFalse();
+
+        tile.IsWorking = true;
+        chat.IsWorking.ShouldBeTrue();
+        chat.Status.ShouldBe("working");
+        tile.IsWorking = false;
+        chat.IsWorking.ShouldBeFalse();
+
+        var other = new WorkspaceTileViewModel(new Workspace { Name = "B", RootPath = @"c:\b" }, yard) { IsWorking = true };
+        chat.Tile = other;
+        chat.IsWorking.ShouldBeTrue("the tile it has now");
+        tile.IsWorking = true;
+        other.IsWorking = false;
+        chat.IsWorking.ShouldBeFalse("the tile it had says nothing to it");
+        chat.Tile = null;
+        other.IsWorking = true;
+        chat.IsWorking.ShouldBeFalse("no tile, no work of a chat's");
+    }
+
+    [Fact]
+    public async Task A_question_taken_along_by_another_chat_s_leaves_its_chat_at_rest()
+    {
+        // Asked in chat 3, not yet sent; then asked in chat 0, whose question takes it along: chat 0 works, chat 3 not.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.BeforeSent = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+        three.IsWorking.ShouldBeTrue();
+
+        vm.SelectedChat = vm.YardChat;
+        Type(vm, "and what's waiting on me?");
+
+        three.IsWorking.ShouldBeFalse();
+        vm.YardChat.IsWorking.ShouldBeTrue();
+        _brain.BeforeSent.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        vm.YardChat.IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_works_while_Raven_answers_in_it()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+
+        Type(vm, "Is the retry test green?");
+
+        three.IsWorking.ShouldBeTrue();
+        three.Status.ShouldBe("working");
+        ChatNumbered(vm, 1).IsWorking.ShouldBeFalse();
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_question_that_fails_before_it_goes_in_leaves_its_chat_at_rest()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.FailsBeforeSent = true;
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+
+        Type(vm, "Is the retry test green?");
+        await WithinAsync(vm.PendingAnswers);
+
+        three.IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_question_interrupted_by_the_next_leaves_its_chat_at_rest()
+    {
+        // Asked in chat 3 and taken in; the next words, in chat 1, take the floor: chat 3's turn ends, chat 1 works.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+        three.IsWorking.ShouldBeTrue();
+
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "What's the branch here?");
+
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.IsWorking.ShouldBeFalse();
+        ChatNumbered(vm, 1).IsWorking.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_removed_while_Raven_answers_in_it_works_at_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        var three = ChatNumbered(vm, 3);
+        vm.SelectedChat = three;
+        Type(vm, "Is the retry test green?");
+
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX")]);
+
+        three.IsWorking.ShouldBeFalse();
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        three.IsWorking.ShouldBeFalse();
     }
 }

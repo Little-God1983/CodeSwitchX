@@ -1792,6 +1792,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Enqueue(question, ended, floor);
     }
 
+    /// <summary>
+    /// Which chats Raven answers a question in (#182): one queued or running there, not one taken along by another (merged)
+    /// or ended. Worked out from the questions whenever the panel's state is, so no change of a question is missed.
+    /// </summary>
+    private void RefreshAnswering()
+    {
+        foreach (var chat in Chats)
+        {
+            chat.IsAnswering = _questions.Any(q => !q.Ended && !q.Merged && q.Chat == chat);
+        }
+    }
+
     /// <summary>The chat as the brain is told of it: "the Yard" for chat 0.</summary>
     private string NameOf(RavenChat chat) => chat == YardChat ? "the Yard" : chat.Name;
 
@@ -1828,6 +1840,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var current = question.Chat;
         question.Chat = to;
+        UpdateState(); // the work goes on there now (#182)
         _carried.Remove(current); // moved on: the chat it was in is told nothing of it
         var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
         foreach (var (entry, _) in kept)
@@ -3302,6 +3315,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void UpdateState()
     {
+        RefreshAnswering();
         if (_capturing)
         {
             State = RavenState.Listening;
@@ -4003,6 +4017,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             gone.PropertyChanged -= OnChatPropertyChanged; // kept by the log's entries, it is muted no more
+            gone.Tile = null; // and follows no tile, and works at nothing
+            gone.IsAnswering = false;
             if (_pulseEnds.Remove(gone, out var pulse))
             {
                 pulse.Timer.Dispose();

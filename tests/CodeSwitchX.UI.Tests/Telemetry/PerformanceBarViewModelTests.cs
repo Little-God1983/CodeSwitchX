@@ -117,6 +117,7 @@ public class PerformanceBarViewModelTests
         tile.Chats.ShouldBeEmpty();
         tile.NeedsAttention.ShouldBeFalse();
         tile.AttentionRank.ShouldBe(2);
+        tile.IsWorking.ShouldBeFalse();
         bar.ActiveSessions.ShouldBe(0, "an idle session that was never prompted is not a chat yet");
         bar.WaitingSessions.ShouldBe(0);
 
@@ -124,6 +125,7 @@ public class PerformanceBarViewModelTests
 
         tile.Chats.ShouldHaveSingleItem();
         tile.AttentionRank.ShouldBe(1);
+        tile.IsWorking.ShouldBeTrue("a chat of the window works (#182)");
         bar.ActiveSessions.ShouldBe(1, "the prompt makes it a chat");
     }
 

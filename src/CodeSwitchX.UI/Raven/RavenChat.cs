@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using CodeSwitchX.UI.Yard;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -40,9 +41,52 @@ public sealed partial class RavenChat : ObservableObject
     [NotifyPropertyChangedFor(nameof(Tip))]
     private string _name;
 
-    /// <summary>The workspace's tile: the chat's header shows its colour and where its repositories stand. Null for the Yard and Activity.</summary>
+    /// <summary>
+    /// The workspace's tile: the chat's header shows its colour and where its repositories stand, and the chat mirrors its
+    /// <see cref="WorkspaceTileViewModel.IsWorking"/> (#182). Null for the Yard and Activity.
+    /// </summary>
     [ObservableProperty]
     private WorkspaceTileViewModel? _tile;
+
+    /// <summary>Raven's brain answers a question in it (#182).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsWorking))]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private bool _isAnswering;
+
+    /// <summary>A Claude chat of its window works, as its tile says (#182).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsWorking))]
+    [NotifyPropertyChangedFor(nameof(Status))]
+    [NotifyPropertyChangedFor(nameof(Tip))]
+    private bool _hasWorkingChat;
+
+    /// <summary>Work goes on in it (#182): Raven answers there, or a Claude chat of its window works. A green dot on its number.</summary>
+    public bool IsWorking => IsAnswering || HasWorkingChat;
+
+    partial void OnTileChanged(WorkspaceTileViewModel? oldValue, WorkspaceTileViewModel? newValue)
+    {
+        if (oldValue is not null)
+        {
+            oldValue.PropertyChanged -= OnTilePropertyChanged;
+        }
+
+        if (newValue is not null)
+        {
+            newValue.PropertyChanged += OnTilePropertyChanged;
+        }
+
+        HasWorkingChat = newValue?.IsWorking == true;
+    }
+
+    private void OnTilePropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(WorkspaceTileViewModel.IsWorking))
+        {
+            HasWorkingChat = Tile?.IsWorking == true; // the tile it has, whatever raised it
+        }
+    }
 
     /// <summary>The header's line under the name, for the Yard and Activity; a window's chat shows its git lines instead.</summary>
     public string? Subtitle => IsActivity ? "Every chat, in time order. Cards are answered in their own chat."
@@ -112,6 +156,7 @@ public sealed partial class RavenChat : ObservableObject
     public string Status => string.Join(", ", new[]
     {
         IsWaitingUnseen ? "waits for you, not seen yet" : IsWaiting ? "waits for you" : null,
+        IsWorking ? "working" : null,
         Unread > 0 ? $"{Unread} unread" : null,
         HasFailed ? "failed" : null,
         IsMuted ? "muted" : null,

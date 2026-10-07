@@ -77,6 +77,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
+    /// <summary>A chat of the window works (#182): Raven's chat list marks the window's chat with it. Summed up in <see cref="Recompute"/>.</summary>
+    [ObservableProperty]
+    private bool _isWorking;
+
     /// <summary>
     /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
     /// round, and close the tooltip the user has open.
@@ -90,7 +94,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     }
 
     /// <summary>0 = waiting on the user, 1 = working, 2 = everything else. Used by "Needs me first".</summary>
-    public int AttentionRank => NeedsAttention ? 0 : Chats.Any(c => c.State == SessionState.Working) ? 1 : 2;
+    public int AttentionRank => NeedsAttention ? 0 : IsWorking ? 1 : 2;
+
+    /// <summary>A chat that works: what ranks a tile second under "Needs me first", and marks its Raven chat (#182).</summary>
+    private static bool Works(ChatRowViewModel chat) => chat.State == SessionState.Working;
 
     /// <summary>
     /// Takes the chat's latest state and shows what the tile shows then (<see cref="Arrange"/>). A chat that runs again
@@ -275,6 +282,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     {
         NeedsAttention = Chats.Any(c => c.NeedsUser);
         HasInferredChats = Chats.Any(c => c.Inferred && c.IsLive);
+        IsWorking = Chats.Any(Works);
         OnPropertyChanged(nameof(AttentionRank));
     }
 

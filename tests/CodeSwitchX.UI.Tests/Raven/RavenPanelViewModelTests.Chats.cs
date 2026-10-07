@@ -88,11 +88,15 @@ public sealed partial class RavenPanelViewModelTests
         // #180: asked in chat 1, Raven started a chat in ContentAutomatorX: the user is moved to chat 3 with the question
         // and its answer, where the new chat's news comes; a note in each chat says so, and chat 3's brain is told.
         var (vm, _) = await ChatsVmAsync();
-        _brain.Answer = _ => StartingIn(vm, CodeSwitchX, ContentAutomatorX, "On it.", " Started a bug report chat in ContentAutomatorX.");
+        var working = new List<(int Number, bool Working)>();
+        _brain.Answer = _ => StartingIn(vm, CodeSwitchX, ContentAutomatorX, "On it.", " Started a bug report chat in ContentAutomatorX.", working);
         vm.SelectedChat = ChatNumbered(vm, 1);
 
         Type(vm, "In ContentAutomatorX, create a bug report chat for the F keys");
         await WithinAsync(vm.PendingAnswers);
+
+        working.ShouldBe([(0, false), (1, false), (3, true)], "the work goes on in chat 3 now (#182)");
+        vm.Chats.ShouldAllBe(c => !c.IsWorking);
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
@@ -118,11 +122,14 @@ public sealed partial class RavenPanelViewModelTests
     /// An answer that starts a chat in <paramref name="window"/>, asked in <paramref name="askedIn"/>'s chat: the app moves
     /// the user while the start_chat call runs, as the MCP tool does.
     /// </summary>
-    private static IEnumerable<BrainEvent> StartingIn(RavenPanelViewModel vm, Guid askedIn, Guid window, string before, string after)
+    /// <param name="seen">Given which chats work right after the move (#182); null for not asked.</param>
+    private static IEnumerable<BrainEvent> StartingIn(RavenPanelViewModel vm, Guid askedIn, Guid window, string before, string after,
+        List<(int Number, bool Working)>? seen = null)
     {
         yield return new BrainText(before);
         yield return new BrainToolCall("t1", "start_chat", "{}");
         vm.FollowWork(YardMcp.ChatKey(askedIn, overview: false)!, window);
+        seen?.AddRange(vm.Chats.Where(c => !c.IsActivity).Select(c => (c.Number, c.IsWorking)));
         yield return new BrainToolResult("t1", false);
         yield return new BrainText(after);
     }
