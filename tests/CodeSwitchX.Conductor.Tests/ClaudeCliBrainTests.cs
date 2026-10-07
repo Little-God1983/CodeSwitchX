@@ -346,6 +346,80 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task An_effort_Claude_Code_will_not_run_at_keeps_the_conversation_and_the_effort_before()
+    {
+        // #203: the process started again for the new effort ends before it says anything.
+        var window = Guid.NewGuid();
+        var (brain, _) = Telling(window);
+        await ReplyTo(brain, "One");
+        var sessions = new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json"));
+        var kept = sessions.Load(window.ToString("N")).ShouldNotBeNull();
+
+        _settings.Effort = "max";
+        _launcher.Answer = _ => [StreamJson.NoConversation];
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("max");
+        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldBe(
+            "Claude Code would not run at max effort with claude-haiku-4-5-20251001, so Raven thinks at Claude Code's default effort, as before, "
+            + "and keeps the conversation. Ask again.");
+        sessions.Load(window.ToString("N")).ShouldNotBeNull().Id.ShouldBe(kept.Id, "the conversation is kept");
+
+        _launcher.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        _launcher.Started[^1].Arguments.ShouldNotContain("--effort", "the effort before, while max stays set");
+        Value(_launcher.Started[^1].Arguments, "--resume").ShouldBe(kept.Id);
+
+        _settings.Effort = "medium";
+        (await ReplyTo(brain, "Four")).ShouldBe("Hi.");
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium", "another effort set is tried");
+    }
+
+    [Fact]
+    public async Task A_restart_for_another_effort_waits_for_a_chat_s_turn_about_to_begin()
+    {
+        // #203: a chat's message reached the process just before the restart, its turn's first line just after.
+        var (brain, told) = Telling(Guid.NewGuid(), settle: TimeSpan.FromSeconds(1));
+        await ReplyTo(brain, "One");
+        var first = _launcher.Last;
+
+        _settings.Effort = "medium";
+        var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        first.Disposed.ShouldBeFalse("it waits a moment");
+        first.Emit(StreamJson.Init());
+        first.Emit(StreamJson.PeerTaken("Which F keys fail?"));
+        first.Emit(StreamJson.Text("The bug report chat asks which F keys fail."));
+        first.Emit(StreamJson.Result("The bug report chat asks which F keys fail."));
+
+        (await answer).ShouldBe("Hi.");
+        first.Disposed.ShouldBeTrue();
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium");
+        var turn = Copy(told).ShouldHaveSingleItem();
+        (turn.Text, turn.Failure).ShouldBe(("The bug report chat asks which F keys fail.", (string?)null), "read whole before the restart");
+    }
+
+    [Fact]
+    public async Task A_restart_for_another_effort_goes_ahead_once_no_turn_began()
+    {
+        var (brain, _) = Telling(Guid.NewGuid(), settle: TimeSpan.FromSeconds(1));
+        await ReplyTo(brain, "One");
+
+        _settings.Effort = "medium";
+        var answer = Task.Run(() => ReplyTo(brain, "Two"), TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _launcher.Started.Count.ShouldBe(1);
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        (await answer).ShouldBe("Hi.");
+        _launcher.Started.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task A_warm_up_after_an_effort_change_lets_a_turn_of_its_own_end_first()
     {
         // The mic pressed while a chat's message is being answered: the restart for the new effort waits for that turn.
@@ -648,7 +722,8 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     /// <summary>A brain that tells its turns of its own, of a window's chat; and what it told.</summary>
-    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window, AskedChats? asked = null)
+    /// <param name="settle">How long a restart for another model or effort waits for a chat's turn (#203); none by default.</param>
+    private (ClaudeCliBrain Brain, List<UnaskedTurn> Told) Telling(Guid window, AskedChats? asked = null, TimeSpan settle = default)
     {
         var unasked = new UnaskedTurns();
         var told = new List<UnaskedTurn>();
@@ -665,7 +740,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
             """);
         var chat = BrainChat.Of(window, new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")));
         return (new ClaudeCliBrain(_paths, _settings, _launcher, () => _claude, _time, NullLogger<ClaudeCliBrain>.Instance, chat: chat, unasked: unasked,
-            asked: asked), told);
+            asked: asked) { RestartSettle = settle }, told);
     }
 
     private static async Task<string> ReplyTo(ClaudeCliBrain brain, string text)

@@ -97,6 +97,22 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The effort the running process was started at; null for Claude Code's default.</summary>
     private string? _processEffort;
 
+    /// <summary>
+    /// The process was started again for another effort (From, To), and has not said anything yet: if it cannot even
+    /// begin, it is the effort Claude Code would not run at, not a conversation that is gone (#203).
+    /// </summary>
+    private (string? From, string? To)? _effortTried;
+
+    /// <summary>An effort Claude Code would not run at with the model, and the one used instead while it stays set (#203).</summary>
+    private (string? Refused, string? Instead, string Model)? _effortRefused;
+
+    /// <summary>
+    /// How long a restart for another model or effort waits for a turn a chat's message is about to begin (#203): its
+    /// message has reached the process, but no line of it yet, and a restart now would lose it. Zero waits not at all;
+    /// the app waits a second.
+    /// </summary>
+    public TimeSpan RestartSettle { get; init; } = TimeSpan.Zero;
+
     /// <summary>The Yard's tools were reported as not connected, and have not been seen connected since; kept across a restart.</summary>
     private bool _yardWarned;
 
@@ -439,6 +455,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 ReplaceForYardWhenIdle();
             }
 
+            if (!Toolless && !_resuming && _process is { } settling)
+            {
+                await SettleAsync(settling, ct).ConfigureAwait(false);
+            }
+
             var failure = EnsureRunning();
             foreach (var notice in _notices)
             {
@@ -511,6 +532,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 }
 
                 _resuming = false; // it said something: the conversation was picked up
+                _effortTried = null; // and at the effort it was started at
 
                 if (!taken)
                 {
@@ -913,9 +935,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 // As a question does: a turn it took on its own is read to its end first, so a restart (another effort,
                 // say) does not cut it off. Only then: a warm-up that keeps the process lets the turn run on.
                 if (!Toolless && !_resuming && _process is { } held
-                    && (_processModel != ModelSet || _processEffort != _settings.Effort || _time.GetUtcNow() - _lastTurnAt >= QuietReset))
+                    && (_processModel != ModelSet || _processEffort != EffortSet(ModelSet) || _time.GetUtcNow() - _lastTurnAt >= QuietReset))
                 {
                     await ReadUnaskedAsync(held).ConfigureAwait(false);
+                    await SettleAsync(held, CancellationToken.None).ConfigureAwait(false);
                 }
 
                 // A failure is the turn's to report, when it comes; a restart's notice waits for it too.
@@ -1062,7 +1085,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         var model = ModelSet;
-        var effort = _settings.Effort;
+        var effort = EffortSet(model);
         if (_process is { } running)
         {
             var young = _processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset;
@@ -1081,9 +1104,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             else if (young)
             {
                 // Another effort is a flag of the process: it is started again, and picks the conversation up (#201).
+                var from = _processEffort;
                 Stop();
-                Notice(effort is null ? "Raven now thinks at Claude Code's default effort."
-                    : $"Raven now thinks at {(effort == "xhigh" ? "extra high" : effort)} effort."); // said aloud: no "xhigh"
+                _effortTried = (from, effort);
+                Notice($"Raven now thinks at {Spoken(effort)} effort.");
             }
             else if (_processModel == model)
             {
@@ -1407,11 +1431,73 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     private string ResumeFailed(IBrainProcess process, bool ask = true)
     {
+        if (_effortTried is { } tried)
+        {
+            // Started for another effort and gone before it said anything: that effort is what failed, not the
+            // conversation, which is kept; the effort before is used until another is set (#203).
+            var model = _processModel ?? ModelSet;
+            _logger.LogWarning("{Brain} could not run at {Effort} effort with {Model}; it stays at {Before}. Its last errors: {Errors}",
+                _name, tried.To ?? "the default", model, tried.From ?? "the default", process.ErrorTail);
+            _effortTried = null;
+            _resuming = false;
+            Stop();
+            _effortRefused = (tried.To, tried.From, model);
+            return $"Claude Code would not run at {Spoken(tried.To)} effort with {model}, so Raven thinks at {Spoken(tried.From)} effort, as "
+                + "before, and keeps the conversation." + (ask ? " Ask again." : "");
+        }
+
         _logger.LogWarning("{Brain} could not pick its conversation up again. Its last errors: {Errors}", _name, process.ErrorTail);
         _resuming = false;
         Stop();
         ForgetSession();
         return "Raven could not pick this chat's conversation up again, so it starts a new one." + (ask ? " Ask again." : "");
+    }
+
+    /// <summary>
+    /// The effort to run at: the one set, or, while Claude Code refuses that one with this model, the one before it (#203).
+    /// </summary>
+    private string? EffortSet(string model)
+    {
+        var effort = _settings.Effort;
+        if (_effortRefused is { } refused && refused.Refused == effort && refused.Model == model)
+        {
+            return refused.Instead;
+        }
+
+        _effortRefused = null; // another effort or model is set: it is tried
+        return effort;
+    }
+
+    /// <summary>An effort as Raven says it: "extra high", not "xhigh"; Claude Code's default for none.</summary>
+    private static string Spoken(string? effort) => effort switch
+    {
+        null => "Claude Code's default",
+        "xhigh" => "extra high",
+        _ => effort,
+    };
+
+    /// <summary>
+    /// Waits <see cref="RestartSettle"/> for a turn a chat's message is about to begin, before the process is started again
+    /// for another model or effort (#203); one that begins is read to its end. Holding <see cref="_turns"/>.
+    /// </summary>
+    private async Task SettleAsync(IBrainProcess process, CancellationToken ct)
+    {
+        if (RestartSettle <= TimeSpan.Zero || process.Exited.IsCompleted
+            || (_processModel == ModelSet && _processEffort == EffortSet(ModelSet)))
+        {
+            return;
+        }
+
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var line = process.Lines.WaitToReadAsync(wait.Token).AsTask();
+        var quiet = Task.Delay(RestartSettle, _time, wait.Token);
+        var first = await Task.WhenAny(line, quiet).ConfigureAwait(false);
+        await wait.CancelAsync().ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        if (first == line && line.IsCompletedSuccessfully && line.Result)
+        {
+            await ReadUnaskedAsync(process, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>The next start begins a new conversation.</summary>
