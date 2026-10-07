@@ -8,6 +8,9 @@ public static class TextCut
     /// <paramref name="max"/> − 1 (one fewer where that would split a surrogate pair), trimmed, with <paramref name="suffix"/>
     /// after them: "dotnet test tests/Pro… (the rest is on the card)".
     /// </summary>
+    /// <summary>The text's words on one line: every run of white space, line breaks included, is one space, none at the ends.</summary>
+    public static string OneLine(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
     public static string Cut(string text, int max, string suffix = "…")
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(max, 2);

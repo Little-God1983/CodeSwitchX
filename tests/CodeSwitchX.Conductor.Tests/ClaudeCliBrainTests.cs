@@ -932,7 +932,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         }
 
         Reply(events).ShouldBe("Nothing waits on you.");
-        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+        events.OfType<BrainNotice>().Where(n => n.Warning).ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
     }
 
     [Fact]
@@ -1183,7 +1183,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Answer = written => chatFirst
             ?
             [
-                StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Taken(written),
+                StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text(" "), StreamJson.Taken(written),
                 StreamJson.Text("Nothing waits on you."), StreamJson.Result("Nothing waits on you."),
             ]
             :
@@ -1210,7 +1210,11 @@ public sealed class ClaudeCliBrainTests : IDisposable
     {
         ClaudeCliBrain.FoldedText(null, "  Line one\n\nline two  ").ShouldEndWith(": \"Line one line two\"");
         ClaudeCliBrain.FoldedText(null, " \n ").ShouldBe("A chat messaged Raven while it answered you, and the answer may speak to it too.");
-        ClaudeCliBrain.FoldedText("bug-report-1", new string('x', 1000)).Length.ShouldBeLessThan(ClaudeCliBrain.FoldedMessageLength + 120);
+        var cut = ClaudeCliBrain.FoldedText("bug-report-1", new string('x', 1000));
+        cut.ShouldStartWith("The chat \"bug-report-1\" messaged Raven");
+        cut.ShouldEndWith(": \"" + new string('x', ClaudeCliBrain.FoldedMessageLength - 1) + "…\"");
+        ClaudeCliBrain.FoldedText(" two\nlines \"quoted\" ", "Hi").ShouldStartWith("The chat \"two lines 'quoted'\" messaged");
+        ClaudeCliBrain.FoldedText("  ", "Hi").ShouldStartWith("A chat messaged");
     }
 
     [Fact]

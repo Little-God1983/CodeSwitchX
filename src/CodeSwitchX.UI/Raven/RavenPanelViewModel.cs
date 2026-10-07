@@ -1976,6 +1976,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainNotice notice:
                         AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
+                        // A note in the middle of the answer (a chat's message folded into it, #197) stays in its place: the
+                        // text after it is a reply of its own, below it.
+                        if (reply is not null)
+                        {
+                            reply.Text = reply.Text.TrimEnd();
+                            reply = null;
+                        }
+
                         break;
                     case BrainFailed { Reason: var reason }:
                         AddEntry(RavenLogKind.Warning, reason, chat);

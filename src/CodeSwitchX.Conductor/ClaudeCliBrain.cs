@@ -581,14 +581,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                     unechoed = whose is null;
 
-                    // Folded into a chat's turn that had said and done nothing yet: the answer speaks to the chat's message
-                    // too, and nothing of that turn would be told, so its message is shown with the answer (#197).
-                    if (_unaskedRead is { Peer: true, Said.Length: 0, Calls.Count: 0 } chatTurn)
+                    // Folded into a chat's turn: the answer speaks to that chat's message too, so it is noted with the answer
+                    // (#197), whatever that turn said or did before, which is told as its own. The turn is closed first.
+                    var foldedInto = _unaskedRead is { Peer: true } chatTurn ? chatTurn.Messages : [];
+                    TellOther(null);
+                    foreach (var note in Folded(foldedInto))
                     {
-                        yield return new BrainNotice(FoldedText(chatTurn.From, chatTurn.Message), Warning: false);
+                        yield return note;
                     }
 
-                    TellOther(null);
                     if (early is not null)
                     {
                         foreach (var notice in Report(early))
@@ -609,11 +610,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         break;
                     case ClaudeTaken { FromPeer: true } peer:
                         // A chat's message folded into the question's turn at a tool call (#197): one turn answers both, so
-                        // the answer goes on, and the message is shown with it, in its place, as a note: the chat's words,
-                        // never a line of Raven's, and no part of what chat 0's summaries are worded from.
-                        _logger.LogInformation("{Brain}{Chat} took a chat's message into the answer it was giving", _name,
-                            _chat is null ? "" : $" of chat {_chat.Key}");
-                        yield return new BrainNotice(FoldedText(peer.From, peer.Message), Warning: false);
+                        // the answer goes on, and the message is noted with it, in its place.
+                        foreach (var note in Folded([(peer.From, peer.Message)]))
+                        {
+                            yield return note;
+                        }
+
                         break;
                     case ClaudeEvents { Events: var events }:
                         foreach (var e in events)
@@ -773,18 +775,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         /// <summary>Another session's message is in it: it is told, failure and all.</summary>
         public bool Peer { get; private set; }
 
-        /// <summary>What the first other session's message in it says, and who sent it (#197).</summary>
-        public string? Message { get; private set; }
-
-        public string? From { get; private set; }
+        /// <summary>The other sessions' messages in it, each with who sent it (#197).</summary>
+        public List<(string? From, string? Message)> Messages { get; } = [];
 
         /// <summary>Keeps what the line says it said and did.</summary>
         public void Take(ClaudeLine line)
         {
             if (line is ClaudeTaken { FromPeer: true } peer)
             {
-                Message ??= peer.Message;
-                From ??= peer.From;
+                Messages.Add((peer.From, peer.Message));
                 Peer = true;
                 Unheard = false;
             }
@@ -912,13 +911,29 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     internal const int FoldedMessageLength = 300;
 
     /// <summary>
+    /// The notes for chats' messages folded into the question's answer (#197): one each, as notes, in their place in the
+    /// answer; the chats' words, never a line of Raven's, and no part of what chat 0's summaries are worded from.
+    /// </summary>
+    private List<BrainEvent> Folded(IReadOnlyList<(string? From, string? Message)> messages)
+    {
+        if (messages.Count > 0)
+        {
+            _logger.LogInformation("{Brain}{Chat} took {Count} chat message(s) into the answer it was giving", _name,
+                _chat is null ? "" : $" of chat {_chat.Key}", messages.Count);
+        }
+
+        return [.. messages.Select(m => (BrainEvent)new BrainNotice(FoldedText(m.From, m.Message), Warning: false))];
+    }
+
+    /// <summary>
     /// What the window's chat notes for a chat's message folded into a question's answer (#197): who sent it, as it is
     /// messaged by, and its words on one line, cut to <see cref="FoldedMessageLength"/>.
     /// </summary>
     internal static string FoldedText(string? from, string? message)
     {
-        var sender = from is { Length: > 0 } ? $"The chat \"{from.Trim()}\"" : "A chat";
-        var words = string.Join(" ", (message ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var name = TextCut.OneLine(from).Replace("\"", "'", StringComparison.Ordinal);
+        var sender = name.Length > 0 ? $"The chat \"{TextCut.Cut(name, 60)}\"" : "A chat";
+        var words = TextCut.OneLine(message);
         return words.Length > 0
             ? $"{sender} messaged Raven while it answered you, and the answer may speak to it too: \"{TextCut.Cut(words, FoldedMessageLength)}\""
             : $"{sender} messaged Raven while it answered you, and the answer may speak to it too.";
