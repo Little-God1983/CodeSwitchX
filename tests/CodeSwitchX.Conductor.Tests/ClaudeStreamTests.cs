@@ -119,13 +119,10 @@ public sealed class ClaudeStreamTests
     }
 
     [Fact]
-    public void An_echo_says_its_uuid_and_text_and_whether_another_session_sent_it()
+    public void An_echo_says_its_uuid_and_whether_another_session_sent_it()
     {
         ClaudeStream.Read(StreamJson.Taken("""{"type":"user","uuid":"q1","message":{"role":"user","content":"Add tests."}}"""))
-            .ShouldBe(new ClaudeTaken("q1", "Add tests.", FromPeer: false));
-
-        var peer = ClaudeStream.Read(StreamJson.PeerTaken("Which F keys?")).ShouldBeOfType<ClaudeTaken>();
-        peer.FromPeer.ShouldBeTrue();
-        peer.Text!.ShouldContain("Which F keys?");
+            .ShouldBe(new ClaudeTaken("q1", FromPeer: false));
+        ClaudeStream.Read(StreamJson.PeerTaken("Which F keys?")).ShouldBeOfType<ClaudeTaken>().FromPeer.ShouldBeTrue();
     }
 }

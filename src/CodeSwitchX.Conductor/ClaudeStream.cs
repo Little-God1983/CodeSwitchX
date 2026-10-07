@@ -27,9 +27,8 @@ internal sealed record ClaudeAnswer : ClaudeLine;
 /// (<c>SendMessage</c>) is echoed too, with an <c>origin</c> of kind "peer" (seen with CLI 2.1.292).
 /// </summary>
 /// <param name="Id">The line's <c>uuid</c>: the one it was written with, which CLI 2.1.292 echoes back; null for none.</param>
-/// <param name="Text">What it says, when that is plain text.</param>
 /// <param name="FromPeer">It came from another session, not from standard input.</param>
-internal sealed record ClaudeTaken(string? Id = null, string? Text = null, bool FromPeer = false) : ClaudeLine;
+internal sealed record ClaudeTaken(string? Id, bool FromPeer) : ClaudeLine;
 
 /// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
@@ -105,10 +104,8 @@ internal static class ClaudeStream
         return new ClaudeInit(Text(root, "model"), servers, Text(root, "permissionMode"), tools);
     }
 
-    private static ClaudeTaken Taken(JsonElement root) => new(
-        Text(root, "uuid"),
-        root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object ? Text(message, "content") : null,
-        root.TryGetProperty("origin", out var origin) && Text(origin, "kind") == "peer");
+    private static ClaudeTaken Taken(JsonElement root) =>
+        new(Text(root, "uuid"), root.TryGetProperty("origin", out var origin) && Text(origin, "kind") == "peer");
 
     private static ClaudeEvents? Delta(JsonElement root)
     {

@@ -693,20 +693,81 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task A_question_is_known_by_its_text_when_its_echo_has_no_uuid()
+    public async Task A_question_s_echo_is_known_without_its_uuid_or_its_text()
     {
-        // A Claude Code that does not echo the uuid back.
+        // A Claude Code that does not echo the uuid back, and gives the text back as blocks: it is no peer's all the same.
         var (brain, told) = Telling(Guid.NewGuid());
         await ReplyTo(brain, "One");
         _launcher.Last.Answer = written =>
         {
             var line = JsonNode.Parse(written)!.AsObject();
             line.Remove("uuid");
+            line["message"]!["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "What's waiting on me?" });
             return ChatTurnAhead(line.ToJsonString(), folded: false);
         };
 
         (await ReplyTo(brain, "What's waiting on me?")).ShouldBe("Nothing waits on you.");
         told.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task How_the_tools_stand_is_told_with_the_answer_when_a_chat_s_turn_began_the_process_s_first_turn()
+    {
+        // The only init is the chat's turn's, and the question is folded into it: it still says the Yard's tools failed.
+        var (brain, _) = Telling(Guid.NewGuid());
+        _launcher.Answer = written =>
+        [
+            StreamJson.Init(status: "failed"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks."),
+            StreamJson.ToolUse("toolu_7", "SendMessage"), StreamJson.ToolResult("toolu_7"),
+            StreamJson.Taken(written), StreamJson.Text("Nothing waits on you."), StreamJson.Result("Nothing waits on you."),
+        ];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("What's waiting on me?", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        Reply(events).ShouldBe("Nothing waits on you.");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+    }
+
+    [Fact]
+    public async Task A_question_cancelled_while_queued_is_ended_unheard_when_it_is_taken_in_after_all()
+    {
+        // Claude Code keeps a queued question through the interrupt (still_queued) and takes it in next (CLI 2.1.292).
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        var interrupts = 0;
+        _launcher.Last.Answer = written =>
+        {
+            if (!StreamJson.IsInterrupt(written))
+            {
+                question = written;
+                return [StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks")];
+            }
+
+            return ++interrupts == 1
+                ? [StreamJson.InterruptAck(written), StreamJson.InterruptedResult, StreamJson.Init(), StreamJson.Taken(question!), StreamJson.Text("The sky is blue.")]
+                : [StreamJson.InterruptAck(written), StreamJson.InterruptedResult];
+        };
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("What colour is the sky?", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => question is not null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        await WaitUntil(() => interrupts == 2);
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        told.ShouldHaveSingleItem().Text.ShouldBe("The bug report chat asks", "the cancelled question's answer is not told");
     }
 
     [Fact]
