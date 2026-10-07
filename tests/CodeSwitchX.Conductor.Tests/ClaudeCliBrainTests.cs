@@ -346,9 +346,10 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task An_effort_Claude_Code_will_not_run_at_keeps_the_conversation_and_the_effort_before()
+    public async Task A_brain_that_cannot_start_again_at_another_effort_keeps_the_conversation_once()
     {
-        // #203: the process started again for the new effort ends before it says anything.
+        // #203: the process started again for the new effort ends before it starts. The effort may be what failed, so the
+        // conversation is kept, once; gone again, it is the conversation's, and a new one begins.
         var window = Guid.NewGuid();
         var (brain, _) = Telling(window);
         await ReplyTo(brain, "One");
@@ -357,53 +358,31 @@ public sealed class ClaudeCliBrainTests : IDisposable
 
         _settings.Effort = "max";
         _launcher.Answer = _ => [StreamJson.NoConversation];
-        _launcher.ErrorTail = "error: Effort level 'max' is not supported for claude-haiku-4-5-20251001";
-        var events = new List<BrainEvent>();
+        var failed = new List<BrainEvent>();
         await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
         {
-            events.Add(e);
+            failed.Add(e);
         }
 
         Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("max");
-        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldBe(
-            "Claude Code would not run at max effort with claude-haiku-4-5-20251001, so Raven thinks at Claude Code's default effort, as before, "
-            + "and keeps the conversation. Ask again.");
+        failed.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldBe(
+            "Raven's brain could not start again at max effort, so this chat's conversation is kept: pick another effort if it happens "
+            + "again. Ask again.");
         sessions.Load(window.ToString("N")).ShouldNotBeNull().Id.ShouldBe(kept.Id, "the conversation is kept");
 
-        _launcher.Answer = StreamJson.Reply("Hi.");
-        _launcher.ErrorTail = null;
-        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
-        _launcher.Started[^1].Arguments.ShouldNotContain("--effort", "the effort before, while max stays set");
-        Value(_launcher.Started[^1].Arguments, "--resume").ShouldBe(kept.Id);
-
-        _settings.Effort = "medium";
-        (await ReplyTo(brain, "Four")).ShouldBe("Hi.");
-        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("medium", "another effort set is tried");
-    }
-
-    [Fact]
-    public async Task A_conversation_that_is_gone_when_the_effort_changed_is_not_taken_for_a_refused_effort()
-    {
-        // #203: a resume that fails for its own reason, with no word of the effort, is the conversation's, as before.
-        var window = Guid.NewGuid();
-        var (brain, _) = Telling(window);
-        await ReplyTo(brain, "One");
-
-        _settings.Effort = "high";
-        _launcher.Answer = _ => [StreamJson.NoConversation];
-        _launcher.ErrorTail = "No conversation found with session ID";
-        var events = new List<BrainEvent>();
-        await foreach (var e in brain.AskAsync("Two", TestContext.Current.CancellationToken))
+        failed.Clear();
+        await foreach (var e in brain.AskAsync("Three", TestContext.Current.CancellationToken))
         {
-            events.Add(e);
+            failed.Add(e);
         }
 
-        events.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldStartWith("Raven could not pick this chat's conversation up again");
-        _launcher.ErrorTail = null;
+        Value(_launcher.Started[^1].Arguments, "--resume").ShouldBe(kept.Id, "tried once more");
+        failed.OfType<BrainFailed>().ShouldHaveSingleItem().Reason.ShouldStartWith("Raven could not pick this chat's conversation up again");
+
         _launcher.Answer = StreamJson.Reply("Hi.");
-        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
-        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("high", "the effort set is kept");
-        _launcher.Started[^1].Arguments.ShouldNotContain("--resume");
+        (await ReplyTo(brain, "Four")).ShouldBe("Hi.");
+        _launcher.Started[^1].Arguments.ShouldNotContain("--resume", "a new conversation");
+        Value(_launcher.Started[^1].Arguments, "--effort").ShouldBe("max");
     }
 
     [Fact]
