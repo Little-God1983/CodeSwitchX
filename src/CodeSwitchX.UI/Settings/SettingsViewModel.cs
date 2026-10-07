@@ -702,6 +702,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenEffortChanged(string value)
     {
         _brain.Effort = value;
+        if (OrDefault(_brain.Effort) is var shown && shown != value)
+        {
+            RavenEffort = shown; // "extra high" shows as its level, which the picker has; this runs again and stores it
+            return;
+        }
+
         Persist(SettingKeys.RavenEffort, _brain.Effort ?? "");
     }
 

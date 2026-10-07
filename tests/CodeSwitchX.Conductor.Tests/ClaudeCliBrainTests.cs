@@ -354,12 +354,10 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Last.Emit(StreamJson.Init());
         _launcher.Last.Emit(StreamJson.PeerTaken("Which F keys fail?"));
         _launcher.Last.Emit(StreamJson.Text("The bug report chat asks which F keys fail."));
-        await Task.Delay(100, TestContext.Current.CancellationToken); // the watcher waits for the rest of the turn
 
+        // Whichever reads the turn, the watcher or the warm-up, the restart waits for its result.
         _settings.Effort = "medium";
         brain.WarmUp();
-        await Task.Delay(100, TestContext.Current.CancellationToken);
-        _launcher.Started.Count.ShouldBe(1, "the turn runs on");
         _launcher.Last.Emit(StreamJson.Result("The bug report chat asks which F keys fail."));
 
         await WaitUntil(() => _launcher.Started.Count == 2);

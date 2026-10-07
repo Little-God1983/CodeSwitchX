@@ -815,8 +815,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             try
             {
                 // As a question does: a turn it took on its own is read to its end first, so a restart (another effort,
-                // say) does not cut it off.
-                if (!Toolless && !_resuming && _process is { } held)
+                // say) does not cut it off. Only then: a warm-up that keeps the process lets the turn run on.
+                if (!Toolless && !_resuming && _process is { } held
+                    && (_processModel != ModelSet || _processEffort != _settings.Effort || _time.GetUtcNow() - _lastTurnAt >= QuietReset))
                 {
                     await ReadUnaskedAsync(held).ConfigureAwait(false);
                 }

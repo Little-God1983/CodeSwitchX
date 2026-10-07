@@ -611,7 +611,9 @@ public class SettingsViewModelTests : IDisposable
         await FlushAsync();
 
         _brain.Effort.ShouldBe("xhigh");
+        _vm.RavenEffort.ShouldBe("xhigh", "the picker shows the level");
         await _store.Received().SetAsync(SettingKeys.RavenEffort, "xhigh", Arg.Any<CancellationToken>());
+        await _store.DidNotReceive().SetAsync(SettingKeys.RavenEffort, "extra high", Arg.Any<CancellationToken>());
     }
 
     [Fact]
