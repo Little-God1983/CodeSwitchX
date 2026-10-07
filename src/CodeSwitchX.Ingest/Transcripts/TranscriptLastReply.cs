@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using CodeSwitchX.Core;
 
 namespace CodeSwitchX.Ingest.Transcripts;
 
@@ -77,7 +78,7 @@ public static class TranscriptLastReply
                 }
             }
 
-            var said = string.Join(' ', text.ToString().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            var said = TextCut.OneLine(text.ToString());
             return said.Length > 0 ? said : null;
         }
         catch (JsonException)

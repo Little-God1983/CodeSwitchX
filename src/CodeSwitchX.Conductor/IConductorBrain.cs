@@ -45,5 +45,11 @@ public sealed record BrainToolResult(string Id, bool Failed) : BrainEvent;
 /// <summary>Something the user should know about the brain itself: it was restarted, it cannot see the Yard.</summary>
 public sealed record BrainNotice(string Text, bool Warning) : BrainEvent;
 
+/// <summary>
+/// A chat's message Claude Code folded into the answer (#197), noted in its place: the chat's words, never a line of the
+/// brain's; the answer after it may speak to it too.
+/// </summary>
+public sealed record BrainChatMessage(string Text) : BrainEvent;
+
 /// <summary>The turn ended without an answer, and why, in words for the user.</summary>
 public sealed record BrainFailed(string Reason) : BrainEvent;

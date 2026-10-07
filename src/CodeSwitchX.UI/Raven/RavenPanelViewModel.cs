@@ -1977,6 +1977,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainNotice notice:
                         AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
                         break;
+                    case BrainChatMessage { Text: var message } when quiet:
+                        _logger.LogInformation("Raven's news teller: {What}", message);
+                        break;
+                    case BrainChatMessage { Text: var message }:
+                        // A chat's message folded into the answer (#197) is noted in its place: a sentence ends there, and the
+                        // text after it is a reply of its own, below it.
+                        spoken.Add("\n");
+                        if (reply is not null)
+                        {
+                            reply.Text = reply.Text.TrimEnd();
+                            reply = null;
+                        }
+
+                        AddEntry(RavenLogKind.Note, message, chat);
+                        break;
                     case BrainFailed { Reason: var reason }:
                         AddEntry(RavenLogKind.Warning, reason, chat);
                         break;

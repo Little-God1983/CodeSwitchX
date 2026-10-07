@@ -22,4 +22,11 @@ public sealed class TextCutTests
         TextCut.Cut("abcd😀efgh", 6).ShouldBe("abcd…");
         TextCut.Cut("abc😀defgh", 6).ShouldBe("abc😀…");
     }
+
+    [Fact]
+    public void One_line_makes_every_run_of_white_space_one_space()
+    {
+        TextCut.OneLine("  a\n\n b\tc  ").ShouldBe("a b c");
+        TextCut.OneLine(null).ShouldBe("");
+    }
 }

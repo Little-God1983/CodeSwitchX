@@ -581,7 +581,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
                     unechoed = whose is null;
 
+                    // Folded into a chat's turn that had said and done nothing yet: the answer speaks to that chat's message
+                    // too, and nothing of that turn would be told, so its message is noted with the answer (#197). One that
+                    // had shows as its own, below. The turn is closed first.
+                    var foldedInto = _unaskedRead is { Peer: true } chatTurn && chatTurn.Said.ToString().Trim().Length == 0 && chatTurn.Calls.Count == 0
+                        ? chatTurn.Messages
+                        : [];
                     TellOther(null);
+                    foreach (var note in Folded(foldedInto))
+                    {
+                        yield return note;
+                    }
+
                     if (early is not null)
                     {
                         foreach (var notice in Report(early))
@@ -597,6 +608,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         foreach (var notice in Report(init))
                         {
                             yield return notice;
+                        }
+
+                        break;
+                    case ClaudeTaken { FromPeer: true } peer:
+                        // A chat's message folded into the question's turn at a tool call (#197): one turn answers both, so
+                        // the answer goes on, and the message is noted with it, in its place.
+                        foreach (var note in Folded([(peer.From, peer.Message)]))
+                        {
+                            yield return note;
                         }
 
                         break;
@@ -758,11 +778,15 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         /// <summary>Another session's message is in it: it is told, failure and all.</summary>
         public bool Peer { get; private set; }
 
+        /// <summary>The other sessions' messages in it, each with who sent it (#197).</summary>
+        public List<(string? From, string? Message)> Messages { get; } = [];
+
         /// <summary>Keeps what the line says it said and did.</summary>
         public void Take(ClaudeLine line)
         {
-            if (line is ClaudeTaken { FromPeer: true })
+            if (line is ClaudeTaken { FromPeer: true } peer)
             {
+                Messages.Add((peer.From, peer.Message));
                 Peer = true;
                 Unheard = false;
             }
@@ -884,6 +908,38 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 (_unaskedRead = new UnaskedRead(process)).Take(read);
                 return true;
         }
+    }
+
+    /// <summary>The most of a chat's message a note shows (#197): enough to know what it asks.</summary>
+    internal const int FoldedMessageLength = 300;
+
+    /// <summary>
+    /// The notes for chats' messages folded into the question's answer (#197): one each, in their place in the answer;
+    /// the chats' words, never a line of Raven's, and no part of what chat 0's summaries are worded from.
+    /// </summary>
+    private List<BrainEvent> Folded(IReadOnlyList<(string? From, string? Message)> messages)
+    {
+        if (messages.Count > 0)
+        {
+            _logger.LogInformation("{Brain}{Chat} took {Count} chat message(s) into the answer it was giving", _name,
+                _chat is null ? "" : $" of chat {_chat.Key}", messages.Count);
+        }
+
+        return [.. messages.Select(m => (BrainEvent)new BrainChatMessage(FoldedText(m.From, m.Message)))];
+    }
+
+    /// <summary>
+    /// What the window's chat notes for a chat's message folded into a question's answer (#197): who sent it, as it is
+    /// messaged by, and its words on one line, cut to <see cref="FoldedMessageLength"/>.
+    /// </summary>
+    internal static string FoldedText(string? from, string? message)
+    {
+        var name = TextCut.OneLine(from).Replace("\"", "'", StringComparison.Ordinal);
+        var sender = name.Length > 0 ? $"The chat \"{TextCut.Cut(name, 60)}\"" : "A chat";
+        var words = TextCut.OneLine(message).Replace("\"", "'", StringComparison.Ordinal);
+        return words.Length > 0
+            ? $"{sender} messaged Raven while it answered you, and the answer may speak to it too: \"{TextCut.Cut(words, FoldedMessageLength)}\""
+            : $"{sender} messaged Raven while it answered you, and the answer may speak to it too.";
     }
 
     /// <summary>Why a turn of its own is told as failed when its process went in the middle of it.</summary>
