@@ -134,6 +134,51 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task Words_a_moved_question_took_along_move_with_it()
+    {
+        // Two lines typed before the brain took the first: one question, both lines its own.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.BeforeSent = new TaskCompletionSource();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("On it.")];
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "In ContentAutomatorX");
+        Type(vm, "create a bug report chat");
+        _brain.BeforeSent.SetResult();
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
+        [
+            (RavenLogKind.Note, "Asked in chat 1, CodeSwitchX."),
+            (RavenLogKind.You, "In ContentAutomatorX"),
+            (RavenLogKind.You, "create a bug report chat"),
+            (RavenLogKind.Raven, "On it."),
+        ]);
+    }
+
+    [Fact]
+    public async Task A_moved_question_is_told_only_while_it_is_fresh()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "In ContentAutomatorX, create a bug report chat");
+        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _time.Advance(RavenPanelViewModel.CarriedLifetime + TimeSpan.FromMinutes(1));
+        Type(vm, "open it");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked[^1].ShouldNotContain("moved here", Case.Insensitive);
+    }
+
+    [Fact]
     public async Task The_brain_is_told_the_window_chat_the_user_asks_in_and_the_yard_once_they_are_back()
     {
         var (vm, _) = await ChatsVmAsync();
