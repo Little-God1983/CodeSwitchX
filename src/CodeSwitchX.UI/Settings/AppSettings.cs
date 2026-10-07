@@ -417,7 +417,7 @@ public sealed class AppSettings : IAppSettings
                 () => S.RavenOverviewModel, v => SetModel(v, m => S.RavenOverviewModel = m)),
             new(new("Raven's effort", Title(SettingsPage.Brain), "How hard all of Raven's chats think before they answer (\"default\": Claude "
                     + "Code's own); higher follows its rules more reliably and answers later. The conversation carries on.",
-                    SettingsViewModel.EffortChoices), SettingsPage.Brain, ["your effort", "raven effort", "brain effort", "thinking effort"],
+                    SettingsViewModel.EffortChoices), SettingsPage.Brain, ["your effort", "your own effort", "raven effort", "brain effort", "brains effort", "thinking effort"],
                 () => S.RavenEffort,
                 v =>
                 {
@@ -434,7 +434,7 @@ public sealed class AppSettings : IAppSettings
                 },
                 () => S.ChatModelChoices),
             new(new("new chats' effort", Title(SettingsPage.Brain), "The effort a chat Raven starts runs at (\"default\": Claude Code's own).",
-                    SettingsViewModel.EffortChoices), SettingsPage.Brain, ["effort", "chat effort", "effort for new chats"],
+                    SettingsViewModel.EffortChoices), SettingsPage.Brain, ["chat effort", "chats effort", "effort for new chats"],
                 () => S.RavenChatEffort,
                 v =>
                 {

@@ -961,6 +961,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var effort = _settings.Effort;
         if (_process is { } running)
         {
+            var young = _processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset;
             if (running.Exited.IsCompleted && _resuming)
             {
                 Notice(ResumeFailed(running, ask: false));
@@ -969,11 +970,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             {
                 Lose(running, $"stopped (exit code {running.Exited.Result})");
             }
-            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset && _processEffort == effort)
+            else if (young && _processEffort == effort)
             {
                 return null;
             }
-            else if (_processModel == model && _time.GetUtcNow() - _lastTurnAt < QuietReset)
+            else if (young)
             {
                 // Another effort is a flag of the process: it is started again, and picks the conversation up (#201).
                 Stop();
@@ -1293,6 +1294,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     {
         var process = Interlocked.Exchange(ref _process, null);
         _processModel = null;
+        _processEffort = null;
         _started = null;
         Unfollow();
         process?.Dispose();

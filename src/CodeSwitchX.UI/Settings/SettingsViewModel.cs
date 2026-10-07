@@ -420,7 +420,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenOverviewModel = await LoadOrDefaultAsync<string>(SettingKeys.RavenOverviewModel, "chat 0's model", ct) is { Length: > 0 } overview
                 ? overview
                 : BrainSettings.DefaultOverviewModel;
-            RavenEffort = OrDefault(await LoadOrDefaultAsync<string>(SettingKeys.RavenEffort, "Raven's effort", ct));
+            RavenEffort = OrDefault(ChatModels.ResolveEffort(await LoadOrDefaultAsync<string>(SettingKeys.RavenEffort, "Raven's effort", ct)));
             RavenModelAliases = await LoadOrDefaultAsync<string>(SettingKeys.RavenModelAliases, "the model aliases", ct) is { Length: > 0 } aliases
                 ? aliases
                 : ChatModels.FormatAliases(ChatModels.DefaultAliases);

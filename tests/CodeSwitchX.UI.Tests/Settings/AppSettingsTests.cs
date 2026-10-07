@@ -140,6 +140,11 @@ public sealed class AppSettingsTests
         await _settings.SetAsync("Raven's effort", "default", Ct);
         _h.Shell.Settings.RavenEffort.ShouldBe(SettingsViewModel.ClaudeDefault);
         await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("Raven's effort", "hard", Ct));
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("effort", "medium", Ct))).Message
+            .ShouldContain("ask the user which", Case.Insensitive, "two settings are an effort now");
+        await _settings.SetAsync("brain's effort", "medium", Ct);
+        _h.Shell.Settings.RavenEffort.ShouldBe("medium");
+        _h.Shell.Settings.RavenChatEffort.ShouldBe(SettingsViewModel.ClaudeDefault);
     }
 
     [Fact]
