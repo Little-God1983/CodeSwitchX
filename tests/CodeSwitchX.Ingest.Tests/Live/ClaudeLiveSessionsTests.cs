@@ -326,6 +326,15 @@ public class ClaudeLiveSessionsTests : IDisposable
     }
 
     [Fact]
+    public void A_record_whose_folder_is_no_path_does_not_hide_the_brain_listed_after_it()
+    {
+        SessionRecord(10, "", @"\\.\pipe\LOCAL\cc-msg-other"); // listed before the brain's
+        SessionRecord(41000, RavenFolder, RavenSocket);
+
+        _live.RunsIn(RavenSocket, RavenFolder).ShouldBeTrue();
+    }
+
+    [Fact]
     public void A_brain_whose_process_is_gone_is_not_found()
     {
         SessionRecord(41000, RavenFolder, RavenSocket);

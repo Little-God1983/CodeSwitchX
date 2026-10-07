@@ -4000,13 +4000,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
     /// <summary>
     /// What a brain said in a turn of its own, started by a chat's message to it (#181): written in its Raven chat, never
     /// said aloud, as it comes unasked; the chat's badge counts it like any line the user has not seen.
     /// </summary>
     private void ShowUnasked(UnaskedTurn turn) => AddSaid(turn.Text, ChatOf(turn.WorkspaceId), said: false);
 
+    /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
     private RavenChat ChatOf(Guid? workspaceId) =>
         workspaceId is { } id ? Chats.FirstOrDefault(c => c.WorkspaceId == id) ?? YardChat : YardChat;
 

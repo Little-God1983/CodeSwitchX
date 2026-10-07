@@ -651,6 +651,59 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_turn_of_its_own_that_fails_says_so_rather_than_passing_its_half_answer_off_as_whole()
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("The bug report chat asks"));
+        _launcher.Last.Emit(StreamJson.ErrorResult);
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        told[0].Text.ShouldBe("Raven could not answer a message from another chat: API Error: 529 Overloaded");
+    }
+
+    [Fact]
+    public async Task A_turn_of_its_own_keeps_the_conversation_young_for_the_next_start()
+    {
+        // The user reads what it said and answers it: a rest in between must not start a new conversation without it.
+        var window = Guid.NewGuid();
+        var (brain, told) = Telling(window);
+        await ReplyTo(brain, "One");
+        _time.Advance(TimeSpan.FromMinutes(15));
+
+        foreach (var line in ChatAsksRaven)
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        await WaitUntil(() => { lock (told) { return told.Count == 1; } });
+        new BrainSessionFile(Path.Combine(_paths.RavenDirectory, "sessions.json")).Load(window.ToString("N"))!.LastTurnAt.ShouldBe(_time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task A_question_waiting_behind_a_turn_of_its_own_can_be_cancelled()
+    {
+        var (brain, _) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Emit(StreamJson.Init());
+        _launcher.Last.Emit(StreamJson.Text("Let me look"));
+        using var cancel = new CancellationTokenSource();
+
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("Two", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(turn.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        _launcher.Last.Written.Count.ShouldBe(1, "the cancelled question never went in");
+    }
+
+    [Fact]
     public async Task Lines_between_questions_that_begin_no_turn_are_dropped_without_waiting_for_one()
     {
         var (brain, told) = Telling(Guid.NewGuid());

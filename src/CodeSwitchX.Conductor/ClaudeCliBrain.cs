@@ -213,7 +213,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // question's to read (a session that is gone ends it at once).
             if (!Toolless && !_resuming && _process is { } held)
             {
-                await ReadUnaskedAsync(held).ConfigureAwait(false);
+                await ReadUnaskedAsync(held, ct).ConfigureAwait(false);
             }
 
             var failure = EnsureRunning();
@@ -432,11 +432,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// lines would be read as the next question's answer, and that question's as the one after it. Lines that begin no
     /// turn are dropped. Holding <see cref="_turns"/>.
     /// </summary>
-    private async Task ReadUnaskedAsync(IBrainProcess process)
+    /// <param name="ct">A question waiting behind it was cancelled: it stops waiting, and the rest of the turn is read later.</param>
+    private async Task ReadUnaskedAsync(IBrainProcess process, CancellationToken ct = default)
     {
         var said = new StringBuilder();
         var tools = new List<string>();
         var begun = false;
+        string? failed = null;
         while (true)
         {
             string? line;
@@ -450,7 +452,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             }
             else
             {
-                (line, var timedOut) = await NextLineAsync(process, CancellationToken.None).ConfigureAwait(false);
+                (line, var timedOut) = await NextLineAsync(process, ct).ConfigureAwait(false);
                 if (timedOut)
                 {
                     Lose(process, $"gave no answer for {Silence.TotalSeconds:0} s in a turn of its own");
@@ -465,8 +467,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
 
             var read = ClaudeStream.Read(line);
             begun |= read is not null;
-            if (read is ClaudeTurnOver)
+            if (read is ClaudeTurnOver over)
             {
+                failed = over.Error;
                 break;
             }
 
@@ -487,9 +490,23 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
 
         _lastTurnAt = _time.GetUtcNow();
+        // The turn is in the conversation, which the user may go on with: a start after a rest picks it up while it is young.
+        if (_chat is not null && !_disposed && ReferenceEquals(process, _process) && _started is { } held)
+        {
+            _session = new BrainSession(held.Id, held.Model, _lastTurnAt);
+            _chat.Sessions.Save(_chat.Key, _session);
+        }
+
         var words = said.ToString().Trim();
-        _logger.LogInformation("{Brain}{Chat} took a turn of its own, as for a message from another session; it called {Tools} and said {Length} characters",
-            _name, _chat is null ? "" : $" of chat {_chat.Key}", tools.Count == 0 ? "nothing" : string.Join(", ", tools), words.Length);
+        _logger.LogInformation("{Brain}{Chat} took a turn of its own, as for a message from another session; it called {Tools} and said {Length} characters{Failed}",
+            _name, _chat is null ? "" : $" of chat {_chat.Key}", tools.Count == 0 ? "nothing" : string.Join(", ", tools), words.Length,
+            failed is null ? "" : $", and failed: {failed}");
+        if (failed is not null)
+        {
+            // Cut off, what it said so far is no answer to pass off as whole.
+            words = $"Raven could not answer a message from another chat: {failed}";
+        }
+
         if (words.Length > 0)
         {
             _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, words));
