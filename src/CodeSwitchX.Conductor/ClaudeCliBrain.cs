@@ -357,6 +357,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var sent = false;
         var id = Guid.NewGuid().ToString("D"); // the question's line's uuid, which its echo carries back
         var taken = false; // its echo came: what follows is its answer
+        ClaudeInit? early = null; // the init before its echo, told with the answer: how this process's tools stand
         try
         {
             // A turn it took on its own just now, which the watcher has not come to yet: read before the question goes in,
@@ -406,7 +407,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // Either way, what follows the question's echo is its answer (TakeOther). An init that comes meanwhile says how
             // this process's tools stand, whoever's turn it begins, so the latest is told with the answer. A Claude Code
             // that echoes nothing answers with no echo before it.
-            ClaudeInit? early = null;
             ForgetStale(process);
             while (true)
             {
@@ -542,6 +542,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 && (taken || _unaskedRead is null) && !await InterruptAsync(process).ConfigureAwait(false))
             {
                 Stop();
+            }
+
+            // Left before its echo came (cancelled, say): how the tools stand is still told, with the next turn, and a
+            // failure still replaces the process (#196).
+            if (!taken && early is not null)
+            {
+                _notices.AddRange(Report(early));
             }
 
             if (_replaceAfterTurn)
