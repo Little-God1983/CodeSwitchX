@@ -357,7 +357,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         var sent = false;
         var id = Guid.NewGuid().ToString("D"); // the question's line's uuid, which its echo carries back
         var taken = false; // its echo came: what follows is its answer
-        ClaudeInit? early = null; // the init before its echo, told with the answer: how this process's tools stand
+        // The init before its echo: how this process's tools stand, told with the answer, or, when none comes, with the next
+        // turn (#196).
+        ClaudeInit? early = null;
         try
         {
             // A turn it took on its own just now, which the watcher has not come to yet: read before the question goes in,
@@ -405,8 +407,8 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             // a turn just as the question went in, so the pre-read above did not see it. That turn's echo comes first; the
             // question then waits for its result, or is folded into it at a tool call, and its own echo comes mid-turn.
             // Either way, what follows the question's echo is its answer (TakeOther). An init that comes meanwhile says how
-            // this process's tools stand, whoever's turn it begins, so the latest is told with the answer. A Claude Code
-            // that echoes nothing answers with no echo before it.
+            // this process's tools stand, whoever's turn it begins, so the latest is told with the answer, or with the next
+            // turn when no answer comes (see finally). A Claude Code that echoes nothing answers with no echo before it.
             ForgetStale(process);
             while (true)
             {
@@ -544,11 +546,16 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 Stop();
             }
 
-            // Left before its echo came (cancelled, say): how the tools stand is still told, with the next turn, and a
-            // failure still replaces the process (#196).
-            if (!taken && early is not null)
+            // Left before its echo came (cancelled, say): how the tools of the process still running stand is told with the
+            // next turn, and a failure replaces it after this one (#196), unless a chat's turn was left running on it: that
+            // turn is not cut off, and the next turn's own init replaces it. A process lost meanwhile is no more to tell of.
+            if (!taken && early is not null && process is not null && ReferenceEquals(process, _process))
             {
                 _notices.AddRange(Report(early));
+                if (_unaskedRead is not null)
+                {
+                    _replaceAfterTurn = false;
+                }
             }
 
             if (_replaceAfterTurn)
