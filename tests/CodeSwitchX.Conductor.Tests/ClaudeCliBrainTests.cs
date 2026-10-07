@@ -1172,6 +1172,27 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
+    public async Task A_chat_s_message_folded_into_the_answer_is_shown_on_its_own()
+    {
+        // #197: the question's echo came, then a chat's message was folded in at a tool call. The answer goes on, and the
+        // chat's message is shown in the window's chat, not lost in the answer.
+        var (brain, told) = Telling(Guid.NewGuid());
+        _launcher.Answer = written =>
+        [
+            StreamJson.Init(), StreamJson.Taken(written), StreamJson.ToolUse("toolu_4", "mcp__codeswitchx__list_chats"),
+            StreamJson.ToolResult("toolu_4"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("Nothing waits on you."),
+            StreamJson.Result("Nothing waits on you."),
+        ];
+
+        (await ReplyTo(brain, "What's waiting on me?")).ShouldBe("Nothing waits on you.");
+
+        var turn = Copy(told).ShouldHaveSingleItem();
+        turn.Text.ShouldBe(ClaudeCliBrain.FoldedText("Which F keys fail?"));
+        turn.Text.ShouldContain("Which F keys fail?");
+        (turn.Calls, turn.Failure).ShouldBe(([], null));
+    }
+
+    [Fact]
     public async Task What_a_cancelled_question_did_before_the_interrupt_ended_it_is_told()
     {
         // Its echo came only while the interrupt was read: its answer is unheard, but its tool call shows, as nothing Raven

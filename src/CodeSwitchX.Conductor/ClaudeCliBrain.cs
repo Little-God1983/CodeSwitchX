@@ -600,6 +600,11 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         }
 
                         break;
+                    case ClaudeTaken { FromPeer: true } peer:
+                        // A chat's message folded into the question's turn at a tool call (#197): one turn answers both, so
+                        // the answer goes on, and the message is shown in the window's chat on its own, not lost in it.
+                        FoldedIn(peer);
+                        break;
                     case ClaudeEvents { Events: var events }:
                         foreach (var e in events)
                         {
@@ -885,6 +890,25 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                 return true;
         }
     }
+
+    /// <summary>
+    /// Shows a chat's message that Claude Code folded into the question's turn, after the question's echo (#197): what
+    /// follows in that turn may answer it as much as the question, and since #193 nothing in it acts. It is told as a turn
+    /// of the brain's own, with the message's words, so the chat's message is seen as the chat's.
+    /// </summary>
+    private void FoldedIn(ClaudeTaken peer)
+    {
+        _logger.LogInformation("{Brain}{Chat} took a chat's message into the answer it was giving", _name, _chat is null ? "" : $" of chat {_chat.Key}");
+        if (!_disposed)
+        {
+            _unasked?.Report(new UnaskedTurn(_chat?.WorkspaceId, FoldedText(peer.Message), [], null));
+        }
+    }
+
+    /// <summary>What the window's chat shows for a chat's message folded into a question's answer (#197).</summary>
+    internal static string FoldedText(string? message) => message is { Length: > 0 }
+        ? $"A chat messaged Raven while it answered you, and the answer may speak to it too: \"{message.Trim()}\""
+        : "A chat messaged Raven while it answered you, and the answer may speak to it too.";
 
     /// <summary>Why a turn of its own is told as failed when its process went in the middle of it.</summary>
     internal const string StoppedMidTurn = "its brain stopped in the middle of it";
