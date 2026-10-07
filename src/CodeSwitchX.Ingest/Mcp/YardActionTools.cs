@@ -26,7 +26,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "workspace named by another of its folders, or another folder named, is refused, and you say so. It returns the chat's "
         + "send_to name: then send it its task with SendMessage to that name, or it does nothing. Leave model "
         + "and effort out to use the defaults; give them only when the user wants them for this one chat. In a window's chat, leave "
-        + "workspace out for that window.")]
+        + "workspace out for that window. A chat started in another window than the chat the user is in moves the user to that "
+        + "window's Raven chat, where the new chat's news comes: say so in a few words.")]
     public async Task<StartedChatView> StartChat(
         [Description("The workspace or project as the user named it, matched like find_workspace. Left out: the window of the chat the user is in.")]
         string? workspace = null,
@@ -61,7 +62,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
                 ?? throw new McpException($"{target.Name} has no folder like '{folder}'. Its folders: {string.Join(", ", target.Folders.Select(f => f.Name))}.");
         }
 
-        var started = await Act(() => actions.StartChatAsync(target, named, model, effort, cancellationToken)).ConfigureAwait(false);
+        var started = await Act(() => actions.StartChatAsync(target, named, model, effort, scope?.Key, cancellationToken)).ConfigureAwait(false);
         return new StartedChatView(VoiceChatOf(started), $"Now send it its task: SendMessage to \"{started.SendTo}\".");
     }
 

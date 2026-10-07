@@ -1271,9 +1271,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var chat = CurrentChat;
-        AddEntry(RavenLogKind.You, text, chat);
+        var asked = AddEntry(RavenLogKind.You, text, chat);
         _voice.Expect();
-        Ask(text, _time.GetUtcNow(), chat);
+        Ask(text, _time.GetUtcNow(), chat, asked);
     }
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
@@ -1676,8 +1676,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
             else if (text.Length > 0)
             {
-                AddEntry(RavenLogKind.You, text, chat);
-                Ask(text, ended, chat);
+                var asked = AddEntry(RavenLogKind.You, text, chat);
+                Ask(text, ended, chat, asked);
             }
         }
         catch (DictationModelLoadException ex)
@@ -1711,7 +1711,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// answered. One asked before it that has not gone to the brain yet is not lost: it goes with this one, as the first
     /// half of what the user said. The answer's voice begins here, as it is asked, unless the user is talking in Open mic.
     /// </remarks>
-    private void Ask(string text, DateTimeOffset ended, RavenChat chat)
+    /// <param name="asked">The words as written to the log, which go with the question wherever it goes (#180).</param>
+    private void Ask(string text, DateTimeOffset ended, RavenChat chat, RavenLogEntry? asked = null)
     {
         _brainAsked = false; // these words answer it, whatever they are
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
@@ -1735,16 +1736,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
-        AskBrain(text, ended, chat);
+        AskBrain(text, ended, chat, asked: asked);
     }
 
     /// <summary>The words go to the brain as the next question, after any not sent yet (UI thread).</summary>
     /// <param name="chat">Where the user asked: the answer goes there, wherever the user is when it comes.</param>
     /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
-    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "")
+    /// <param name="asked">The words as written to the log; null when they were written before (asked again).</param>
+    /// <param name="entries">The log entries of a question asked again, which stay its own.</param>
+    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "", RavenLogEntry? asked = null,
+        IReadOnlyList<RavenLogEntry>? entries = null)
     {
         var takenEarlier = "";
         var takenText = "";
+        List<RavenLogEntry> takenEntries = [.. entries ?? []];
         List<Question> own = [];
         foreach (var waiting in Unsent())
         {
@@ -1753,18 +1758,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
                 // own window, so "stop it" said in chat 3 would stop a chat in the window the user is in now.
-                own.Add(new Question(waiting.Text, waiting.Chat, waiting.Earlier));
+                var again = new Question(waiting.Text, waiting.Chat, waiting.Earlier);
+                again.Entries.AddRange(waiting.Entries);
+                own.Add(again);
             }
             else if (waiting.Chat == chat)
             {
                 takenEarlier += waiting.Earlier;
                 takenText += waiting.Text + "\n";
+                takenEntries.AddRange(waiting.Entries);
             }
             else
             {
                 // Asked in another chat: it keeps saying where, or "stop it" there would mean the window the user is in now.
-                takenEarlier += waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {(waiting.Chat == YardChat ? "the Yard" : waiting.Chat.Name)}:] "
-                    + waiting.Text + "\n";
+                takenEarlier += waiting.Earlier + $"[Said in chat {waiting.Chat.Number}, {NameOf(waiting.Chat)}:] " + waiting.Text + "\n";
+                // Its lines stay in the chat they were said in: moved, they would leave that chat with no word why.
             }
         }
 
@@ -1774,7 +1782,96 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Enqueue(other, ended, floor);
         }
 
-        Enqueue(new Question(takenText + text, chat, takenEarlier + earlier), ended, floor);
+        var question = new Question(takenText + text, chat, Carried(chat) + takenEarlier + earlier);
+        question.Entries.AddRange(takenEntries);
+        if (asked is not null)
+        {
+            question.Entries.Add(asked);
+        }
+
+        Enqueue(question, ended, floor);
+    }
+
+    /// <summary>The chat as the brain is told of it: "the Yard" for chat 0.</summary>
+    private string NameOf(RavenChat chat) => chat == YardChat ? "the Yard" : chat.Name;
+
+    /// <summary>
+    /// What the next question in a chat is told first, once, while it is fresh: the question Raven moved there with the
+    /// user (#180), as that chat's brain is another and knows nothing of it. Empty for none. UI thread.
+    /// </summary>
+    private string Carried(RavenChat chat) =>
+        _carried.Remove(chat, out var carried) && _time.GetUtcNow() - carried.At < CarriedLifetime ? carried.Text : "";
+
+    /// <summary>How long a question moved to a chat is told to its next question (#180): one asked much later is about something else.</summary>
+    internal static readonly TimeSpan CarriedLifetime = TimeSpan.FromMinutes(10);
+
+    private readonly Dictionary<RavenChat, (string Text, DateTimeOffset At)> _carried = [];
+
+    /// <summary>
+    /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
+    /// (#180): the user follows the work. The question whose turn is starting it, its words and its answer so far, moves
+    /// to that window's Raven chat, where the rest of the answer and the new chat's news come, and the panel shows that
+    /// chat. A note in each chat says where the question went and where it came from. Nothing happens when no question of
+    /// that chat's is starting a chat (one asked since, say), the window has no chat, or it is the user's own. UI thread.
+    /// </summary>
+    public void FollowWork(string askedIn, Guid workspaceId)
+    {
+        var to = Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == workspaceId);
+        var from = askedIn == YardMcp.OverviewChat ? YardChat
+            : Guid.TryParse(askedIn, out var window) ? Chats.FirstOrDefault(c => c.WorkspaceId == window) : null;
+        // The question whose turn is starting the chat: not one asked since in that chat, while a slow start went on.
+        var question = _questions.FirstOrDefault(q => q.Sent && !q.Ended && q.StartingChat && q.AskedIn == from);
+        if (to is null || from is null || from == to || question is null || question.Chat == to)
+        {
+            return;
+        }
+
+        var current = question.Chat;
+        question.Chat = to;
+        _carried.Remove(current); // moved on: the chat it was in is told nothing of it
+        var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
+        foreach (var (entry, _) in kept)
+        {
+            if (entry.IsUnread)
+            {
+                // The user is moved to the chat with it: its lines are shown to them, not come while they were away.
+                entry.Chat.Unread -= entry.Unread;
+                entry.Unread = 0;
+            }
+
+            entry.Chat = to;
+        }
+
+        current.IsNewsPulsing &= current.Unread > 0;
+        if (question.Origin is null)
+        {
+            // Placed above the question, and so of its time: the log is in time order. A question whose first lines the
+            // log has let go of is noted above what is left of it.
+            var first = kept.Count > 0 ? kept[0].At : -1;
+            var at = first >= 0 ? Log[first].At : _time.GetUtcNow();
+            question.Origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {NameOf(from)}.", at) { Chat = to };
+            question.Entries.Insert(0, question.Origin);
+            Log.Insert(first >= 0 ? first : Log.Count, question.Origin);
+            TrimLog();
+        }
+
+        AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", current);
+        if (BrainOf(to) != BrainOf(from))
+        {
+            // That chat's brain is another, and knows nothing of the question: its next question is told.
+            _carried[to] = ($"[The user asked this in chat {from.Number}, {NameOf(from)}, and was moved here when Raven started a chat in this "
+                + $"window: \"{question.Text}\"]\n", _time.GetUtcNow());
+        }
+
+        _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", current.Number, to.Number);
+        if (SelectedChat == to)
+        {
+            ShowSelected(); // the entries moved into the chat shown
+        }
+        else
+        {
+            SelectedChat = to;
+        }
     }
 
     /// <summary>The question goes to its chat's brain after those before it, on the floor it was given (UI thread).</summary>
@@ -1806,8 +1903,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         /// <summary>Words it took along from another chat, each part tagged with the chat it was asked in; empty for none.</summary>
         public string Earlier { get; } = earlier;
 
-        /// <summary>The chat it was asked in: its answer goes there.</summary>
-        public RavenChat Chat { get; } = chat;
+        /// <summary>The chat its answer goes to: the one it was asked in, or another once Raven moved the user with it (<see cref="FollowWork"/>).</summary>
+        public RavenChat Chat { get; set; } = chat;
+
+        /// <summary>The chat it was asked in, whose brain answers it, wherever the answer goes.</summary>
+        public RavenChat AskedIn { get; } = chat;
+
+        /// <summary>The note above it saying where it was asked, once it was moved (<see cref="FollowWork"/>); moves with it.</summary>
+        public RavenLogEntry? Origin { get; set; }
+
+        /// <summary>Its turn is in a start_chat call: the one a move of the user is for (<see cref="FollowWork"/>).</summary>
+        public bool StartingChat { get; set; }
+
+        /// <summary>Its entries in the log so far: the words asked, the replies and the cards; what moves with it.</summary>
+        public List<RavenLogEntry> Entries { get; } = [];
 
         public bool Sent { get; set; }
 
@@ -1877,7 +1986,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
             // And only while the user is still in that chat: one who moved on is not answering it.
-            _brainAsked = !floor.IsCancellationRequested && CurrentChat == question.Chat
+            // Not once the user was moved to a chat of another brain with it (#180): that brain did not ask, and would not hear.
+            _brainAsked = !floor.IsCancellationRequested && BrainOf(question.Chat) == BrainOf(question.AskedIn) && CurrentChat == question.Chat
                 && Log.Skip(before is null ? 0 : Log.IndexOf(before) + 1).LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
                 && said.Text.TrimEnd().EndsWith('?');
         }
@@ -1886,6 +1996,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (question.Sent)
             {
                 Summarize(question.Chat);
+                if (question.AskedIn != question.Chat)
+                {
+                    Summarize(question.AskedIn); // what it was asked for went elsewhere (#180)
+                }
             }
 
             question.Ended = true;
@@ -1911,6 +2025,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         RavenLogEntry? reply = null;
         var said = false;
         var began = _time.GetUtcNow();
+        // Where the question is now: another chat once Raven moved the user with it (FollowWork). Its entries are the
+        // question's, so they move with it.
+        RavenChat Where() => question?.Chat ?? chat;
+        RavenLogEntry Track(RavenLogEntry entry)
+        {
+            question?.Entries.Add(entry);
+            return entry;
+        }
+
         // An allow was proposed in this turn: the rest of the brain's words go to the app's log only. After the app's
         // read-back, a brain steered by a chat's words could ask "Say yes." to something else, in speech or in writing.
         var proposed = false;
@@ -1943,7 +2066,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
-                            reply = AddSaid(start, chat, spoken);
+                            reply = Track(AddSaid(start, Where(), spoken));
                             said = true;
                             spoken.Add(start);
                         }
@@ -1955,6 +2078,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         spoken.Add(piece);
                         break;
                     case BrainToolCall call:
+                        if (question is not null)
+                        {
+                            question.StartingChat = call.Tool == "start_chat"; // the app moves the user while it runs (#180)
+                        }
+
                         spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
                         // The part of the reply before the card is done: "Let me check.\n\n" keeps no empty lines.
                         if (reply is not null)
@@ -1963,19 +2091,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             reply = null;
                         }
 
-                        var card = AddEntry(RavenLogKind.Action, call.Tool, chat);
+                        var card = Track(AddEntry(RavenLogKind.Action, call.Tool, Where()));
                         card.Detail = ActionDetail(call.Input);
                         cards[call.Id] = card;
                         break;
                     case BrainToolResult { Failed: true, Id: var id } when cards.TryGetValue(id, out var failed):
                         failed.Failed = true;
+                        if (question is not null)
+                        {
+                            question.StartingChat = false;
+                        }
+
+                        break;
+                    case BrainToolResult when question is not null:
+                        question.StartingChat = false;
                         break;
                     case BrainNotice or BrainFailed when quiet:
                         _logger.LogWarning("Raven's news teller: {What}", e);
                         failedMidway |= e is BrainFailed or BrainNotice { Warning: true };
                         break;
                     case BrainNotice notice:
-                        AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
+                        Track(AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, Where()));
                         break;
                     case BrainChatMessage { Text: var message } when quiet:
                         _logger.LogInformation("Raven's news teller: {What}", message);
@@ -1990,10 +2126,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             reply = null;
                         }
 
-                        AddEntry(RavenLogKind.Note, message, chat);
+                        Track(AddEntry(RavenLogKind.Note, message, Where()));
                         break;
                     case BrainFailed { Reason: var reason }:
-                        AddEntry(RavenLogKind.Warning, reason, chat);
+                        Track(AddEntry(RavenLogKind.Warning, reason, Where()));
                         break;
                 }
             }
@@ -2022,7 +2158,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Raven's brain failed");
-            AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}", chat);
+            Track(AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}", Where()));
         }
 
         return said;
@@ -2371,7 +2507,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Their own turns end at once; their words go again, with the news of the yes.
             waiting.Merged = true;
-            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier);
+            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries);
         }
         else
         {
@@ -3342,23 +3478,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenLogEntry Append(RavenLogEntry entry, RavenChat? chat = null)
     {
         entry.Chat = chat ?? CurrentChat;
-        while (Log.Count >= MaximumLogEntries)
-        {
-            var dropped = Log[0];
-            Shown.Remove(dropped);
-            Log.RemoveAt(0);
-            if (dropped.Ask is { IsOpen: true })
-            {
-                CountWaiting(dropped.Chat);
-            }
-
-            if (dropped.IsUnread)
-            {
-                dropped.Chat.Unread -= dropped.Unread; // opening the chat would not show it any more
-                dropped.Unread = 0;
-            }
-        }
-
+        TrimLog(1);
         Log.Add(entry);
         if (IsShown(entry))
         {
@@ -3834,6 +3954,27 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>Drops the oldest entries until <paramref name="room"/> more fit under <see cref="MaximumLogEntries"/>.</summary>
+    private void TrimLog(int room = 0)
+    {
+        while (Log.Count + room > MaximumLogEntries)
+        {
+            var dropped = Log[0];
+            Shown.Remove(dropped);
+            Log.RemoveAt(0);
+            if (dropped.Ask is { IsOpen: true })
+            {
+                CountWaiting(dropped.Chat);
+            }
+
+            if (dropped.IsUnread)
+            {
+                dropped.Chat.Unread -= dropped.Unread; // opening the chat would not show it any more
+                dropped.Unread = 0;
+            }
+        }
+    }
+
     /// <summary>Fills <see cref="Shown"/> anew with the selected chat's entries.</summary>
     private void ShowSelected()
     {
@@ -3881,6 +4022,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             Chats.Remove(gone);
+            _carried.Remove(gone);
         }
 
         for (var i = 0; i < wanted.Count; i++)

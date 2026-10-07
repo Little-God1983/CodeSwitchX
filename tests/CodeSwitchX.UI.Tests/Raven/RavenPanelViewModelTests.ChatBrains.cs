@@ -1,6 +1,7 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Messaging;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -400,5 +401,48 @@ public sealed partial class RavenPanelViewModelTests
 
         ((FakeBrain)brains.For(ContentAutomatorX)).WarmUps.ShouldBe(1);
         _brain.WarmUps.ShouldBe(0);
+    }
+
+    /// <summary>Asks in chat 1, whose brain answers behind a gate, and moves the user to chat 3 with the question (#180).</summary>
+    private async Task<(RavenPanelViewModel Vm, FakeChatBrains Brains)> MovedToChat3Async()
+    {
+        var (vm, brains) = await ChatBrainsVmAsync();
+        brains.Windows[CodeSwitchX] = new FakeBrain { Answer = _ => StartingIn(vm, CodeSwitchX, ContentAutomatorX, "On it.", " Started.") };
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "In ContentAutomatorX, create a bug report chat for the F keys");
+        await WithinAsync(vm.PendingAnswers);
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        return (vm, brains);
+    }
+
+    [Fact]
+    public async Task The_chat_the_user_was_moved_to_tells_its_brain_the_question_once()
+    {
+        // Its brain is another, and knows nothing of what was asked in chat 1 (#180).
+        var (vm, brains) = await MovedToChat3Async();
+
+        Type(vm, "open it");
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "and then?");
+        await WithinAsync(vm.PendingAnswers);
+
+        var three = brains.Windows[ContentAutomatorX].Sent;
+        three[0].ShouldStartWith("[The user asked this in chat 1, CodeSwitchX, and was moved here when Raven started a chat in this window: "
+            + "\"In ContentAutomatorX, create a bug report chat for the F keys\"]");
+        three[0].ShouldEndWith("open it");
+        three[1].ShouldNotContain("moved here", Case.Insensitive, "told once");
+        brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem("chat 1's brain answered the question itself");
+    }
+
+    [Fact]
+    public async Task A_moved_question_is_told_only_while_it_is_fresh()
+    {
+        var (vm, brains) = await MovedToChat3Async();
+
+        _time.Advance(RavenPanelViewModel.CarriedLifetime + TimeSpan.FromMinutes(1));
+        Type(vm, "open it");
+        await WithinAsync(vm.PendingAnswers);
+
+        brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem().ShouldNotContain("moved here", Case.Insensitive);
     }
 }

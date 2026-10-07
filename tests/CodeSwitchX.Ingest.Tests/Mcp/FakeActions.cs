@@ -25,10 +25,14 @@ internal sealed class FakeActions : IYardActions
 
     public bool StartedByRaven(string chatId) => Voice.Contains(chatId);
 
-    public Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
+    /// <summary>The Raven chat the last start was asked in, as its brain names it; null for none.</summary>
+    public string? StartedFrom { get; private set; }
+
+    public Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, string? askedIn, CancellationToken ct)
     {
         Act("start_chat");
         Started = (workspace, folder, model, effort);
+        StartedFrom = askedIn;
         return Task.FromResult(new VoiceChatView("dddddddd-0004", workspace.Id, workspace.Name, folder?.Path ?? workspace.RootPath,
             "claude-fable-5-1", "high", "diffusionnexus-4f"));
     }

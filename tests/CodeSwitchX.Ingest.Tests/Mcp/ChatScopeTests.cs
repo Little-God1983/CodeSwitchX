@@ -58,6 +58,20 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task A_chat_started_from_a_window_s_chat_says_which_chat_asked()
+    {
+        // #180: the app moves the user to the workspace's chat when another chat asked.
+        await new YardActionTools(_yard, _actions, scope: InDiffusion).StartChat("CodeSwitchX", cancellationToken: Ct);
+        _actions.StartedFrom.ShouldBe(FakeYard.DiffusionId.ToString("D"));
+
+        await new YardActionTools(_yard, _actions, scope: ChatScope.Yard).StartChat("CodeSwitchX", cancellationToken: Ct);
+        _actions.StartedFrom.ShouldBe(YardMcp.OverviewChat);
+
+        await new YardActionTools(_yard, _actions, scope: ChatScope.None).StartChat("CodeSwitchX", cancellationToken: Ct);
+        _actions.StartedFrom.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Stop_it_where_no_chat_works_stops_nothing_and_does_not_reach_into_another_window()
     {
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).StopChat(cancellationToken: Ct));
