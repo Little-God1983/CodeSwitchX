@@ -325,28 +325,27 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// </summary>
     private void Unverified(bool now)
     {
-        if (_asked is not null && Header is { } chat)
+        if (_asked is null || Header is not { } chat || now == _unverified)
         {
-            _asked.Unverified(chat, now);
+            return; // only what this brain said is taken back: another for the same window may have said it
         }
+
+        _unverified = now;
+        _asked.Unverified(chat, now);
     }
 
+    /// <summary>It has said the running turn answers a question it cannot verify, and not yet taken it back.</summary>
+    private bool _unverified;
+
     /// <summary>
-    /// The question's answer came with no echo at all, from a Claude Code that has echoed nothing: it cannot be told from a
-    /// cancelled question's, so it does not act, and the Yard says why (#199). False for one that echoes but sent no echo
-    /// for this turn (a turn it began on its own), which is no question's either.
+    /// A question's whole turn came and went with no echo, and the process has echoed nothing: its Claude Code echoes
+    /// nothing at all, so no answer of it can be told from a cancelled question's, and none acts (#199).
     /// </summary>
-    private bool UnverifiedWithoutEcho(string id)
+    private bool EchoesNothing()
     {
         lock (_questionGate)
         {
-            if (_question != id || _peerInTurn || _echoes)
-            {
-                return false;
-            }
-
-            Unverified(true);
-            return true;
+            return !_echoes;
         }
     }
 
@@ -422,6 +421,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         // The init before its echo: how this process's tools stand, told with the answer, or, when none comes, with the next
         // turn (#196).
         ClaudeInit? early = null;
+        var unechoed = false; // its answer came with no echo before it
         try
         {
             // A turn it took on its own just now, which the watcher has not come to yet: read before the question goes in,
@@ -529,10 +529,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     // turn, the question's answer is told as such, the rest of that turn with it.
                     taken = true;
                     var whose = read is ClaudeTaken echo ? EchoOf(echo, id) : (Echo?)null;
-                    if ((whose == Echo.QuestionWithoutId || (whose is null && UnverifiedWithoutEcho(id))) && FirstNoIds())
+                    if (whose == Echo.QuestionWithoutId && FirstNoIds())
                     {
                         yield return new BrainNotice(NoIds, Warning: true);
                     }
+
+                    unechoed = whose is null;
 
                     TellOther(null);
                     if (early is not null)
@@ -562,6 +564,12 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                         break;
                     case ClaudeTurnOver over:
                         finished = true;
+                        if (unechoed && EchoesNothing() && FirstNoIds())
+                        {
+                            // Said once the whole turn showed it, so a turn that only began with no echo does not mislead.
+                            yield return new BrainNotice(NoIds, Warning: true);
+                        }
+
                         if (over.Error is { } error && _unproven && ++_unprovenFailures >= UnprovenFailures)
                         {
                             // Picked up again and failing each time (a transcript the API now refuses, say): kept, it

@@ -1244,27 +1244,35 @@ public sealed class ClaudeCliBrainTests : IDisposable
         var window = Guid.NewGuid();
         var chat = window.ToString("D");
         var (brain, _) = Telling(window, asked);
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it.")];
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            yield return StreamJson.Init();
+            yield return StreamJson.Text("Stopping it.");
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Result("Stopping it.");
+        }
+
+        _launcher.Answer = Answer;
 
         var events = new List<BrainEvent>();
-        var ask = Task.Run(async () =>
+        await foreach (var e in brain.AskAsync("Stop the issues chat", TestContext.Current.CancellationToken))
         {
-            await foreach (var e in brain.AskAsync("Stop the issues chat", TestContext.Current.CancellationToken))
-            {
-                events.Add(e);
-            }
-        }, TestContext.Current.CancellationToken);
-        await WaitUntil(() => asked.IsUnverified(chat)); // the Yard says why it refuses, for this turn
-        asked.IsAsked(chat).ShouldBeFalse();
-        _launcher.Last.Emit(StreamJson.Result("Stopping it."));
-        await ask;
+            events.Add(e);
+        }
 
         Reply(events).ShouldBe("Stopping it.");
+        seen.ShouldBe([false]);
         events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldBe(ClaudeCliBrain.NoIds);
-        asked.IsUnverified(chat).ShouldBeFalse("for that turn only");
-        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Stopping it."), StreamJson.Result("Stopping it.")];
         var (other, _) = Telling(Guid.NewGuid(), asked);
-        (await ReplyTo(other, "Hi")).ShouldBe("Stopping it.", "another chat's brain says it no more");
+        var again = new List<BrainEvent>();
+        await foreach (var e in other.AskAsync("Hi", TestContext.Current.CancellationToken))
+        {
+            again.Add(e);
+        }
+
+        Reply(again).ShouldBe("Stopping it.");
+        again.OfType<BrainNotice>().ShouldBeEmpty("another chat's brain says it no more");
     }
 
     [Fact]
