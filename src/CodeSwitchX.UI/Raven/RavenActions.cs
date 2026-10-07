@@ -37,6 +37,12 @@ public interface IRavenShell
 
     /// <summary>Mutes or unmutes a window's Raven chat (#153); what Raven says of it, or null when no window's chat has the number.</summary>
     string? MuteChat(int number, bool muted);
+
+    /// <summary>
+    /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
+    /// (#180): the user is moved to that window's Raven chat, with the question and its answer.
+    /// </summary>
+    void FollowWork(string askedIn, Guid workspaceId);
 }
 
 /// <summary>
@@ -102,7 +108,8 @@ public sealed class RavenActions : IYardActions
 
     public bool StartedByRaven(string chatId) => _started.ContainsKey(chatId);
 
-    public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct)
+    public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, string? askedIn,
+        CancellationToken ct)
     {
         var modelId = ChatSettings.Blank(model) is { } m ? _chats.ModelIdOf(m) : _chats.DefaultModelId;
         var level = ChatSettings.Blank(effort) is { } e ? ChatSettings.EffortOf(e) : _chats.Defaults.Effort;
@@ -113,6 +120,12 @@ public sealed class RavenActions : IYardActions
         _claim(chat.SessionId, workspace.Id);
         _started[chat.SessionId] = true;
         _ui.Post(() => _shell().MarkVoice(chat.SessionId, Label(modelId, level)));
+        if (askedIn is not null && askedIn != YardMcp.ChatKey(workspace.Id, overview: false))
+        {
+            // Asked elsewhere: the user follows the work to the window's chat, where the chat's news comes (#180).
+            _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id));
+        }
+
         _logger.LogInformation("Raven opened chat {Id} in {Workspace}", chat.SessionId, workspace.Name);
         return new VoiceChatView(chat.SessionId, workspace.Id, workspace.Name, chat.Folder, modelId, level, chat.SendTo);
     }

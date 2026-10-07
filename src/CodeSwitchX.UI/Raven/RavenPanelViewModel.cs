@@ -1774,7 +1774,80 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Enqueue(other, ended, floor);
         }
 
-        Enqueue(new Question(takenText + text, chat, takenEarlier + earlier), ended, floor);
+        var question = new Question(takenText + text, chat, Carried(chat) + takenEarlier + earlier);
+        foreach (var taken in Unsent().Where(q => q.Chat == chat))
+        {
+            question.Entries.AddRange(taken.Entries);
+        }
+
+        // The words were just written to the log, right before: they are the question's.
+        if (Log.Count > 0 && Log[^1] is { Kind: RavenLogKind.You } asked && asked.Chat == chat && asked.Text == text)
+        {
+            question.Entries.Add(asked);
+        }
+
+        Enqueue(question, ended, floor);
+    }
+
+    /// <summary>
+    /// What the next question in a chat is told first, once: the question Raven moved there with the user (#180), as that
+    /// chat's brain is another and knows nothing of it. Empty for none. UI thread.
+    /// </summary>
+    private string Carried(RavenChat chat) => _carried.Remove(chat, out var carried) ? carried : "";
+
+    private readonly Dictionary<RavenChat, string> _carried = [];
+
+    /// <summary>
+    /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
+    /// (#180): the user follows the work. The question running there, its words and its answer so far, moves to that
+    /// window's Raven chat, where the rest of the answer and the new chat's news come, and the panel shows that chat. A
+    /// note in each chat says where the question went and where it came from. Nothing moves when no question of that
+    /// chat's runs, or the window has no chat; the panel still shows the window's chat. UI thread.
+    /// </summary>
+    public void FollowWork(string askedIn, Guid workspaceId)
+    {
+        var to = Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == workspaceId);
+        var from = askedIn == YardMcp.OverviewChat ? YardChat
+            : Chats.FirstOrDefault(c => c.WorkspaceId is { } id && YardMcp.ChatKey(id, overview: false) == askedIn);
+        if (to is null || from is null || from == to)
+        {
+            return;
+        }
+
+        if (_questions.FirstOrDefault(q => q.Sent && !q.Ended && q.Chat == from) is { } question)
+        {
+            var fromName = from == YardChat ? "the Yard" : from.Name;
+            question.Chat = to;
+            foreach (var entry in question.Entries)
+            {
+                if (entry.IsUnread)
+                {
+                    entry.Chat.Unread -= entry.Unread; // shown now, where the user is moved to
+                    entry.Unread = 0;
+                }
+
+                entry.Chat = to;
+            }
+
+            var origin = new RavenLogEntry(RavenLogKind.Note, $"Asked in chat {from.Number}, {fromName}.", _time.GetUtcNow()) { Chat = to };
+            var first = question.Entries.Count > 0 ? Log.IndexOf(question.Entries[0]) : -1;
+            if (first >= 0)
+            {
+                Log.Insert(first, origin);
+            }
+            else
+            {
+                Log.Add(origin);
+            }
+
+            AddEntry(RavenLogKind.Note, $"Continued in chat {to.Number}, {to.Name}: Raven started a chat there.", from);
+            _carried[to] = $"[The user asked this in chat {from.Number}, {fromName}, and was moved here when Raven started a chat in this "
+                + $"window: \"{question.Text}\"]\n";
+            _logger.LogInformation("Raven moved the user from chat {From} to chat {To} with their question", from.Number, to.Number);
+        }
+
+        SelectedChat = to;
+        ShowSelected(); // the entries moved, also when the chat was shown already
     }
 
     /// <summary>The question goes to its chat's brain after those before it, on the floor it was given (UI thread).</summary>
@@ -1806,8 +1879,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         /// <summary>Words it took along from another chat, each part tagged with the chat it was asked in; empty for none.</summary>
         public string Earlier { get; } = earlier;
 
-        /// <summary>The chat it was asked in: its answer goes there.</summary>
-        public RavenChat Chat { get; } = chat;
+        /// <summary>The chat it was asked in: its answer goes there. Another once Raven moved the user with it (<see cref="FollowWork"/>).</summary>
+        public RavenChat Chat { get; set; } = chat;
+
+        /// <summary>Its entries in the log so far: the words asked, the replies and the cards; what moves with it.</summary>
+        public List<RavenLogEntry> Entries { get; } = [];
 
         public bool Sent { get; set; }
 
@@ -1911,6 +1987,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         RavenLogEntry? reply = null;
         var said = false;
         var began = _time.GetUtcNow();
+        // Where the question is now: another chat once Raven moved the user with it (FollowWork). Its entries are the
+        // question's, so they move with it.
+        RavenChat Where() => question?.Chat ?? chat;
+        RavenLogEntry Track(RavenLogEntry entry)
+        {
+            question?.Entries.Add(entry);
+            return entry;
+        }
+
         // An allow was proposed in this turn: the rest of the brain's words go to the app's log only. After the app's
         // read-back, a brain steered by a chat's words could ask "Say yes." to something else, in speech or in writing.
         var proposed = false;
@@ -1943,7 +2028,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainText { Delta: var piece } when reply is null:
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
-                            reply = AddSaid(start, chat, spoken);
+                            reply = Track(AddSaid(start, Where(), spoken));
                             said = true;
                             spoken.Add(start);
                         }
@@ -1963,7 +2048,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             reply = null;
                         }
 
-                        var card = AddEntry(RavenLogKind.Action, call.Tool, chat);
+                        var card = Track(AddEntry(RavenLogKind.Action, call.Tool, Where()));
                         card.Detail = ActionDetail(call.Input);
                         cards[call.Id] = card;
                         break;
@@ -1975,7 +2060,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         failedMidway |= e is BrainFailed or BrainNotice { Warning: true };
                         break;
                     case BrainNotice notice:
-                        AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, chat);
+                        Track(AddEntry(notice.Warning ? RavenLogKind.Warning : RavenLogKind.Note, notice.Text, Where()));
                         break;
                     case BrainChatMessage { Text: var message } when quiet:
                         _logger.LogInformation("Raven's news teller: {What}", message);
@@ -1990,10 +2075,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             reply = null;
                         }
 
-                        AddEntry(RavenLogKind.Note, message, chat);
+                        Track(AddEntry(RavenLogKind.Note, message, Where()));
                         break;
                     case BrainFailed { Reason: var reason }:
-                        AddEntry(RavenLogKind.Warning, reason, chat);
+                        Track(AddEntry(RavenLogKind.Warning, reason, Where()));
                         break;
                 }
             }
@@ -2022,7 +2107,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Raven's brain failed");
-            AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}", chat);
+            Track(AddEntry(RavenLogKind.Warning, $"Raven could not answer: {ex.Message}", Where()));
         }
 
         return said;

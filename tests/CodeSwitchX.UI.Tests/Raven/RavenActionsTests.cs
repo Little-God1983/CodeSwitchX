@@ -42,8 +42,22 @@ public sealed class RavenActionsTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private Task<VoiceChatView> StartAsync(string? model = null, string? effort = null, YardFolder? folder = null) =>
-        _actions.StartChatAsync(Diffusion, folder, model, effort, Ct);
+    private Task<VoiceChatView> StartAsync(string? model = null, string? effort = null, YardFolder? folder = null, string? askedIn = null) =>
+        _actions.StartChatAsync(Diffusion, folder, model, effort, askedIn, Ct);
+
+    [Theory]
+    [InlineData("11111111-1111-1111-1111-111111111111", true)]
+    [InlineData("overview", true)]
+    [InlineData("22222222-2222-2222-2222-222222222222", false)]
+    [InlineData(null, false)]
+    public async Task The_user_follows_a_chat_started_from_another_chat(string? askedIn, bool follows)
+    {
+        // #180: asked in another window's chat or chat 0, the user is moved to the window's chat; asked in its own, or by
+        // no Raven chat, not.
+        await StartAsync(askedIn: askedIn);
+
+        _shell.Followed.ShouldBe(follows ? [(askedIn!, Diffusion.Id)] : []);
+    }
 
     [Fact]
     public async Task A_chat_opens_in_the_workspace_s_VS_Code_and_is_put_on_its_tile()
@@ -410,6 +424,10 @@ public sealed class RavenActionsTests
         public List<string> Forgotten { get; } = [];
 
         public void ForgetChat(string sessionId) => Forgotten.Add(sessionId);
+
+        public List<(string AskedIn, Guid WorkspaceId)> Followed { get; } = [];
+
+        public void FollowWork(string askedIn, Guid workspaceId) => Followed.Add((askedIn, workspaceId));
 
         public List<WindowRequest> Windows { get; } = [];
 

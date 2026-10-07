@@ -18,7 +18,12 @@ public interface IYardActions
     /// <param name="folder">The folder the user named for it; null for wherever VS Code starts a chat.</param>
     /// <param name="model">A name the alias table knows, or a full id; null for the default.</param>
     /// <param name="effort">An effort level, or how it is said; null for the default.</param>
-    Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, CancellationToken ct);
+    /// <param name="askedIn">
+    /// The Raven chat the request came from, as its brain names it (<see cref="YardMcp.ChatKey"/>); null for a caller
+    /// that is no Raven chat. Asked in another window's chat, or chat 0, the user is moved to the workspace's chat, where
+    /// the new chat's news comes (#180).
+    /// </param>
+    Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, string? askedIn, CancellationToken ct);
 
     /// <summary>
     /// Closes the chat's tab in VS Code, any chat open there, Raven's or not, and takes its row off the tile at once.
