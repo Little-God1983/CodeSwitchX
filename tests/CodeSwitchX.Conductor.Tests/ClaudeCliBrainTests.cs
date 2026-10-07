@@ -733,29 +733,22 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task A_question_the_interrupt_finds_still_queued_is_answered_unheard_when_it_is_taken_in()
+    public async Task A_cancelled_question_taken_in_while_the_next_one_waits_is_not_read_as_its_answer()
     {
-        // Cancelled before any echo came: the interrupt ends the turn that ran, and the question stays queued behind it
-        // (still_queued, CLI 2.1.292). Its answer must not be read as the next question's, nor told.
+        // Cancelled before any echo came, the question stays queued behind the turn the interrupt ended (still_queued, CLI
+        // 2.1.292), and is taken in just as the next question goes in: its echo has a uuid the next one does not wait for.
         var (brain, told) = Telling(Guid.NewGuid());
         await ReplyTo(brain, "One");
-        string? question = null;
-        var interrupts = 0;
+        string? cancelled = null;
         _launcher.Last.Answer = written =>
         {
-            if (!StreamJson.IsInterrupt(written))
+            if (StreamJson.IsInterrupt(written))
             {
-                question = written;
-                return [StreamJson.Init()];
+                return [StreamJson.InterruptAck(written), StreamJson.InterruptedResult];
             }
 
-            interrupts++;
-            var id = JsonNode.Parse(question!)!["uuid"]!.GetValue<string>();
-            return
-            [
-                StreamJson.InterruptAck(written, id), StreamJson.InterruptedResult, StreamJson.Init(), StreamJson.Taken(question!),
-                StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
-            ];
+            cancelled = written;
+            return [StreamJson.Init()];
         };
         using var cancel = new CancellationTokenSource();
         var turn = Task.Run(async () =>
@@ -764,14 +757,17 @@ public sealed class ClaudeCliBrainTests : IDisposable
             {
             }
         }, TestContext.Current.CancellationToken);
-        await WaitUntil(() => question is not null);
+        await WaitUntil(() => cancelled is not null);
         await Task.Delay(100, TestContext.Current.CancellationToken);
         await cancel.CancelAsync();
         await Should.ThrowAsync<OperationCanceledException>(turn);
 
-        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        _launcher.Last.Answer = written =>
+        [
+            StreamJson.Init(), StreamJson.Taken(cancelled!), StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
+            StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Hi."), StreamJson.Result("Hi."),
+        ];
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
-        interrupts.ShouldBe(1);
         told.ShouldBeEmpty("it said what no one waits for, and did nothing");
     }
 
