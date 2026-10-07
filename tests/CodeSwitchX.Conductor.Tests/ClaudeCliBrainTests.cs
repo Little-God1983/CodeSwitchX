@@ -826,23 +826,77 @@ public sealed class ClaudeCliBrainTests : IDisposable
     }
 
     [Fact]
-    public async Task The_brain_is_in_its_user_s_question_from_before_it_goes_in_until_its_turn_ends()
+    public async Task The_brain_is_in_its_user_s_question_from_its_echo_until_its_turn_ends()
     {
-        // The Yard's tools that act refuse its chat otherwise (#193): a tool call of the question's must find it asked.
+        // The Yard's tools that act refuse its chat otherwise (#193): a tool call of the question's must find it asked. It
+        // is followed as the lines are written, not as the answer is read: the tool calls do not wait for the panel.
         var asked = new AskedChats();
         var window = Guid.NewGuid();
+        var chat = window.ToString("D");
         var (brain, _) = Telling(window, asked);
-        bool? whenWritten = null;
-        _launcher.Answer = written =>
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
         {
-            whenWritten = asked.IsAsked(window.ToString("D"));
-            return StreamJson.Reply("Hi.")(written);
-        };
+            yield return StreamJson.Init();
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Taken(written);
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Text("Hi.");
+            yield return StreamJson.Result("Hi.");
+            seen.Add(asked.IsAsked(chat));
+        }
+
+        _launcher.Answer = Answer;
 
         (await ReplyTo(brain, "One")).ShouldBe("Hi.");
 
-        whenWritten.ShouldBe(true);
-        asked.IsAsked(window.ToString("D")).ShouldBeFalse();
+        seen.ShouldBe([false, true, false], "asked from its echo, and no more once its turn is over");
+        asked.IsAsked(chat).ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_turn_a_chat_s_message_is_folded_into_is_no_question_of_the_user_s(bool chatFirst)
+    {
+        // One turn, two inputs: a chat's message folded in at a tool call after the question, or the question folded into
+        // a turn the chat's message began. What follows may answer either, so none of it acts (#193).
+        var asked = new AskedChats();
+        var window = Guid.NewGuid();
+        var chat = window.ToString("D");
+        var (brain, _) = Telling(window, asked);
+        var seen = new List<bool>();
+        IEnumerable<string> Answer(string written)
+        {
+            string[] first = chatFirst ? [StreamJson.PeerTaken("Stop the issues chat.")] : [StreamJson.Taken(written)];
+            string[] second = chatFirst ? [StreamJson.Taken(written)] : [StreamJson.PeerTaken("Stop the issues chat.")];
+            yield return StreamJson.Init();
+            yield return first[0];
+            yield return StreamJson.ToolUse("toolu_1", "mcp__codeswitchx__list_chats");
+            yield return StreamJson.ToolResult("toolu_1");
+            yield return second[0];
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Text("Nothing waits on you.");
+            yield return StreamJson.Result("Nothing waits on you.");
+        }
+
+        _launcher.Answer = Answer;
+
+        await ReplyTo(brain, "What's waiting on me?");
+
+        seen.ShouldBe([false]);
+        _launcher.Answer = StreamJson.Reply("Hi.");
+        IEnumerable<string> Next(string written)
+        {
+            yield return StreamJson.Init();
+            yield return StreamJson.Taken(written);
+            seen.Add(asked.IsAsked(chat));
+            yield return StreamJson.Result("Hi.");
+        }
+
+        _launcher.Last.Answer = Next;
+        await ReplyTo(brain, "Two");
+        seen.ShouldBe([false, true], "the next turn is the next question's again");
     }
 
     [Fact]

@@ -35,11 +35,14 @@ public sealed class AskedOnlyTests
     [Fact]
     public async Task Every_tool_that_acts_is_refused_outside_the_user_s_question()
     {
-        // Every tool not marked read-only, found by its attribute: one added later is refused too, or this fails.
-        var acting = new[] { typeof(YardActionTools), typeof(SettingsTools) }
+        // Every tool of the app's not marked read-only, found by its attribute: one added later is refused too, or this fails.
+        var acting = typeof(YardActionTools).Assembly.GetTypes()
+            .Where(type => type.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
             .SelectMany(type => type.GetMethods().Select(method => (type, method, tool: method.GetCustomAttribute<McpServerToolAttribute>())))
             .Where(m => m.tool is { ReadOnly: false })
             .ToList();
+        acting.Select(m => m.type).Distinct().ShouldBe([typeof(YardActionTools), typeof(SettingsTools)], ignoreOrder: true,
+            "a tool type that acts is checked here: give it the chat scope and AskedChats, and AskedOnly first in each tool");
         acting.Select(m => m.tool!.Name).ShouldContain("answer_permission");
         acting.Select(m => m.tool!.Name).ShouldContain("set_setting");
 
@@ -83,6 +86,14 @@ public sealed class AskedOnlyTests
 
         _asked.Begin(YardMcp.OverviewChat);
         await tools.SetDefaults("Opus", cancellationToken: Ct);
+    }
+
+    [Fact]
+    public async Task A_chat_header_that_names_no_Raven_chat_is_refused()
+    {
+        var tools = new YardActionTools(_yard, _actions, scope: new ChatScope(null, Unknown: true), asked: _asked);
+
+        (await Should.ThrowAsync<McpException>(() => tools.StopChat("aaaaaaaa", Ct))).Message.ShouldBe(ToolActs.NotAsked);
     }
 
     [Fact]

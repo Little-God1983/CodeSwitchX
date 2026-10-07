@@ -10,6 +10,12 @@ public interface IBrainProcess : IDisposable
     /// <summary>Standard output, line by line; completes when the process closes it, which it does as it exits.</summary>
     ChannelReader<string> Lines { get; }
 
+    /// <summary>
+    /// Each line of standard output as it is read, before <see cref="Lines"/> has it, however far behind the reader of
+    /// <see cref="Lines"/> is. Raised on the reading thread: a handler must be quick, and never throw.
+    /// </summary>
+    event Action<string>? LineRead;
+
     /// <summary>Completes with the exit code once the process has exited.</summary>
     Task<int> Exited { get; }
 
@@ -98,6 +104,8 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
 
         public ChannelReader<string> Lines => _lines.Reader;
 
+        public event Action<string>? LineRead;
+
         public Task<int> Exited => _exited.Task;
 
         public string ErrorTail
@@ -135,6 +143,7 @@ public sealed class BrainProcessLauncher : IBrainProcessLauncher
             {
                 while (await _process.StandardOutput.ReadLineAsync().ConfigureAwait(false) is { } line)
                 {
+                    LineRead?.Invoke(line);
                     _lines.Writer.TryWrite(line);
                 }
             }

@@ -18,4 +18,10 @@ public static class YardMcp
     /// <summary>What chat 0, the Yard's overview, sends as <see cref="ChatHeader"/>: it sees no card's text and answers none.</summary>
     /// <remarks>Also chat 0's session key and config name: "yard" was its key before it was the overview, and is not picked up again.</remarks>
     public const string OverviewChat = "overview";
+
+    /// <summary>
+    /// What a Raven chat's brain sends as <see cref="ChatHeader"/>, and so how the app knows the chat (<see cref="AskedChats"/>):
+    /// a window's chat its workspace id, chat 0 <see cref="OverviewChat"/>; null for a brain of no Raven chat.
+    /// </summary>
+    public static string? ChatKey(Guid? workspaceId, bool overview) => overview ? OverviewChat : workspaceId?.ToString("D");
 }

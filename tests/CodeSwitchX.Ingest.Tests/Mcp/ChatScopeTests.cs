@@ -31,7 +31,7 @@ public sealed class ChatScopeTests
         ChatScope.Of(context).WorkspaceId.ShouldBe(FakeYard.DiffusionId);
 
         context.Request.Headers[YardMcp.ChatHeader] = "not a window";
-        ChatScope.Of(context).ShouldBe(ChatScope.None);
+        ChatScope.Of(context).ShouldBe(new ChatScope(null, Unknown: true), "a header that names no Raven chat is no caller without one");
 
         context.Request.Headers[YardMcp.ChatHeader] = YardMcp.OverviewChat;
         ChatScope.Of(context).ShouldBe(ChatScope.Yard);

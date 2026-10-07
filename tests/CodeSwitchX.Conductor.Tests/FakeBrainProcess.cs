@@ -18,6 +18,8 @@ internal sealed class FakeBrainProcess : IBrainProcess
 
     public ChannelReader<string> Lines => _lines.Reader;
 
+    public event Action<string>? LineRead;
+
     public Task<int> Exited => _exited.Task;
 
     public string ErrorTail => "error: something broke";
@@ -47,13 +49,17 @@ internal sealed class FakeBrainProcess : IBrainProcess
         Written.Add(line);
         foreach (var answer in Answer(line))
         {
-            _lines.Writer.TryWrite(answer);
+            Emit(answer);
         }
 
         return Task.CompletedTask;
     }
 
-    public void Emit(string line) => _lines.Writer.TryWrite(line);
+    public void Emit(string line)
+    {
+        LineRead?.Invoke(line);
+        _lines.Writer.TryWrite(line);
+    }
 
     public bool InputClosed { get; private set; }
 
