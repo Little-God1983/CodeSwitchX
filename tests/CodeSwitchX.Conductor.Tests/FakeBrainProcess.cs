@@ -159,6 +159,26 @@ internal static class StreamJson
         return line.ToJsonString();
     }
 
+    /// <summary>
+    /// A message from another Claude session (<c>SendMessage</c>), echoed as it is taken into a turn (CLI 2.1.292, captured
+    /// 2026-10-07, the envelope cut down).
+    /// </summary>
+    public static string PeerTaken(string message) => new System.Text.Json.Nodes.JsonObject
+    {
+        ["type"] = "user",
+        ["message"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["role"] = "user",
+            ["content"] = $"Another Claude session sent a message:\n<cross-session-message from=\"uds:x\" from-name=\"bug-report-1\" from-mode=\"prompting\">\n{message}\n</cross-session-message>",
+        },
+        ["parent_tool_use_id"] = null,
+        ["session_id"] = "s",
+        ["uuid"] = Guid.NewGuid().ToString("D"),
+        ["isReplay"] = true,
+        ["isSynthetic"] = true,
+        ["origin"] = new System.Text.Json.Nodes.JsonObject { ["kind"] = "peer", ["from"] = "uds:x", ["name"] = "bug-report-1", ["body"] = message },
+    }.ToJsonString();
+
     public const string ErrorResult =
         """{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 Overloaded","session_id":"s"}""";
 

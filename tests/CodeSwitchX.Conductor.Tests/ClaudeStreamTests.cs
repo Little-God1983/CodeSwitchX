@@ -117,4 +117,12 @@ public sealed class ClaudeStreamTests
         ClaudeStream.Read(StreamJson.Taken("""{"type":"user","message":{"role":"user","content":"Add tests."}}""")).ShouldBeOfType<ClaudeTaken>();
         ClaudeStream.Read(StreamJson.ToolResult("t1")).ShouldBeOfType<ClaudeEvents>();
     }
+
+    [Fact]
+    public void An_echo_says_its_uuid_and_whether_another_session_sent_it()
+    {
+        ClaudeStream.Read(StreamJson.Taken("""{"type":"user","uuid":"q1","message":{"role":"user","content":"Add tests."}}"""))
+            .ShouldBe(new ClaudeTaken("q1", FromPeer: false));
+        ClaudeStream.Read(StreamJson.PeerTaken("Which F keys?")).ShouldBeOfType<ClaudeTaken>().FromPeer.ShouldBeTrue();
+    }
 }

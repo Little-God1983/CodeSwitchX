@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeSwitchX.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -217,6 +218,7 @@ public sealed class ClaudeCliBrainTests : IDisposable
         Value(arguments, "--input-format").ShouldBe("stream-json");
         Value(arguments, "--output-format").ShouldBe("stream-json");
         arguments.ShouldContain("--include-partial-messages");
+        arguments.ShouldContain("--replay-user-messages", "a question's echo tells its answer from another turn's lines (#192)");
     }
 
     [Fact]
@@ -650,6 +652,175 @@ public sealed class ClaudeCliBrainTests : IDisposable
         (await ReplyTo(brain, "Two")).ShouldBe("Hi.");
         (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
         told.ShouldHaveSingleItem().Text.ShouldEndWith("which F keys?");
+    }
+
+    /// <summary>
+    /// A chat's message to Raven begins a turn just as the question goes in, so its first line comes only after the
+    /// question was written (#192): the turn's lines as CLI 2.1.292 wrote them on 2026-10-07, the question's echo after them.
+    /// </summary>
+    private static IEnumerable<string> ChatTurnAhead(string written, bool folded)
+    {
+        string[] chat =
+        [
+            StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks which F keys fail."),
+            StreamJson.AssistantText("The bug report chat asks which F keys fail."),
+        ];
+        string[] answer = [StreamJson.Taken(written), StreamJson.Text("Nothing waits on you."), StreamJson.AssistantText("Nothing waits on you.")];
+        return folded
+            // The question is folded in at the chat's tool call: one turn, one result.
+            ? [.. chat, StreamJson.ToolUse("toolu_7", "SendMessage"), StreamJson.ToolResult("toolu_7"), .. answer, StreamJson.Result("Nothing waits on you.")]
+            // The question is queued behind the chat's turn: two turns.
+            : [.. chat, StreamJson.Result("The bug report chat asks which F keys fail."), StreamJson.Init(), .. answer, StreamJson.Result("Nothing waits on you.")];
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_chat_s_turn_that_begins_just_after_the_question_went_in_is_not_read_as_its_answer(bool folded)
+    {
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = written => ChatTurnAhead(written, folded);
+
+        (await ReplyTo(brain, "What's waiting on me?")).ShouldBe("Nothing waits on you.");
+
+        var turn = told.ShouldHaveSingleItem();
+        turn.Text.ShouldBe("The bug report chat asks which F keys fail.");
+        turn.Calls.Select(c => c.Call.Tool).ShouldBe(folded ? ["SendMessage"] : []);
+        turn.Failure.ShouldBeNull();
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.", "nothing of either turn is left for the next question");
+    }
+
+    [Fact]
+    public async Task A_question_s_echo_is_known_without_its_uuid_or_its_text()
+    {
+        // A Claude Code that does not echo the uuid back, and gives the text back as blocks: it is no peer's all the same.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        _launcher.Last.Answer = written =>
+        {
+            var line = JsonNode.Parse(written)!.AsObject();
+            line.Remove("uuid");
+            line["message"]!["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = "What's waiting on me?" });
+            return ChatTurnAhead(line.ToJsonString(), folded: false);
+        };
+
+        (await ReplyTo(brain, "What's waiting on me?")).ShouldBe("Nothing waits on you.");
+        told.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task How_the_tools_stand_is_told_with_the_answer_when_a_chat_s_turn_began_the_process_s_first_turn()
+    {
+        // The only init is the chat's turn's, and the question is folded into it: it still says the Yard's tools failed.
+        var (brain, _) = Telling(Guid.NewGuid());
+        _launcher.Answer = written =>
+        [
+            StreamJson.Init(status: "failed"), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks."),
+            StreamJson.ToolUse("toolu_7", "SendMessage"), StreamJson.ToolResult("toolu_7"),
+            StreamJson.Taken(written), StreamJson.Text("Nothing waits on you."), StreamJson.Result("Nothing waits on you."),
+        ];
+
+        var events = new List<BrainEvent>();
+        await foreach (var e in brain.AskAsync("What's waiting on me?", TestContext.Current.CancellationToken))
+        {
+            events.Add(e);
+        }
+
+        Reply(events).ShouldBe("Nothing waits on you.");
+        events.OfType<BrainNotice>().ShouldHaveSingleItem().Text.ShouldStartWith("Raven cannot see the Yard");
+    }
+
+    [Fact]
+    public async Task A_cancelled_question_taken_in_while_the_next_one_waits_is_not_read_as_its_answer()
+    {
+        // Cancelled before any echo came, the question stays queued behind the turn the interrupt ended (still_queued, CLI
+        // 2.1.292), and is taken in just as the next question goes in: its echo has a uuid the next one does not wait for.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? cancelled = null;
+        _launcher.Last.Answer = written =>
+        {
+            if (StreamJson.IsInterrupt(written))
+            {
+                return [StreamJson.InterruptAck(written), StreamJson.InterruptedResult];
+            }
+
+            cancelled = written;
+            return [StreamJson.Init()];
+        };
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("What colour is the sky?", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => cancelled is not null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        _launcher.Last.Answer = written =>
+        [
+            StreamJson.Init(), StreamJson.Taken(cancelled!), StreamJson.Text("The sky is blue."), StreamJson.Result("The sky is blue."),
+            StreamJson.Init(), StreamJson.Taken(written), StreamJson.Text("Hi."), StreamJson.Result("Hi."),
+        ];
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
+        told.ShouldBeEmpty("it said what no one waits for, and did nothing");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_question_cancelled_behind_a_chat_s_turn_leaves_that_turn_be_and_is_answered_unheard(bool uuidEchoed)
+    {
+        // An interrupt would end the chat's turn, which is no question's to end: the question stays queued, and once it
+        // is taken in, what it does is shown and what it says is not. Without the uuid echoed, it is the oldest cancelled.
+        var (brain, told) = Telling(Guid.NewGuid());
+        await ReplyTo(brain, "One");
+        string? question = null;
+        _launcher.Last.Answer = written =>
+        {
+            question = written;
+            return [StreamJson.Init(), StreamJson.PeerTaken("Which F keys fail?"), StreamJson.Text("The bug report chat asks")];
+        };
+        using var cancel = new CancellationTokenSource();
+        var turn = Task.Run(async () =>
+        {
+            await foreach (var _ in brain.AskAsync("Stop the issues chat", cancel.Token))
+            {
+            }
+        }, TestContext.Current.CancellationToken);
+        await WaitUntil(() => question is not null);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await cancel.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(turn);
+
+        var echo = JsonNode.Parse(question!)!.AsObject();
+        if (!uuidEchoed)
+        {
+            echo.Remove("uuid");
+        }
+
+        foreach (var line in new[]
+        {
+            StreamJson.Text(" which F keys fail."), StreamJson.Result(), StreamJson.Init(), StreamJson.Taken(echo.ToJsonString()),
+            StreamJson.Text("Stopping it."), StreamJson.ToolUse("toolu_8", "mcp__codeswitchx__stop_chat", """{"chat":"issues"}"""),
+            StreamJson.ToolResult("toolu_8"), StreamJson.Text("Done."), StreamJson.Result("Done."),
+        })
+        {
+            _launcher.Last.Emit(line);
+        }
+
+        await WaitUntil(() => { lock (told) { return told.Count == 2; } });
+        (told[0].Text, told[0].Failure).ShouldBe(("The bug report chat asks which F keys fail.", (string?)null), "told whole, not cut off");
+        told[1].Text.ShouldBeEmpty("the cancelled question is not answered aloud");
+        told[1].Calls.ShouldHaveSingleItem().Call.Tool.ShouldBe("stop_chat", "what it did is shown");
+        _launcher.Last.Written.ShouldNotContain(w => StreamJson.IsInterrupt(w));
+        _launcher.Last.Answer = StreamJson.Reply("Hi.");
+        (await ReplyTo(brain, "Three")).ShouldBe("Hi.");
     }
 
     [Fact]
