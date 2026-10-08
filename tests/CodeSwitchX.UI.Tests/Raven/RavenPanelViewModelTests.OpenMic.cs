@@ -261,6 +261,7 @@ public sealed partial class RavenPanelViewModelTests
     // #219: "Raven, check chat three." (a pause ends the turn) "And then chat five." lost its second half
     [Theory]
     [InlineData(1.5, true)]
+    [InlineData(2.3, true)] // it counts once half a second of it is heard: it began 1.8 s after
     [InlineData(3, false)]
     public async Task A_turn_begun_soon_after_one_with_Ravens_name_is_the_rest_of_it(double after, bool asked)
     {
@@ -279,6 +280,34 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.Any(q => q.Contains("chat five")).ShouldBe(asked);
+        if (asked)
+        {
+            // The first half went to the brain at once; the rest takes the floor from its answer, so it goes with it.
+            _brain.Asked.Last().ShouldContain("goes on from what they asked just before: \"Check chat three.\"");
+        }
+    }
+
+    // Review of #219: the words after the name alone are the turn with the name, and their rest goes with them too
+    [Fact]
+    public async Task The_words_after_Ravens_name_alone_have_their_rest_after_a_pause_too()
+    {
+        var said = "Raven.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+
+        said = "Check chat three.";
+        _time.Advance(TimeSpan.FromSeconds(3));
+        await TurnAsync(vm, answered: false);
+        said = "And then tell me about chat five.";
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.Last().ShouldContain("chat five");
     }
 
     // #219: a turn taken as the rest of one with the name does not open the window again, so the TV cannot chain on

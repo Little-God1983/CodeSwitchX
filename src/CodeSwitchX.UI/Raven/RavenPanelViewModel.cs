@@ -252,6 +252,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// not the TV's next line.</summary>
     internal static readonly TimeSpan ContinueWindow = TimeSpan.FromSeconds(2);
 
+    /// <summary>The question the last turn with Raven's name asked: the rest of it, after a pause, goes with it (#219).</summary>
+    private Question? _namedQuestion;
+
+    /// <summary>Whether <paramref name="at"/> is within <paramref name="window"/> from <paramref name="from"/>.</summary>
+    private static bool Within(DateTimeOffset? from, TimeSpan window, DateTimeOffset at) => from is { } f && at >= f && at <= f + window;
+
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
 
@@ -1377,7 +1383,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // Only a turn begun in the follow-up is surely the user's, and takes the floor as it starts; any other may be the
         // TV, which must not hush Raven, hold its news or keep its answers unspoken, and waits to be heard to its name.
         _openHeard = true;
-        _openBegan = _time.GetUtcNow();
+        _openBegan = _time.GetUtcNow() - TurnDetector.MinimumSpeech; // it counts once half a second of it was heard
         if (InFollowUp())
         {
             _openSpeech = true;
@@ -1392,16 +1398,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     internal bool TakesTurnsWithoutName => InFollowUp();
 
     /// <summary>
-    /// Whether a turn beginning now needs no name before it (#217): soon after Raven's name was heard alone, or while the
-    /// follow-up runs: Raven's answer to an Open mic turn, or an allow's read-back, was heard or written a moment ago. Not
+    /// Whether a turn beginning now needs no name before it (#217): soon after Raven's name was heard alone, or right after
+    /// a turn with the name (the rest of it, #219), also while Raven speaks or thinks; or while the follow-up runs: Raven's
+    /// answer to an Open mic turn, or an allow's read-back, was heard or written a moment ago. The follow-up does not run
     /// while Raven speaks or thinks: talk then is the TV as often as the user, and only the name takes the floor.
     /// </summary>
     private bool InFollowUp()
     {
         var now = _time.GetUtcNow();
-        if (_calledAt is { } called && now <= called + CallWindow || _namedEndedAt is { } named && now <= named + ContinueWindow)
+        if (Within(_calledAt, CallWindow, now) || Within(_namedEndedAt, ContinueWindow, now))
         {
-            return true; // the words after the name, or the rest of what was said with it, also while Raven thinks (#219)
+            return true;
         }
 
         return FollowUpSeconds > 0 && !_speaking && _asking == 0 && !_telling
@@ -1754,7 +1761,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _logger.LogInformation("Open mic's turn of {Seconds:0.0} s had no words", clip.Length.TotalSeconds);
             }
 
-            if (open is { } turn && text.Length > 0 && !ForRaven(ref text, turn, clip.Length, ended))
+            var named = false;
+            var continues = false;
+            if (open is { } turn && text.Length > 0 && !ForRaven(ref text, turn, clip.Length, ended, out named, out continues))
             {
                 return;
             }
@@ -1766,7 +1775,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             else if (text.Length > 0)
             {
                 var asked = AddEntry(RavenLogKind.You, text, chat);
-                Ask(text, ended, chat, asked, openMic: open is not null);
+                // The rest of a request split by a pause (#219): the first half has gone to the brain already, and its answer
+                // gives way to this one, so the brain is told what this goes on from. One not sent yet goes along anyway.
+                var earlier = continues && _namedQuestion is { Sent: true, Merged: false } first
+                    ? $"[After a pause the user goes on from what they asked just before: \"{first.Text}\"]\n" : "";
+                var question = Ask(text, ended, chat, asked, openMic: open is not null, earlier: earlier);
+                if (named)
+                {
+                    _namedQuestion = question;
+                }
             }
         }
         catch (DictationModelLoadException ex)
@@ -1800,8 +1817,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// say: dropped, with only its length in the log. The name alone stops what Raven says and lets the turn after it
     /// through without the name, also one begun before the name was transcribed.
     /// </summary>
-    private bool ForRaven(ref string text, OpenTurn turn, TimeSpan length, DateTimeOffset ended)
+    /// <param name="named">The turn began with the name, or came right after the name alone: its rest may follow (#219).</param>
+    /// <param name="continues">The turn is the rest of the last one with the name, after a pause.</param>
+    private bool ForRaven(ref string text, OpenTurn turn, TimeSpan length, DateTimeOffset ended, out bool named, out bool continues)
     {
+        named = false;
+        continues = false;
         if (CommandWord.TryStrip(text, out var rest))
         {
             _calledAt = null;
@@ -1809,6 +1830,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 text = rest;
                 _namedEndedAt = ended;
+                named = true;
                 return true;
             }
 
@@ -1818,16 +1840,24 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return false;
         }
 
-        // A word on its own in the follow-up counts only as a yes: a cough Whisper writes as "Thank you." must not be asked.
-        // Begun soon after a turn with the name, it is the rest of that (#219); only a turn with the name starts that window,
-        // so a TV line taken this way does not open it again.
-        if ((turn.FollowUp || _calledAt is { } called && turn.Began >= called && turn.Began <= called + CallWindow
-                || _namedEndedAt is { } named && turn.Began >= named && turn.Began <= named + ContinueWindow)
-            && (!turn.Short || SpokenYes.IsYes(text)))
+        // A word on its own counts only as a yes: a cough Whisper writes as "Thank you." must not be asked. Begun soon after
+        // a turn with the name, a turn is the rest of that (#219); only a turn with the name, or the words right after the
+        // name alone, start that window, so a TV line taken this way does not open it again.
+        var called = Within(_calledAt, CallWindow, turn.Began);
+        continues = !called && Within(_namedEndedAt, ContinueWindow, turn.Began);
+        if ((turn.FollowUp || called || continues) && (!turn.Short || SpokenYes.IsYes(text)))
         {
+            if (called)
+            {
+                _namedEndedAt = ended; // the words after the name alone are the named turn
+                named = true;
+            }
+
             _calledAt = null;
             return true;
         }
+
+        continues = false;
 
         _logger.LogInformation("Open mic's turn of {Seconds:0.0} s did not start with Raven's name: not for Raven", length.TotalSeconds);
         return false;
@@ -1862,7 +1892,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </remarks>
     /// <param name="asked">The words as written to the log, which go with the question wherever it goes (#180).</param>
     /// <param name="openMic">Said in Open mic: once its answer is heard, the follow-up runs (#217).</param>
-    private void Ask(string text, DateTimeOffset ended, RavenChat chat, RavenLogEntry? asked = null, bool openMic = false)
+    /// <param name="earlier">Words that go along before these, as <see cref="AskBrain"/> takes them.</param>
+    /// <returns>The question, or null when the words were a yes to an allow.</returns>
+    private Question? Ask(string text, DateTimeOffset ended, RavenChat chat, RavenLogEntry? asked = null, bool openMic = false, string earlier = "")
     {
         _brainAsked = false; // these words answer it, whatever they are
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
@@ -1874,7 +1906,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (SpokenYes.IsYes(text))
             {
                 ConfirmProposal(proposal, ended);
-                return;
+                return null;
             }
 
             _asks.Cancel(proposal); // the brain is told (OnProposalEnded)
@@ -1886,7 +1918,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.Cancel(standing);
         }
 
-        AskBrain(text, ended, chat, asked: asked, openMic: openMic);
+        return AskBrain(text, ended, chat, earlier, asked: asked, openMic: openMic);
     }
 
     /// <summary>The words go to the brain as the next question, after any not sent yet (UI thread).</summary>
@@ -1894,7 +1926,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
     /// <param name="asked">The words as written to the log; null when they were written before (asked again).</param>
     /// <param name="entries">The log entries of a question asked again, which stay its own.</param>
-    private void AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "", RavenLogEntry? asked = null,
+    private Question AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "", RavenLogEntry? asked = null,
         IReadOnlyList<RavenLogEntry>? entries = null, bool openMic = false)
     {
         var takenEarlier = "";
@@ -1941,6 +1973,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         Enqueue(question, ended, floor);
+        return question;
     }
 
     /// <summary>
@@ -2404,7 +2437,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // the next change of state schedules it again
         }
 
-        if (_calledAt is { } called && called + CallWindow - _time.GetUtcNow() is var listening && listening > TimeSpan.Zero)
+        if (Within(_calledAt, CallWindow, _time.GetUtcNow()) && _calledAt!.Value + CallWindow - _time.GetUtcNow() is var listening
+            && listening > TimeSpan.Zero)
         {
             // Raven was called by its name alone and waits for the words: nothing of its own comes in between (#219).
             _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(listening.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
