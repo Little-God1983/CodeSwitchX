@@ -205,14 +205,15 @@ public partial class MainWindow : Window, IShellWindow
                 return;
             }
 
-            // A Cab whose VS Code is not shown yet shows it, without the foreground.
+            // A Cab whose VS Code is not shown yet shows it first, without the foreground; that raise leaves it under the shell.
+            if (_host.ShownInCab == 0)
+            {
+                _shell.RaiseHostedWindow(focus: false);
+            }
+
             if (_host.ShownInCab is var shown and not 0)
             {
                 ZOrder.TuckUnder(_hwnd, shown);
-            }
-            else
-            {
-                _shell.RaiseHostedWindow(focus: false);
             }
         });
         if (onContent)

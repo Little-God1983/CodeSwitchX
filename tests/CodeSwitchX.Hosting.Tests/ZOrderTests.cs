@@ -145,9 +145,10 @@ public sealed class ZOrderTests
         var keep = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE;
         const nint ime = 42; // the shell's hidden IME window, which Windows keeps over the shell
         const nint other = 43;
+        const nint dialog = 44; // a dialog of the shell's own, Add workspace say
         bool IsMoveOver(SET_WINDOW_POS_FLAGS flags, nint insertAfter, params nint[] stack) =>
             ZOrder.IsMoveOver(flags, new HWND(insertAfter), VsCode, Shell, AboveIn([.. stack.Select(h => ValueTuple.Create(h))]),
-                h => h == ime ? Shell : 0);
+                h => h is ime or dialog ? Shell : 0, h => h != ime);
 
         IsMoveOver(keep, 0, VsCode, Shell).ShouldBeTrue("to the top");
         IsMoveOver(keep | SET_WINDOW_POS_FLAGS.SWP_NOZORDER, 0, VsCode, Shell).ShouldBeFalse("a move or resize only");
@@ -160,6 +161,36 @@ public sealed class ZOrderTests
         // (#213): where that window stands before the move says nothing, so a window the shell owns always counts.
         IsMoveOver(keep, ime, ime, VsCode, Shell).ShouldBeTrue("under a window of its own over VS Code");
         IsMoveOver(keep, ime, VsCode, ime, Shell).ShouldBeTrue("under a window of its own, still under VS Code before the move");
+        // Activating a dialog of the shell brings the shell along right under it: tucked under VS Code, the shell would take
+        // the dialog with it and hide it there.
+        IsMoveOver(keep, dialog, dialog, VsCode, Shell).ShouldBeFalse("under a dialog of its own");
+    }
+
+    [Fact]
+    public void A_window_covers_the_shell_when_their_frames_overlap_unless_it_belongs_to_VS_Code()
+    {
+        var frames = new Dictionary<nint, ScreenRect?>
+        {
+            [Shell] = new ScreenRect(0, 0, 1000, 1000),
+            [1] = new ScreenRect(500, 500, 1500, 1500), // over the Raven panel
+            [2] = new ScreenRect(-1000, 0, 0, 1000), // on the other monitor
+            [3] = new ScreenRect(400, 400, 600, 600), // a dialog of VS Code's, Save changes? say
+            [4] = null, // no frame to be had
+        };
+        var covers = ZOrder.CoversOf(Shell, VsCode, h => frames[h], h => h == 3 ? VsCode : h);
+
+        covers(1).ShouldBeTrue();
+        covers(2).ShouldBeFalse();
+        covers(3).ShouldBeFalse("it goes where VS Code goes: lowered under the shell, it would be hidden");
+        covers(4).ShouldBeTrue("a window whose place is unknown may cover the shell");
+    }
+
+    [Fact]
+    public void Without_the_shells_own_frame_every_window_covers_it()
+    {
+        var covers = ZOrder.CoversOf(Shell, VsCode, h => h == Shell ? null : new ScreenRect(-1000, 0, 0, 1000), h => h);
+
+        covers(1).ShouldBeTrue("nothing proves it does not");
     }
 
     [Fact]

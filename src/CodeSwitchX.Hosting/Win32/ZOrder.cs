@@ -33,7 +33,7 @@ public static unsafe class ZOrder
     public static FrontMove KeepUnder(nint windowPos, nint self, nint upper)
     {
         var pos = (WINDOWPOS*)windowPos;
-        if (pos is null || upper == 0 || !IsMoveOver(pos->flags, pos->hwndInsertAfter, upper, self, Above, Owner))
+        if (pos is null || upper == 0 || !IsMoveOver(pos->flags, pos->hwndInsertAfter, upper, self, Above, Owner, Seen))
         {
             return FrontMove.None;
         }
@@ -49,14 +49,15 @@ public static unsafe class ZOrder
 
     /// <summary>
     /// Whether a move may put <paramref name="self"/> over <paramref name="upper"/>: to the top, right under a window that
-    /// is over <paramref name="upper"/>, or right under a window <paramref name="self"/> owns. A click on the shell comes as
-    /// the last kind: Windows takes the shell's hidden IME window, which it keeps over the shell, to the top in the same
-    /// move and puts the shell right under it, so where that window stands before the move tells nothing (#213). Held
-    /// back while the two are the front pair anyway, such a move changes nothing that matters.
+    /// is over <paramref name="upper"/>, or right under a hidden window <paramref name="self"/> owns. A click on the shell
+    /// comes as the last kind: Windows takes the shell's hidden IME window, which it keeps over the shell, to the top in the
+    /// same move and puts the shell right under it, so where that window stands before the move tells nothing (#213). Held
+    /// back while the two are the front pair anyway, such a move changes nothing that matters. Right under a dialog of its
+    /// own the shell follows that dialog to the front: tucked back under VS Code, it would take the dialog along and hide it.
     /// </summary>
     /// <remarks>One walk up from <paramref name="upper"/>, at most <see cref="MaxSteps"/> windows.</remarks>
     internal static bool IsMoveOver(SET_WINDOW_POS_FLAGS flags, HWND insertAfter, nint upper, nint self, Func<nint, nint> above,
-        Func<nint, nint> owner)
+        Func<nint, nint> owner, Func<nint, bool> seen)
     {
         if ((flags & SET_WINDOW_POS_FLAGS.SWP_NOZORDER) != 0)
         {
@@ -77,7 +78,7 @@ public static unsafe class ZOrder
 
         if (owner(after) == self)
         {
-            return true;
+            return !seen(after);
         }
 
         var window = upper;
@@ -100,15 +101,12 @@ public static unsafe class ZOrder
 
     /// <summary>
     /// True when <paramref name="upper"/> is the front window below the always-on-top ones and <paramref name="lower"/>
-    /// sits right below it, as far as <paramref name="lower"/> can tell: only windows that cover part of it count. Windows
-    /// nobody sees (hidden, cloaked) do not count either, nor do windows on another monitor: the browser the user had last
-    /// there made every click on the shell bury VS Code (#213).
+    /// sits right below it, as far as <paramref name="lower"/> can tell: only windows that cover part of it count
+    /// (<see cref="CoversOf"/>). Windows nobody sees (hidden, cloaked) do not count either, nor do windows on another
+    /// monitor: the browser the user had last there made every click on the shell bury VS Code (#213).
     /// </summary>
-    public static bool IsFrontPair(nint upper, nint lower)
-    {
-        var frame = Frame(lower);
-        return IsFrontPair(upper, lower, Above, Seen, IsTopmost, w => frame is { } f && Frame(w) is { } r && Overlap(r, f));
-    }
+    public static bool IsFrontPair(nint upper, nint lower) =>
+        IsFrontPair(upper, lower, Above, Seen, IsTopmost, CoversOf(lower, upper, Frame, RootOwner));
 
     /// <remarks>
     /// One walk up from <paramref name="lower"/>, at most <see cref="MaxSteps"/> windows: a walk that runs out (a z-order
@@ -170,8 +168,7 @@ public static unsafe class ZOrder
             return;
         }
 
-        var frame = Frame(self);
-        var covering = Covering(upper, self, Above, Seen, IsTopmost, w => frame is { } f && Frame(w) is { } r && Overlap(r, f), IsOurs);
+        var covering = Covering(upper, self, Above, Seen, IsTopmost, CoversOf(self, upper, Frame, RootOwner), IsOurs);
         var keep = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE;
         PInvoke.SetWindowPos(new HWND(self), new HWND(upper), 0, 0, 0, 0, keep);
         // Nearest VS Code first, each right under the shell: the ones higher up land above them, in their old order.
@@ -209,6 +206,17 @@ public static unsafe class ZOrder
         return covering;
     }
 
+    /// <summary>
+    /// Which windows cover part of <paramref name="self"/>, for <see cref="IsFrontPair(nint, nint)"/> and
+    /// <see cref="TuckUnder"/>. A window of <paramref name="upper"/>'s (a dialog VS Code shows) does not: it goes where
+    /// VS Code goes, and lowered under the shell it would be hidden. A frame nobody can tell counts as covering.
+    /// </summary>
+    internal static Func<nint, bool> CoversOf(nint self, nint upper, Func<nint, ScreenRect?> frame, Func<nint, nint> rootOwner)
+    {
+        var own = frame(self);
+        return w => rootOwner(w) != upper && (own is not { } f || frame(w) is not { } r || Overlap(r, f));
+    }
+
     /// <summary>Whether two rectangles share any pixel; ones that only touch, or are of no size, do not.</summary>
     internal static bool Overlap(ScreenRect a, ScreenRect b) =>
         a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom && a.Width > 0 && a.Height > 0 && b.Width > 0 && b.Height > 0;
@@ -239,6 +247,8 @@ public static unsafe class ZOrder
     private static nint Above(nint hwnd) => PInvoke.GetWindow(new HWND(hwnd), GET_WINDOW_CMD.GW_HWNDPREV);
 
     private static nint Owner(nint hwnd) => PInvoke.GetWindow(new HWND(hwnd), GET_WINDOW_CMD.GW_OWNER);
+
+    private static nint RootOwner(nint hwnd) => PInvoke.GetAncestor(new HWND(hwnd), GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
 
     private static bool Seen(nint hwnd)
     {
