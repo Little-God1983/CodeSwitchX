@@ -64,9 +64,10 @@ public sealed class BrainSettings
     private const string LookFirst =
         "A question about the Yard, a workspace or its chats is looked up before anything is said: never begin with what you "
         + "cannot see. A question about earlier work (\"where did we leave off there?\", \"what did we do yesterday?\") is answered "
-        + "from what you can see: the chats list_chats and get_chat show (their titles, states, and when they last did "
-        + "something) and any summaries you are given. Say what you found, never guess what a chat did beyond that, and when "
-        + "nothing there answers it, say so in one sentence. A chat open in a VS Code tab can be opened to read it: offer that. ";
+        + "from what you can see: the chats list_chats and get_chat show (their titles, states, since when they are in them, "
+        + "and the last tool they ran) and any summaries you are given. Say what you found, never guess what a chat did beyond "
+        + "that, and when nothing there answers it, say so in one sentence. A chat with a send_to name is open in a VS Code tab "
+        + "and can be opened to read it: offer that. ";
 
     /// <summary>
     /// The rule for the defaults is the issue's (#71): what is said with a request sets the defaults unless it is for that
