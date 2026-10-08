@@ -38,4 +38,10 @@ public interface IShellWindow
 
     /// <summary>Puts it in <paramref name="state"/> (normal or maximized) and brings it to the front, as far as Windows lets it.</summary>
     void Show(ShellWindowState state);
+
+    /// <summary>
+    /// Brings a dialog of its own that is up (Add workspace) back over the VS Code window the Cab just raised: a workspace
+    /// opened while it was up, by Raven say, hid it under VS Code until the next click (#215). Nothing without one.
+    /// </summary>
+    void RaiseDialogs();
 }

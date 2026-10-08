@@ -764,6 +764,27 @@ public class ShellViewModelTests
         _h.Docker.DidNotReceive().BringToFront(Arg.Any<nint>());
     }
 
+    // #215: a workspace opened while Add workspace was up hid the dialog under VS Code
+    [Fact]
+    public async Task A_raise_of_VS_Code_brings_a_dialog_of_the_shell_back_over_it()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        var window = Substitute.For<IShellWindow>();
+        _h.Shell.Window = window;
+        _h.Docker.ClearReceivedCalls();
+
+        _h.Shell.RaiseHostedWindow();
+
+        Received.InOrder(() =>
+        {
+            _h.Docker.BringToFront(500);
+            window.RaiseDialogs();
+        });
+    }
+
     [Fact]
     public async Task Switching_inside_the_cab_to_a_workspace_that_still_has_to_start_hides_the_one_shown_so_far()
     {

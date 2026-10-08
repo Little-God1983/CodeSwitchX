@@ -185,6 +185,25 @@ public sealed class ZOrderTests
         covers(4).ShouldBeTrue("a window whose place is unknown may cover the shell");
     }
 
+    // #215: a restore or maximize that brings the shell forward was judged by its old frame
+    [Fact]
+    public void A_move_that_resizes_the_shell_counts_what_covers_it_where_it_goes()
+    {
+        var frames = new Dictionary<nint, ScreenRect?>
+        {
+            [Shell] = new ScreenRect(0, 0, 1000, 1000), // restored
+            [1] = new ScreenRect(1200, 0, 1900, 800), // beside it now, over it once maximized
+            [2] = new ScreenRect(-1000, 0, 0, 1000), // on the other monitor
+        };
+        var maximized = new ScreenRect(-8, -8, 1928, 1088);
+
+        var covers = ZOrder.CoversOf(Shell, VsCode, ZOrder.Reaching(Shell, maximized, h => frames[h]), h => h);
+
+        covers(1).ShouldBeTrue();
+        covers(2).ShouldBeTrue("a window rectangle reaches 8 px past the frame: counted, the shell is only tucked under VS Code again");
+        ZOrder.CoversOf(Shell, VsCode, ZOrder.Reaching(Shell, null, h => frames[h]), h => h)(1).ShouldBeFalse("a move in the z-order only");
+    }
+
     [Fact]
     public void Without_the_shells_own_frame_every_window_covers_it()
     {

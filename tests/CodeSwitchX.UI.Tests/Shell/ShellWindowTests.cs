@@ -175,5 +175,7 @@ public sealed class ShellWindowTests
             State = state;
             IsInFront = !ForegroundRefused;
         }
+
+        public void RaiseDialogs() => Calls.Add("raise dialogs");
     }
 }

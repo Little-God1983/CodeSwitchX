@@ -750,6 +750,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
         {
             _host.ShowInCab(id, rect, focus);
+            Window?.RaiseDialogs(); // a dialog of the shell's stays over the VS Code window it opened over (#215)
         }
     }
 

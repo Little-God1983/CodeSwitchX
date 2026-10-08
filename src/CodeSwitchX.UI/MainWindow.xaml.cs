@@ -71,6 +71,14 @@ public partial class MainWindow : Window, IShellWindow
         WindowActivation.BringUp(this);
     }
 
+    void IShellWindow.RaiseDialogs()
+    {
+        foreach (var dialog in Application.Current.Windows.OfType<Window>().Where(w => w.Owner == this && w.IsVisible))
+        {
+            dialog.Activate(); // a modal one holds the keyboard anyway
+        }
+    }
+
     /// <summary>Shows the Add workspace dialog over the shell until it is closed.</summary>
     private Task ShowAddWorkspaceDialog(AddWorkspaceViewModel viewModel)
     {
