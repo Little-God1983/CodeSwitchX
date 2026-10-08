@@ -272,19 +272,25 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => _speech.Spoken.Any(s => s.Contains("One chat waits.")));
     }
 
-    // Second review of #217: the TV talking hid that Raven thinks
+    // Second and third reviews of #217: the TV talking, and its words being transcribed, hid that Raven thinks
     [Fact]
     public async Task Talk_around_the_room_while_Raven_thinks_leaves_it_thinking()
     {
+        var transcript = new TaskCompletionSource<DictationResult>();
+        Transcribes(transcript.Task);
         _brain.Gate = new TaskCompletionSource();
         var vm = await InOpenMicAsync();
         Type(vm, "What's waiting on me?");
         await Until(() => vm.Caption.StartsWith("Thinking", StringComparison.Ordinal));
 
         _openMic.Speak();
-
         vm.Caption.ShouldStartWith("Thinking");
+        _openMic.EndTurn(); // being transcribed now
+        vm.Caption.ShouldStartWith("Thinking");
+
+        transcript.SetResult(new DictationResult("At least someone's happy I'm home.", TimeSpan.FromSeconds(1)));
         _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingTranscriptions);
     }
 
     [Fact]
@@ -688,13 +694,16 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Asked.ShouldHaveSingleItem();
     }
 
-    // Final review 1; #217: the name stops it, talk around the room does not
+    // Final review 1; #217: the name stops it, talk around the room does not, also in the follow-up (third review)
     [Theory]
-    [InlineData("Raven.", true)]
-    [InlineData("At least someone's happy I'm home.", false)]
-    public async Task Ravens_name_in_Open_mic_stops_a_digest_being_told_and_other_talk_does_not(string said, bool stops)
+    [InlineData("Raven.", true, false)]
+    [InlineData("At least someone's happy I'm home.", false, false)]
+    [InlineData("At least someone's happy I'm home.", false, true)]
+    public async Task Ravens_name_in_Open_mic_stops_a_digest_being_told_and_other_talk_does_not(string said, bool stops, bool inFollowUp)
     {
-        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(inFollowUp ? Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))) : Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))),
+                Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
         _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user talks
         _teller.Answer = _ => [new BrainText("ContentAutomatorX is done.")];
         _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
@@ -704,10 +713,16 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.RefreshMicrophonesAsync());
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
+        if (inFollowUp)
+        {
+            await AnsweredAMomentAgoAsync(vm); // the follow-up runs while the teller thinks: only the name takes the floor then
+        }
+
         _time.Advance(TimeSpan.FromSeconds(1));
         Changes("a", SessionState.Working, SessionState.Idle);
         _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
+        vm.TakesTurnsWithoutName.ShouldBeFalse();
 
         _openMic.Speak();
         _openMic.EndTurn();

@@ -1395,7 +1395,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return true;
         }
 
-        return FollowUpSeconds > 0 && !_speaking && _asking == 0
+        return FollowUpSeconds > 0 && !_speaking && _asking == 0 && !_telling
             && _followUpFrom is { } from && now <= from + TimeSpan.FromSeconds(FollowUpSeconds);
     }
 
@@ -1411,7 +1411,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var followUp = _openSpeech;
         _openSpeech = false;
         _openHeard = false;
-        _pending++;
+        if (followUp)
+        {
+            _pending++; // only the user's turn holds the floor while it is transcribed: the TV's must not keep news back (#217)
+        }
+
         var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
         var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
         var number = ++_clipsQueued;
@@ -1762,7 +1766,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
         finally
         {
-            _pending--;
+            if (open is not { FollowUp: false })
+            {
+                _pending--;
+            }
+
             UpdateState();
         }
     }
@@ -2139,9 +2147,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _questions.Remove(question);
             spoken.Complete();
             _asking--;
-            if (question.OpenMic)
+            if (question.OpenMic && !floor.IsCancellationRequested)
             {
-                _ = OpenFollowUpOnceHeardAsync(spoken);
+                _ = OpenFollowUpOnceHeardAsync(spoken); // one cut off by the next question leaves the follow-up to that one's
             }
             UpdateState();
         }
