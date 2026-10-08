@@ -525,6 +525,21 @@ public class ShellViewModelTests
         (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false));
     }
 
+    // #224: forward first, the shell's activation raised the Cab's old VS Code before the one asked for
+    [Fact]
+    public async Task A_workspace_opened_by_voice_comes_forward_once_it_is_entered()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        (ShellMode Mode, Guid? Workspace)? atForward = null;
+        _h.Shell.ForwardRequested += () => atForward = (_h.Shell.Mode, _h.Shell.ActiveWorkspaceId);
+
+        (await ((IRavenShell)_h.Shell).OpenInCabAsync(_h.App.Id)).ShouldBeNull();
+
+        atForward.ShouldBe((ShellMode.Cab, _h.App.Id));
+    }
+
     /// <summary>"Open chat two" switches Raven's chat and docks its window; the brain's switch_chat gets Raven's line back.</summary>
     [Fact]
     public async Task Open_chat_two_docks_its_window_and_the_brain_s_switch_says_where()
@@ -539,6 +554,12 @@ public class ShellViewModelTests
         _h.Shell.Mode.ShouldBe(ShellMode.Cab); // set before the Cab waits for VS Code
 
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        // Forward once the workspace is entered (#224): the open finishes in the background.
+        for (var i = 0; i < 100 && !forwarded; i++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
         forwarded.ShouldBeTrue("the window comes forward, as when the brain opens a workspace");
         IRavenShell shell = _h.Shell;
         shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false))!.Value.Said.ShouldBe("Chat 0, the Yard.");

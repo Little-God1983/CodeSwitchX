@@ -624,8 +624,16 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             return "it is not on the Yard any more.";
         }
 
-        ForwardRequested?.Invoke();
+        // Forward once the workspace is entered: in front before it, the shell's activation raised the VS Code window the
+        // Cab showed so far, which flashed up before the one asked for (#224). A minimized shell comes back first, or the
+        // Cab cannot show the window.
+        if (_shellMinimized)
+        {
+            ForwardRequested?.Invoke();
+        }
+
         await EnterCabAsync(workspaceId);
+        ForwardRequested?.Invoke();
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 

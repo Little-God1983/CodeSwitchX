@@ -40,7 +40,12 @@ public partial class MainWindow : Window, IShellWindow
         DataContext = shell;
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
-        shell.ForwardRequested += () => WindowActivation.BringUp(this);
+        // What Raven opens by voice comes to the front with the keyboard, past Windows' foreground lock (#224).
+        shell.ForwardRequested += () =>
+        {
+            WindowActivation.BringUp(this);
+            TakeForegroundAsAsked();
+        };
         shell.AskBeforeRemove = (workspace, cards) => Task.FromResult(RemoveWorkspaceWindow.Ask(this, workspace, cards));
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
@@ -69,12 +74,36 @@ public partial class MainWindow : Window, IShellWindow
     {
         WindowState = state == ShellWindowState.Maximized ? WindowState.Maximized : WindowState.Normal;
         WindowActivation.BringUp(this);
-        // Asked by voice (set_window), the request is no input to this process, and Windows' foreground lock keeps the app
-        // in front where it is: the user asked for CodeSwitchX, so it takes the foreground past it (#222). Not while a
-        // mouse button is held: the activation would be read as a click on the shell; nor while a modifier is, whose release
-        // would land here and leave it held in the other app. Not while the Cab's VS Code has the focus either: CodeSwitchX
-        // is in front then, and taking it would move the keyboard off VS Code.
-        if (!WindowActivation.AnyMouseButtonDown() && !WindowActivation.AnyModifierDown() && !((IShellWindow)this).IsInFront)
+        TakeForegroundAsAsked();
+    }
+
+    /// <summary>
+    /// Asked by voice (set_window, and what Raven opens), the request is no input to this process, and Windows' foreground
+    /// lock keeps the app in front where it is: the user asked for CodeSwitchX, so it takes the foreground past it, keyboard
+    /// and all (#222, #224). Not while a mouse button is held: the activation would be read as a click on the shell; nor
+    /// while a modifier is, whose release would land here and leave it held in the other app. Not while the Cab's VS Code
+    /// has the focus either: CodeSwitchX is in front then, and taking it would move the keyboard off VS Code. The shell
+    /// still goes right under that VS Code, over whatever covered it: VS Code given the keyboard by the open came up alone,
+    /// over the app the user was in, and once the Settings page hid it, Windows gave the keyboard to that app (#224).
+    /// </summary>
+    private void TakeForegroundAsAsked()
+    {
+        if (WindowActivation.AnyMouseButtonDown() || WindowActivation.AnyModifierDown())
+        {
+            return;
+        }
+
+        if (_host.ShownInCab is var shown and not 0 && Win32WindowEnumerator.Foreground() == shown)
+        {
+            if (!ZOrder.IsFrontPair(shown, _hwnd))
+            {
+                ZOrder.TuckUnder(_hwnd, shown);
+            }
+
+            return;
+        }
+
+        if (!((IShellWindow)this).IsInFront)
         {
             ForegroundLock.Take(_hwnd);
         }
