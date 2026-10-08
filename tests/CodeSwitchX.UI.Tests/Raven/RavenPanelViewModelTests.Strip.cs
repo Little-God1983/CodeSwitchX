@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -322,20 +323,22 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Collapsed_an_answer_only_written_while_the_user_talks_in_Open_mic_counts()
     {
         var transcript = new TaskCompletionSource<DictationResult>();
-        Transcribes(transcript.Task);
-        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
+        _brain.Answer = q => q.Contains("Hello") ? [new BrainText("Hi.")] : [new BrainText("You have one chat waiting.")];
         var vm = await InOpenMicAsync();
         vm.IsOpen = false;
+        await AnsweredAMomentAgoAsync(vm);
         _openMic.Speak();
         _openMic.EndTurn();
 
-        _openMic.Speak(); // the user's next turn has started
-        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        _openMic.Speak(); // the user's next turn has started, in the follow-up: theirs
+        transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 
         var answer = vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
-        _speech.Spoken.ShouldBeEmpty("the user is talking");
+        _speech.Spoken.ShouldNotContain(s => s.Contains("one chat waiting"), "the user is talking");
         answer.Chat.Unread.ShouldBe(1, "written, not said");
     }
 

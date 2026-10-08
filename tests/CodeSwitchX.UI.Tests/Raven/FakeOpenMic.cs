@@ -118,6 +118,10 @@ internal sealed class FakeOpenMic : IOpenMic
     public void EndTurn(OpenMicRun? run = null, double seconds = 2) =>
         TurnEnded?.Invoke(this, new OpenMicTurn(run ?? Run!, new float[(int)(seconds * 16_000)]));
 
+    /// <summary>A word on its own: the listener ends it as a short turn, with no <see cref="Speak"/> before it.</summary>
+    public void SayShort(OpenMicRun? run = null) =>
+        TurnEnded?.Invoke(this, new OpenMicTurn(run ?? Run!, new float[(int)(1.1 * 16_000)], Short: true));
+
     /// <summary>A batch of 50 ms at this level, as the listener raises them; <paramref name="quietest"/> is its quietest
     /// block (the whole batch at <paramref name="rms"/> unless given).</summary>
     public void Hear(float rms, float? quietest = null) =>

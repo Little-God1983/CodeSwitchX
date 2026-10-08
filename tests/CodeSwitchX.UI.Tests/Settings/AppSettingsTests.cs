@@ -85,6 +85,18 @@ public sealed class AppSettingsTests
         _h.Shell.Settings.RavenCooldownSeconds.ShouldBe(20);
     }
 
+    // #217: the box reads 0 as "Off"
+    [Fact]
+    public async Task Open_mics_follow_up_is_set_from_what_is_said_off_too()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync("follow-up without Raven's name", "30 seconds", Ct)).Value.ShouldBe("30 seconds");
+        _h.Shell.Raven.FollowUpSeconds.ShouldBe(30);
+        (await _settings.SetAsync("follow-up", "off", Ct)).Value.ShouldBe("0 seconds");
+        _h.Shell.Raven.FollowUpSeconds.ShouldBe(0);
+    }
+
     [Fact]
     public async Task Use_the_kokoro_voice_picks_the_engine_and_then_a_voice_of_it()
     {

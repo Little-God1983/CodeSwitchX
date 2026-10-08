@@ -144,6 +144,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.IsMuted = Settings.RavenMuted;
         Raven.SpeakNews = Settings.RavenSpeakNews;
         Raven.BargeIn = Settings.RavenBargeIn;
+        Raven.FollowUpSeconds = Settings.RavenFollowUpSeconds;
         Raven.CatchUp = Settings.RavenCatchUp;
         Raven.SetMutedWindows(Settings.RavenMutedWindows);
         Raven.MutedWindowsChanged += (_, _) => Settings.RavenMutedWindows = Raven.MutedWindows;
@@ -199,6 +200,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             else if (e.PropertyName == nameof(SettingsViewModel.RavenBargeIn))
             {
                 Raven.BargeIn = Settings.RavenBargeIn;
+            }
+            else if (e.PropertyName == nameof(SettingsViewModel.RavenFollowUpSeconds))
+            {
+                Raven.FollowUpSeconds = Settings.RavenFollowUpSeconds;
             }
             else if (e.PropertyName is nameof(SettingsViewModel.YardKeepClosedMinutes) or nameof(SettingsViewModel.YardHideIdleHours))
             {

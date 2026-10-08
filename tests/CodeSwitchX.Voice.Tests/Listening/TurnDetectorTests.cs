@@ -13,12 +13,42 @@ public sealed class TurnDetectorTests
     public TurnDetectorTests() => _detector = new TurnDetector(_vad, _turn, NullLogger.Instance);
 
     [Fact]
-    public void A_burst_shorter_than_half_a_second_is_no_turn()
+    public void A_burst_shorter_than_a_quarter_second_is_no_turn()
     {
-        var events = Feed(Silence(1), Speech(0.4), Silence(1));
+        var events = Feed(Silence(1), Speech(0.2), Silence(1.5));
 
         events.ShouldBeEmpty();
         _turn.Calls.ShouldBe(0);
+    }
+
+    // #217: "Raven." and "Yes." are shorter than the half second a turn needs
+    [Fact]
+    public void A_word_on_its_own_ends_as_a_short_turn_once_a_second_of_silence_follows()
+    {
+        var events = Feed(Silence(1), Speech(0.4), Silence(0.9));
+        events.ShouldBeEmpty();
+
+        events = Feed(Silence(0.2));
+
+        var ended = events.ShouldHaveSingleItem().ShouldBeOfType<TurnEvent.Ended>();
+        ended.Short.ShouldBeTrue();
+        Seconds(ended.Clip).ShouldBeInRange(1.0, 1.2); // 0.5 s pre-roll + 0.4 s + 0.2 s of the pause
+        _turn.Calls.ShouldBe(0, "no turn to end: nothing to ask Smart Turn");
+    }
+
+    // #217: "Raven," and the comma's pause were dropped as a cough, and the words after it came without the name
+    [Fact]
+    public void A_short_word_and_the_words_after_a_pause_are_one_turn()
+    {
+        _turn.Answers.Enqueue(0.9);
+        var name = 0.25f;
+
+        var events = Feed(Silence(1), Audio(name, Frame * 15, speech: true), Silence(0.35), Speech(1.1), Silence(0.5));
+
+        events.OfType<TurnEvent.Started>().ShouldHaveSingleItem();
+        var ended = events.OfType<TurnEvent.Ended>().ShouldHaveSingleItem();
+        ended.Short.ShouldBeFalse();
+        ended.Clip.ShouldContain(name);
     }
 
     [Fact]

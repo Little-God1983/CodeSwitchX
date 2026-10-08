@@ -219,6 +219,41 @@ public sealed partial class RavenPanelViewModelTests
             + "allow you proposed, and it was allowed.]\n" + InChatOne + "what's next");
     }
 
+    // Reviews of #217: the read-back opens the follow-up; after it, the TV's "yes" must not allow, so a yes needs the name
+    [Theory]
+    [InlineData(-2, "Yes.", true)]
+    [InlineData(2, "Yes.", false)]
+    [InlineData(2, "Raven, yes.", true)]
+    public async Task In_Open_mic_a_bare_yes_allows_in_the_follow_up_after_the_read_back_and_later_only_with_the_name(int past, string said,
+        bool allows)
+    {
+        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await QuestionsVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + past));
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        if (allows)
+        {
+            await WithinAsync(held);
+            (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        }
+        else
+        {
+            held.IsCompleted.ShouldBeFalse();
+            asks.Proposed.ShouldBe(proposal, "dropped unheard: the proposal still waits");
+        }
+    }
+
     [Fact]
     public async Task Other_words_after_a_proposed_allow_run_nothing_and_go_to_the_brain_which_is_told()
     {

@@ -1,0 +1,68 @@
+using CodeSwitchX.Core.Yard;
+
+namespace CodeSwitchX.Core.Tests.Yard;
+
+public class CommandWordTests
+{
+    [Theory]
+    [InlineData("Raven, what's waiting?", "What's waiting?")]
+    [InlineData("raven what is chat three doing", "What is chat three doing")]
+    [InlineData("Hey Raven, chat three.", "Chat three.")]
+    [InlineData("Okay, Raven: open StoryForgeX", "Open StoryForgeX")]
+    [InlineData("Raven, yes.", "Yes.")]
+    [InlineData("Ravin, ja bitte", "Ja bitte")]
+    [InlineData("Rayven. Stop it.", "Stop it.")]
+    [InlineData("Raben, was wartet auf mich?", "Was wartet auf mich?")]
+    [InlineData("  \"Raven - status", "Status")]
+    [InlineData("Hello Raven, what's waiting?", "What's waiting?")]
+    [InlineData("...Raven, status", "Status")]
+    [InlineData("- Yo, Raven. Chat seven.", "Chat seven.")]
+    public void A_turn_that_starts_with_the_word_is_for_Raven_without_it(string said, string rest)
+    {
+        CommandWord.TryStrip(said, out var words).ShouldBeTrue();
+        words.ShouldBe(rest);
+    }
+
+    [Theory]
+    [InlineData("Raven.")]
+    [InlineData("Hey Raven!")]
+    [InlineData("raven?")]
+    [InlineData("Raven…")]
+    [InlineData("\"Raven\"")]
+    [InlineData("'Raven'")]
+    public void The_word_alone_leaves_nothing(string said)
+    {
+        CommandWord.TryStrip(said, out var words).ShouldBeTrue();
+        words.ShouldBe("");
+        CommandWord.IsName(said).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData("RAIVEN")]
+    [InlineData("Raven")]
+    [InlineData("raben")]
+    public void A_spelling_of_the_name_is_the_name(string word) => CommandWord.IsName(word).ShouldBeTrue();
+
+    [Theory]
+    [InlineData("RavenCutX")]
+    [InlineData("Raven, chat three")]
+    [InlineData("StoryForgeX")]
+    public void Other_words_are_not_the_name(string word) => CommandWord.IsName(word).ShouldBeFalse();
+
+    [Theory]
+    [InlineData("At least someone's happy I'm home.")]
+    [InlineData("Wohnzimmer 100%.")]
+    [InlineData("Ravens are clever birds.")]
+    [InlineData("I saw a raven today.")]
+    [InlineData("Raven's chat is stuck.")]
+    [InlineData("Yes.")]
+    [InlineData("chat three")]
+    [InlineData("Hey, how are you?")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Any_other_turn_is_not(string? said)
+    {
+        CommandWord.TryStrip(said, out var words).ShouldBeFalse();
+        words.ShouldBe("");
+    }
+}
