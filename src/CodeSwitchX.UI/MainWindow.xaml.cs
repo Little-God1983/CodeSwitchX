@@ -60,7 +60,10 @@ public partial class MainWindow : Window, IShellWindow
     private ShellWindowState _restored = ShellWindowState.Normal;
 
     /// <summary>It, a dialog of it (Add workspace), or the VS Code window its Cab shows, which holds the focus there.</summary>
-    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0 && (front == _host.ShownInCab || IsOwnWindow(front));
+    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && (CabHasKeyboard(front) || IsOwnWindow(front));
+
+    /// <summary>Whether <paramref name="front"/> is the Cab's VS Code, or a dialog of it (Open Folder, Save changes?).</summary>
+    private bool CabHasKeyboard(nint front) => ZOrder.IsOf(front, _host.ShownInCab);
 
     /// <summary>Whether <paramref name="hwnd"/> is a window of the app's own: the shell, a dialog of it.</summary>
     private static bool IsOwnWindow(nint hwnd) =>
@@ -75,10 +78,18 @@ public partial class MainWindow : Window, IShellWindow
         BringForwardAsAsked();
     }
 
+    /// <summary>Never throws: what Raven says of the open or the page, which comes after, must not be lost to it.</summary>
     private void BringForwardAsAsked()
     {
-        WindowActivation.BringUp(this);
-        TakeForegroundAsAsked();
+        try
+        {
+            WindowActivation.BringUp(this);
+            TakeForegroundAsAsked();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _watcherLogger.LogWarning(ex, "CodeSwitchX could not come to the front"); // closing, say
+        }
     }
 
     /// <summary>
@@ -92,20 +103,16 @@ public partial class MainWindow : Window, IShellWindow
     /// </summary>
     private void TakeForegroundAsAsked()
     {
-        if (WindowActivation.AnyMouseButtonDown() || WindowActivation.AnyModifierDown())
-        {
-            return;
-        }
-
         var front = Win32WindowEnumerator.Foreground();
         if (IsOwnWindow(front))
         {
             return; // a window of its own has the keyboard already
         }
 
-        if (_host.ShownInCab is var shown and not 0 && front == shown)
+        if (CabHasKeyboard(front))
         {
-            if (!ZOrder.IsFrontPair(shown, _hwnd))
+            // Takes no keyboard, so also while a key or button is held.
+            if (_host.ShownInCab is var shown and not 0 && !ZOrder.IsFrontPair(shown, _hwnd))
             {
                 ZOrder.TuckUnder(_hwnd, shown);
             }
@@ -113,7 +120,10 @@ public partial class MainWindow : Window, IShellWindow
             return;
         }
 
-        ForegroundLock.Take(_hwnd);
+        if (!WindowActivation.AnyMouseButtonDown() && !WindowActivation.AnyModifierDown())
+        {
+            ForegroundLock.Take(_hwnd);
+        }
     }
 
     nint IShellWindow.Dialog =>

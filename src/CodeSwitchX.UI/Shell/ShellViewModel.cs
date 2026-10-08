@@ -629,15 +629,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // first (#224); forward after the wait, nothing showed while VS Code started, and an open that finished late took the
         // keyboard from whatever came since.
         var entering = EnterCabAsync(workspaceId);
-        try
-        {
-            ForwardRequested?.Invoke();
-        }
-        finally
-        {
-            await entering; // also when the forward failed: what came of the open is still said
-        }
-
+        ForwardRequested?.Invoke(); // never throws (MainWindow), so the open is always awaited and said
+        await entering;
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 
