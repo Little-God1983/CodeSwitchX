@@ -10,7 +10,10 @@ public interface IWindowDocker
     void Uncloak(nint hwnd);
     void BringToFront(nint hwnd);
 
-    /// <summary>Puts the window above the others without activating it: the window in the foreground keeps the keyboard and the mouse.</summary>
+    /// <summary>
+    /// Puts the window above the others without activating it: the window in the foreground keeps the keyboard and the mouse.
+    /// Not above the foreground window, though: Windows leaves the window under that one (#213, see <see cref="ZOrder.TuckUnder"/>).
+    /// </summary>
     void PlaceOnTop(nint hwnd);
 
     /// <summary>
