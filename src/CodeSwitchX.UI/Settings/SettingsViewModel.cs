@@ -90,6 +90,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty] private bool _ravenBargeIn = true;
 
+    /// <summary>How long, in seconds, after Raven spoke or answered an Open mic turn needs no "Raven" before it (#217): one of
+    /// <see cref="FollowUpChoices"/>, 0 for none.</summary>
+    [ObservableProperty] private int _ravenFollowUpSeconds = Raven.RavenPanelViewModel.DefaultFollowUpSeconds;
+
     /// <summary>How long, in seconds, other chats stay silent after an announcement or a sound (#125): one of <see cref="CooldownChoices"/>.</summary>
     [ObservableProperty] private int _ravenCooldownSeconds = (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
 
@@ -163,6 +167,8 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The pauses between messages the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> PauseChoices => Raven.TrafficWatcher.PauseChoices;
+
+    public IReadOnlyList<int> FollowUpChoices => Raven.RavenPanelViewModel.FollowUpChoices;
 
     /// <summary>The engine Raven speaks with: a name of <see cref="SpeechEngine"/>, or <see cref="NoEngine"/> (Raven only writes).</summary>
     [ObservableProperty]
@@ -430,6 +436,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenSpeakNews = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenSpeakNews, "whether Raven speaks chat news", ct) ?? true;
             RavenMicMode = await LoadOrDefaultAsync<string?>(SettingKeys.RavenMicMode, "Raven's mic mode", ct) ?? nameof(Raven.MicMode.PushToTalk);
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
+            RavenFollowUpSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenFollowUpSeconds, "Open mic's follow-up", ct) is { } followUp
+                && FollowUpChoices.Contains(followUp) ? followUp : Raven.RavenPanelViewModel.DefaultFollowUpSeconds;
             RavenCooldownSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenCooldownSeconds, "the chats' cooldown", ct) is { } cooldown
                 && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
             RavenMutedWindows = await LoadOrDefaultAsync<List<Guid>>(SettingKeys.RavenMutedWindows, "the muted Raven chats", ct) ?? [];
@@ -584,6 +592,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenMicModeChanged(string value) => Persist(SettingKeys.RavenMicMode, value);
 
     partial void OnRavenBargeInChanged(bool value) => Persist(SettingKeys.RavenBargeIn, value);
+
+    partial void OnRavenFollowUpSecondsChanged(int value) => Persist(SettingKeys.RavenFollowUpSeconds, value);
 
     partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
 

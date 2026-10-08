@@ -121,9 +121,97 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 
-        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.You && e.Text == "Hallo Raven, open Diffusion Nexus");
-        _brain.Asked.ShouldContain(q => q.Contains("open Diffusion Nexus"));
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.You && e.Text == "Open Diffusion Nexus", "Raven's name is cut off");
+        _brain.Asked.ShouldContain(q => q.Contains("Open Diffusion Nexus") && !q.Contains("Raven"));
         vm.State.ShouldBe(RavenState.Attending);
+    }
+
+    // #217: the TV was taken for the user
+    [Theory]
+    [InlineData("At least someone's happy I'm home.")]
+    [InlineData("Yes.")]
+    [InlineData("Chat three.")]
+    public async Task An_Open_mic_turn_without_Ravens_name_is_dropped_unnoted(string said)
+    {
+        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        var before = vm.Log.Count;
+        var chat = vm.CurrentChat;
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.Log.Count.ShouldBe(before);
+        vm.CurrentChat.ShouldBe(chat);
+        _brain.Asked.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Soon_after_Ravens_answer_a_turn_needs_no_name_and_later_it_does()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await InOpenMicAsync();
+
+        await TurnAsync(vm);
+        said = "And in chat seven?";
+        _time.Advance(TimeSpan.FromSeconds(9)); // the turn began 7 s after the answer: 9 s, less its 2 s
+        await TurnAsync(vm);
+        said = "Wohnzimmer 100%.";
+        _time.Advance(TimeSpan.FromSeconds(13));
+        await TurnAsync(vm);
+
+        _brain.Asked.Count.ShouldBe(2);
+        _brain.Asked[1].ShouldContain("And in chat seven?");
+        vm.Log.ShouldNotContain(e => e.Text.Contains("Wohnzimmer"));
+    }
+
+    [Fact]
+    public async Task Ravens_name_alone_asks_nothing_and_the_next_words_need_no_name()
+    {
+        var said = "Hey Raven.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        var before = vm.Log.Count;
+
+        await TurnAsync(vm);
+        vm.Log.Count.ShouldBe(before);
+        _brain.Asked.ShouldBeEmpty();
+
+        said = "What's waiting on me?";
+        _time.Advance(TimeSpan.FromSeconds(5));
+        await TurnAsync(vm);
+        _brain.Asked.ShouldHaveSingleItem().ShouldContain("What's waiting on me?");
+    }
+
+    [Fact]
+    public async Task With_no_follow_up_every_turn_needs_the_name()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await InOpenMicAsync();
+        vm.FollowUpSeconds = 0;
+
+        await TurnAsync(vm);
+        said = "Yes.";
+        await TurnAsync(vm);
+
+        _brain.Asked.ShouldHaveSingleItem();
+    }
+
+    /// <summary>One Open mic turn, transcribed and answered.</summary>
+    private async Task TurnAsync(RavenPanelViewModel vm)
+    {
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
     }
 
     [Fact]
@@ -771,7 +859,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn(); // the first question is still being transcribed
 
         _openMic.Speak(); // the user's next turn has started
-        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
         await Task.Delay(100, TestContext.Current.CancellationToken);

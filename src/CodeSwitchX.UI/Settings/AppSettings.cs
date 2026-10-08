@@ -234,8 +234,9 @@ public sealed class AppSettings : IAppSettings
             });
 
         // A count of seconds the Voice page offers in a box: "20", "20 seconds".
-        Entry Seconds(string name, string description, string[] aliases, IReadOnlyList<int> choices, Func<int> get, Action<int> set) =>
-            new(new(name, Title(SettingsPage.Voice), description, [.. choices.Select(c => $"{c} seconds")]), SettingsPage.Voice, aliases,
+        Entry Seconds(string name, string description, string[] aliases, IReadOnlyList<int> choices, Func<int> get, Action<int> set,
+            SettingsPage page = SettingsPage.Voice) =>
+            new(new(name, Title(page), description, [.. choices.Select(c => $"{c} seconds")]), page, aliases,
                 () => $"{get()} seconds", v =>
                 {
                     set(Number(v) is { } n && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
@@ -395,6 +396,10 @@ public sealed class AppSettings : IAppSettings
                 () => [.. R.Speakers?.Speakers.Select(s => s.Name) ?? []]),
             Toggle("talk over Raven", SettingsPage.Listening, "In open mic, the user talking over Raven stops it; off, open mic ignores "
                 + "speech while Raven speaks (Raven heard on speakers).", () => S.RavenBargeIn, v => S.RavenBargeIn = v, "barge in", "interrupt"),
+            Seconds("follow-up without Raven's name", "In open mic, only what starts with \"Raven\" reaches Raven, or what the user says "
+                    + "while Raven speaks or answers and this many seconds after; 0 means every turn needs the name.",
+                ["follow-up", "follow up", "command word", "wake word"],
+                RavenPanelViewModel.FollowUpChoices, () => S.RavenFollowUpSeconds, v => S.RavenFollowUpSeconds = v, SettingsPage.Listening),
             new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: Tiny, "
                     + "Base and Small hear English only and are smaller and faster; Large v3 Turbo also hears other languages.", [.. WhisperNames.Select(w => w.Name)]),
                 SettingsPage.Listening, ["whisper", "whisper model", "dictation model", "speech recognition"],

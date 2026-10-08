@@ -330,7 +330,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn();
 
         _openMic.Speak(); // the user's next turn has started
-        transcript.SetResult(new DictationResult("What's waiting on me?", TimeSpan.FromSeconds(1)));
+        transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 

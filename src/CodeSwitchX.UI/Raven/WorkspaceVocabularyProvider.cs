@@ -99,8 +99,10 @@ public sealed class WorkspaceVocabularyProvider : IDictationVocabularyProvider, 
                 }
             }
 
-            // "Chat" first, as in "chat three", the switch the app hears itself (#121); then every workspace name before any
-            // folder label: the prompt keeps the first words when the list is long.
+            // "Raven" first, the name an Open mic turn starts with (#217), and "Chat", as in "chat three", the switch the app
+            // hears itself (#121); then every workspace name before any folder label: the prompt keeps the first words when
+            // the list is long.
+            Add("Raven");
             Add("Chat");
             foreach (var workspace in workspaces)
             {

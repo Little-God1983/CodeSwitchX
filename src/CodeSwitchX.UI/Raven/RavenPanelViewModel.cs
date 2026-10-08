@@ -228,6 +228,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
     private bool _speaking;
 
+    /// <summary>When Raven last finished speaking or answering, or heard its name alone: the follow-up runs from here (#217).</summary>
+    private DateTimeOffset? _followUpFrom;
+
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
 
@@ -447,6 +450,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// speakers). The shell keeps it in step with Settings.</summary>
     [ObservableProperty]
     private bool _bargeIn = true;
+
+    /// <summary>How long after Raven spoke or answered an Open mic turn needs no "Raven" before it (#217); 0 means every turn
+    /// does. The shell keeps it in step with Settings.</summary>
+    [ObservableProperty]
+    private int _followUpSeconds = DefaultFollowUpSeconds;
+
+    /// <summary>The follow-up Settings offers, in seconds (#217); 0 is none.</summary>
+    public static readonly IReadOnlyList<int> FollowUpChoices = [0, 5, 10, 15, 20, 30, 60];
+
+    public const int DefaultFollowUpSeconds = 10;
 
     /// <summary>The mic button's name and tooltip: what a press does in the mode the panel is in.</summary>
     public string MicButtonName => MicMode == MicMode.PushToTalk ? "Push to talk"
@@ -1052,6 +1065,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void OnSpeakingChanged(bool speaking)
     {
         _speaking = speaking;
+        _followUpFrom = _time.GetUtcNow();
         Traffic.Announced(); // begun or ended, the cooldown runs from the last of it
         UpdateIgnoreSpeech();
         UpdateState();
@@ -1670,6 +1684,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _logger.LogInformation("Open mic's turn of {Seconds:0.0} s had no words", clip.Length.TotalSeconds);
             }
 
+            if (quiet && text.Length > 0 && !ForRaven(ref text, ended - clip.Length))
+            {
+                return;
+            }
+
             if (text.Length > 0 && SwitchBySaying(text))
             {
                 _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
@@ -1699,6 +1718,37 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _pending--;
             UpdateState();
         }
+    }
+
+    /// <summary>
+    /// Whether an Open mic turn is meant for Raven (#217): it starts with its name, which is cut off, or it began in the
+    /// follow-up, while Raven speaks or answers or soon after. Anything else is speech around the room, a TV say: dropped,
+    /// with only its length in the log. The name alone opens the follow-up for the words that come next.
+    /// </summary>
+    private bool ForRaven(ref string text, DateTimeOffset began)
+    {
+        if (CommandWord.TryStrip(text, out var rest))
+        {
+            if (rest.Length > 0)
+            {
+                text = rest;
+                return true;
+            }
+
+            _followUpFrom = _time.GetUtcNow();
+            _logger.LogInformation("Open mic heard Raven's name alone: the next {Seconds} s need no name", FollowUpSeconds);
+            return false;
+        }
+
+        if (FollowUpSeconds > 0
+            && (_speaking || _asking > 0 || _followUpFrom is { } from && began <= from + TimeSpan.FromSeconds(FollowUpSeconds)))
+        {
+            return true;
+        }
+
+        _logger.LogInformation("Open mic's turn of {Seconds:0.0} s did not start with Raven's name: not for Raven",
+            (_time.GetUtcNow() - began).TotalSeconds);
+        return false;
     }
 
     /// <summary>
@@ -2019,6 +2069,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _questions.Remove(question);
             spoken.Complete();
             _asking--;
+            _followUpFrom = _time.GetUtcNow();
             UpdateState();
         }
     }

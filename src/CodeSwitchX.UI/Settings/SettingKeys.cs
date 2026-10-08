@@ -21,6 +21,7 @@ public static class SettingKeys
     public const string RavenSpeakNews = "raven.speakNews";
     public const string RavenMicMode = "raven.micMode";
     public const string RavenBargeIn = "raven.bargeIn";
+    public const string RavenFollowUpSeconds = "raven.followUpSeconds";
     public const string RavenCooldownSeconds = "raven.cooldownSeconds";
     public const string RavenPauseSeconds = "raven.pauseSeconds";
     public const string RavenMutedWindows = "raven.mutedWindows";
