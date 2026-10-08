@@ -157,9 +157,10 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await InOpenMicAsync();
 
         await TurnAsync(vm);
+        _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         await Until(() => vm.TakesTurnsWithoutName); // the answer was heard to its end
         said = "And in chat seven?";
-        _time.Advance(TimeSpan.FromSeconds(9));
+        _time.Advance(TimeSpan.FromSeconds(6));
         await TurnAsync(vm);
         await Until(() => vm.TakesTurnsWithoutName);
         said = "Wohnzimmer 100%.";
@@ -185,6 +186,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn();
         await WithinAsync(vm.PendingTranscriptions);
         await Until(() => _brain.Asked.Count == 1);
+        _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
 
         said = "At least someone's happy I'm home.";
         _openMic.Speak();
@@ -228,6 +230,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.SayShort();
         await WithinAsync(vm.PendingTranscriptions);
         said = "What's waiting on me?";
+        _time.Advance(TimeSpan.FromSeconds(1)); // begun after the name ended
         await TurnAsync(vm);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldContain("What's waiting on me?");
@@ -254,6 +257,148 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.Count.ShouldBe(asked ? 2 : 1);
+    }
+
+    // #219: "Raven, check chat three." (a pause ends the turn) "And then chat five." lost its second half
+    [Theory]
+    [InlineData(1.5, true)]
+    [InlineData(2.3, true)] // it counts once half a second of it is heard: it began 1.8 s after
+    [InlineData(3, false)]
+    public async Task A_turn_begun_soon_after_one_with_Ravens_name_is_the_rest_of_it(double after, bool asked)
+    {
+        var said = "Raven, check chat three.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource(); // Raven thinks about the first half meanwhile
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+        await Until(() => _brain.Asked.Count == 1);
+
+        said = "And then tell me about chat five.";
+        _time.Advance(TimeSpan.FromSeconds(after));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.Any(q => q.Contains("chat five")).ShouldBe(asked);
+        if (asked)
+        {
+            // The first half went to the brain at once; the rest takes the floor from its answer, so it goes with it.
+            _brain.Asked.Last().ShouldContain("goes on from what they asked just before: \"Check chat three.\"");
+        }
+    }
+
+    // Third review of #219: through speakers, Raven's answer begun within the 2 s was taken as the rest, and asked
+    [Fact]
+    public async Task Talk_begun_while_Raven_speaks_is_never_the_rest_of_a_request()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        var said = "Raven, what time is it?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Answer = _ => [new BrainText("It's three.")];
+        var vm = await InOpenMicAsync(voice);
+        await TurnAsync(vm);
+        await Until(() => vm.State == RavenState.Speaking);
+
+        said = "It's three.";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+
+        _brain.Asked.ShouldHaveSingleItem();
+        voice.IsSpeaking.ShouldBeTrue();
+    }
+
+    // Third review of #219: a throat-clear Whisper wrote as "Thank you." was asked as the rest and took the floor
+    [Fact]
+    public async Task Whispers_noise_right_after_a_question_is_not_asked()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+        await Until(() => _brain.Asked.Count == 1);
+
+        said = "Thank you.";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldHaveSingleItem();
+    }
+
+    // Second and third reviews of #219: the rest of a request stops the answer on its way, which would be said over it;
+    // a cough there leaves that answer written
+    [Fact]
+    public async Task A_cough_right_after_a_question_leaves_its_answer_written()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+        await Until(() => _brain.Asked.Count == 1);
+
+        said = "";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text == "One chat waits.");
+        _speech.Spoken.ShouldNotContain(t => t.Contains("One chat waits."), "hushed as the rest began, so it is not said over it");
+    }
+
+    // Review of #219: the words after the name alone are the turn with the name, and their rest goes with them too
+    [Fact]
+    public async Task The_words_after_Ravens_name_alone_have_their_rest_after_a_pause_too()
+    {
+        var said = "Raven.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+
+        said = "Check chat three.";
+        _time.Advance(TimeSpan.FromSeconds(3));
+        await TurnAsync(vm, answered: false);
+        said = "And then tell me about chat five.";
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.Last().ShouldContain("chat five");
+    }
+
+    // #219: a turn taken as the rest of one with the name does not open the window again, so the TV cannot chain on
+    [Fact]
+    public async Task Only_a_turn_with_Ravens_name_opens_the_window_for_the_rest()
+    {
+        var said = "Raven, check chat three.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+
+        said = "At least someone's happy I'm home.";
+        _time.Advance(TimeSpan.FromSeconds(1.5));
+        await TurnAsync(vm, answered: false);
+        said = "You agree with me about that, right?";
+        _time.Advance(TimeSpan.FromSeconds(1.9)); // within 2 s of the TV line, not of the turn with the name
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldNotContain(q => q.Contains("agree with me"));
     }
 
     // Second review of #217: the words after the name began before the name was transcribed
@@ -303,6 +448,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await InOpenMicAsync();
         await TurnAsync(vm, answered: false);
         await Until(() => _brain.Asked.Count == 1);
+        _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
 
         said = "Raven?";
         await TurnAsync(vm, answered: false);
@@ -345,6 +491,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await TurnAsync(vm);
         await Task.Delay(100, TestContext.Current.CancellationToken); // the answer heard
+        _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         said = "Yes.";
         await TurnAsync(vm);
         _brain.Asked.ShouldHaveSingleItem();
@@ -352,6 +499,7 @@ public sealed partial class RavenPanelViewModelTests
         said = "Raven.";
         await TurnAsync(vm);
         said = "And in chat seven?";
+        _time.Advance(TimeSpan.FromSeconds(1)); // begun after the name ended
         await TurnAsync(vm);
         _brain.Asked.Count.ShouldBe(2);
         _brain.Asked[1].ShouldContain("And in chat seven?");
@@ -362,6 +510,7 @@ public sealed partial class RavenPanelViewModelTests
     private async Task AnsweredAMomentAgoAsync(RavenPanelViewModel vm)
     {
         await TurnAsync(vm);
+        _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         await Until(() => vm.TakesTurnsWithoutName);
     }
 
@@ -732,6 +881,31 @@ public sealed partial class RavenPanelViewModelTests
         voice.IsSpeaking.ShouldBeTrue();
         player.Stops.ShouldBe(stops);
         _brain.Asked.ShouldHaveSingleItem();
+    }
+
+    // #219: news began in the pause after "Raven." and was cut off by the words that came
+    [Fact]
+    public async Task After_Ravens_name_alone_news_waits_for_the_words()
+    {
+        Transcribes(Task.FromResult(new DictationResult("Raven.", TimeSpan.FromSeconds(1))));
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX is done.")];
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var news = new ChatNews(_bus, _yard, _time, _ => "All done.");
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, _openMic);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await TurnAsync(vm, answered: false);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(TimeSpan.FromSeconds(5));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _teller.Asked.ShouldBeEmpty("Raven listens for the words after its name");
+
+        _time.Advance(RavenPanelViewModel.CallWindow);
+        await Until(() => _teller.Asked.Count == 1);
     }
 
     // Final review 1; #217: the name stops it, talk around the room does not, also in the follow-up (third review)

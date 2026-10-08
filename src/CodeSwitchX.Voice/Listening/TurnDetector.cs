@@ -12,7 +12,9 @@ public abstract record TurnEvent
     /// <summary>The turn's audio, 16 kHz: the half second before the speech, the speech, and the first 0.2 s of the pause.</summary>
     /// <param name="Short">A word on its own, too short to start a turn ("Raven.", "Yes."): no <see cref="Started"/> came
     /// before it, and the listener's caller decides from its words whether it counts (#217).</param>
-    public sealed record Ended(float[] Clip, bool Short = false) : TurnEvent;
+    /// <param name="Silence">How long the speech had been over when the turn ended: the pause Smart Turn judged, 3 s when
+    /// it gave up waiting, a second for a word on its own. Its end is that long before the event (#219).</param>
+    public sealed record Ended(float[] Clip, bool Short = false, TimeSpan Silence = default) : TurnEvent;
 }
 
 /// <summary>
@@ -238,8 +240,9 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     {
         var extraSilence = Math.Max(0, _silentFrames - FramesIn(Pause)) * Frame;
         var clip = _turn.GetRange(0, _turn.Count - extraSilence).ToArray();
+        var silence = TimeSpan.FromSeconds((double)_silentFrames * Frame / Rate);
         Reset(keepVad: true);
-        return new TurnEvent.Ended(clip);
+        return new TurnEvent.Ended(clip, Silence: silence);
     }
 
     private static int FramesIn(TimeSpan span) => (int)Math.Round(span.TotalSeconds * Rate / Frame);
