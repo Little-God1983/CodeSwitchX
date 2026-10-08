@@ -228,8 +228,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Raven is saying something (UI thread, as <see cref="ReplyVoice.SpeakingChanged"/> posts it).</summary>
     private bool _speaking;
 
-    /// <summary>When Raven last finished speaking or answering, or heard its name alone: the follow-up runs from here (#217).</summary>
+    /// <summary>When Raven's last answer was heard to its end, or written: the follow-up runs from here (#217).</summary>
     private DateTimeOffset? _followUpFrom;
+
+    /// <summary>When Raven's name was heard on its own: the turn begun next, soon after, needs no name (#217).</summary>
+    private DateTimeOffset? _calledAt;
+
+    /// <summary>How long after its name alone Raven waits for the words, whatever the follow-up is set to.</summary>
+    internal static readonly TimeSpan CallWindow = TimeSpan.FromSeconds(DefaultFollowUpSeconds);
 
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
@@ -243,8 +249,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Open mic is paused by the user, or by a failure until the next press.</summary>
     private bool _attendPaused;
 
-    /// <summary>The user is talking in Open mic: <see cref="IOpenMic.SpeechStarted"/> came, the turn has not ended.</summary>
+    /// <summary>The user is talking in Open mic: a turn begun in the follow-up (#217) is under way, so it is theirs.</summary>
     private bool _openSpeech;
+
+    /// <summary>Open mic hears a turn: <see cref="IOpenMic.SpeechStarted"/> came, the turn has not ended. Whether it is for
+    /// Raven is known from its start (<see cref="_openSpeech"/>) or once it is transcribed (its name).</summary>
+    private bool _openHeard;
 
     /// <summary>Each start or stop of Open mic asked for: a start that finishes after a newer one was asked for stops the
     /// run it opened (UI thread).</summary>
@@ -1017,6 +1027,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         _openMicRequest++;
         _openSpeech = false;
+        _openHeard = false;
         _openMicWaitsForList = false;
         if (_openRun is { } run)
         {
@@ -1065,7 +1076,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void OnSpeakingChanged(bool speaking)
     {
         _speaking = speaking;
-        _followUpFrom = _time.GetUtcNow();
         Traffic.Announced(); // begun or ended, the cooldown runs from the last of it
         UpdateIgnoreSpeech();
         UpdateState();
@@ -1349,28 +1359,57 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // stopped, paused or moved to another run since
         }
 
-        _openSpeech = true;
-        UserStartsTalking();
+        // Only a turn begun in the follow-up is surely the user's, and takes the floor as it starts; any other may be the
+        // TV, which must not hush Raven, hold its news or keep its answers unspoken, and waits to be heard to its name.
+        _openHeard = true;
+        if (InFollowUp())
+        {
+            _openSpeech = true;
+            UserStartsTalking();
+        }
+
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
         UpdateState();
+    }
+
+    /// <summary>Whether an Open mic turn begun now would be taken without Raven's name (#217).</summary>
+    internal bool TakesTurnsWithoutName => InFollowUp();
+
+    /// <summary>
+    /// Whether a turn beginning now needs no name before it (#217): soon after Raven's name was heard alone, or while the
+    /// follow-up runs: an allow's read-back waits for its yes, or Raven's last answer was heard or written a moment ago.
+    /// Not while Raven speaks or thinks: talk then is the TV as often as the user, and only the name takes the floor.
+    /// </summary>
+    private bool InFollowUp()
+    {
+        var now = _time.GetUtcNow();
+        if (_calledAt is { } called && now <= called + CallWindow)
+        {
+            return true;
+        }
+
+        return FollowUpSeconds > 0 && !_speaking && _asking == 0
+            && (_asks?.Proposed is not null || _followUpFrom is { } from && now <= from + TimeSpan.FromSeconds(FollowUpSeconds));
     }
 
     /// <summary>The turn is over: its clip joins the transcription queue as a released recording's does.</summary>
     private void OnOpenTurn(OpenMicTurn turn)
     {
-        if (turn.Run != _openRun || !_openSpeech)
+        if (turn.Run != _openRun || !_openHeard)
         {
             return;
         }
 
         var clip = turn.Clip;
+        var followUp = _openSpeech;
         _openSpeech = false;
+        _openHeard = false;
         _pending++;
         var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
         var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
         var number = ++_clipsQueued;
         var transcribed = TranscribeInTurnAsync(_pipeline, number, Task.FromResult<RecordedClip?>(new RecordedClip(clip, length)), heard,
-            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), CurrentChat, quiet: true);
+            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), CurrentChat, quiet: true, followUp: followUp);
         _pipeline = transcribed;
         UpdateState();
     }
@@ -1621,8 +1660,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="chat">The chat the user was in when the turn ended: the words, and what is said of them, go there.</param>
     /// <param name="quiet">An Open mic turn: one too short or without words is only logged, never noted in the panel, as
     /// the user pressed nothing.</param>
+    /// <param name="followUp">An Open mic turn begun in the follow-up: Raven takes it without its name (#217).</param>
     private async Task TranscribeInTurnAsync(Task previous, long number, Task<RecordedClip?> stopping, SpeechReading speech,
-        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended, RavenChat chat, bool quiet = false)
+        string? mic, Task<DictationVocabulary> vocabulary, DateTimeOffset ended, RavenChat chat, bool quiet = false, bool followUp = false)
     {
         try
         {
@@ -1684,7 +1724,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 _logger.LogInformation("Open mic's turn of {Seconds:0.0} s had no words", clip.Length.TotalSeconds);
             }
 
-            if (quiet && text.Length > 0 && !ForRaven(ref text, ended - clip.Length))
+            if (quiet && text.Length > 0 && !ForRaven(ref text, followUp, clip.Length))
             {
                 return;
             }
@@ -1722,32 +1762,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// Whether an Open mic turn is meant for Raven (#217): it starts with its name, which is cut off, or it began in the
-    /// follow-up, while Raven speaks or answers or soon after. Anything else is speech around the room, a TV say: dropped,
-    /// with only its length in the log. The name alone opens the follow-up for the words that come next.
+    /// follow-up (<see cref="InFollowUp"/>). Anything else is speech around the room, a TV say: dropped, with only its
+    /// length in the log. The name alone stops Raven and lets the turn after it through without the name.
     /// </summary>
-    private bool ForRaven(ref string text, DateTimeOffset began)
+    private bool ForRaven(ref string text, bool followUp, TimeSpan length)
     {
         if (CommandWord.TryStrip(text, out var rest))
         {
+            _calledAt = null;
             if (rest.Length > 0)
             {
                 text = rest;
                 return true;
             }
 
-            _followUpFrom = _time.GetUtcNow();
-            _logger.LogInformation("Open mic heard Raven's name alone: the next {Seconds} s need no name", FollowUpSeconds);
+            _calledAt = _time.GetUtcNow();
+            UserStartsTalking(); // Raven stops and listens for the words
+            _logger.LogInformation("Open mic heard Raven's name alone: the next turn needs no name");
             return false;
         }
 
-        if (FollowUpSeconds > 0
-            && (_speaking || _asking > 0 || _followUpFrom is { } from && began <= from + TimeSpan.FromSeconds(FollowUpSeconds)))
+        if (followUp)
         {
+            _calledAt = null;
             return true;
         }
 
-        _logger.LogInformation("Open mic's turn of {Seconds:0.0} s did not start with Raven's name: not for Raven",
-            (_time.GetUtcNow() - began).TotalSeconds);
+        _logger.LogInformation("Open mic's turn of {Seconds:0.0} s did not start with Raven's name: not for Raven", length.TotalSeconds);
         return false;
     }
 
@@ -2069,9 +2110,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _questions.Remove(question);
             spoken.Complete();
             _asking--;
-            _followUpFrom = _time.GetUtcNow();
+            _ = OpenFollowUpOnceHeardAsync(spoken);
             UpdateState();
         }
+    }
+
+    /// <summary>
+    /// The follow-up (#217) runs from when the answer was heard to its end, or at once when it was only written, muted or
+    /// cut off: the voice says when.
+    /// </summary>
+    private async Task OpenFollowUpOnceHeardAsync(ReplyVoice.SpokenReply spoken)
+    {
+        await spoken.Played.ConfigureAwait(false);
+        _dispatcher.Post(() => _followUpFrom = _time.GetUtcNow());
     }
 
     /// <summary>
@@ -3374,7 +3425,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        if (_openSpeech)
+        if (_openSpeech || _openHeard && !_speaking)
         {
             State = RavenState.Listening;
             Caption = "Listening…";
@@ -3384,11 +3435,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_speaking)
         {
             State = RavenState.Speaking;
-            // Talking interrupts in push to talk (a press) and in an Open mic that listens with barge-in on. Otherwise
-            // (Open mic paused or starting, or ignoring speech while Raven talks; a press there only pauses) a typed
-            // question is what interrupts.
-            var talkInterrupts = MicMode == MicMode.PushToTalk || (_openRun is not null && !_attendPaused && BargeIn);
-            Caption = talkInterrupts ? "Speaking… Talk to interrupt." : "Speaking… Type to interrupt.";
+            // Talking interrupts in push to talk (a press), and Raven's name in an Open mic that listens with barge-in on
+            // (#217). Otherwise (Open mic paused or starting, or ignoring speech while Raven talks; a press there only
+            // pauses) a typed question is what interrupts.
+            Caption = MicMode == MicMode.PushToTalk ? "Speaking… Talk to interrupt."
+                : _openRun is not null && !_attendPaused && BargeIn ? "Speaking… Say \"Raven\" to interrupt."
+                : "Speaking… Type to interrupt.";
             return;
         }
 

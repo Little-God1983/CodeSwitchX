@@ -14,6 +14,9 @@ public class CommandWordTests
     [InlineData("Rayven. Stop it.", "Stop it.")]
     [InlineData("Raben, was wartet auf mich?", "Was wartet auf mich?")]
     [InlineData("  \"Raven - status", "Status")]
+    [InlineData("Hello Raven, what's waiting?", "What's waiting?")]
+    [InlineData("...Raven, status", "Status")]
+    [InlineData("- Yo, Raven. Chat seven.", "Chat seven.")]
     public void A_turn_that_starts_with_the_word_is_for_Raven_without_it(string said, string rest)
     {
         CommandWord.TryStrip(said, out var words).ShouldBeTrue();

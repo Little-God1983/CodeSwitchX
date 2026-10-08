@@ -1103,6 +1103,24 @@ public class ShellViewModelTests
         await _h.Settings.Received(1).SetAsync(SettingKeys.RavenBargeIn, true, Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData(30, 30)]
+    [InlineData(0, 0)]
+    [InlineData(7, RavenPanelViewModel.DefaultFollowUpSeconds)] // no choice Settings offers
+    public async Task Open_mics_follow_up_follows_the_setting(int stored, int taken)
+    {
+        _h.Settings.GetAsync<int?>(SettingKeys.RavenFollowUpSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(stored));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.FollowUpSeconds.ShouldBe(taken);
+
+        _h.Shell.Settings.RavenFollowUpSeconds = 15;
+
+        _h.Shell.Raven.FollowUpSeconds.ShouldBe(15);
+        await _h.Shell.Settings.FlushSavesAsync(CancellationToken.None);
+        await _h.Settings.Received(1).SetAsync(SettingKeys.RavenFollowUpSeconds, 15, Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task Settings_Voice_opens_by_itself_once_with_a_welcome_when_the_Raven_panel_is_first_used_with_no_engine()
     {

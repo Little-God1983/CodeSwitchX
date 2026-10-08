@@ -9,7 +9,7 @@ namespace CodeSwitchX.Core.Yard;
 /// </summary>
 public static partial class CommandWord
 {
-    [GeneratedRegex("""^[\s"'„“”]*(?:(?:hey|hi|hallo|okay|ok|so|well|please|bitte)[\s,.!:;]+)*(?:raven|ravin|rayven|raeven|raiven|raben)(?!\p{L})[\s,.!?:;\-–—]*""",
+    [GeneratedRegex("""^[\s"'„“”.…\-–—]*(?:(?:hey|hi|hello|hallo|yo|ey|okay|ok|so|well|please|bitte)[\s,.!:;…\-–—]+)*(?:raven|ravin|rayven|raeven|raiven|raben)(?!\p{L})[\s,.!?:;\-–—]*""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Start();
 

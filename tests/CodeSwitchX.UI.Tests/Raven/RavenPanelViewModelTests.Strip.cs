@@ -323,19 +323,20 @@ public sealed partial class RavenPanelViewModelTests
     {
         var transcript = new TaskCompletionSource<DictationResult>();
         Transcribes(transcript.Task);
-        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        _brain.Answer = q => q.Contains("Hello") ? [new BrainText("Hi.")] : [new BrainText("You have one chat waiting.")];
         var vm = await InOpenMicAsync();
         vm.IsOpen = false;
+        await AnsweredAMomentAgoAsync(vm);
         _openMic.Speak();
         _openMic.EndTurn();
 
-        _openMic.Speak(); // the user's next turn has started
+        _openMic.Speak(); // the user's next turn has started, in the follow-up: theirs
         transcript.SetResult(new DictationResult("Raven, what's waiting on me?", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
         await WithinAsync(vm.PendingAnswers);
 
         var answer = vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.");
-        _speech.Spoken.ShouldBeEmpty("the user is talking");
+        _speech.Spoken.ShouldNotContain(s => s.Contains("one chat waiting"), "the user is talking");
         answer.Chat.Unread.ShouldBe(1, "written, not said");
     }
 

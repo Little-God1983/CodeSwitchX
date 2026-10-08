@@ -219,6 +219,29 @@ public sealed partial class RavenPanelViewModelTests
             + "allow you proposed, and it was allowed.]\n" + InChatOne + "what's next");
     }
 
+    // Review of #217: the read-back waits longer for its yes than the follow-up runs
+    [Fact]
+    public async Task In_Open_mic_a_bare_yes_allows_while_the_read_back_waits_also_after_the_follow_up_ran_out()
+    {
+        Transcribes(Task.FromResult(new DictationResult("Yes.", TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await QuestionsVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + 2));
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+    }
+
     [Fact]
     public async Task Other_words_after_a_proposed_allow_run_nothing_and_go_to_the_brain_which_is_told()
     {
