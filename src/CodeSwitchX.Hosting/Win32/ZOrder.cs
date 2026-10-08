@@ -20,9 +20,10 @@ public static unsafe class ZOrder
     private const int MaxSteps = 10_000;
 
     /// <summary>
-    /// Called with each <c>WM_WINDOWPOSCHANGING</c> of <paramref name="self"/>. A move to the front while
-    /// <paramref name="upper"/> already is the front window with <paramref name="self"/> right below it keeps the order
-    /// instead, so nothing comes between them and <paramref name="upper"/> stays on top (<see cref="FrontMove.Held"/>).
+    /// Called with each <c>WM_WINDOWPOSCHANGING</c> of <paramref name="self"/>. A move over <paramref name="upper"/>
+    /// (<see cref="IsMoveOver"/>) while <paramref name="upper"/> already is the front window with <paramref name="self"/>
+    /// right below it keeps the order instead, so nothing comes between them and <paramref name="upper"/> stays on top
+    /// (<see cref="FrontMove.Held"/>).
     /// From behind a window that covers it (another app was active last) the move goes through, and the caller tucks
     /// <paramref name="self"/> back under <paramref name="upper"/> as soon as it is done (<see cref="FrontMove.Lifted"/>,
     /// <see cref="TuckUnder"/>). Owning the docked window would keep it above the shell in every case, but a cross-process
@@ -32,7 +33,7 @@ public static unsafe class ZOrder
     public static FrontMove KeepUnder(nint windowPos, nint self, nint upper)
     {
         var pos = (WINDOWPOS*)windowPos;
-        if (pos is null || upper == 0 || !IsMoveToFront(pos->flags, pos->hwndInsertAfter))
+        if (pos is null || upper == 0 || !IsMoveOver(pos->flags, pos->hwndInsertAfter, upper, self, Above, Owner))
         {
             return FrontMove.None;
         }
@@ -46,8 +47,56 @@ public static unsafe class ZOrder
         return FrontMove.Held;
     }
 
-    internal static bool IsMoveToFront(SET_WINDOW_POS_FLAGS flags, HWND insertAfter) =>
-        (flags & SET_WINDOW_POS_FLAGS.SWP_NOZORDER) == 0 && insertAfter == HWND.HWND_TOP;
+    /// <summary>
+    /// Whether a move may put <paramref name="self"/> over <paramref name="upper"/>: to the top, right under a window that
+    /// is over <paramref name="upper"/>, or right under a window <paramref name="self"/> owns. A click on the shell comes as
+    /// the last kind: Windows takes the shell's hidden IME window, which it keeps over the shell, to the top in the same
+    /// move and puts the shell right under it, so where that window stands before the move tells nothing (#213). Held
+    /// back while the two are the front pair anyway, such a move changes nothing that matters.
+    /// </summary>
+    /// <remarks>One walk up from <paramref name="upper"/>, at most <see cref="MaxSteps"/> windows.</remarks>
+    internal static bool IsMoveOver(SET_WINDOW_POS_FLAGS flags, HWND insertAfter, nint upper, nint self, Func<nint, nint> above,
+        Func<nint, nint> owner)
+    {
+        if ((flags & SET_WINDOW_POS_FLAGS.SWP_NOZORDER) != 0)
+        {
+            return false;
+        }
+
+        if (insertAfter == HWND.HWND_TOP)
+        {
+            return true;
+        }
+
+        // HWND_BOTTOM, HWND_TOPMOST and HWND_NOTOPMOST are no windows to look for.
+        var after = (nint)insertAfter.Value;
+        if (after is 1 or -1 or -2)
+        {
+            return false;
+        }
+
+        if (owner(after) == self)
+        {
+            return true;
+        }
+
+        var window = upper;
+        for (var steps = 0; steps < MaxSteps; steps++)
+        {
+            window = above(window);
+            if (window == 0)
+            {
+                return false;
+            }
+
+            if (window == after)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// True when <paramref name="upper"/> is the front window below the always-on-top ones and <paramref name="lower"/>
@@ -188,6 +237,8 @@ public static unsafe class ZOrder
     }
 
     private static nint Above(nint hwnd) => PInvoke.GetWindow(new HWND(hwnd), GET_WINDOW_CMD.GW_HWNDPREV);
+
+    private static nint Owner(nint hwnd) => PInvoke.GetWindow(new HWND(hwnd), GET_WINDOW_CMD.GW_OWNER);
 
     private static bool Seen(nint hwnd)
     {

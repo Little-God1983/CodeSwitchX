@@ -140,14 +140,26 @@ public sealed class ZOrderTests
     }
 
     [Fact]
-    public void Only_a_move_to_the_front_is_held_back()
+    public void Only_a_move_over_VS_Code_is_held_back()
     {
         var keep = SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE;
+        const nint ime = 42; // the shell's hidden IME window, which Windows keeps over the shell
+        const nint other = 43;
+        bool IsMoveOver(SET_WINDOW_POS_FLAGS flags, nint insertAfter, params nint[] stack) =>
+            ZOrder.IsMoveOver(flags, new HWND(insertAfter), VsCode, Shell, AboveIn([.. stack.Select(h => ValueTuple.Create(h))]),
+                h => h == ime ? Shell : 0);
 
-        ZOrder.IsMoveToFront(keep, HWND.HWND_TOP).ShouldBeTrue();
-        ZOrder.IsMoveToFront(keep | SET_WINDOW_POS_FLAGS.SWP_NOZORDER, HWND.HWND_TOP).ShouldBeFalse("a move or resize only");
-        ZOrder.IsMoveToFront(keep, new HWND(42)).ShouldBeFalse("placed below a window of its own, a dialog it owns say");
-        ZOrder.IsMoveToFront(keep, new HWND(-1)).ShouldBeFalse("made always-on-top");
+        IsMoveOver(keep, 0, VsCode, Shell).ShouldBeTrue("to the top");
+        IsMoveOver(keep | SET_WINDOW_POS_FLAGS.SWP_NOZORDER, 0, VsCode, Shell).ShouldBeFalse("a move or resize only");
+        IsMoveOver(keep, -1, VsCode, Shell).ShouldBeFalse("made always-on-top");
+        IsMoveOver(keep, 1, VsCode, Shell).ShouldBeFalse("to the bottom");
+        IsMoveOver(keep, other, other, VsCode, Shell).ShouldBeTrue("under another window over VS Code");
+        IsMoveOver(keep, VsCode, VsCode, other, Shell).ShouldBeFalse("right under VS Code");
+        IsMoveOver(keep, other, VsCode, other, Shell).ShouldBeFalse("under another window under VS Code");
+        // A click on the shell puts it right under its IME window, which Windows takes to the top with it in the same move
+        // (#213): where that window stands before the move says nothing, so a window the shell owns always counts.
+        IsMoveOver(keep, ime, ime, VsCode, Shell).ShouldBeTrue("under a window of its own over VS Code");
+        IsMoveOver(keep, ime, VsCode, ime, Shell).ShouldBeTrue("under a window of its own, still under VS Code before the move");
     }
 
     [Fact]
