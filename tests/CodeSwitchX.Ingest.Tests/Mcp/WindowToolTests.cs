@@ -36,6 +36,9 @@ public sealed class WindowToolTests
     [InlineData("bring CodeSwitchX up", WindowRequest.Front)]
     [InlineData("raise", WindowRequest.Front)]
     [InlineData("switch back", WindowRequest.Front)]
+    [InlineData("come to the front", WindowRequest.Front)]
+    [InlineData("bring it into focus", WindowRequest.Front)]
+    [InlineData("come back", WindowRequest.Front)]
     [InlineData("minimised", WindowRequest.Minimize)]
     [InlineData("maximised", WindowRequest.Maximize)]
     public async Task The_state_as_the_brain_says_it_reaches_the_app(string said, WindowRequest request)

@@ -19,8 +19,9 @@ public static unsafe class ForegroundLock
     private static bool Answers(HWND window)
     {
         nuint result;
+        // Not SMTO_BLOCK: the shell keeps answering what is sent to it meanwhile, VS Code in its Cab included.
         return PInvoke.SendMessageTimeout(window, PInvoke.WM_NULL, 0, 0,
-            SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_ABORTIFHUNG | SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_BLOCK, Answer, &result) != 0;
+            SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_ABORTIFHUNG | SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_NORMAL, Answer, &result) != 0;
     }
 
     /// <summary>Whether <paramref name="hwnd"/> has the foreground afterwards.</summary>

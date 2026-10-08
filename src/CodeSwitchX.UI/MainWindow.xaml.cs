@@ -71,9 +71,10 @@ public partial class MainWindow : Window, IShellWindow
         WindowActivation.BringUp(this);
         // Asked by voice (set_window), the request is no input to this process, and Windows' foreground lock keeps the app
         // in front where it is: the user asked for CodeSwitchX, so it takes the foreground past it (#222). Not while a
-        // mouse button is held: the activation would be read as a click on the shell. Not while the Cab's VS Code has the
-        // focus either: CodeSwitchX is in front then, and taking it would move the keyboard off VS Code.
-        if (!WindowActivation.AnyMouseButtonDown() && !((IShellWindow)this).IsInFront)
+        // mouse button is held: the activation would be read as a click on the shell; nor while a modifier is, whose release
+        // would land here and leave it held in the other app. Not while the Cab's VS Code has the focus either: CodeSwitchX
+        // is in front then, and taking it would move the keyboard off VS Code.
+        if (!WindowActivation.AnyMouseButtonDown() && !WindowActivation.AnyModifierDown() && !((IShellWindow)this).IsInFront)
         {
             ForegroundLock.Take(_hwnd);
         }
