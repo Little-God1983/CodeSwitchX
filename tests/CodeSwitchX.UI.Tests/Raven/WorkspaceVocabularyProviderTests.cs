@@ -52,6 +52,18 @@ public sealed class WorkspaceVocabularyProviderTests
         vocabulary.Words.ShouldBe(["Chat", "Diffusion-Full", "ContentAutomatorX", "DiffusionNexus"]);
     }
 
+    // #217: Whisper writes its prompt's words for noise, and Raven's name would let that noise through Open mic
+    [Fact]
+    public async Task A_workspace_named_as_Raven_is_spelled_is_no_word()
+    {
+        var store = StoreOf(new Workspace { Name = "RAIVEN", RootPath = @"c:\a" }, new Workspace { Name = "RavenCutX", RootPath = @"c:\b" });
+        using var provider = NewProvider(store, _ => null);
+
+        var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
+
+        vocabulary.Words.ShouldBe(["Chat", "RavenCutX"]);
+    }
+
     [Fact]
     public async Task An_unreadable_workspace_file_leaves_only_the_name()
     {
@@ -67,11 +79,11 @@ public sealed class WorkspaceVocabularyProviderTests
     public async Task Words_are_distinct_ignoring_case()
     {
         var store = StoreOf(
-            new Workspace { Name = "Raven", RootPath = @"c:\a" },
-            new Workspace { Name = "raven", RootPath = @"c:\b" });
+            new Workspace { Name = "Studio", RootPath = @"c:\a" },
+            new Workspace { Name = "studio", RootPath = @"c:\b" });
         using var provider = NewProvider(store, _ => null);
 
-        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Chat", "Raven"]);
+        (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Chat", "Studio"]);
     }
 
     // Every press of the mic asks for the vocabulary: it is read from the store and the workspace files once, not per press.
@@ -100,11 +112,11 @@ public sealed class WorkspaceVocabularyProviderTests
     [MemberData(nameof(WorkspaceSetChanges))]
     public async Task A_change_to_the_workspaces_reads_them_again(string change)
     {
-        var store = StoreOf(new Workspace { Name = "Raven", RootPath = @"c:\a" });
+        var store = StoreOf(new Workspace { Name = "Studio", RootPath = @"c:\a" });
         using var provider = NewProvider(store, _ => null);
         await provider.GetAsync(TestContext.Current.CancellationToken);
         var shop = new Workspace { Name = "Shop", RootPath = @"c:\shop" };
-        store.GetAllAsync(Arg.Any<CancellationToken>()).Returns([new Workspace { Name = "Raven", RootPath = @"c:\a" }, shop]);
+        store.GetAllAsync(Arg.Any<CancellationToken>()).Returns([new Workspace { Name = "Studio", RootPath = @"c:\a" }, shop]);
 
         switch (change)
         {
@@ -121,7 +133,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Chat", "Raven", "Shop"]);
+        vocabulary.Words.ShouldBe(["Chat", "Studio", "Shop"]);
         await store.Received(2).GetAllAsync(Arg.Any<CancellationToken>());
     }
 
@@ -129,7 +141,7 @@ public sealed class WorkspaceVocabularyProviderTests
     [Fact]
     public async Task The_vocabulary_is_read_again_after_ten_minutes()
     {
-        var store = StoreOf(new Workspace { Name = "Raven", RootPath = @"c:\a" });
+        var store = StoreOf(new Workspace { Name = "Studio", RootPath = @"c:\a" });
         using var provider = NewProvider(store, _ => null);
         await provider.GetAsync(TestContext.Current.CancellationToken);
 
@@ -150,13 +162,13 @@ public sealed class WorkspaceVocabularyProviderTests
         var store = Substitute.For<IWorkspaceStore>();
         store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(
             Task.FromException<IReadOnlyList<Workspace>>(new IOException("database locked")),
-            Task.FromResult<IReadOnlyList<Workspace>>([new Workspace { Name = "Raven", RootPath = @"c:\a" }]));
+            Task.FromResult<IReadOnlyList<Workspace>>([new Workspace { Name = "Studio", RootPath = @"c:\a" }]));
         using var provider = NewProvider(store, _ => null);
 
         await Should.ThrowAsync<IOException>(() => provider.GetAsync(TestContext.Current.CancellationToken));
         var vocabulary = await provider.GetAsync(TestContext.Current.CancellationToken);
 
-        vocabulary.Words.ShouldBe(["Chat", "Raven"]);
+        vocabulary.Words.ShouldBe(["Chat", "Studio"]);
     }
 
     // The workspaces changed while the vocabulary was being read: what that read found is not kept.
@@ -172,7 +184,7 @@ public sealed class WorkspaceVocabularyProviderTests
 
         var stale = provider.GetAsync(TestContext.Current.CancellationToken);
         _bus.Publish(new WorkspaceRootsChanged());
-        reading.SetResult([new Workspace { Name = "Raven", RootPath = @"c:\a" }]);
+        reading.SetResult([new Workspace { Name = "Studio", RootPath = @"c:\a" }]);
         await stale;
 
         (await provider.GetAsync(TestContext.Current.CancellationToken)).Words.ShouldBe(["Chat", "Shop"]);

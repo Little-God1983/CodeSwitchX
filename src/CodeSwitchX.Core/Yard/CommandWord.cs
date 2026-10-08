@@ -9,7 +9,7 @@ namespace CodeSwitchX.Core.Yard;
 /// </summary>
 public static partial class CommandWord
 {
-    [GeneratedRegex("""^[\s"'„“”.…\-–—]*(?:(?:hey|hi|hello|hallo|yo|ey|okay|ok|so|well|please|bitte)[\s,.!:;…\-–—]+)*(?:raven|ravin|rayven|raeven|raiven|raben)(?!\p{L})[\s,.!?:;\-–—]*""",
+    [GeneratedRegex("""^[\s"'„“”.…\-–—]*(?:(?:hey|hi|hello|hallo|yo|ey|okay|ok|so|well|please|bitte)[\s,.!:;…\-–—]+)*(?:raven|ravin|rayven|raeven|raiven|raben)(?!\p{L}|['’]\p{L})[\s,.!?:;…"'„“”\-–—]*""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Start();
 
@@ -24,7 +24,11 @@ public static partial class CommandWord
         }
 
         var after = said[match.Length..].Trim();
-        rest = after.Length == 0 ? "" : char.ToUpperInvariant(after[0]) + after[1..];
+        rest = !after.Any(char.IsLetterOrDigit) ? "" : char.ToUpperInvariant(after[0]) + after[1..];
         return true;
     }
+
+    /// <summary>Whether <paramref name="word"/> is the name itself, in any of its spellings: kept out of Whisper's prompt,
+    /// which it writes for noise.</summary>
+    public static bool IsName(string word) => TryStrip(word, out var rest) && rest.Length == 0;
 }

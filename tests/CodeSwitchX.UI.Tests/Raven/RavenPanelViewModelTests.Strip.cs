@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -322,7 +323,8 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Collapsed_an_answer_only_written_while_the_user_talks_in_Open_mic_counts()
     {
         var transcript = new TaskCompletionSource<DictationResult>();
-        Transcribes(transcript.Task);
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), transcript.Task);
         _brain.Answer = q => q.Contains("Hello") ? [new BrainText("Hi.")] : [new BrainText("You have one chat waiting.")];
         var vm = await InOpenMicAsync();
         vm.IsOpen = false;

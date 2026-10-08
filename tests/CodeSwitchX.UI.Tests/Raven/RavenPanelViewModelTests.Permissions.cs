@@ -219,11 +219,15 @@ public sealed partial class RavenPanelViewModelTests
             + "allow you proposed, and it was allowed.]\n" + InChatOne + "what's next");
     }
 
-    // Review of #217: the read-back waits longer for its yes than the follow-up runs
-    [Fact]
-    public async Task In_Open_mic_a_bare_yes_allows_while_the_read_back_waits_also_after_the_follow_up_ran_out()
+    // Reviews of #217: the read-back opens the follow-up; after it, the TV's "yes" must not allow, so a yes needs the name
+    [Theory]
+    [InlineData(-2, "Yes.", true)]
+    [InlineData(2, "Yes.", false)]
+    [InlineData(2, "Raven, yes.", true)]
+    public async Task In_Open_mic_a_bare_yes_allows_in_the_follow_up_after_the_read_back_and_later_only_with_the_name(int past, string said,
+        bool allows)
     {
-        Transcribes(Task.FromResult(new DictationResult("Yes.", TimeSpan.FromSeconds(1))));
+        Transcribes(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
         var (vm, asks) = await QuestionsVmAsync(openMic: true);
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
@@ -232,14 +236,22 @@ public sealed partial class RavenPanelViewModelTests
         await card.Naming;
         var proposal = asks.Propose("p1");
         await Until(() => asks.IsHeard(proposal));
-        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + 2));
+        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + past));
 
         _openMic.Speak();
         _openMic.EndTurn();
         await WithinAsync(vm.PendingTranscriptions);
 
-        await WithinAsync(held);
-        (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        if (allows)
+        {
+            await WithinAsync(held);
+            (await held).ShouldNotBeNull().Permit.ShouldBe(new ChatPermit(true, null));
+        }
+        else
+        {
+            held.IsCompleted.ShouldBeFalse();
+            asks.Proposed.ShouldBe(proposal, "dropped unheard: the proposal still waits");
+        }
     }
 
     [Fact]

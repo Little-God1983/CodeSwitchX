@@ -869,7 +869,7 @@
                 <StackPanel>
                   <TextBlock Text="Follow-up without Raven's name" FontSize="14.5" FontWeight="SemiBold" />
                   <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
-                             Text="In Open mic, Raven only takes what starts with &quot;Raven&quot; (&quot;Raven, what's waiting?&quot;), so the TV or people in the room are not taken for you. While Raven speaks or answers, and this long after, you can go on without the name. Push to talk never needs it." />
+                             Text="In Open mic, Raven only takes what starts with &quot;Raven&quot; (&quot;Raven, what's waiting?&quot;), so the TV or people in the room are not taken for you. For this long after Raven answers you, you can go on without the name; Off, every turn needs it. Push to talk never needs it." />
                 </StackPanel>
               </DockPanel>
             </StackPanel>

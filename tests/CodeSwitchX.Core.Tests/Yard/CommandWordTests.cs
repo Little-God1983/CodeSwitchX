@@ -27,17 +27,34 @@ public class CommandWordTests
     [InlineData("Raven.")]
     [InlineData("Hey Raven!")]
     [InlineData("raven?")]
+    [InlineData("Raven…")]
+    [InlineData("\"Raven\"")]
+    [InlineData("'Raven'")]
     public void The_word_alone_leaves_nothing(string said)
     {
         CommandWord.TryStrip(said, out var words).ShouldBeTrue();
         words.ShouldBe("");
+        CommandWord.IsName(said).ShouldBeTrue();
     }
+
+    [Theory]
+    [InlineData("RAIVEN")]
+    [InlineData("Raven")]
+    [InlineData("raben")]
+    public void A_spelling_of_the_name_is_the_name(string word) => CommandWord.IsName(word).ShouldBeTrue();
+
+    [Theory]
+    [InlineData("RavenCutX")]
+    [InlineData("Raven, chat three")]
+    [InlineData("StoryForgeX")]
+    public void Other_words_are_not_the_name(string word) => CommandWord.IsName(word).ShouldBeFalse();
 
     [Theory]
     [InlineData("At least someone's happy I'm home.")]
     [InlineData("Wohnzimmer 100%.")]
     [InlineData("Ravens are clever birds.")]
     [InlineData("I saw a raven today.")]
+    [InlineData("Raven's chat is stuck.")]
     [InlineData("Yes.")]
     [InlineData("chat three")]
     [InlineData("Hey, how are you?")]

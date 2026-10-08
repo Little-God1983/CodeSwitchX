@@ -1,6 +1,7 @@
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Workspaces;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Voice.Dictation;
 
 namespace CodeSwitchX.UI.Raven;
@@ -93,15 +94,15 @@ public sealed class WorkspaceVocabularyProvider : IDictationVocabularyProvider, 
 
             void Add(string? word)
             {
-                if (!string.IsNullOrWhiteSpace(word) && seen.Add(word))
+                if (!string.IsNullOrWhiteSpace(word) && !CommandWord.IsName(word) && seen.Add(word))
                 {
                     list.Add(word);
                 }
             }
 
             // "Chat" first, as in "chat three", the switch the app hears itself (#121); then every workspace name before any
-            // folder label: the prompt keeps the first words when the list is long. Not "Raven", the name an Open mic turn
-            // starts with (#217): Whisper writes words of its prompt for noise, and that one would let the noise through.
+            // folder label: the prompt keeps the first words when the list is long. Never the name an Open mic turn starts
+            // with (#217), not even a workspace's: Whisper writes words of its prompt for noise, and that one lets it through.
             Add("Chat");
             foreach (var workspace in workspaces)
             {

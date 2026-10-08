@@ -239,7 +239,9 @@ public sealed class AppSettings : IAppSettings
             new(new(name, Title(page), description, [.. choices.Select(c => $"{c} seconds")]), page, aliases,
                 () => $"{get()} seconds", v =>
                 {
-                    set(Number(v) is { } n && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                    // "off" where 0 is offered, as the box reads it (#217).
+                    var number = choices.Contains(0) && v.Trim().Equals("off", StringComparison.OrdinalIgnoreCase) ? 0 : Number(v);
+                    set(number is { } n && choices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
                         : throw new YardActionException($"{Capital(name)} is one of {string.Join(", ", choices)} seconds, not '{v}'. Nothing was changed."));
                     return null;
                 });
@@ -397,7 +399,7 @@ public sealed class AppSettings : IAppSettings
             Toggle("talk over Raven", SettingsPage.Listening, "In open mic, the user talking over Raven stops it; off, open mic ignores "
                 + "speech while Raven speaks (Raven heard on speakers).", () => S.RavenBargeIn, v => S.RavenBargeIn = v, "barge in", "interrupt"),
             Seconds("follow-up without Raven's name", "In open mic, only what starts with \"Raven\" reaches Raven, or what the user says "
-                    + "while Raven speaks or answers and this many seconds after; 0 means every turn needs the name.",
+                    + "within this many seconds after Raven answered them; 0 (off) means every turn needs the name.",
                 ["follow-up", "follow up", "command word", "wake word"],
                 RavenPanelViewModel.FollowUpChoices, () => S.RavenFollowUpSeconds, v => S.RavenFollowUpSeconds = v, SettingsPage.Listening),
             new(new("speech to text model", Title(SettingsPage.Listening), "The Whisper model that writes down what the user says: Tiny, "
