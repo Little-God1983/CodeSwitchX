@@ -122,6 +122,11 @@ public sealed class SnapWindowDocker : IWindowDocker
             SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_SHOWWINDOW
             | SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS);
 
+    public void PlaceUnder(nint hwnd, nint above) =>
+        PInvoke.SetWindowPos(new HWND(hwnd), new HWND(above), 0, 0, 0, 0,
+            SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_SHOWWINDOW
+            | SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS);
+
     /// <summary>
     /// A drag or resize by the frame runs in Windows' modal move loop, inside the window's own thread, which holds the
     /// mouse capture for as long as it lasts. WM_CANCELMODE makes DefWindowProc release that capture, and the loop ends

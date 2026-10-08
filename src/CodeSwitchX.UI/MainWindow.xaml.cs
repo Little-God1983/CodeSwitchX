@@ -71,6 +71,9 @@ public partial class MainWindow : Window, IShellWindow
         WindowActivation.BringUp(this);
     }
 
+    nint IShellWindow.Dialog =>
+        OwnedWindows.OfType<Window>().FirstOrDefault(w => w.IsVisible) is { } dialog ? new WindowInteropHelper(dialog).Handle : 0;
+
     /// <summary>Shows the Add workspace dialog over the shell until it is closed.</summary>
     private Task ShowAddWorkspaceDialog(AddWorkspaceViewModel viewModel)
     {

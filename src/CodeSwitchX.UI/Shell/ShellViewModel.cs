@@ -749,7 +749,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     {
         if (!_shellMinimized && Mode == ShellMode.Cab && ActiveWorkspaceId is { } id && Cab.LastHostRect is { } rect)
         {
-            _host.ShowInCab(id, rect, focus);
+            // A dialog of the shell's up (Add workspace): VS Code comes in right under it, and the dialog keeps the foreground (#215).
+            _host.ShowInCab(id, rect, focus, under: Window?.Dialog ?? 0);
         }
     }
 
@@ -765,7 +766,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         TellHostWhereTheCabWaits();
         if (Mode == ShellMode.Cab && ActiveWorkspaceId is { } id)
         {
-            _host.Dock(id, rect);
+            // A window shown here for the first time comes in under a dialog of the shell's, as in RaiseHostedWindow (#215).
+            _host.Dock(id, rect, under: Window?.Dialog ?? 0);
         }
     }
 }

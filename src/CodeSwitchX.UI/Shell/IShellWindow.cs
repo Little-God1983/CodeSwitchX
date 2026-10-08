@@ -38,4 +38,10 @@ public interface IShellWindow
 
     /// <summary>Puts it in <paramref name="state"/> (normal or maximized) and brings it to the front, as far as Windows lets it.</summary>
     void Show(ShellWindowState state);
+
+    /// <summary>
+    /// A dialog of its own that is up (Add workspace), or 0: the Cab shows VS Code right under it, so a workspace opened
+    /// while it is up, by Raven say, no longer hides it until the next click (#215).
+    /// </summary>
+    nint Dialog { get; }
 }
