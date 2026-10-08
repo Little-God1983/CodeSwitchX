@@ -288,9 +288,53 @@ public sealed partial class RavenPanelViewModelTests
         }
     }
 
-    // Second review of #219: a cough right after a question took the floor and hushed the answer on its way
+    // Third review of #219: through speakers, Raven's answer begun within the 2 s was taken as the rest, and asked
     [Fact]
-    public async Task A_cough_right_after_a_question_leaves_its_answer_to_be_said()
+    public async Task Talk_begun_while_Raven_speaks_is_never_the_rest_of_a_request()
+    {
+        var player = new HoldingPlayer();
+        using var voice = _speech.NewVoice(player);
+        var said = "Raven, what time is it?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Answer = _ => [new BrainText("It's three.")];
+        var vm = await InOpenMicAsync(voice);
+        await TurnAsync(vm);
+        await Until(() => vm.State == RavenState.Speaking);
+
+        said = "It's three.";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+
+        _brain.Asked.ShouldHaveSingleItem();
+        voice.IsSpeaking.ShouldBeTrue();
+    }
+
+    // Third review of #219: a throat-clear Whisper wrote as "Thank you." was asked as the rest and took the floor
+    [Fact]
+    public async Task Whispers_noise_right_after_a_question_is_not_asked()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+        await Until(() => _brain.Asked.Count == 1);
+
+        said = "Thank you.";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.ShouldHaveSingleItem();
+    }
+
+    // Second and third reviews of #219: the rest of a request stops the answer on its way, which would be said over it;
+    // a cough there leaves that answer written
+    [Fact]
+    public async Task A_cough_right_after_a_question_leaves_its_answer_written()
     {
         var said = "Raven, what's waiting on me?";
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
@@ -307,7 +351,8 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
 
-        await Until(() => _speech.Spoken.Any(s => s.Contains("One chat waits.")));
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text == "One chat waits.");
+        _speech.Spoken.ShouldNotContain(t => t.Contains("One chat waits."), "hushed as the rest began, so it is not said over it");
     }
 
     // Review of #219: the words after the name alone are the turn with the name, and their rest goes with them too

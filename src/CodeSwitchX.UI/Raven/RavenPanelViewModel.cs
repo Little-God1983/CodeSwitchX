@@ -237,9 +237,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>When the Open mic turn under way began (UI thread).</summary>
     private DateTimeOffset _openBegan;
 
+    /// <summary>The Open mic turn under way began while Raven spoke.</summary>
+    private bool _openOverRaven;
+
     /// <summary>An Open mic turn as it began: when, and whether in the follow-up, so Raven takes it without its name (#217).
     /// A short one is a word on its own, which counts only as the name, or as a yes in the follow-up.</summary>
-    private readonly record struct OpenTurn(DateTimeOffset Began, bool FollowUp, bool Short = false);
+    /// <param name="SpokeTill">When its speech ended: a turn with the name opens the window for its rest from there (#219).</param>
+    /// <param name="OverRaven">It began while Raven spoke: through speakers that may be Raven's own voice, never the rest of a request.</param>
+    private readonly record struct OpenTurn(DateTimeOffset Began, bool FollowUp, bool Short, DateTimeOffset SpokeTill, bool OverRaven);
 
     /// <summary>How long after its name alone Raven waits for the words, whatever the follow-up is set to.</summary>
     internal static readonly TimeSpan CallWindow = TimeSpan.FromSeconds(DefaultFollowUpSeconds);
@@ -1052,6 +1057,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _openMicRequest++;
         _openSpeech = false;
         _openHeard = false;
+        _calledAt = null; // nothing listens for the words any more: news need not wait (#219)
+        _namedEndedAt = null;
         _openMicWaitsForList = false;
         if (_openRun is { } run)
         {
@@ -1387,12 +1394,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // TV, which must not hush Raven, hold its news or keep its answers unspoken, and waits to be heard to its name.
         _openHeard = true;
         _openBegan = _time.GetUtcNow() - TurnDetector.MinimumSpeech; // it counts once half a second of it was heard
+        _openOverRaven = _speaking;
         if (InFollowUp(_openBegan))
         {
+            // The user's: Raven stops, and so does an answer on its way, which would be said over the rest of a request
+            // (#219) and heard into it through speakers.
             _openSpeech = true;
-            // What Raven says stops, but not an answer on its way: the rest of a request may be a cough that asks nothing,
-            // and its answer would then be lost to a hush (#219).
-            StopForName();
+            UserStartsTalking();
         }
 
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
@@ -1411,7 +1419,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="began">When the turn began: the windows are judged by that, as <see cref="ForRaven"/> judges them.</param>
     private bool InFollowUp(DateTimeOffset began)
     {
-        if (Within(_calledAt, CallWindow, began) || Within(_namedEndedAt, ContinueWindow, began))
+        // The rest of a request not while Raven speaks: through speakers, that is Raven's own voice.
+        if (Within(_calledAt, CallWindow, began) || !_speaking && Within(_namedEndedAt, ContinueWindow, began))
         {
             return true;
         }
@@ -1430,15 +1439,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         var clip = turn.Clip;
         var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
+        var spokeTill = _time.GetUtcNow() - turn.Silence;
         OpenTurn open;
         if (turn.Short)
         {
-            var began = _time.GetUtcNow() - length;
-            open = new OpenTurn(began, InFollowUp(began), Short: true); // no start came: a word on its own
+            // No start came: a word on its own, as long as its clip less the pre-roll and the pause kept after it.
+            var spoken = length - TurnDetector.PreRoll - TurnDetector.Pause;
+            var began = spokeTill - (spoken > TimeSpan.Zero ? spoken : TimeSpan.Zero);
+            open = new OpenTurn(began, InFollowUp(began), Short: true, spokeTill, OverRaven: _speaking);
         }
         else
         {
-            open = new OpenTurn(_openBegan, _openSpeech);
+            open = new OpenTurn(_openBegan, _openSpeech, Short: false, spokeTill, _openOverRaven);
             _openSpeech = false;
             _openHeard = false;
         }
@@ -1787,7 +1799,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 var asked = AddEntry(RavenLogKind.You, text, chat);
                 // The rest of a request split by a pause (#219): the first half has gone to the brain already, and its answer
                 // gives way to this one, so the brain is told what this goes on from. One not sent yet goes along anyway.
-                var earlier = continues && _namedQuestion is { Sent: true, Merged: false } first
+                var earlier = continues && _namedQuestion is { Sent: true, Merged: false } first && first.Chat == chat
                     ? $"[After a pause the user goes on from what they asked just before: \"{first.Text}\"]\n" : "";
                 var question = Ask(text, ended, chat, asked, openMic: open is not null, earlier: earlier);
                 if (named)
@@ -1839,12 +1851,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (rest.Length > 0)
             {
                 text = rest;
-                _namedEndedAt = ended - TurnDetector.Pause; // when the speech ended: the turn ends a pause after it
+                _namedEndedAt = turn.SpokeTill;
                 named = true;
                 return true;
             }
 
-            _calledAt = ended - TurnDetector.Pause;
+            _calledAt = turn.SpokeTill;
             StopForName();
             _logger.LogInformation("Open mic heard Raven's name alone: the next turn needs no name");
             return false;
@@ -1854,12 +1866,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // a turn with the name, a turn is the rest of that (#219); only a turn with the name, or the words right after the
         // name alone, start that window, so a TV line taken this way does not open it again.
         var called = Within(_calledAt, CallWindow, turn.Began);
-        continues = !called && Within(_namedEndedAt, ContinueWindow, turn.Began);
+        continues = !called && !turn.OverRaven && Within(_namedEndedAt, ContinueWindow, turn.Began);
         if ((turn.FollowUp || called || continues) && (!turn.Short || SpokenYes.IsYes(text)))
         {
+            if (WhisperNoise.Is(text))
+            {
+                // A cough or a throat-clear Whisper writes as words: asked, it would take the floor from the answer.
+                _logger.LogInformation("Open mic's turn of {Seconds:0.0} s was noise Whisper wrote as words: not asked", length.TotalSeconds);
+                continues = false;
+                return false;
+            }
+
             if (called)
             {
-                _namedEndedAt = ended - TurnDetector.Pause; // the words after the name alone are the named turn
+                _namedEndedAt = turn.SpokeTill; // the words after the name alone are the named turn
                 named = true;
             }
 

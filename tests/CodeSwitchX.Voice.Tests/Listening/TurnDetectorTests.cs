@@ -36,6 +36,17 @@ public sealed class TurnDetectorTests
         _turn.Calls.ShouldBe(0, "no turn to end: nothing to ask Smart Turn");
     }
 
+    // #219: the rest of a request is timed from when the speech ended, which is not always the 0.2 s pause before the end
+    [Fact]
+    public void A_turn_says_how_long_its_speech_had_been_over()
+    {
+        _turn.Answers.Enqueue(0.9);
+        Feed(Speech(1.0), Silence(0.5)).OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Silence.TotalSeconds.ShouldBe(0.2, 0.04);
+
+        _turn.Answers.Enqueue(0.1); // "check chat three and …": Smart Turn waits, and the turn ends after 3 s of silence
+        Feed(Speech(1.0), Silence(3.2)).OfType<TurnEvent.Ended>().ShouldHaveSingleItem().Silence.TotalSeconds.ShouldBe(3.0, 0.04);
+    }
+
     // #217: "Raven," and the comma's pause were dropped as a cough, and the words after it came without the name
     [Fact]
     public void A_short_word_and_the_words_after_a_pause_are_one_turn()
