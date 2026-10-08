@@ -58,6 +58,18 @@ public sealed class BrainSettings
         + "conversation; call the tools again for every question. ";
 
     /// <summary>
+    /// Asked "where did we leave off in StoryForgeX yesterday?", a brain said it had no access to yesterday's conversations,
+    /// then looked the chats up and answered after all (#211): the disclaimer was noise, and the user heard a refusal first.
+    /// </summary>
+    private const string LookFirst =
+        "A question about the Yard, a workspace or its chats is looked up before anything is said: never begin with what you "
+        + "cannot see. A question about earlier work (\"where did we leave off there?\", \"what did we do yesterday?\") is answered "
+        + "from what you can see: the chats list_chats and get_chat show (their titles, states, since when they are in them, "
+        + "and the last tool they ran) and any summaries you are given. Say what you found, never guess what a chat did beyond "
+        + "that, and when nothing there answers it, say so in one sentence. A chat with a send_to name is open in a VS Code tab "
+        + "and can be opened to read it: offer that. ";
+
+    /// <summary>
     /// The rule for the defaults is the issue's (#71): what is said with a request sets the defaults unless it is for that
     /// one chat. A chat is started empty in VS Code and given its task by SendMessage (#96).
     /// </summary>
@@ -143,6 +155,7 @@ public sealed class BrainSettings
         + "there is stop_chat with no chat. Act on another window only when the user names it, and give list_chats the workspace "
         + "\"all\" when they ask about every window. "
         + Fresh
+        + LookFirst
         + Starting
         + Telling
         + ClosingAndStopping
@@ -185,6 +198,7 @@ public sealed class BrainSettings
         + "You do not answer cards: a chat's question or permission prompt is answered in its window's Raven chat, where it is read "
         + "out, or with a click on the card. When the user wants to answer one, say which chat it is in, and offer to switch there. "
         + Fresh
+        + LookFirst
         + Starting
         + Telling
         + ClosingAndStopping
