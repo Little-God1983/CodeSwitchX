@@ -293,6 +293,9 @@ public static unsafe class ZOrder
 
     private static nint RootOwner(nint hwnd) => PInvoke.GetAncestor(new HWND(hwnd), GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
 
+    /// <summary>Whether <paramref name="hwnd"/> is <paramref name="window"/> or a window it owns: a dialog VS Code shows.</summary>
+    public static bool IsOf(nint hwnd, nint window) => hwnd != 0 && window != 0 && (hwnd == window || RootOwner(hwnd) == window);
+
     private static bool Seen(nint hwnd)
     {
         var h = new HWND(hwnd);

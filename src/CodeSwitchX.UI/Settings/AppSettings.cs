@@ -55,8 +55,8 @@ public sealed class AppSettings : IAppSettings
         {
             if (entry.Set is null)
             {
-                _shell().BringForward();
                 _shell().OpenSettingsAt(entry.Page); // the user does it there
+                _shell().BringForward(); // after the page, which hid the Cab's VS Code: the shell takes the keyboard (#224)
                 throw new YardActionException($"{Capital(entry.Info.Name)} is not changed by voice: {entry.Info.NotByVoice} "
                     + $"Settings is open at {Title(entry.Page)}.");
             }
@@ -72,7 +72,6 @@ public sealed class AppSettings : IAppSettings
         SettingsPage? target = string.IsNullOrWhiteSpace(page) || PageWords(page).Count == 0 ? null : PageNamed(page);
         return _ui.InvokeAsync(() =>
         {
-            _shell().BringForward();
             if (target is { } named)
             {
                 _shell().OpenSettingsAt(named);
@@ -81,6 +80,8 @@ public sealed class AppSettings : IAppSettings
             {
                 _shell().OpenSettings();
             }
+
+            _shell().BringForward(); // after the page, which hid the Cab's VS Code: the shell takes the keyboard (#224)
 
             return Title(S.Page);
         }, RavenActions.UiTimeout, ct);

@@ -525,6 +525,25 @@ public class ShellViewModelTests
         (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false));
     }
 
+    // #224: forward first, the shell's activation raised the Cab's old VS Code before the one asked for; after the wait for
+    // VS Code, nothing showed meanwhile
+    [Fact]
+    public async Task A_workspace_opened_by_voice_comes_forward_once_the_Cab_has_switched_to_it()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        (ShellMode Mode, Guid? Workspace, bool VsCodeShown)? atForward = null;
+        _h.Shell.ForwardRequested += () => atForward = (_h.Shell.Mode, _h.Shell.ActiveWorkspaceId,
+            _h.Docker.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IWindowDocker.BringToFront)));
+
+        (await ((IRavenShell)_h.Shell).OpenInCabAsync(_h.App.Id)).ShouldBeNull();
+
+        // Forwarded while VS Code still started: forwarded after the wait, it would have been shown already.
+        atForward.ShouldBe((ShellMode.Cab, _h.App.Id, false));
+        _h.Docker.Received(1).BringToFront(500);
+    }
+
     /// <summary>"Open chat two" switches Raven's chat and docks its window; the brain's switch_chat gets Raven's line back.</summary>
     [Fact]
     public async Task Open_chat_two_docks_its_window_and_the_brain_s_switch_says_where()
