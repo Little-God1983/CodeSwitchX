@@ -194,11 +194,13 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     }
 
     [McpServerTool(Name = "set_window", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Minimizes, maximizes or restores CodeSwitchX's own window (\"minimize CodeSwitchX\", \"get out of the way\", \"maximize "
-        + "it\", \"full screen\", \"bring CodeSwitchX back\"). The VS Code window shown in it goes along. You keep hearing the user while it "
-        + "is minimized. Returns what you say.")]
+    [Description("Minimizes, maximizes, restores or brings to the front CodeSwitchX's own window (\"minimize CodeSwitchX\", \"get out of "
+        + "the way\", \"maximize it\", \"full screen\", \"bring CodeSwitchX back\", \"bring CodeSwitchX to the front\", \"switch to "
+        + "CodeSwitchX\", \"show me CodeSwitchX\"). The VS Code window shown in it goes along. You keep hearing the user while it is "
+        + "minimized. Returns what you say.")]
     public Task<string> SetWindow(
-        [Description("minimize, maximize or restore (back to its normal size, in front).")] string state,
+        [Description("minimize, maximize or restore. Restore brings it to the front: from minimized or from behind other windows "
+            + "as it was, maximized too; only when it is in front already, back to its normal size.")] string state,
         CancellationToken cancellationToken = default)
     {
         var request = WindowRequestOf(state)
@@ -213,7 +215,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutofway" or "outofway" => WindowRequest.Minimize,
         "maximize" or "maximise" or "maximized" or "maximised" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
-        "restore" or "restored" or "normal" or "normalsize" or "backnormal" or "bringback" or "back" or "show" => WindowRequest.Restore,
+        "restore" or "restored" or "normal" or "normalsize" or "backnormal" or "bringback" or "back" or "show" or "front" or "infront"
+            or "bringfront" or "foreground" or "forward" or "bringforward" or "focus" => WindowRequest.Restore,
         _ => null,
     };
 

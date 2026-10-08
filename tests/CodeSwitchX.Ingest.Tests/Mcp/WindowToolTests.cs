@@ -26,6 +26,10 @@ public sealed class WindowToolTests
     [InlineData("get out of my way", WindowRequest.Minimize)]
     [InlineData("back to normal", WindowRequest.Restore)]
     [InlineData("normal size", WindowRequest.Restore)]
+    [InlineData("bring it to the front", WindowRequest.Restore)] // #222
+    [InlineData("to front", WindowRequest.Restore)]
+    [InlineData("foreground", WindowRequest.Restore)]
+    [InlineData("focus", WindowRequest.Restore)]
     [InlineData("minimised", WindowRequest.Minimize)]
     [InlineData("maximised", WindowRequest.Maximize)]
     public async Task The_state_as_the_brain_says_it_reaches_the_app(string said, WindowRequest request)

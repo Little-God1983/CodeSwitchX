@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Interop;
 using CodeSwitchX.Hosting.Win32;
 
 namespace CodeSwitchX.UI.Infrastructure;
@@ -30,5 +31,8 @@ internal static class WindowActivation
 
         window.Show();
         window.Activate();
+        // Asked by voice, the request is no input to this process, and Windows' foreground lock keeps the app in front
+        // where it is: take the foreground past it (#222).
+        Foreground.Take(new WindowInteropHelper(window).Handle);
     }
 }
