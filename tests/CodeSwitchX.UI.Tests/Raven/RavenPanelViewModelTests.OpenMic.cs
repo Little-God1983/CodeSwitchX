@@ -230,6 +230,7 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.SayShort();
         await WithinAsync(vm.PendingTranscriptions);
         said = "What's waiting on me?";
+        _time.Advance(TimeSpan.FromSeconds(1)); // begun after the name ended
         await TurnAsync(vm);
 
         _brain.Asked.ShouldHaveSingleItem().ShouldContain("What's waiting on me?");
@@ -285,6 +286,28 @@ public sealed partial class RavenPanelViewModelTests
             // The first half went to the brain at once; the rest takes the floor from its answer, so it goes with it.
             _brain.Asked.Last().ShouldContain("goes on from what they asked just before: \"Check chat three.\"");
         }
+    }
+
+    // Second review of #219: a cough right after a question took the floor and hushed the answer on its way
+    [Fact]
+    public async Task A_cough_right_after_a_question_leaves_its_answer_to_be_said()
+    {
+        var said = "Raven, what's waiting on me?";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await InOpenMicAsync();
+        await TurnAsync(vm, answered: false);
+        await Until(() => _brain.Asked.Count == 1);
+
+        said = "";
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await TurnAsync(vm, answered: false);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        await Until(() => _speech.Spoken.Any(s => s.Contains("One chat waits.")));
     }
 
     // Review of #219: the words after the name alone are the turn with the name, and their rest goes with them too
@@ -431,6 +454,7 @@ public sealed partial class RavenPanelViewModelTests
         said = "Raven.";
         await TurnAsync(vm);
         said = "And in chat seven?";
+        _time.Advance(TimeSpan.FromSeconds(1)); // begun after the name ended
         await TurnAsync(vm);
         _brain.Asked.Count.ShouldBe(2);
         _brain.Asked[1].ShouldContain("And in chat seven?");

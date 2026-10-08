@@ -255,6 +255,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The question the last turn with Raven's name asked: the rest of it, after a pause, goes with it (#219).</summary>
     private Question? _namedQuestion;
 
+    /// <summary>How much longer Raven listens for the words after its name alone (#219): nothing of its own comes meanwhile.</summary>
+    private TimeSpan CallListening() => _calledAt is { } called ? called + CallWindow - _time.GetUtcNow() : TimeSpan.Zero;
+
     /// <summary>Whether <paramref name="at"/> is within <paramref name="window"/> from <paramref name="from"/>.</summary>
     private static bool Within(DateTimeOffset? from, TimeSpan window, DateTimeOffset at) => from is { } f && at >= f && at <= f + window;
 
@@ -1384,10 +1387,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // TV, which must not hush Raven, hold its news or keep its answers unspoken, and waits to be heard to its name.
         _openHeard = true;
         _openBegan = _time.GetUtcNow() - TurnDetector.MinimumSpeech; // it counts once half a second of it was heard
-        if (InFollowUp())
+        if (InFollowUp(_openBegan))
         {
             _openSpeech = true;
-            UserStartsTalking();
+            // What Raven says stops, but not an answer on its way: the rest of a request may be a cough that asks nothing,
+            // and its answer would then be lost to a hush (#219).
+            StopForName();
         }
 
         _vocabularyFetch = Task.Run(FetchVocabularyAsync);
@@ -1395,7 +1400,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>Whether an Open mic turn begun now would be taken without Raven's name (#217).</summary>
-    internal bool TakesTurnsWithoutName => InFollowUp();
+    internal bool TakesTurnsWithoutName => InFollowUp(_time.GetUtcNow());
 
     /// <summary>
     /// Whether a turn beginning now needs no name before it (#217): soon after Raven's name was heard alone, or right after
@@ -1403,16 +1408,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// answer to an Open mic turn, or an allow's read-back, was heard or written a moment ago. The follow-up does not run
     /// while Raven speaks or thinks: talk then is the TV as often as the user, and only the name takes the floor.
     /// </summary>
-    private bool InFollowUp()
+    /// <param name="began">When the turn began: the windows are judged by that, as <see cref="ForRaven"/> judges them.</param>
+    private bool InFollowUp(DateTimeOffset began)
     {
-        var now = _time.GetUtcNow();
-        if (Within(_calledAt, CallWindow, now) || Within(_namedEndedAt, ContinueWindow, now))
+        if (Within(_calledAt, CallWindow, began) || Within(_namedEndedAt, ContinueWindow, began))
         {
             return true;
         }
 
         return FollowUpSeconds > 0 && !_speaking && _asking == 0 && !_telling
-            && _followUpFrom is { } from && now <= from + TimeSpan.FromSeconds(FollowUpSeconds);
+            && _followUpFrom is { } from && began <= from + TimeSpan.FromSeconds(FollowUpSeconds);
     }
 
     /// <summary>The turn is over: its clip joins the transcription queue as a released recording's does.</summary>
@@ -1428,7 +1433,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         OpenTurn open;
         if (turn.Short)
         {
-            open = new OpenTurn(_time.GetUtcNow() - length, InFollowUp(), Short: true); // no start came: a word on its own
+            var began = _time.GetUtcNow() - length;
+            open = new OpenTurn(began, InFollowUp(began), Short: true); // no start came: a word on its own
         }
         else
         {
@@ -1771,6 +1777,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (text.Length > 0 && SwitchBySaying(text))
             {
                 _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
+                if (named)
+                {
+                    _namedQuestion = null; // asked nothing: its rest goes on from no question
+                }
             }
             else if (text.Length > 0)
             {
@@ -1829,12 +1839,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (rest.Length > 0)
             {
                 text = rest;
-                _namedEndedAt = ended;
+                _namedEndedAt = ended - TurnDetector.Pause; // when the speech ended: the turn ends a pause after it
                 named = true;
                 return true;
             }
 
-            _calledAt = ended;
+            _calledAt = ended - TurnDetector.Pause;
             StopForName();
             _logger.LogInformation("Open mic heard Raven's name alone: the next turn needs no name");
             return false;
@@ -1849,7 +1859,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             if (called)
             {
-                _namedEndedAt = ended; // the words after the name alone are the named turn
+                _namedEndedAt = ended - TurnDetector.Pause; // the words after the name alone are the named turn
                 named = true;
             }
 
@@ -2423,7 +2433,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void SoundForOtherChat(bool floorFree)
     {
-        if (_chime is not null && !IsMuted && Traffic.TrySound(floorFree))
+        if (_chime is not null && !IsMuted && Traffic.TrySound(floorFree && CallListening() <= TimeSpan.Zero))
         {
             _logger.LogInformation("Raven chimes for another chat's news or card");
             _chime.Play();
@@ -2437,8 +2447,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // the next change of state schedules it again
         }
 
-        if (Within(_calledAt, CallWindow, _time.GetUtcNow()) && _calledAt!.Value + CallWindow - _time.GetUtcNow() is var listening
-            && listening > TimeSpan.Zero)
+        if (CallListening() is var listening && listening > TimeSpan.Zero)
         {
             // Raven was called by its name alone and waits for the words: nothing of its own comes in between (#219).
             _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(listening.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
