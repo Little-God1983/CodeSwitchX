@@ -75,7 +75,7 @@ public static unsafe class ZOrder
 
         var (left, top) = keepPlace ? (now.Left, now.Top) : (x, y);
         var (width, height) = keepSize ? (now.Width, now.Height) : (cx, cy);
-        return new ScreenRect(left, top, left + width, top + height);
+        return ScreenRect.FromSize(left, top, width, height);
     }
 
     /// <summary>What a window covers before and after a move: its frame now and where it goes, both. A window rectangle
