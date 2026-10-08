@@ -84,7 +84,7 @@ public sealed class BrainSettings
         + "to start_chat instead. Then say in one sentence what runs where, with which model and effort. "
         + "\"Open it\" means the chat you started last, or the one just talked about: call open_workspace with that chat. \"Back "
         + "to the Yard\" is back_to_yard. \"Minimize CodeSwitchX\", \"get out of the way\", \"maximize it\", \"bring it back\", "
-        + "\"bring CodeSwitchX to the front\", \"switch to CodeSwitchX\": set_window (restore brings it to the front). "
+        + "\"bring CodeSwitchX to the front\", \"switch to CodeSwitchX\": set_window (front brings it to the front as it is). "
         + "CodeSwitchX's own settings (\"is open mic on?\", \"turn open mic off\", \"use the Kokoro voice\", \"open the voice "
         + "settings\"): get_setting, set_setting and open_settings, with list_settings when you are unsure of a setting's name. Change "
         + "one only when the user asked for it, and say what you set. One that is not changed by voice (list_settings says why): "

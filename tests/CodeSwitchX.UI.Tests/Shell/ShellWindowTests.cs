@@ -110,6 +110,20 @@ public sealed class ShellWindowTests
         _window.State.ShouldBe(ShellWindowState.Normal);
     }
 
+    // #222: "switch to CodeSwitchX" while it is in front shrank a maximized window
+    [Fact]
+    public void Front_never_changes_the_size_and_says_when_it_is_there_already()
+    {
+        _window.State = ShellWindowState.Maximized;
+
+        Set(WindowRequest.Front).ShouldBe("CodeSwitchX is already there, in front.");
+        _window.Calls.ShouldBeEmpty();
+
+        _window.IsInFront = false;
+        Set(WindowRequest.Front).ShouldBe("CodeSwitchX is back.");
+        _window.Calls.ShouldBe(["show Maximized"]);
+    }
+
     [Fact]
     public void A_window_windows_keeps_behind_is_said_honestly()
     {

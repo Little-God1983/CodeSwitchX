@@ -69,6 +69,13 @@ public partial class MainWindow : Window, IShellWindow
     {
         WindowState = state == ShellWindowState.Maximized ? WindowState.Maximized : WindowState.Normal;
         WindowActivation.BringUp(this);
+        // Asked by voice (set_window), the request is no input to this process, and Windows' foreground lock keeps the app
+        // in front where it is: the user asked for CodeSwitchX, so it takes the foreground past it (#222). Not while a
+        // mouse button is held: the activation would be read as a click on the shell.
+        if (!WindowActivation.AnyMouseButtonDown())
+        {
+            ForegroundLock.Take(_hwnd);
+        }
     }
 
     nint IShellWindow.Dialog =>

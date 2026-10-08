@@ -9,21 +9,23 @@ namespace CodeSwitchX.Hosting.Win32;
 /// window in front where it was (#222). For the moment of the switch, this thread shares the input state of the window in
 /// front, which lets it take the foreground; no key press is made up.
 /// </summary>
-public static unsafe class Foreground
+public static unsafe class ForegroundLock
 {
     /// <summary>Whether <paramref name="hwnd"/> has the foreground afterwards.</summary>
+    /// <remarks>A window in front that does not answer is left alone: attached to its input, the activation would wait on
+    /// it, and a hung app would freeze the shell.</remarks>
     public static bool Take(nint hwnd)
     {
         var window = new HWND(hwnd);
-        if (PInvoke.GetForegroundWindow() == window || PInvoke.SetForegroundWindow(window) && PInvoke.GetForegroundWindow() == window)
+        var front = PInvoke.GetForegroundWindow();
+        if (front == window)
         {
             return true;
         }
 
-        var front = PInvoke.GetForegroundWindow();
         var frontThread = front.IsNull ? 0 : PInvoke.GetWindowThreadProcessId(front, null);
         var ownThread = PInvoke.GetCurrentThreadId();
-        if (frontThread == 0 || frontThread == ownThread)
+        if (frontThread == 0 || frontThread == ownThread || PInvoke.IsHungAppWindow(front))
         {
             return false;
         }

@@ -199,8 +199,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "CodeSwitchX\", \"show me CodeSwitchX\"). The VS Code window shown in it goes along. You keep hearing the user while it is "
         + "minimized. Returns what you say.")]
     public Task<string> SetWindow(
-        [Description("minimize, maximize or restore. Restore brings it to the front: from minimized or from behind other windows "
-            + "as it was, maximized too; only when it is in front already, back to its normal size.")] string state,
+        [Description("minimize, maximize, restore or front. front brings it to the front as it is, maximized too (\"bring it to the "
+            + "front\", \"switch to CodeSwitchX\", \"show it\", \"bring it back\"); restore is back to its normal size.")] string state,
         CancellationToken cancellationToken = default)
     {
         var request = WindowRequestOf(state)
@@ -215,8 +215,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutofway" or "outofway" => WindowRequest.Minimize,
         "maximize" or "maximise" or "maximized" or "maximised" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
-        "restore" or "restored" or "normal" or "normalsize" or "backnormal" or "bringback" or "back" or "show" or "front" or "infront"
-            or "bringfront" or "foreground" or "forward" or "bringforward" or "focus" => WindowRequest.Restore,
+        "restore" or "restored" or "normal" or "normalsize" or "backnormal" => WindowRequest.Restore,
+        "front" or "infront" or "bringfront" or "foreground" or "forward" or "bringforward" or "focus" or "switch" or "bringback" or "back"
+            or "show" or "showme" => WindowRequest.Front,
         _ => null,
     };
 

@@ -74,6 +74,9 @@ public enum WindowRequest
     Minimize,
     Maximize,
     Restore,
+
+    /// <summary>To the front as it is, maximized too, out of the minimized state: never a change of size (#222).</summary>
+    Front,
 }
 
 /// <summary>A request the Yard cannot carry out; the message says why, in words for the user.</summary>
