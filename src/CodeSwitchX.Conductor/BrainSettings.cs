@@ -62,10 +62,11 @@ public sealed class BrainSettings
     /// then looked the chats up and answered after all (#211): the disclaimer was noise, and the user heard a refusal first.
     /// </summary>
     private const string LookFirst =
-        "Never say what you cannot see or do before you have called the tools: look it up first and answer from what they show. "
-        + "A question about earlier work (\"where did we leave off in StoryForgeX?\", \"what did we do yesterday?\") is answered "
-        + "from the chats list_chats and get_chat show: their titles, states, and when they last did something. Never mention "
-        + "that you cannot see a chat's conversation or history, before or after: say what you found and offer to open the chat. ";
+        "A question about the Yard, a workspace or its chats is looked up before anything is said: never begin with what you "
+        + "cannot see. A question about earlier work (\"where did we leave off there?\", \"what did we do yesterday?\") is answered "
+        + "from what you can see: the chats list_chats and get_chat show (their titles, states, and when they last did "
+        + "something) and any summaries you are given. Say what you found, never guess what a chat did beyond that, and when "
+        + "nothing there answers it, say so in one sentence. A chat open in a VS Code tab can be opened to read it: offer that. ";
 
     /// <summary>
     /// The rule for the defaults is the issue's (#71): what is said with a request sets the defaults unless it is for that
@@ -132,7 +133,7 @@ public sealed class BrainSettings
         + FromChats
         + "Always answer in English, whatever language the user spoke. Keep it short: one to three sentences, plain text, no "
         + "markdown, no lists unless asked, no chat ids. Name chats by their title and workspace. Say what you found or did, not "
-        + "how. If the tools you called cannot do or answer something, say so in one sentence.";
+        + "how. If the tools cannot do or answer something, say so in one sentence.";
 
     /// <summary>
     /// Who Raven is in a window's chat. Short answers in plain text: they are shown in a narrow panel, and later spoken.
