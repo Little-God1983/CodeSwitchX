@@ -244,6 +244,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>How long after its name alone Raven waits for the words, whatever the follow-up is set to.</summary>
     internal static readonly TimeSpan CallWindow = TimeSpan.FromSeconds(DefaultFollowUpSeconds);
 
+    /// <summary>When the last turn that began with Raven's name ended: a turn begun within <see cref="ContinueWindow"/> of
+    /// it is the rest of what the user said, split by a pause (#219).</summary>
+    private DateTimeOffset? _namedEndedAt;
+
+    /// <summary>How soon after a turn with Raven's name the next one must begin to go with it: a pause in what the user says,
+    /// not the TV's next line.</summary>
+    internal static readonly TimeSpan ContinueWindow = TimeSpan.FromSeconds(2);
+
     /// <summary>The note that follows the voice's install and first load, while it stands.</summary>
     private RavenLogEntry? _voiceNote;
 
@@ -1391,9 +1399,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool InFollowUp()
     {
         var now = _time.GetUtcNow();
-        if (_calledAt is { } called && now <= called + CallWindow)
+        if (_calledAt is { } called && now <= called + CallWindow || _namedEndedAt is { } named && now <= named + ContinueWindow)
         {
-            return true;
+            return true; // the words after the name, or the rest of what was said with it, also while Raven thinks (#219)
         }
 
         return FollowUpSeconds > 0 && !_speaking && _asking == 0 && !_telling
@@ -1800,6 +1808,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (rest.Length > 0)
             {
                 text = rest;
+                _namedEndedAt = ended;
                 return true;
             }
 
@@ -1810,7 +1819,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         // A word on its own in the follow-up counts only as a yes: a cough Whisper writes as "Thank you." must not be asked.
-        if ((turn.FollowUp || _calledAt is { } called && turn.Began >= called && turn.Began <= called + CallWindow)
+        // Begun soon after a turn with the name, it is the rest of that (#219); only a turn with the name starts that window,
+        // so a TV line taken this way does not open it again.
+        if ((turn.FollowUp || _calledAt is { } called && turn.Began >= called && turn.Began <= called + CallWindow
+                || _namedEndedAt is { } named && turn.Began >= named && turn.Began <= named + ContinueWindow)
             && (!turn.Short || SpokenYes.IsYes(text)))
         {
             _calledAt = null;
@@ -1896,7 +1908,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
                 // own window, so "stop it" said in chat 3 would stop a chat in the window the user is in now.
-                var again = new Question(waiting.Text, waiting.Chat, waiting.Earlier);
+                var again = new Question(waiting.Text, waiting.Chat, waiting.Earlier) { OpenMic = waiting.OpenMic };
                 again.Entries.AddRange(waiting.Entries);
                 own.Add(again);
             }
@@ -1905,6 +1917,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 takenEarlier += waiting.Earlier;
                 takenText += waiting.Text + "\n";
                 takenEntries.AddRange(waiting.Entries);
+                openMic |= waiting.OpenMic; // said in Open mic, its answer opens the follow-up as this one's (#219)
             }
             else
             {
@@ -2391,6 +2404,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return; // the next change of state schedules it again
         }
 
+        if (_calledAt is { } called && called + CallWindow - _time.GetUtcNow() is var listening && listening > TimeSpan.Zero)
+        {
+            // Raven was called by its name alone and waits for the words: nothing of its own comes in between (#219).
+            _newsTimer.Change(TimeSpan.FromMilliseconds(Math.Ceiling(listening.TotalMilliseconds)), Timeout.InfiniteTimeSpan);
+            return;
+        }
+
         if (Traffic.PauseLeft is var left && left > TimeSpan.Zero)
         {
             // A chat's sound came meanwhile, or the timer, counting coarser than the clock, fired a little early: only what is
@@ -2677,7 +2697,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Their own turns end at once; their words go again, with the news of the yes.
             waiting.Merged = true;
-            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries);
+            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries, openMic: waiting.OpenMic);
         }
         else
         {
