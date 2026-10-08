@@ -738,8 +738,9 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     /// <summary>
     /// Shows the active workspace's VS Code in the Cab and raises it, when the shell can show it: in Cab mode, not
-    /// minimised, with a known Cab rectangle. The one place for that rule: an open that finishes, a restore, and an
-    /// activation of the shell (which puts the shell above the docked VS Code) all come here.
+    /// minimised, with a known Cab rectangle. The one place for that rule: an open that finishes, a restore, and a
+    /// keyboard activation of the shell all come here. A click on the shell tucks the shell under VS Code instead, as
+    /// Windows leaves VS Code under the shell then (#213, <see cref="CodeSwitchX.Hosting.Win32.ZOrder.TuckUnder"/>).
     /// </summary>
     public void RaiseHostedWindow() => RaiseHostedWindow(focus: true);
 
