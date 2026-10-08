@@ -17,6 +17,12 @@ public interface IWindowDocker
     void PlaceOnTop(nint hwnd);
 
     /// <summary>
+    /// Puts the window right under <paramref name="above"/> without activating it: under a dialog of the shell's, so the
+    /// dialog stays in front whenever the asynchronous move lands (#215).
+    /// </summary>
+    void PlaceUnder(nint hwnd, nint above);
+
+    /// <summary>
     /// Ends the drag or resize the user has started on the window's frame, before it has moved anything, without
     /// waiting for the window's thread. Nothing happens when the window is not in a drag or resize any more.
     /// </summary>

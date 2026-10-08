@@ -176,6 +176,6 @@ public sealed class ShellWindowTests
             IsInFront = !ForegroundRefused;
         }
 
-        public void RaiseDialogs() => Calls.Add("raise dialogs");
+        public nint Dialog { get; set; }
     }
 }

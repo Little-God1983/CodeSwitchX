@@ -77,6 +77,21 @@ public class HostManagerTests
         hosted.Error.ShouldNotBeNull().ShouldContain("window");
     }
 
+    // #215: shown on top, VS Code hid a dialog of the shell's until the next click
+    [Fact]
+    public async Task ShowInCab_under_a_dialog_puts_the_window_right_under_it_without_the_foreground()
+    {
+        WindowAppearsAfterLaunch();
+        await _manager.OpenAsync(_workspace, CancellationToken.None);
+        _docker.ClearReceivedCalls();
+
+        _manager.ShowInCab(_workspace.Id, ScreenRect.FromSize(0, 28, 1600, 900), under: 77);
+
+        _docker.Received(1).PlaceUnder(500, 77);
+        _docker.DidNotReceive().BringToFront(Arg.Any<nint>());
+        _docker.DidNotReceive().PlaceOnTop(Arg.Any<nint>());
+    }
+
     [Fact]
     public async Task ShowInCab_uncloaks_moves_and_hides_the_others()
     {

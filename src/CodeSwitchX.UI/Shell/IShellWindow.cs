@@ -40,8 +40,8 @@ public interface IShellWindow
     void Show(ShellWindowState state);
 
     /// <summary>
-    /// Brings a dialog of its own that is up (Add workspace) back over the VS Code window the Cab just raised: a workspace
-    /// opened while it was up, by Raven say, hid it under VS Code until the next click (#215). Nothing without one.
+    /// A dialog of its own that is up (Add workspace), or 0: the Cab shows VS Code right under it, so a workspace opened
+    /// while it is up, by Raven say, no longer hides it until the next click (#215).
     /// </summary>
-    void RaiseDialogs();
+    nint Dialog { get; }
 }

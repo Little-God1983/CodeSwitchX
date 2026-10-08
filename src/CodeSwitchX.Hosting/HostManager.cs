@@ -521,13 +521,14 @@ public sealed class HostManager : IDisposable
     /// Switches the Cab to this workspace: hides the others, shows this window in the rect and raises it; with
     /// <paramref name="focus"/> false it goes on top without taking the foreground (see <see cref="IWindowDocker.PlaceOnTop"/>).
     /// </summary>
-    public void ShowInCab(Guid workspaceId, ScreenRect rect, bool focus = true)
+    /// <param name="under">A dialog of the shell's that is up: the window goes right under it, without the foreground (#215).</param>
+    public void ShowInCab(Guid workspaceId, ScreenRect rect, bool focus = true, nint under = 0)
     {
         lock (_gate)
         {
             if (_hosted.TryGetValue(workspaceId, out var target) && target.State == HostState.Running)
             {
-                ShowInCabLocked(target, rect, focus);
+                ShowInCabLocked(target, rect, focus, under);
             }
         }
     }
@@ -537,7 +538,8 @@ public sealed class HostManager : IDisposable
     /// dragging the shell never pulls VS Code over other windows or steals focus. A window that is not visible, or that
     /// was never docked (adopted as it was on the desktop, so visible but behind the shell), is shown as by <see cref="ShowInCab"/>.
     /// </summary>
-    public void Dock(Guid workspaceId, ScreenRect rect)
+    /// <param name="under">A dialog of the shell's that is up: a window not shown yet goes right under it, as by <see cref="ShowInCab"/>.</param>
+    public void Dock(Guid workspaceId, ScreenRect rect, nint under = 0)
     {
         lock (_gate)
         {
@@ -548,7 +550,7 @@ public sealed class HostManager : IDisposable
 
             if (!target.Visible || target.TargetRect is null)
             {
-                ShowInCabLocked(target, rect);
+                ShowInCabLocked(target, rect, under: under);
                 return;
             }
 
@@ -558,7 +560,7 @@ public sealed class HostManager : IDisposable
         }
     }
 
-    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect, bool focus = true)
+    private void ShowInCabLocked(HostedWorkspace target, ScreenRect rect, bool focus = true, nint under = 0)
     {
         foreach (var other in _hosted.Values.Where(h => h != target && h.State == HostState.Running && h.Visible))
         {
@@ -572,7 +574,11 @@ public sealed class HostManager : IDisposable
         // shown first it drew a frame there.
         _docker.MoveTo(target.Hwnd, rect);
         _docker.Uncloak(target.Hwnd);
-        if (focus)
+        if (under != 0)
+        {
+            _docker.PlaceUnder(target.Hwnd, under);
+        }
+        else if (focus)
         {
             _docker.BringToFront(target.Hwnd);
         }

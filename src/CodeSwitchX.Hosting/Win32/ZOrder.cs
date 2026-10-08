@@ -60,16 +60,29 @@ public static unsafe class ZOrder
             return null;
         }
 
-        var (left, top) = (pos->flags & SET_WINDOW_POS_FLAGS.SWP_NOMOVE) != 0 ? (now.left, now.top) : (pos->x, pos->y);
-        var (width, height) = (pos->flags & SET_WINDOW_POS_FLAGS.SWP_NOSIZE) != 0 ? (now.right - now.left, now.bottom - now.top) : (pos->cx, pos->cy);
+        return Destination(pos->flags, pos->x, pos->y, pos->cx, pos->cy, new ScreenRect(now.left, now.top, now.right, now.bottom));
+    }
+
+    /// <summary>The window rectangle a move gives: its new place, its new size, or both, the rest as <paramref name="now"/>.</summary>
+    internal static ScreenRect? Destination(SET_WINDOW_POS_FLAGS flags, int x, int y, int cx, int cy, ScreenRect now)
+    {
+        var keepPlace = (flags & SET_WINDOW_POS_FLAGS.SWP_NOMOVE) != 0;
+        var keepSize = (flags & SET_WINDOW_POS_FLAGS.SWP_NOSIZE) != 0;
+        if (keepPlace && keepSize)
+        {
+            return null;
+        }
+
+        var (left, top) = keepPlace ? (now.Left, now.Top) : (x, y);
+        var (width, height) = keepSize ? (now.Width, now.Height) : (cx, cy);
         return new ScreenRect(left, top, left + width, top + height);
     }
 
     /// <summary>What a window covers before and after a move: its frame now and where it goes, both. A window rectangle
     /// reaches a few pixels past the frame, so the pair may count as covered when it is not: that only tucks the shell
-    /// under VS Code again, where it already is.</summary>
+    /// under VS Code again, where it already is. A frame nobody can tell stays unknown, so every window covers it.</summary>
     internal static Func<nint, ScreenRect?> Reaching(nint self, ScreenRect? destination, Func<nint, ScreenRect?> frame) =>
-        destination is not { } to ? frame : w => w != self ? frame(w) : frame(w) is { } f ? Union(f, to) : to;
+        destination is not { } to ? frame : w => w != self ? frame(w) : frame(w) is { } f ? Union(f, to) : null;
 
     internal static ScreenRect Union(ScreenRect a, ScreenRect b) =>
         new(Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top), Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom));

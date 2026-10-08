@@ -202,6 +202,20 @@ public sealed class ZOrderTests
         covers(1).ShouldBeTrue();
         covers(2).ShouldBeTrue("a window rectangle reaches 8 px past the frame: counted, the shell is only tucked under VS Code again");
         ZOrder.CoversOf(Shell, VsCode, ZOrder.Reaching(Shell, null, h => frames[h]), h => h)(1).ShouldBeFalse("a move in the z-order only");
+        ZOrder.CoversOf(Shell, VsCode, ZOrder.Reaching(Shell, maximized, h => h == Shell ? null : frames[h]), h => h)(2)
+            .ShouldBeTrue("its own frame unknown, every window covers it, wherever it goes");
+    }
+
+    [Fact]
+    public void A_moves_destination_takes_its_new_place_and_size_and_keeps_the_rest()
+    {
+        var now = new ScreenRect(100, 100, 600, 400);
+        const SET_WINDOW_POS_FLAGS place = SET_WINDOW_POS_FLAGS.SWP_NOMOVE, size = SET_WINDOW_POS_FLAGS.SWP_NOSIZE;
+
+        ZOrder.Destination(0, -8, -8, 1936, 1096, now).ShouldBe(new ScreenRect(-8, -8, 1928, 1088), "a maximize: both");
+        ZOrder.Destination(place, 0, 0, 800, 600, now).ShouldBe(new ScreenRect(100, 100, 900, 700), "resized where it stands");
+        ZOrder.Destination(size, 300, 50, 0, 0, now).ShouldBe(new ScreenRect(300, 50, 800, 350), "moved, its size kept");
+        ZOrder.Destination(place | size, 0, 0, 0, 0, now).ShouldBeNull("a move in the z-order only");
     }
 
     [Fact]

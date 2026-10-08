@@ -766,7 +766,26 @@ public class ShellViewModelTests
 
     // #215: a workspace opened while Add workspace was up hid the dialog under VS Code
     [Fact]
-    public async Task A_raise_of_VS_Code_brings_a_dialog_of_the_shell_back_over_it()
+    public async Task With_a_dialog_of_the_shell_up_VS_Code_comes_in_right_under_it_without_the_foreground()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        var window = Substitute.For<IShellWindow>();
+        window.Dialog.Returns((nint)77);
+        _h.Shell.Window = window;
+        _h.Docker.ClearReceivedCalls();
+
+        _h.Shell.RaiseHostedWindow();
+
+        _h.Docker.Received(1).PlaceUnder(500, 77);
+        _h.Docker.DidNotReceive().BringToFront(Arg.Any<nint>());
+        _h.Docker.DidNotReceive().PlaceOnTop(Arg.Any<nint>());
+    }
+
+    [Fact]
+    public async Task Without_a_dialog_a_raise_brings_VS_Code_to_the_front_as_before()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
@@ -778,11 +797,8 @@ public class ShellViewModelTests
 
         _h.Shell.RaiseHostedWindow();
 
-        Received.InOrder(() =>
-        {
-            _h.Docker.BringToFront(500);
-            window.RaiseDialogs();
-        });
+        _h.Docker.Received(1).BringToFront(500);
+        _h.Docker.DidNotReceive().PlaceUnder(Arg.Any<nint>(), Arg.Any<nint>());
     }
 
     [Fact]
