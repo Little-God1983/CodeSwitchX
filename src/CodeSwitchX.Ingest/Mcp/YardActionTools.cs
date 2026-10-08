@@ -194,28 +194,38 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     }
 
     [McpServerTool(Name = "set_window", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Minimizes, maximizes or restores CodeSwitchX's own window (\"minimize CodeSwitchX\", \"get out of the way\", \"maximize "
-        + "it\", \"full screen\", \"bring CodeSwitchX back\"). The VS Code window shown in it goes along. You keep hearing the user while it "
-        + "is minimized. Returns what you say.")]
+    [Description("Minimizes, maximizes, restores or brings to the front CodeSwitchX's own window (\"minimize CodeSwitchX\", \"get out of "
+        + "the way\", \"maximize it\", \"full screen\", \"bring CodeSwitchX back\", \"bring CodeSwitchX to the front\", \"switch to "
+        + "CodeSwitchX\", \"show me CodeSwitchX\"). The VS Code window shown in it goes along. You keep hearing the user while it is "
+        + "minimized. Returns what you say.")]
     public Task<string> SetWindow(
-        [Description("minimize, maximize or restore (back to its normal size, in front).")] string state,
+        [Description("minimize, maximize, restore or front. front brings it to the front as it is, maximized too (\"bring it to the "
+            + "front\", \"switch to CodeSwitchX\", \"show it\", \"bring it back\"); restore is back to its normal size.")] string state,
         CancellationToken cancellationToken = default)
     {
         var request = WindowRequestOf(state)
-            ?? throw new McpException($"state is minimize, maximize or restore, not '{state}'. Nothing was changed.");
+            ?? throw new McpException($"state is minimize, maximize, restore or front, not '{state}'. Nothing was changed.");
         return Act(() => actions.SetWindowAsync(request, cancellationToken));
     }
 
     /// <summary>How the brain may say the state: "minimise", "hide", "full screen", "bring back".</summary>
-    internal static WindowRequest? WindowRequestOf(string? state) => string.Concat((state ?? "").ToLowerInvariant()
-            .Split([' ', ',', '.', '-', '!'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w is not ("it" or "the" or "my" or "to" or "codeswitchx" or "window" or "please"))) switch
+    internal static WindowRequest? WindowRequestOf(string? state) => Words(state) switch
     {
+        var said when said.Contains("front", StringComparison.Ordinal) || said.Contains("foreground", StringComparison.Ordinal)
+            || said.Contains("focus", StringComparison.Ordinal) => WindowRequest.Front, // "come to the front", "into focus" (#222)
         "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutofway" or "outofway" => WindowRequest.Minimize,
         "maximize" or "maximise" or "maximized" or "maximised" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
-        "restore" or "restored" or "normal" or "normalsize" or "backnormal" or "bringback" or "back" or "show" => WindowRequest.Restore,
+        "restore" or "restored" or "normal" or "normalsize" or "backnormal" => WindowRequest.Restore,
+        "front" or "infront" or "bringfront" or "bringinfront" or "foreground" or "bringforeground" or "forward" or "bringforward" or "focus"
+            or "switch" or "switchback" or "bringback" or "back" or "comeback" or "show" or "showme" or "bringup" or "raise" or "activate"
+            or "unminimize" or "unminimise" => WindowRequest.Front,
         _ => null,
     };
+
+    /// <summary>The state's words joined, without the ones that only go with it.</summary>
+    private static string Words(string? state) => string.Concat((state ?? "").ToLowerInvariant()
+        .Split([' ', ',', '.', '-', '!'], StringSplitOptions.RemoveEmptyEntries)
+        .Where(w => w is not ("it" or "the" or "my" or "to" or "codeswitchx" or "window" or "please")));
 
     [McpServerTool(Name = "close_chat", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Closes a chat's tab in VS Code (\"close the … chat\"); its row leaves the tile. Any chat open in a VS Code tab can be closed, "

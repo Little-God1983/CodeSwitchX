@@ -16,6 +16,11 @@ internal static class WindowActivation
     public static bool AnyMouseButtonDown() =>
         HotkeyInterop.IsKeyDown(VkLButton) || HotkeyInterop.IsKeyDown(VkRButton) || HotkeyInterop.IsKeyDown(VkMButton);
 
+    /// <summary>Whether Shift, Ctrl, Alt or a Windows key is held right now, in whatever app has the keyboard.</summary>
+    public static bool AnyModifierDown() =>
+        HotkeyInterop.IsKeyDown(0x10) || HotkeyInterop.IsKeyDown(0x11) || HotkeyInterop.IsKeyDown(0x12) || HotkeyInterop.IsKeyDown(0x5B)
+        || HotkeyInterop.IsKeyDown(0x5C);
+
     /// <summary>
     /// Brings the window back to the user: out of the minimised state, as it was before (maximized too, as from the
     /// taskbar), and to the front.

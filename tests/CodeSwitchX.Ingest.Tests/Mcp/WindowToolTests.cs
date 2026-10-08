@@ -17,15 +17,28 @@ public sealed class WindowToolTests
     [InlineData("maximize", WindowRequest.Maximize)]
     [InlineData("full screen", WindowRequest.Maximize)]
     [InlineData("restore", WindowRequest.Restore)]
-    [InlineData("bring back", WindowRequest.Restore)]
-    [InlineData("bring it back", WindowRequest.Restore)]
+    [InlineData("bring back", WindowRequest.Front)]
+    [InlineData("bring it back", WindowRequest.Front)]
     [InlineData("maximize it", WindowRequest.Maximize)]
     [InlineData("minimize CodeSwitchX", WindowRequest.Minimize)]
     [InlineData("get out of the way", WindowRequest.Minimize)]
-    [InlineData("show it", WindowRequest.Restore)]
+    [InlineData("show it", WindowRequest.Front)]
     [InlineData("get out of my way", WindowRequest.Minimize)]
     [InlineData("back to normal", WindowRequest.Restore)]
     [InlineData("normal size", WindowRequest.Restore)]
+    [InlineData("bring it to the front", WindowRequest.Front)] // #222
+    [InlineData("to front", WindowRequest.Front)]
+    [InlineData("foreground", WindowRequest.Front)]
+    [InlineData("focus", WindowRequest.Front)]
+    [InlineData("switch to CodeSwitchX", WindowRequest.Front)]
+    [InlineData("front", WindowRequest.Front)]
+    [InlineData("bring to the foreground", WindowRequest.Front)]
+    [InlineData("bring CodeSwitchX up", WindowRequest.Front)]
+    [InlineData("raise", WindowRequest.Front)]
+    [InlineData("switch back", WindowRequest.Front)]
+    [InlineData("come to the front", WindowRequest.Front)]
+    [InlineData("bring it into focus", WindowRequest.Front)]
+    [InlineData("come back", WindowRequest.Front)]
     [InlineData("minimised", WindowRequest.Minimize)]
     [InlineData("maximised", WindowRequest.Maximize)]
     public async Task The_state_as_the_brain_says_it_reaches_the_app(string said, WindowRequest request)
@@ -44,7 +57,7 @@ public sealed class WindowToolTests
 
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(new FakeYard(), actions).SetWindow("wiggle", Ct));
 
-        error.Message.ShouldContain("minimize, maximize or restore");
+        error.Message.ShouldContain("minimize, maximize, restore or front");
         actions.Window.ShouldBeNull();
     }
 

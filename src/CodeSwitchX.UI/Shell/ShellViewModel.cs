@@ -597,10 +597,11 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
         // Restored from minimized, it comes back as it was before, maximized too, as from the taskbar. Asked to come back
         // while covered, it comes to the front as it is; only asked to restore while in front, a maximized one shrinks.
+        // Asked to the front, it never changes size (#222).
         var inFront = window.IsInFront;
         var (state, word) = request == WindowRequest.Maximize ? (ShellWindowState.Maximized, "maximized")
             : window.State == ShellWindowState.Minimized ? (window.Restored, "back")
-            : !inFront ? (window.State, "back")
+            : !inFront || request == WindowRequest.Front ? (window.State, "back")
             : (ShellWindowState.Normal, "at its normal size");
         if (window.State == state && inFront)
         {
