@@ -204,7 +204,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var request = WindowRequestOf(state)
-            ?? throw new McpException($"state is minimize, maximize or restore, not '{state}'. Nothing was changed.");
+            ?? throw new McpException($"state is minimize, maximize, restore or front, not '{state}'. Nothing was changed.");
         return Act(() => actions.SetWindowAsync(request, cancellationToken));
     }
 
@@ -216,8 +216,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         "minimize" or "minimise" or "minimized" or "minimised" or "min" or "hide" or "hidden" or "getoutofway" or "outofway" => WindowRequest.Minimize,
         "maximize" or "maximise" or "maximized" or "maximised" or "max" or "fullscreen" or "full" => WindowRequest.Maximize,
         "restore" or "restored" or "normal" or "normalsize" or "backnormal" => WindowRequest.Restore,
-        "front" or "infront" or "bringfront" or "foreground" or "forward" or "bringforward" or "focus" or "switch" or "bringback" or "back"
-            or "show" or "showme" => WindowRequest.Front,
+        "front" or "infront" or "bringfront" or "bringinfront" or "foreground" or "bringforeground" or "forward" or "bringforward" or "focus"
+            or "switch" or "switchback" or "bringback" or "back" or "show" or "showme" or "bringup" or "up" or "raise" or "activate"
+            or "unminimize" or "unminimise" => WindowRequest.Front,
         _ => null,
     };
 

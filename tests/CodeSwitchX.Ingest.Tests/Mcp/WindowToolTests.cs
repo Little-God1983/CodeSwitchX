@@ -32,6 +32,10 @@ public sealed class WindowToolTests
     [InlineData("focus", WindowRequest.Front)]
     [InlineData("switch to CodeSwitchX", WindowRequest.Front)]
     [InlineData("front", WindowRequest.Front)]
+    [InlineData("bring to the foreground", WindowRequest.Front)]
+    [InlineData("bring CodeSwitchX up", WindowRequest.Front)]
+    [InlineData("raise", WindowRequest.Front)]
+    [InlineData("switch back", WindowRequest.Front)]
     [InlineData("minimised", WindowRequest.Minimize)]
     [InlineData("maximised", WindowRequest.Maximize)]
     public async Task The_state_as_the_brain_says_it_reaches_the_app(string said, WindowRequest request)
@@ -50,7 +54,7 @@ public sealed class WindowToolTests
 
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(new FakeYard(), actions).SetWindow("wiggle", Ct));
 
-        error.Message.ShouldContain("minimize, maximize or restore");
+        error.Message.ShouldContain("minimize, maximize, restore or front");
         actions.Window.ShouldBeNull();
     }
 

@@ -1,5 +1,6 @@
 using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace CodeSwitchX.Hosting.Win32;
 
@@ -11,9 +12,21 @@ namespace CodeSwitchX.Hosting.Win32;
 /// </summary>
 public static unsafe class ForegroundLock
 {
+    /// <summary>How long the window in front may take to answer before it is taken for busy (IsHungAppWindow waits 5 s).</summary>
+    private const uint Answer = 200;
+
+    /// <summary>Whether the window's thread pumps its messages: a WM_NULL comes back within <see cref="Answer"/> ms.</summary>
+    private static bool Answers(HWND window)
+    {
+        nuint result;
+        return PInvoke.SendMessageTimeout(window, PInvoke.WM_NULL, 0, 0,
+            SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_ABORTIFHUNG | SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_BLOCK, Answer, &result) != 0;
+    }
+
     /// <summary>Whether <paramref name="hwnd"/> has the foreground afterwards.</summary>
-    /// <remarks>A window in front that does not answer is left alone: attached to its input, the activation would wait on
-    /// it, and a hung app would freeze the shell.</remarks>
+    /// <remarks>A window in front that does not answer within <see cref="Answer"/> is left alone: attached to its input, the
+    /// activation would wait on it, and a busy or hung app would freeze the shell. One that hangs right after the probe still
+    /// can, for as long as it hangs.</remarks>
     public static bool Take(nint hwnd)
     {
         var window = new HWND(hwnd);
@@ -25,7 +38,7 @@ public static unsafe class ForegroundLock
 
         var frontThread = front.IsNull ? 0 : PInvoke.GetWindowThreadProcessId(front, null);
         var ownThread = PInvoke.GetCurrentThreadId();
-        if (frontThread == 0 || frontThread == ownThread || PInvoke.IsHungAppWindow(front))
+        if (frontThread == 0 || frontThread == ownThread || PInvoke.IsHungAppWindow(front) || !Answers(front))
         {
             return false;
         }

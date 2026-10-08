@@ -81,3 +81,5 @@ MIB_TCP6TABLE_OWNER_MODULE
 AttachThreadInput
 BringWindowToTop
 IsHungAppWindow
+SendMessageTimeout
+WM_NULL
