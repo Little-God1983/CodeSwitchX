@@ -281,12 +281,15 @@ public static unsafe class ZOrder
 /// <summary>What <see cref="ZOrder.KeepUnder"/> made of a window's move.</summary>
 public enum FrontMove
 {
-    /// <summary>No move to the front, or no window to keep above.</summary>
+    /// <summary>No move over the other window, or no window to keep above.</summary>
     None,
 
-    /// <summary>The move to the front was held back: the window stays right below the other one.</summary>
+    /// <summary>The move over the other window was held back: the window stays right below it.</summary>
     Held,
 
-    /// <summary>The window goes over the other one: raise that one again once the move is done.</summary>
+    /// <summary>
+    /// The window goes over the other one: put it back under that one once the move is done (<see cref="ZOrder.TuckUnder"/>).
+    /// Raising the other one instead does nothing while this one has the foreground (#213).
+    /// </summary>
     Lifted,
 }
