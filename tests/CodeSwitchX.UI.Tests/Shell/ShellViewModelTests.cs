@@ -533,12 +533,15 @@ public class ShellViewModelTests
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
-        (ShellMode Mode, Guid? Workspace)? atForward = null;
-        _h.Shell.ForwardRequested += () => atForward = (_h.Shell.Mode, _h.Shell.ActiveWorkspaceId);
+        (ShellMode Mode, Guid? Workspace, bool VsCodeShown)? atForward = null;
+        _h.Shell.ForwardRequested += () => atForward = (_h.Shell.Mode, _h.Shell.ActiveWorkspaceId,
+            _h.Docker.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(IWindowDocker.BringToFront)));
 
         (await ((IRavenShell)_h.Shell).OpenInCabAsync(_h.App.Id)).ShouldBeNull();
 
-        atForward.ShouldBe((ShellMode.Cab, _h.App.Id));
+        // Forwarded while VS Code still started: forwarded after the wait, it would have been shown already.
+        atForward.ShouldBe((ShellMode.Cab, _h.App.Id, false));
+        _h.Docker.Received(1).BringToFront(500);
     }
 
     /// <summary>"Open chat two" switches Raven's chat and docks its window; the brain's switch_chat gets Raven's line back.</summary>
@@ -555,12 +558,6 @@ public class ShellViewModelTests
         _h.Shell.Mode.ShouldBe(ShellMode.Cab); // set before the Cab waits for VS Code
 
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
-        // Forward once the workspace is entered (#224): the open finishes in the background.
-        for (var i = 0; i < 100 && !forwarded; i++)
-        {
-            await Task.Delay(20, TestContext.Current.CancellationToken);
-        }
-
         forwarded.ShouldBeTrue("the window comes forward, as when the brain opens a workspace");
         IRavenShell shell = _h.Shell;
         shell.SwitchChat(new CodeSwitchX.Core.Yard.ChatSwitch(0, false, false))!.Value.Said.ShouldBe("Chat 0, the Yard.");

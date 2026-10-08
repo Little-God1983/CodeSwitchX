@@ -624,12 +624,20 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             return "it is not on the Yard any more.";
         }
 
-        // Forward once the Cab has switched to it, which it does before it waits for VS Code: forward before that, the
-        // shell's activation raised the VS Code the Cab showed so far, which flashed up first (#224); forward after the wait,
-        // nothing showed while VS Code started, and an open that finished late took the keyboard from whatever came since.
+        // Forward once the Cab has switched to it, which it does before it waits for VS Code (and shows a VS Code that runs
+        // already): forward before that, the shell's activation raised the VS Code the Cab showed so far, which flashed up
+        // first (#224); forward after the wait, nothing showed while VS Code started, and an open that finished late took the
+        // keyboard from whatever came since.
         var entering = EnterCabAsync(workspaceId);
-        ForwardRequested?.Invoke();
-        await entering;
+        try
+        {
+            ForwardRequested?.Invoke();
+        }
+        finally
+        {
+            await entering; // also when the forward failed: what came of the open is still said
+        }
+
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
     }
 

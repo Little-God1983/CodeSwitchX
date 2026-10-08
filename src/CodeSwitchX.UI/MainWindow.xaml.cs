@@ -41,7 +41,7 @@ public partial class MainWindow : Window, IShellWindow
         CabView.HostRectChanged += rect => _shell.UpdateCabRect(rect);
         shell.Yard.AddWorkspaceRequested += path => _ = _addWorkspace.OpenAsync(path);
         // What Raven opens by voice comes to the front with the keyboard, past Windows' foreground lock (#224).
-        shell.ForwardRequested += () => BringForwardAsAsked(opening: true);
+        shell.ForwardRequested += BringForwardAsAsked;
         shell.AskBeforeRemove = (workspace, cards) => Task.FromResult(RemoveWorkspaceWindow.Ask(this, workspace, cards));
         // The first use of the Raven panel: open at the start, Settings → Voice opens once the window shows.
         ContentRendered += (_, _) => shell.OfferVoiceSetup();
@@ -60,8 +60,11 @@ public partial class MainWindow : Window, IShellWindow
     private ShellWindowState _restored = ShellWindowState.Normal;
 
     /// <summary>It, a dialog of it (Add workspace), or the VS Code window its Cab shows, which holds the focus there.</summary>
-    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0
-        && (front == _host.ShownInCab || Application.Current.Windows.OfType<Window>().Any(w => new WindowInteropHelper(w).Handle == front));
+    bool IShellWindow.IsInFront => Win32WindowEnumerator.Foreground() is var front && front != 0 && (front == _host.ShownInCab || IsOwnWindow(front));
+
+    /// <summary>Whether <paramref name="hwnd"/> is a window of the app's own: the shell, a dialog of it.</summary>
+    private static bool IsOwnWindow(nint hwnd) =>
+        hwnd != 0 && Application.Current.Windows.OfType<Window>().Any(w => new WindowInteropHelper(w).Handle == hwnd);
 
     /// <summary>As the title bar's button: StateChanged tells the shell, which hides the Cab's VS Code window with it.</summary>
     void IShellWindow.Minimize() => WindowState = WindowState.Minimized;
@@ -69,15 +72,13 @@ public partial class MainWindow : Window, IShellWindow
     void IShellWindow.Show(ShellWindowState state)
     {
         WindowState = state == ShellWindowState.Maximized ? WindowState.Maximized : WindowState.Normal;
-        BringForwardAsAsked(opening: false);
+        BringForwardAsAsked();
     }
 
-    /// <param name="opening">Raven opens something (a workspace, Settings): what the Cab shows changes, so the shell takes the
-    /// keyboard also from the Cab's VS Code, and its activation hands it to the VS Code shown then, if any.</param>
-    private void BringForwardAsAsked(bool opening)
+    private void BringForwardAsAsked()
     {
         WindowActivation.BringUp(this);
-        TakeForegroundAsAsked(opening);
+        TakeForegroundAsAsked();
     }
 
     /// <summary>
@@ -85,11 +86,11 @@ public partial class MainWindow : Window, IShellWindow
     /// lock keeps the app in front where it is: the user asked for CodeSwitchX, so it takes the foreground past it, keyboard
     /// and all (#222, #224). Not while a mouse button is held: the activation would be read as a click on the shell; nor
     /// while a modifier is, whose release would land here and leave it held in the other app. Not while the Cab's VS Code
-    /// has the focus either, unless Raven opens something there: CodeSwitchX is in front then, and taking it would move the
-    /// keyboard off VS Code. The shell still goes right under that VS Code, over whatever covered it, so VS Code does not
-    /// stand alone over the app the user was in.
+    /// has the focus either: CodeSwitchX is in front then, the VS Code asked for once a workspace is open, and taking it
+    /// would move the keyboard off VS Code. The shell still goes right under that VS Code, over whatever covered it, so VS
+    /// Code does not stand alone over the app the user was in. Settings call this once their page hid the Cab's VS Code.
     /// </summary>
-    private void TakeForegroundAsAsked(bool opening)
+    private void TakeForegroundAsAsked()
     {
         if (WindowActivation.AnyMouseButtonDown() || WindowActivation.AnyModifierDown())
         {
@@ -97,12 +98,12 @@ public partial class MainWindow : Window, IShellWindow
         }
 
         var front = Win32WindowEnumerator.Foreground();
-        if (Application.Current.Windows.OfType<Window>().Any(w => new WindowInteropHelper(w).Handle == front))
+        if (IsOwnWindow(front))
         {
             return; // a window of its own has the keyboard already
         }
 
-        if (!opening && _host.ShownInCab is var shown and not 0 && front == shown)
+        if (_host.ShownInCab is var shown and not 0 && front == shown)
         {
             if (!ZOrder.IsFrontPair(shown, _hwnd))
             {
