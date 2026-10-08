@@ -525,9 +525,10 @@ public class ShellViewModelTests
         (_h.Shell.Raven.IsListFolded, _h.Shell.Settings.IsSidebarFolded).ShouldBe((false, false));
     }
 
-    // #224: forward first, the shell's activation raised the Cab's old VS Code before the one asked for
+    // #224: forward first, the shell's activation raised the Cab's old VS Code before the one asked for; after the wait for
+    // VS Code, nothing showed meanwhile
     [Fact]
-    public async Task A_workspace_opened_by_voice_comes_forward_once_it_is_entered()
+    public async Task A_workspace_opened_by_voice_comes_forward_once_the_Cab_has_switched_to_it()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
