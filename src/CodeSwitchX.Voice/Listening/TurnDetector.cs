@@ -10,7 +10,9 @@ public abstract record TurnEvent
     public sealed record Started : TurnEvent;
 
     /// <summary>The turn's audio, 16 kHz: the half second before the speech, the speech, and the first 0.2 s of the pause.</summary>
-    public sealed record Ended(float[] Clip) : TurnEvent;
+    /// <param name="Short">A word on its own, too short to start a turn ("Raven.", "Yes."): no <see cref="Started"/> came
+    /// before it, and the listener's caller decides from its words whether it counts (#217).</param>
+    public sealed record Ended(float[] Clip, bool Short = false) : TurnEvent;
 }
 
 /// <summary>
@@ -21,8 +23,10 @@ public abstract record TurnEvent
 /// recorder's limit.
 /// <para>
 /// Silero's own hysteresis: a frame must reach 0.5 to start speech, and 0.35 keeps it going. Speech must add up to half
-/// a second before the turn counts (<see cref="TurnEvent.Started"/>): a cough, a key or a knock falls short and is
-/// dropped without a trace once 0.2 s of silence follows it.
+/// a second before the turn counts (<see cref="TurnEvent.Started"/>). A shorter burst waits <see cref="BurstGap"/> for
+/// more: "Raven," and the comma's pause are less than that, and the words after it start the turn with the name in it
+/// (#217). A burst that stays alone ends as a short turn when it held <see cref="ShortWord"/> of speech, a word on its own
+/// ("Raven.", "Yes."); a click or a knock under that is dropped without a trace.
 /// </para>
 /// <para>
 /// Allocation-free while it waits: the pre-roll is a fixed ring of frames, copied into the turn only when speech starts.
@@ -37,6 +41,8 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
     public const float StartThreshold = 0.5f;
     public const float ContinueThreshold = 0.35f;
     public static readonly TimeSpan MinimumSpeech = TimeSpan.FromSeconds(0.5);
+    public static readonly TimeSpan BurstGap = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan ShortWord = TimeSpan.FromSeconds(0.25);
     public static readonly TimeSpan Pause = TimeSpan.FromSeconds(0.2);
     public static readonly TimeSpan GiveUp = TimeSpan.FromSeconds(3);
     public static readonly TimeSpan PreRoll = TimeSpan.FromSeconds(0.5);
@@ -113,9 +119,14 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
         else
         {
             _silentFrames++;
-            if (!_started && _silentFrames >= FramesIn(Pause))
+            if (!_started && _silentFrames >= FramesIn(BurstGap))
             {
-                DropBurst(); // a cough, a key: no turn
+                if (_speechFrames >= FramesIn(ShortWord))
+                {
+                    return End() with { Short = true }; // a word on its own: its words decide
+                }
+
+                DropBurst(); // a click, a knock: no turn
                 return null;
             }
 
@@ -160,7 +171,7 @@ public sealed class TurnDetector(IVoiceActivity vad, ITurnEnd turnEnd, ILogger l
         }
     }
 
-    /// <summary>A cough or a key is forgotten, but the half second before the next speech must still be real audio, so
+    /// <summary>A click or a knock is forgotten, but the half second before the next speech must still be real audio, so
     /// what the burst swallowed of it is handed back to the pre-roll.</summary>
     private void DropBurst()
     {

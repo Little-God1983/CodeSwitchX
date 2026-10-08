@@ -237,8 +237,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>When the Open mic turn under way began (UI thread).</summary>
     private DateTimeOffset _openBegan;
 
-    /// <summary>An Open mic turn as it began: when, and whether in the follow-up, so Raven takes it without its name (#217).</summary>
-    private readonly record struct OpenTurn(DateTimeOffset Began, bool FollowUp);
+    /// <summary>An Open mic turn as it began: when, and whether in the follow-up, so Raven takes it without its name (#217).
+    /// A short one is a word on its own, which counts only as the name, or as a yes in the follow-up.</summary>
+    private readonly record struct OpenTurn(DateTimeOffset Began, bool FollowUp, bool Short = false);
 
     /// <summary>How long after its name alone Raven waits for the words, whatever the follow-up is set to.</summary>
     internal static readonly TimeSpan CallWindow = TimeSpan.FromSeconds(DefaultFollowUpSeconds);
@@ -1402,25 +1403,35 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The turn is over: its clip joins the transcription queue as a released recording's does.</summary>
     private void OnOpenTurn(OpenMicTurn turn)
     {
-        if (turn.Run != _openRun || !_openHeard)
+        if (turn.Run != _openRun || !_openHeard && !turn.Short)
         {
             return;
         }
 
         var clip = turn.Clip;
-        var followUp = _openSpeech;
-        _openSpeech = false;
-        _openHeard = false;
-        if (followUp)
+        var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
+        OpenTurn open;
+        if (turn.Short)
+        {
+            open = new OpenTurn(_time.GetUtcNow() - length, InFollowUp(), Short: true); // no start came: a word on its own
+        }
+        else
+        {
+            open = new OpenTurn(_openBegan, _openSpeech);
+            _openSpeech = false;
+            _openHeard = false;
+        }
+
+        if (open.FollowUp)
         {
             _pending++; // only the user's turn holds the floor while it is transcribed: the TV's must not keep news back (#217)
         }
 
-        var length = TimeSpan.FromSeconds((double)clip.Length / AudioMath.TargetRate);
         var heard = new SpeechReading(true, 0, 0, length); // the detector heard the speech
         var number = ++_clipsQueued;
         var transcribed = TranscribeInTurnAsync(_pipeline, number, Task.FromResult<RecordedClip?>(new RecordedClip(clip, length)), heard,
-            SelectedMicrophone?.Name, _vocabularyFetch, _time.GetUtcNow(), CurrentChat, quiet: true, open: new OpenTurn(_openBegan, followUp));
+            SelectedMicrophone?.Name, turn.Short ? Task.Run(FetchVocabularyAsync) : _vocabularyFetch, _time.GetUtcNow(), CurrentChat, quiet: true,
+            open: open);
         _pipeline = transcribed;
         UpdateState();
     }
@@ -1798,7 +1809,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return false;
         }
 
-        if (turn.FollowUp || _calledAt is { } called && turn.Began >= called && turn.Began <= called + CallWindow)
+        // A word on its own in the follow-up counts only as a yes: a cough Whisper writes as "Thank you." must not be asked.
+        if ((turn.FollowUp || _calledAt is { } called && turn.Began >= called && turn.Began <= called + CallWindow)
+            && (!turn.Short || SpokenYes.IsYes(text)))
         {
             _calledAt = null;
             return true;

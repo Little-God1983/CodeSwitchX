@@ -216,6 +216,46 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Asked.ShouldHaveSingleItem().ShouldContain("What's waiting on me?");
     }
 
+    // On-screen check of #217: "Raven." on its own is too short to start a turn, and comes as a short one
+    [Fact]
+    public async Task Ravens_name_as_a_short_turn_lets_the_next_words_through()
+    {
+        var said = "Raven.";
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+
+        _openMic.SayShort();
+        await WithinAsync(vm.PendingTranscriptions);
+        said = "What's waiting on me?";
+        await TurnAsync(vm);
+
+        _brain.Asked.ShouldHaveSingleItem().ShouldContain("What's waiting on me?");
+    }
+
+    // On-screen check of #217: a short word counts only as the name, or as a yes in the follow-up
+    [Theory]
+    [InlineData("Yes.", true, true)]
+    [InlineData("Thank you.", true, false)] // a cough, as Whisper writes it
+    [InlineData("Yes.", false, false)]
+    public async Task A_short_word_in_the_follow_up_counts_only_as_a_yes(string said, bool inFollowUp, bool asked)
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        await AnsweredAMomentAgoAsync(vm);
+        if (!inFollowUp)
+        {
+            _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + 1));
+        }
+
+        _openMic.SayShort();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Asked.Count.ShouldBe(asked ? 2 : 1);
+    }
+
     // Second review of #217: the words after the name began before the name was transcribed
     [Fact]
     public async Task The_words_after_Ravens_name_alone_need_no_name_though_they_began_before_it_was_transcribed()

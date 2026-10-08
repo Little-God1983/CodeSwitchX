@@ -78,7 +78,8 @@ public sealed class OpenMicRun(string deviceId)
 public readonly record struct HeardAudio(float Loudest, float Quietest, TimeSpan Duration);
 
 /// <summary>A finished turn of <paramref name="Run"/>: its audio, 16 kHz; empty when the detector lost it.</summary>
-public sealed record OpenMicTurn(OpenMicRun Run, float[] Clip);
+/// <param name="Short">A word on its own (<see cref="TurnEvent.Ended.Short"/>): no <see cref="IOpenMic.SpeechStarted"/> came before it.</param>
+public sealed record OpenMicTurn(OpenMicRun Run, float[] Clip, bool Short = false);
 
 /// <summary>
 /// Ties a <see cref="IMicrophoneStream"/> to a <see cref="TurnDetector"/>. The capture thread only queues blocks; one
@@ -439,7 +440,7 @@ public sealed class OpenMicListener : IOpenMic, IDisposable
                             break;
                         case TurnEvent.Ended ended:
                             inTurn = false;
-                            var turn = new OpenMicTurn(run, ended.Clip);
+                            var turn = new OpenMicTurn(run, ended.Clip, ended.Short);
                             Raise(() => TurnEnded?.Invoke(this, turn), "TurnEnded");
                             break;
                     }
