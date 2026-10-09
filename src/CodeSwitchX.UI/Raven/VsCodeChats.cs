@@ -60,9 +60,9 @@ public interface IVsCodeChats
     /// </summary>
     /// <param name="folder">The folder the chat runs in, for when its conversation does not say the one it started in.</param>
     /// <param name="title">The title the Yard shows it by: its name.</param>
-    /// <returns>Whether it was named: false for a chat VS Code lists already, or whose conversation cannot be read.</returns>
+    /// <returns>Whether it was named: false for a chat VS Code lists already; null when its conversation cannot be read.</returns>
     /// <exception cref="YardActionException">It was not named; the message says why.</exception>
-    Task<bool> NameAsync(string sessionId, string folder, string title, CancellationToken ct);
+    Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct);
 }
 
 /// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
@@ -418,10 +418,14 @@ public sealed class VsCodeChats : IVsCodeChats
         return true;
     }
 
-    public async Task<bool> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+    public async Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
     {
-        // No conversation (yet) is nothing to name.
-        if (_startOf(sessionId) is not { Listed: false } start)
+        if (_startOf(sessionId) is not { } start)
+        {
+            return null; // no conversation yet, or none that can be read: whether VS Code lists it is not known
+        }
+
+        if (start.Listed)
         {
             return false;
         }

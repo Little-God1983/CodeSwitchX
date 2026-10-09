@@ -123,6 +123,7 @@ public sealed class RavenActionsTests
         (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
         Turn("new-chat");
 
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(300), Ct)).ShouldBeFalse("named once");
         _vsCode.Names.ShouldBe([@"name new-chat (Fix the upload) in E:\Repos\DiffusionNexus"]);
     }
 
@@ -137,7 +138,61 @@ public sealed class RavenActionsTests
         _bus.Publish(new SessionChanged(idle with { State = SessionState.Working }, idle with { State = SessionState.Waiting }));
         Turn("by-hand");
 
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(300), Ct)).ShouldBeFalse();
         _vsCode.Names.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_is_not_named_while_it_is_compacted_nor_after_it_ended()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+        _vsCode.During = () => Turn("new-chat");
+
+        await _actions.CompactChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, null, Ct);
+        Turn("new-chat", end: SessionState.Ended);
+        Turn("new-chat");
+
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(300), Ct)).ShouldBeFalse("the compaction names it itself, and an ended chat is Raven's no more");
+    }
+
+    [Fact]
+    public async Task A_chat_whose_conversation_cannot_be_read_yet_is_named_after_its_next_turn()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+        _vsCode.Unreadable.Add("new-chat");
+
+        Turn("new-chat");
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        lock (_vsCode.Unreadable)
+        {
+            _vsCode.Unreadable.Clear();
+        }
+
+        await NextNamingAsync();
+        _vsCode.Unlisted.ShouldBeEmpty();
+    }
+
+    /// <summary>Turns of the chat until another naming begins: the one before is let go of on the thread pool.</summary>
+    private async Task NextNamingAsync()
+    {
+        for (var i = 0; i < 1000; i++)
+        {
+            Turn("new-chat");
+            if (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(10), Ct))
+            {
+                // the naming runs on: wait until the fake has answered it
+                for (var j = 0; j < 500 && _vsCode.Unlisted.Contains("new-chat"); j++)
+                {
+                    await Task.Delay(10, Ct);
+                }
+
+                return;
+            }
+        }
+
+        throw new TimeoutException("No naming began again.");
     }
 
     [Fact]
@@ -151,16 +206,50 @@ public sealed class RavenActionsTests
         (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
         _vsCode.NameFailure = null;
 
-        // The failure is let go of on the thread pool: turns until the next one is tried.
-        for (var i = 0; i < 200 && _vsCode.Names.Count < 2; i++)
-        {
-            Turn("new-chat");
-            await Task.Delay(10, Ct);
-        }
-
-        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        await NextNamingAsync();
         _vsCode.Names.Count.ShouldBe(2);
         _vsCode.Unlisted.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_close_waits_for_a_naming_under_way()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+        _vsCode.NameHold = new TaskCompletionSource();
+        Turn("new-chat");
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+
+        var closing = _actions.CloseChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, Ct);
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(300), Ct)).ShouldBeFalse("two Claude Codes must not write the conversation at once");
+        closing.IsCompleted.ShouldBeFalse();
+        _vsCode.NameHold.SetResult();
+
+        (await closing).ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
+        _vsCode.Names.Count.ShouldBe(2, "the close finds it named");
+    }
+
+    [Fact]
+    public async Task A_close_whose_naming_takes_too_long_says_how_to_go_on_from_a_terminal()
+    {
+        await StartAsync();
+        _vsCode.NameHold = new TaskCompletionSource();
+
+        var closing = _actions.CloseChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, Ct);
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        _time.Advance(RavenActions.NameWait);
+
+        (await closing).ShouldBe(@"The Fix the upload chat is closed. VS Code does not list it, as it has no name: in a terminal in E:\Repos\DiffusionNexus, "
+            + "claude --resume new-chat goes on with it.");
+    }
+
+    [Fact]
+    public async Task A_closed_chat_whose_conversation_cannot_be_read_is_not_said_to_be_listed()
+    {
+        await StartAsync();
+        _vsCode.Unreadable.Add("new-chat");
+
+        (await _actions.CloseChatAsync(Chat("new-chat", "Fix the upload"), Ct)).ShouldBe("The Fix the upload chat is closed.");
     }
 
     [Fact]
@@ -692,25 +781,50 @@ public sealed class RavenActionsTests
         /// <summary>Why naming fails; null when it does not.</summary>
         public string? NameFailure { get; set; }
 
+        /// <summary>The chats whose conversation cannot be read.</summary>
+        public HashSet<string> Unreadable { get; } = [];
+
+        /// <summary>When set, a naming waits for it, or for its token to end: a headless Claude Code takes a while.</summary>
+        public TaskCompletionSource? NameHold { get; set; }
+
+        private readonly List<string> _names = [];
+
         /// <summary>Each naming asked for, done or not.</summary>
-        public List<string> Names { get; } = [];
-
-        /// <summary>Released once for each naming that is over.</summary>
-        public SemaphoreSlim Tried { get; } = new(0);
-
-        public Task<bool> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+        public IReadOnlyList<string> Names
         {
-            try
+            get
             {
-                lock (Names)
+                lock (_names)
                 {
-                    Names.Add($"name {sessionId} ({title}) in {folder}");
-                    return NameFailure is { } failure ? throw new YardActionException(failure) : Task.FromResult(Unlisted.Remove(sessionId));
+                    return [.. _names];
                 }
             }
-            finally
+        }
+
+        /// <summary>Released once for each naming that has begun.</summary>
+        public SemaphoreSlim Tried { get; } = new(0);
+
+        public async Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+        {
+            lock (_names)
             {
-                Tried.Release();
+                _names.Add($"name {sessionId} ({title}) in {folder}");
+            }
+
+            Tried.Release();
+            if (NameHold is { } hold)
+            {
+                await hold.Task.WaitAsync(ct);
+            }
+
+            if (NameFailure is { } failure)
+            {
+                throw new YardActionException(failure);
+            }
+
+            lock (_names)
+            {
+                return Unreadable.Contains(sessionId) ? null : Unlisted.Remove(sessionId);
             }
         }
 

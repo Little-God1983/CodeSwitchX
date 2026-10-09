@@ -31,7 +31,8 @@ public interface IChatCompactor
 /// It runs as VS Code's Claude Code (<c>CLAUDE_CODE_ENTRYPOINT</c>), which keeps the chat in VS Code's session list, and
 /// with no model given: Claude Code's own, as for a chat in a new tab. Its JSON result says whether it compacted; one
 /// that fails says why there or on standard error. It runs with hooks off: its SessionStart and SessionEnd carry the
-/// chat's own id, and would tell CodeSwitchX that the chat ended while its tab still runs.
+/// chat's own id, and would tell CodeSwitchX that the chat ended while its tab still runs. The user's own hooks (a
+/// PreCompact one) do not run for it either.
 /// </summary>
 /// <param name="findClaude">The <c>claude.exe</c> to run (<see cref="ClaudeCliLocator"/>); null when none is installed.</param>
 public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time, ILogger<ChatCompactor> logger)

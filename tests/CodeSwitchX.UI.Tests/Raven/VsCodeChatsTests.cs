@@ -633,7 +633,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _nameless.Add("raven-chat");
         _startedIn["raven-chat"] = @"E:\Repos\App";
 
-        (await _chats.NameAsync("raven-chat", @"E:\Repos\App\.claude\worktrees\x", "Fix the upload", Ct)).ShouldBeTrue();
+        (await _chats.NameAsync("raven-chat", @"E:\Repos\App\.claude\worktrees\x", "Fix the upload", Ct)).ShouldBe(true);
 
         _compactor.Named.ShouldBe([("raven-chat", "Fix the upload", 0)]);
         _compactor.NamedIn.ShouldBe([@"E:\Repos\App"]);
@@ -645,8 +645,8 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _unreadable.Add("unread");
 
-        (await _chats.NameAsync("listed", @"E:\Repos\App", "Docs", Ct)).ShouldBeFalse();
-        (await _chats.NameAsync("unread", @"E:\Repos\App", "Docs", Ct)).ShouldBeFalse();
+        (await _chats.NameAsync("listed", @"E:\Repos\App", "Docs", Ct)).ShouldBe(false);
+        (await _chats.NameAsync("unread", @"E:\Repos\App", "Docs", Ct)).ShouldBeNull("whether VS Code lists it is not known");
 
         _compactor.Named.ShouldBeEmpty();
     }
