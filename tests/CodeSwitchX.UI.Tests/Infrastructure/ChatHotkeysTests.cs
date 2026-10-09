@@ -16,10 +16,12 @@ public class ChatHotkeysTests
 
         keys.Rows.Select(r => r.Chord).ShouldBe([
             "Ctrl+Alt+F12", "Ctrl+Alt+F1", "Ctrl+Alt+F2", "Ctrl+Alt+F3", "Ctrl+Alt+F4", "Ctrl+Alt+F5", "Ctrl+Alt+F6", "Ctrl+Alt+F7",
-            "Ctrl+Alt+F8", "Ctrl+Alt+F9", "Ctrl+Alt+F10", "Ctrl+Alt+F11", "Ctrl+Alt+PageUp", "Ctrl+Alt+PageDown"]);
+            "Ctrl+Alt+F8", "Ctrl+Alt+F9", "Ctrl+Alt+F10", "Ctrl+Alt+F11", "Ctrl+Alt+PageUp", "Ctrl+Alt+PageDown",
+            "Ctrl+Alt+End"]);
         keys.Rows.ShouldAllBe(r => r.Problem == null);
-        keys.Active.Count.ShouldBe(14);
+        keys.Active.Count.ShouldBe(15);
         Row(keys, "chat3").Target.ShouldBe(new ChatSwitch(3, false, false));
+        Row(keys, "nextQuestion").ShouldSatisfyAllConditions(r => r.Target.ShouldBeNull(), r => r.Step.ShouldBe(0)); // #230: the next question
         Row(keys, "next").Step.ShouldBe(1);
     }
 

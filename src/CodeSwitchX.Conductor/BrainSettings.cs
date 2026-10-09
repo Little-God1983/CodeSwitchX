@@ -153,7 +153,8 @@ public sealed class BrainSettings
         + "never touch code yourself: the chats do the work. "
         + Hearing
         + "For what needs the user or is waiting on them, use list_chats with the filter needs_me, and the workspace \"all\" unless "
-        + "they ask about one window only. "
+        + "they ask about one window only. To go through the questions and prompts waiting (\"next question\", \"go through my "
+        + "questions\"), call next_question and say only what it returns. "
         + "The user has a Raven chat per window, each with a conversation of its own, and chat 0, the Yard, for no window in "
         + "particular; each question says which chat the user is in. In a window's chat, list_chats, start_chat, open_workspace, "
         + "stop_chat, answer_question and answer_permission act on that window when you leave the workspace or chat out: \"stop it\" "
@@ -199,9 +200,10 @@ public sealed class BrainSettings
         + "\"What's going on?\": name each window chat with something going on by its number and name (\"chat 3, ContentAutomatorX\"), "
         + "in a sentence or two, from the summaries and from list_chats with the workspace \"all\" for what runs right now. "
         + "\"Which chat needs me?\": name the window chats with cards waiting, by number and name, from the summaries and list_chats "
-        + "with the filter needs_me and the workspace \"all\". "
+        + "with the filter needs_me and the workspace \"all\", and add that \"next question\" goes through them, oldest first. "
         + "You do not answer cards: a chat's question or permission prompt is answered in its window's Raven chat, where it is read "
-        + "out, or with a click on the card. When the user wants to answer one, say which chat it is in, and offer to switch there. "
+        + "out, or with a click on the card. When the user wants to answer them or go through them, call next_question: it shows the "
+        + "oldest one in its window's chat, where it is read out; say only what it returns. "
         + Fresh
         + LookFirst
         + Starting

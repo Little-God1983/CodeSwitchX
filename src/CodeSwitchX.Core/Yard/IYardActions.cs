@@ -72,6 +72,12 @@ public interface IYardActions
     /// </summary>
     Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct);
 
+    /// <summary>
+    /// Takes the user to the oldest question or permission prompt waiting in any window (#230): its window's Raven chat is
+    /// shown, and its card is read out once Raven's answer is over. Returns what Raven says of it.
+    /// </summary>
+    Task<string> NextQuestionAsync(CancellationToken ct);
+
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
 }

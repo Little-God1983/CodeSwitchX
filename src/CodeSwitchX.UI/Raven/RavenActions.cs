@@ -45,6 +45,12 @@ public interface IRavenShell
     string? MuteChat(int number, bool muted);
 
     /// <summary>
+    /// Shows the chat of the oldest question or permission prompt waiting in any window, whose card is read out once Raven's
+    /// answer is over (#230); what Raven says of it, or null when none waits.
+    /// </summary>
+    string? NextQuestion();
+
+    /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
     /// (#180): the user is moved to that window's Raven chat, with the question and its answer.
     /// </summary>
@@ -466,6 +472,9 @@ public sealed class RavenActions : IYardActions
 
     public Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().SetWindow(request), UiTimeout, ct);
+
+    public Task<string> NextQuestionAsync(CancellationToken ct) =>
+        _ui.InvokeAsync(() => _shell().NextQuestion() ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);
 
     public Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct) => _ui.InvokeAsync(() => _shell().MuteChat(number, muted)
         ?? throw new YardActionException(number == 0
