@@ -911,7 +911,7 @@ public sealed class RavenActionsTests
 
         said.ShouldBe("It fixed the retry. The full summary is written in Raven's panel.");
         _shell.Summaries.ShouldHaveSingleItem().ShouldBe(("overview",
-            "The Fix the upload chat in Diffusion-Full:\nAsked: Fix the retry.\nDone: Changed Upload.cs.\nNow: Idle.\nWaiting: nothing"));
+            "Summary of \"Fix the upload\" in Diffusion-Full:\nAsked: Fix the retry.\nDone: Changed Upload.cs.\nNow: Idle.\nWaiting: nothing"));
     }
 
     /// <summary>#230: the panel shows the chat of the oldest card; with none waiting, Raven says so.</summary>

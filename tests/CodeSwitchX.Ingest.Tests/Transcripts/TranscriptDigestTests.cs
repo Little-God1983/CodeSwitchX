@@ -30,6 +30,7 @@ public sealed class TranscriptDigestTests : IDisposable
             ToolResult,
             Tool("Bash", """{"command":"dotnet test"}"""),
             Tool("Grep", """{"pattern":"Retry"}"""),
+            Tool("SendMessage", """{"to":"raven-1","message":"Fixed; a fourth case waits for you."}"""),
             Assistant("A sub-agent's words.", sidechain: true),
             User("<command-name>/rename</command-name>"),
             User("meta", ""","isMeta":true"""),
@@ -42,6 +43,7 @@ public sealed class TranscriptDigestTests : IDisposable
             Changed a file: src/Upload.cs
             Ran: dotnet test
             Used Grep: Retry
+            Answered through a message: Fixed; a fourth case waits for you.
             Claude: The retry backs off now, and the tests pass.
             """.Replace("\r\n", "\n"));
     }
@@ -55,7 +57,7 @@ public sealed class TranscriptDigestTests : IDisposable
         ]);
 
         TranscriptDigest.Read(_path).ShouldBe("""
-            User (through Raven or another session): Remember JADE-44.
+            Asked through Raven or another chat: Remember JADE-44.
             Earlier, as Claude Code summed it up when it compacted the chat: This session is being continued. Summary: it fixed the uploader.
             """.Replace("\r\n", "\n"));
     }

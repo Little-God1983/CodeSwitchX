@@ -484,7 +484,7 @@ public sealed class RavenActions : IYardActions
     {
         var summaries = _summaries ?? throw new YardActionException("This CodeSwitchX cannot sum chats up.");
         var summary = await summaries.SummarizeAsync(chat, ct).ConfigureAwait(false);
-        _ui.Post(() => _shell().WriteSummary(askedIn, $"The {chat.Title} chat in {chat.Workspace}:\n{summary.Full}"));
+        _ui.Post(() => _shell().WriteSummary(askedIn, $"Summary of \"{chat.Title}\" in {chat.Workspace}:\n{summary.Full}"));
         _logger.LogInformation("Raven summed up chat {Id} in {Workspace}", chat.Id, chat.Workspace);
         return $"{summary.Short} The full summary is written in Raven's panel.";
     }

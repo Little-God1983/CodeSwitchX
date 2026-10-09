@@ -102,7 +102,7 @@ public static class TranscriptDigest
 
     /// <summary>A prompt as a step ("User: …", or one handed over by another session); null for any other line.</summary>
     private static string? PromptOf(string line) => line.Contains("\"user\"", StringComparison.Ordinal) && StepOf(line) is { } step
-        && step.StartsWith("User", StringComparison.Ordinal) ? step : null;
+        && (step.StartsWith("User: ", StringComparison.Ordinal) || step.StartsWith("Asked through", StringComparison.Ordinal)) ? step : null;
 
     /// <summary>What the line adds to the digest, one or more lines of it; null for a line that adds nothing.</summary>
     private static string? StepOf(string line)
@@ -180,7 +180,7 @@ public static class TranscriptDigest
 
         if (CrossSessionMessage.SenderOf(text) is not null)
         {
-            return ChatTitle.FromPrompt(text, MaxStepChars) is { } task ? "User (through Raven or another session): " + task : null;
+            return ChatTitle.FromPrompt(text, MaxStepChars) is { } task ? "Asked through Raven or another chat: " + task : null;
         }
 
         return "User: " + Short(text, MaxStepChars);
@@ -226,6 +226,8 @@ public static class TranscriptDigest
         {
             "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "Changed a file: " + (Field("file_path", "notebook_path", "path") ?? "?"),
             "Bash" or "PowerShell" => "Ran: " + Short(Field("command") ?? "?", 200),
+            // How a chat Raven started answers it: what it says there is its answer.
+            "SendMessage" => "Answered through a message: " + Short(Field("message") ?? "?", MaxStepChars),
             _ => Field("file_path", "path", "pattern", "url", "query", "description", "skill", "subject") is { } about
                 ? $"Used {tool}: {Short(about, 200)}" : $"Used {tool}",
         };
