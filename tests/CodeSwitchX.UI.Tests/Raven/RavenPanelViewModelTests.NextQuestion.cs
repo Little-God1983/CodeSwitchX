@@ -11,7 +11,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>Three windows: ContentAutomatorX (1, chat "a"), DiffusionNexus (2, chat "c"), RawCutX (3, chat "d"); the user is in chat 1.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync()
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null)
     {
         string[] workspaces = ["ContentAutomatorX", "DiffusionNexus", "RawCutX"];
         string[] ids = ["a", "c", "d"];
@@ -22,8 +22,9 @@ public sealed partial class RavenPanelViewModelTests
 
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard);
         await WithinAsync(vm.RefreshMicrophonesAsync());
+        _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
         vm.SelectedChat = ChatNumbered(vm, 1);
         return (vm, asks);
@@ -88,8 +89,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
         await WithinAsync(first);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count > 0 && _speech.Spoken[^1] == "Next?");
-        await WithinAsync(_voice.WhenQuietAsync());
+        await Until(() => vm.OffersNext); // heard to its end
         vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("One more question is waiting. Next?");
         var before = _speech.Spoken.Count;
 
@@ -99,6 +99,30 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
         _brain.Asked.ShouldBeEmpty("the yes goes to no brain");
+    }
+
+    /// <summary>"Next?" is a question: news waits while it stands, as while an allow waits for its yes, and comes once it lapses.</summary>
+    [Fact]
+    public async Task News_waits_while_the_offer_stands_and_comes_once_it_lapsed()
+    {
+        _teller.Answer = q => [new BrainText("Task a is done.")];
+        var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."));
+        var first = await AsksFruitAsync(vm, asks, "a");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext); // heard to its end
+        await Until(() => vm.State == RavenState.Idle);
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        _speech.Spoken.ShouldNotContain("Task a is done.", "the offer stands");
+
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime);
+        await GraceAsync(vm);
+        await Until(() => _speech.Spoken.Contains("Task a is done."));
     }
 
     [Fact]
@@ -111,8 +135,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
         await WithinAsync(first);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count > 0 && _speech.Spoken[^1] == "Next?");
-        await WithinAsync(_voice.WhenQuietAsync());
+        await Until(() => vm.OffersNext); // heard to its end
 
         Type(vm, "what time is it");
         await WithinAsync(vm.PendingAnswers);

@@ -318,8 +318,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private bool _nextOfferDue;
 
-    /// <summary>When the offer of the next question was heard to its end, or written; a yes after it takes it (UI thread).</summary>
+    /// <summary>
+    /// When the offer of the next question was heard to its end, or written; a yes after it takes it. While it stands, Raven
+    /// says nothing of its own, as while an allow waits for its yes (UI thread).
+    /// </summary>
     private DateTimeOffset? _nextOffered;
+
+    /// <summary>Lets the offer lapse once <see cref="NextOfferLifetime"/> is over, and the news held for it is told.</summary>
+    private ITimer? _offerTimer;
+
+    /// <summary>Whether "Next?" stands: heard, and neither answered, let go nor lapsed (UI thread).</summary>
+    internal bool OffersNext => _nextOffered is not null;
 
     /// <summary>How long a yes to "Next?" counts: as long as one to an allow.</summary>
     internal static readonly TimeSpan NextOfferLifetime = ChatAsks.ProposalLifetime;
@@ -1981,7 +1990,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // words let it go.
         if (_nextOffered is { } offered)
         {
-            _nextOffered = null;
+            DropOffer();
             if (ended >= offered && ended - offered <= NextOfferLifetime && SpokenYes.IsYes(text))
             {
                 GoToNextQuestion();
@@ -2483,7 +2492,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool FloorIsFree => TrafficWatcher.IsFree(Floor);
 
     private TrafficWatcher.Floor Floor => new(Capturing: _capturing, Holding: _heldInputs.Count > 0, Pending: _pending, Asking: _asking,
-        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null);
+        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null || _nextOffered is not null);
 
     /// <summary>The floor as a telling sees it: free but for the telling itself.</summary>
     private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false });
@@ -4034,7 +4043,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _brainAsked = false; // moved to another chat: the user moved on from what Raven asked
-        _nextOffered = null; // and from "Next?": a yes now is for something in the chat shown
+        DropOffer(); // and from "Next?": a yes now is for something in the chat shown
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
         // something in the chat shown, not for that prompt.
@@ -4641,7 +4650,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private ChatAskCard? ShowNextQuestion()
     {
         _nextOfferDue = false;
-        _nextOffered = null;
+        DropOffer();
         if (OpenCards() is not [var card, ..])
         {
             return null;
@@ -4726,6 +4735,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         _nextOffered = _time.GetUtcNow();
         _followUpFrom = _nextOffered; // a bare yes may answer it (#217)
+        _offerTimer?.Dispose();
+        _offerTimer = _time.CreateTimer(_ => _dispatcher.Post(DropOffer), null, NextOfferLifetime, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>The offer of the next question is over (answered, let go or lapsed): what Raven held for it may be said.</summary>
+    private void DropOffer()
+    {
+        _offerTimer?.Dispose();
+        _offerTimer = null;
+        if (_nextOffered is not null)
+        {
+            _nextOffered = null;
+            ScheduleNews();
+        }
     }
 
     /// <summary>The Cab opened a workspace: its chat is shown. The list never opens a workspace itself.</summary>
