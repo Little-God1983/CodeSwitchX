@@ -33,7 +33,8 @@ public interface IYardActions
 
     /// <summary>
     /// Compacts the chat as <c>/compact</c> in its tab would (#226): its tab closes, Claude Code compacts the conversation,
-    /// and the tab opens again. Returns once it is done, with what Raven says of it.
+    /// and the tab opens again. Returns once it is done, with what Raven says of it; a long one goes on after a minute, the
+    /// answer says so, and what comes of it is written in the chat's window chat in Raven's panel.
     /// </summary>
     /// <param name="keep">What the summary is to keep ("the test plan"); null for a plain compaction.</param>
     Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct);

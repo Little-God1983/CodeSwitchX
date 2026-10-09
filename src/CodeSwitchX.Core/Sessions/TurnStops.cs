@@ -157,6 +157,15 @@ public sealed class TurnStops : IDisposable
         }
     }
 
+    /// <summary>Takes back a <see cref="CutOff"/> that did not happen: the tab did not close, and the turn's end is news again.</summary>
+    public void Uncut(string sessionId)
+    {
+        lock (_lock)
+        {
+            _stopped.Remove(sessionId);
+        }
+    }
+
     /// <summary>Whether the chat's last turn ended because it was stopped here, and no new turn began since: its end is no news.</summary>
     public bool StoppedLately(string sessionId)
     {

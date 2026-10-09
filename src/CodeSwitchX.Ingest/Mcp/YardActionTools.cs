@@ -253,7 +253,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "chat goes on from that summary with room in its context again; the whole conversation stays on disk. Its tab closes for the "
         + "compaction, which takes about half a minute and longer for a long chat, and opens again. Never call it before you have asked "
         + "the user \"Compact the <title> chat?\" and they said yes in their next words. A chat that is working or waiting for the user "
-        + "is refused unless anyway is true: compacting it cuts its turn off. Returns once it is done; say what it returns.")]
+        + "is refused unless anyway is true: compacting it cuts its turn off. Returns once it is done, or after a minute with word that it goes "
+        + "on, and what comes of it is then written in Raven's panel; say what it returns.")]
     public async Task<string> CompactChat(
         [Description("The chat's id from list_chats; its start is enough.")] string chat,
         [Description("What the summary is to keep, in the user's words (\"compact it but keep the test plan\": \"keep the test plan\"); "

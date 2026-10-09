@@ -210,13 +210,25 @@ public sealed class RavenActions : IYardActions
         var reopened = false;
         try
         {
-            var hadTab = await _vsCode.CompactAsync(chat.Id, folder, chat.Title, keep, open =>
+            var hadTab = await _vsCode.CompactAsync(chat.Id, folder, chat.Title, keep, step =>
             {
-                closed |= !open;
-                reopened |= open;
-                if (!open && cutsOff)
+                switch (step)
                 {
-                    _stops.CutOff(chat.Id);
+                    case CompactionTab.Closing:
+                        closed = true;
+                        if (cutsOff)
+                        {
+                            _stops.CutOff(chat.Id);
+                        }
+
+                        break;
+                    case CompactionTab.NotClosed:
+                        closed = false;
+                        _stops.Uncut(chat.Id);
+                        break;
+                    case CompactionTab.Reopened:
+                        reopened = true;
+                        break;
                 }
             }, CancellationToken.None).ConfigureAwait(false);
             _logger.LogInformation("Raven compacted chat {Id} in {Workspace}", chat.Id, chat.Workspace);

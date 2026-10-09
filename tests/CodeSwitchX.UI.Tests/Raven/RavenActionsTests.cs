@@ -136,6 +136,19 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
+    public async Task A_turn_whose_tab_did_not_close_after_all_is_still_news_and_keeps_its_mark()
+    {
+        await StartAsync("Fable", "high");
+        _vsCode.NotClosed = "VS Code did not close the chat: no tab. Nothing was compacted.";
+
+        await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(
+            Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\App", State = SessionState.Working }, null, Ct));
+
+        _stops.StoppedLately("new-chat").ShouldBeFalse();
+        _actions.StartedByRaven("new-chat").ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task A_turn_whose_compaction_was_refused_before_its_tab_closed_is_still_news()
     {
         _vsCode.Failure = "The VS Code window that chat runs in does not run the CodeSwitchX companion, so it cannot be compacted from here.";
@@ -598,10 +611,13 @@ public sealed class RavenActionsTests
         /// <summary>When set, a compaction waits for it: a long chat takes a while.</summary>
         public TaskCompletionSource? Hold { get; set; }
 
+        /// <summary>Why the tab did not close after all; null when it did.</summary>
+        public string? NotClosed { get; set; }
+
         /// <summary>Why the tab, closed, did not open again; null when it did.</summary>
         public string? NotReopened { get; set; }
 
-        public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<bool>? tab, CancellationToken ct)
+        public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct)
         {
             Sequence.Add($"compact {sessionId} ({title}) in {folder}{(keep is null ? "" : $" keeping {keep}")}");
             if (Failure is { } failure)
@@ -609,7 +625,13 @@ public sealed class RavenActionsTests
                 throw new YardActionException(failure); // refused before its tab was closed
             }
 
-            tab?.Invoke(false);
+            tab?.Invoke(CompactionTab.Closing);
+            if (NotClosed is { } stays)
+            {
+                tab?.Invoke(CompactionTab.NotClosed);
+                throw new YardActionException(stays);
+            }
+
             During();
             if (Hold is { } hold)
             {
@@ -621,7 +643,7 @@ public sealed class RavenActionsTests
                 throw new YardActionException(why);
             }
 
-            tab?.Invoke(true);
+            tab?.Invoke(CompactionTab.Reopened);
             return Reopens;
         }
     }

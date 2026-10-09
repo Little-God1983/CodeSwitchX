@@ -659,26 +659,27 @@ public sealed class VsCodeChatsTests : IDisposable
         Starts(300, "a-chat", Host);
         _windows.Close = () => Ends(300);
         _startedIn["a-chat"] = @"E:\Repos\App";
-        var told = new List<(bool Open, int Commands, int Compactions)>();
+        var told = new List<(CompactionTab Step, int Commands, int Compactions)>();
 
         await _chats.CompactAsync("a-chat", @"E:\Repos\App\.claude\worktrees\x", "A chat", null,
-            open => told.Add((open, _windows.Commands.Count, _compactor.Calls.Count)), Ct);
+            step => told.Add((step, _windows.Commands.Count, _compactor.Calls.Count)), Ct);
 
         _compactor.Calls.ShouldHaveSingleItem().Folder.ShouldBe(@"E:\Repos\App");
-        told.ShouldBe([(false, 1, 0), (true, 2, 1)], "told once the tab is closed, before it is compacted, and once it is open again");
+        told.ShouldBe([(CompactionTab.Closing, 0, 0), (CompactionTab.Reopened, 2, 1)],
+            "told before the close is sent, as the turn it cuts off may end first, and once it is open again");
     }
 
     [Fact]
-    public async Task A_tab_that_does_not_close_says_nothing_was_compacted_and_tells_no_close()
+    public async Task A_tab_that_does_not_close_says_nothing_was_compacted_and_takes_the_close_back()
     {
         _windows.Shown = Showing();
         Starts(300, "a-chat", Host);
         _windows.Answer = new CompanionAnswer(false, Error: "That chat is not in a tab of this VS Code window.");
-        var told = false;
+        var told = new List<CompactionTab>();
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, _ => told = true, Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, told.Add, Ct))).Message
             .ShouldBe("VS Code did not close the chat: That chat is not in a tab of this VS Code window. Nothing was compacted.");
-        told.ShouldBeFalse();
+        told.ShouldBe([CompactionTab.Closing, CompactionTab.NotClosed]);
         _compactor.Calls.ShouldBeEmpty();
     }
 

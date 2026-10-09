@@ -57,6 +57,15 @@ public sealed class TurnStopsTests : IDisposable
     }
 
     [Fact]
+    public void A_cut_off_that_did_not_happen_is_taken_back()
+    {
+        _stops.CutOff("s1");
+        _stops.Uncut("s1");
+
+        _stops.StoppedLately("s1").ShouldBeFalse();
+    }
+
+    [Fact]
     public void Another_chat_a_sub_agent_or_an_event_that_is_no_step_leaves_it()
     {
         var stopped = _stops.Request("s1");
