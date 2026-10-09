@@ -59,11 +59,104 @@ public static class TranscriptDigest
 
         // A cut line at the edge of the end read does not parse, and is passed over.
         var steps = tail.Split('\n').Select(StepOf).OfType<string>().ToList();
-        if (steps.Count == 0 && first is null)
+        return steps.Count == 0 && first is null ? null : Compose(first, steps, maxChars, whole);
+    }
+
+    /// <summary>
+    /// The steps between <paramref name="from"/> and <paramref name="to"/> only (#237), in short, at most about
+    /// <paramref name="maxChars"/>: the latest that fit, with the first prompt among them when they do not all fit. The
+    /// whole file is read, line by line. Null when no step falls in that time, or the file cannot be read.
+    /// </summary>
+    public static string? ReadBetween(string? path, DateTimeOffset from, DateTimeOffset to, int maxChars = 4_000, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(path))
         {
             return null;
         }
 
+        var steps = new List<string>();
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var lines = 0;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            while (reader.ReadLine() is { } line)
+            {
+                if (++lines % 1000 == 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                }
+
+                if (TimeOf(line) is not { } at)
+                {
+                    continue;
+                }
+
+                // Lines come in the order they were written: well past the end, the rest of a long conversation is later still.
+                if (at > to + PastEnd)
+                {
+                    break;
+                }
+
+                // A resumed conversation writes its history again, under the same ids: each step counts once.
+                if (at >= from && at <= to && (IdOf(line) is not { } id || seen.Add(id)) && StepOf(line) is { } step)
+                {
+                    steps.Add(step);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var first = steps.FirstOrDefault(s => s.StartsWith("User: ", StringComparison.Ordinal) || s.StartsWith("Asked through", StringComparison.Ordinal));
+        return steps.Count == 0 ? null : Compose(first, steps, maxChars, complete: true);
+    }
+
+    /// <summary>How far past the end a line may be written and the reading still go on: a sub-agent's lines come a little out of order.</summary>
+    internal static readonly TimeSpan PastEnd = TimeSpan.FromMinutes(30);
+
+    /// <summary>The line's own id ("uuid"); null for a line without one.</summary>
+    private static string? IdOf(string line) => Field(line, "\"uuid\":\"");
+
+    private static string? Field(string line, string key)
+    {
+        var at = line.IndexOf(key, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        at += key.Length;
+        var end = line.IndexOf('"', at);
+        return end > at ? line[at..end] : null;
+    }
+
+    /// <summary>The time a line was written ("timestamp"); null for a line without one.</summary>
+    private static DateTimeOffset? TimeOf(string line)
+    {
+        const string Key = "\"timestamp\":\"";
+        var at = line.IndexOf(Key, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        at += Key.Length;
+        var end = line.IndexOf('"', at);
+        return end > at && DateTimeOffset.TryParse(line.AsSpan(at, end - at), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var time) ? time : null;
+    }
+
+    /// <summary>
+    /// The first prompt and the latest steps that fit in <paramref name="maxChars"/>, oldest first, with a note where steps
+    /// were left out. <paramref name="complete"/>: the steps are all there are, from the first on.
+    /// </summary>
+    private static string Compose(string? first, List<string> steps, int maxChars, bool complete)
+    {
+        var whole = complete;
         var kept = new List<string>();
         var size = first?.Length ?? 0;
         for (var i = steps.Count - 1; i >= 0 && size + steps[i].Length <= maxChars; i--)

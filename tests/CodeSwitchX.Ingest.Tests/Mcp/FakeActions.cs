@@ -91,6 +91,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult($"{chat.Title} is summed up.");
     }
 
+    public string? RecappedFor { get; private set; }
+
+    public Task<string> RecapLastSessionAsync(string? askedIn, CancellationToken ct)
+    {
+        Act("summarize_last_session");
+        RecappedFor = askedIn;
+        return Task.FromResult("Yesterday it got done.");
+    }
+
     public Task<string> NextQuestionAsync(CancellationToken ct)
     {
         Act("next_question");

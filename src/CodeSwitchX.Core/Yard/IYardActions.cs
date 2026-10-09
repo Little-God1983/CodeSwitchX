@@ -86,6 +86,14 @@ public interface IYardActions
     /// <exception cref="YardActionException">It could not be summed up; the message says why.</exception>
     Task<string> SummarizeChatAsync(YardChat chat, string? askedIn, CancellationToken ct);
 
+    /// <summary>
+    /// Sums the user's last working session up (#237): when it was, what each chat got done, what is still open. Written
+    /// in the Raven chat <paramref name="askedIn"/> names (the one the user is in for null); returns what Raven says. One
+    /// that takes longer than a minute goes on, and is only written when done.
+    /// </summary>
+    /// <exception cref="YardActionException">There is none to sum up, or it could not be; the message says why.</exception>
+    Task<string> RecapLastSessionAsync(string? askedIn, CancellationToken ct);
+
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
 }

@@ -109,6 +109,27 @@ public sealed class TranscriptDigestTests : IDisposable
         TranscriptDigest.Read(_path).ShouldBe("User: Rename it.\nThe user stopped it.\nA background task of the chat ended.");
     }
 
+    private static string Timed(string line, string at) => line.Insert(1, $"\"timestamp\":\"{at}\",");
+
+    [Fact]
+    public void Only_the_steps_of_a_stretch_of_time_are_read()
+    {
+        File.WriteAllLines(_path, [
+            Timed(User("Old task."), "2026-10-07T10:00:00.000Z"),
+            Timed(User("Fix the upload."), "2026-10-08T14:00:00.000Z"),
+            Timed(Assistant("Fixed it.").Insert(1, "\"uuid\":\"u2\","), "2026-10-08T14:20:00.000Z"),
+            Timed(Assistant("Fixed it.").Insert(1, "\"uuid\":\"u2\","), "2026-10-08T14:20:00.000Z"), // a resumed chat writes it again
+            Assistant("No time on this line."),
+            Timed(User("Next day."), "2026-10-09T09:00:00.000Z"),
+        ]);
+
+        var ct = TestContext.Current.CancellationToken;
+        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 8, 13, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 8, 18, 0, 0, TimeSpan.Zero), ct: ct)
+            .ShouldBe("User: Fix the upload.\nClaude: Fixed it.");
+        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 2, 0, 0, 0, TimeSpan.Zero), ct: ct)
+            .ShouldBeNull("long past the end, the reading stops");
+    }
+
     [Fact]
     public void No_file_and_no_step_are_null()
     {
