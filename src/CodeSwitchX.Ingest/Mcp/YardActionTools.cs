@@ -182,7 +182,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     }
 
     // Not read-only, as summarize_chat: it writes in Raven's panel and gives out what the chats did.
-    [McpServerTool(Name = "summarize_last_session", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "summarize_last_session", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Sums up the user's last working session, from what the chats did in it and the commits made then (\"what did I do "
         + "yesterday?\", \"summary of yesterday\", \"where did I leave off?\", \"what happened last time?\"). A session ends at a "
         + "break of four hours or more; while the user works, it is the one before. Takes up to a minute; a longer one is written in "
@@ -191,7 +191,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         Act(() => actions.RecapLastSessionAsync(scope?.Key, cancellationToken));
 
     // Not read-only: it writes in Raven's panel and gives out what a chat said, so a message from another session is refused it.
-    [McpServerTool(Name = "summarize_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [McpServerTool(Name = "summarize_chat", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Sums one Claude Code chat up from its conversation (\"summarize the upload chat\", \"what did the docs chat do?\", "
         + "\"where does it stand?\"): what it was asked, what it did, where it stands and what it waits for. Takes some seconds. "
         + "The full summary is written in Raven's panel; returns the short summary to say: say only that summary, in your own voice.")]

@@ -234,7 +234,7 @@ public partial class App : Application
         // Sums the user's last working session up when Raven is asked to (#237).
         services.AddKeyedSingleton<IConductorBrain>(SessionRecaps.BrainKey, (sp, _) => ToollessBrain(sp, BrainRole.Recapper));
         services.AddSingleton<ISessionRecaps>(sp => new SessionRecaps(sp.GetRequiredKeyedService<IConductorBrain>(SessionRecaps.BrainKey),
-            sp.GetRequiredService<IUsageStore>(), () => sp.GetRequiredService<SessionEngine>().Snapshots, sp.GetRequiredService<IYardDirectory>(),
+            sp.GetRequiredService<IUsageStore>(), sp.GetRequiredService<ISessionStore>(), () => sp.GetRequiredService<SessionEngine>().Snapshots, sp.GetRequiredService<IYardDirectory>(),
             GitInspector.RunGitAsync, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<SessionRecaps>>()));
         services.AddSingleton<IChatSummaries>(sp => new ChatSummaries(sp.GetRequiredKeyedService<IConductorBrain>(ChatSummaries.BrainKey),
             id => VsCodeChats.ConversationPathOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id), sp.GetRequiredService<TimeProvider>(),

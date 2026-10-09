@@ -34,6 +34,18 @@ public class WorkSessionsTests
     }
 
     [Fact]
+    public void A_break_of_four_hours_idle_ends_a_session_and_one_minute_less_does_not()
+    {
+        // The last minute with work is 9:00-9:01: idle from 9:01.
+        var exactly = new[] { At("a", Morning), At("b", Morning.AddHours(4).AddMinutes(1)) };
+        var less = new[] { At("a", Morning), At("b", Morning.AddHours(4)) };
+        var later = Morning.AddDays(1);
+
+        WorkSessions.Last(exactly, _ => true, later).ShouldNotBeNull().MinutesByChat.Keys.ShouldBe(["b"]);
+        WorkSessions.Last(less, _ => true, later).ShouldNotBeNull().MinutesByChat.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public void Minutes_that_do_not_count_and_a_lone_session_going_on_give_none()
     {
         var buckets = Minutes("raven", Morning, 30).Concat(Minutes("a", Morning.AddDays(1), 5));

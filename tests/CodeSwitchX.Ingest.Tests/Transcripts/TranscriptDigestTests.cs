@@ -122,10 +122,11 @@ public sealed class TranscriptDigestTests : IDisposable
             Assistant("No time on this line."),
         ]);
 
-        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 8, 13, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 8, 18, 0, 0, TimeSpan.Zero))
+        var ct = TestContext.Current.CancellationToken;
+        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 8, 13, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 8, 18, 0, 0, TimeSpan.Zero), ct: ct)
             .ShouldBe("User: Fix the upload.\nClaude: Fixed it.");
-        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 2, 0, 0, 0, TimeSpan.Zero))
-            .ShouldBeNull();
+        TranscriptDigest.ReadBetween(_path, new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2026, 10, 2, 0, 0, 0, TimeSpan.Zero), ct: ct)
+            .ShouldBeNull("long past the end, the reading stops");
     }
 
     [Fact]

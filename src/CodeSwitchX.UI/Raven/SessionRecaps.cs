@@ -23,9 +23,10 @@ public interface ISessionRecaps
 /// summed up by the recapper (<see cref="BrainRole.Recapper"/>, a small fast model with no tools) in one short summary.
 /// One at a time.
 /// </summary>
-/// <param name="sessions">The chats the app knows, with their workspace and conversation (<c>SessionEngine.Snapshots</c>).</param>
+/// <param name="stored">The chats saved, with their workspace and conversation: the app keeps in mind only those of the last day it started with.</param>
+/// <param name="sessions">The chats the app knows now (<c>SessionEngine.Snapshots</c>), fresher than those saved.</param>
 /// <param name="git">Runs git in a folder with the arguments given; its output, or null when it failed.</param>
-public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, Func<IReadOnlyCollection<SessionSnapshot>> sessions, IYardDirectory yard,
+public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, ISessionStore stored, Func<IReadOnlyCollection<SessionSnapshot>> sessions, IYardDirectory yard,
     Func<string, string, CancellationToken, Task<string?>> git, TimeProvider time, ILogger<SessionRecaps> logger) : ISessionRecaps
 {
     /// <summary>The recapper's key among the app's brains.</summary>
@@ -45,6 +46,9 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
 
     /// <summary>The most commits told per workspace.</summary>
     internal const int MaxCommits = 15;
+
+    /// <summary>How long after its last chat's work a commit still counts to the session: one made by hand, say.</summary>
+    internal static readonly TimeSpan CommitSlack = TimeSpan.FromMinutes(15);
 
     private readonly SemaphoreSlim _one = new(1, 1);
 
@@ -88,11 +92,30 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
         }
     }
 
+    /// <summary>A chat that may have worked in the session: its workspace, title and conversation.</summary>
+    private sealed record ChatFacts(Guid? WorkspaceId, string? Title, string? TranscriptPath);
+
     /// <summary>What the recapper is given: when the session was, what each chat did in it, and the commits made then.</summary>
     internal async Task<string> QuestionAsync(CancellationToken ct)
     {
         var now = time.GetUtcNow();
-        var chats = sessions().Where(s => s.WorkspaceId is not null).ToDictionary(s => s.SessionId, StringComparer.Ordinal);
+
+        // The saved chats of the whole look-back, the app's own fresher where it has them: after a restart it keeps in mind
+        // only the chats of the day before, and a Friday's must count on a Monday.
+        var chats = new Dictionary<string, ChatFacts>(StringComparer.Ordinal);
+        foreach (var record in await stored.GetActiveSinceAsync(now - LookBack, ct).ConfigureAwait(false))
+        {
+            if (record.WorkspaceId is not null)
+            {
+                chats[record.Id] = new ChatFacts(record.WorkspaceId, record.Title, record.TranscriptPath);
+            }
+        }
+
+        foreach (var snapshot in sessions().Where(s => s.WorkspaceId is not null))
+        {
+            chats[snapshot.SessionId] = new ChatFacts(snapshot.WorkspaceId, snapshot.Title, snapshot.TranscriptPath);
+        }
+
         var buckets = await usage.GetBucketsAsync(now - LookBack, now, ct).ConfigureAwait(false);
         var session = WorkSessions.Last(buckets, chats.ContainsKey, now)
             ?? throw new YardActionException($"No working session before this one shows in the last {LookBack.TotalDays:0} days.");
@@ -103,11 +126,13 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
         text.Append("It was ").Append(When(session.Start, now)).Append(", from ").Append(Local(session.Start).ToString("HH:mm", CultureInfo.InvariantCulture))
             .Append(" to ").Append(Local(session.End).ToString("HH:mm", CultureInfo.InvariantCulture)).Append(".\n\n");
 
+        // The chats that worked the longest; one whose conversation cannot be read makes room for the next.
         var told = 0;
-        foreach (var (id, minutes) in session.MinutesByChat.OrderByDescending(c => c.Value).Take(MaxChats))
+        foreach (var (id, minutes) in session.MinutesByChat.OrderByDescending(c => c.Value))
         {
             var chat = chats[id];
-            if (TranscriptDigest.ReadBetween(chat.TranscriptPath, session.Start - TimeSpan.FromMinutes(1), session.End, ChatChars) is not { } steps)
+            if (told == MaxChats
+                || TranscriptDigest.ReadBetween(chat.TranscriptPath, session.Start - TimeSpan.FromMinutes(1), session.End, ChatChars, ct) is not { } steps)
             {
                 continue;
             }
@@ -129,18 +154,25 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
         return text.ToString().TrimEnd();
     }
 
-    /// <summary>The commits each workspace's folders got in the session, on any branch, merges aside; workspaces with none are left out.</summary>
+    /// <summary>
+    /// The user's own commits in each workspace's folders during the session, on its local branches (no one else's fetched
+    /// ones, no stash), merges aside; a folder two workspaces share counts for the first; workspaces with none are left out.
+    /// </summary>
     private async Task<List<(string Workspace, IReadOnlyList<string> Subjects)>> CommitsAsync(IReadOnlyList<YardWorkspace> workspaces, WorkSession session,
         CancellationToken ct)
     {
-        var range = $"--since=\"{Git(session.Start)}\" --until=\"{Git(session.End)}\"";
-        var found = await Task.WhenAll(workspaces.Select(async w =>
+        var range = $"--since=\"{Git(session.Start)}\" --until=\"{Git(session.End + CommitSlack)}\"";
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var each = workspaces.Select(w => (w.Name, Folders: (w.Folders.Count > 0 ? w.Folders.Select(f => f.Path) : [w.RootPath]).Where(seen.Add).ToList()))
+            .ToList();
+        var found = await Task.WhenAll(each.Select(async w =>
         {
-            var folders = w.Folders.Count > 0 ? w.Folders.Select(f => f.Path) : [w.RootPath];
             var subjects = new List<string>();
-            foreach (var folder in folders.Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var folder in w.Folders)
             {
-                var log = await git(folder, $"log --all --no-merges {range} --pretty=format:%s -n {MaxCommits}", ct).ConfigureAwait(false);
+                var author = (await git(folder, "config user.email", ct).ConfigureAwait(false))?.Trim() is { Length: > 0 } email
+                    ? $" --author=\"{email.Replace("\"", "")}\"" : "";
+                var log = await git(folder, $"log --branches --no-merges{author} {range} --pretty=format:%s -n {MaxCommits}", ct).ConfigureAwait(false);
                 subjects.AddRange((log ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
             }
 
@@ -153,11 +185,10 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
 
     private DateTimeOffset Local(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, time.LocalTimeZone);
 
-    /// <summary>"yesterday afternoon", "on Friday evening", "earlier today, in the morning", "on 2 October".</summary>
+    /// <summary>"yesterday afternoon", "last night", "on Friday evening", "earlier today, in the morning", "on 2 October".</summary>
     internal string When(DateTimeOffset start, DateTimeOffset now)
     {
         var at = Local(start);
-        var days = (Local(now).Date - at.Date).Days;
         var part = at.Hour switch
         {
             < 5 => "night",
@@ -166,13 +197,17 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, F
             < 22 => "evening",
             _ => "night",
         };
-        return days switch
+
+        // The small hours belong to the night before: 01:00 on Thursday is Wednesday night.
+        var day = at.Hour < 5 ? at.Date.AddDays(-1) : at.Date;
+        var named = day.ToString("dddd d MMMM", CultureInfo.InvariantCulture);
+        return (Local(now).Date - day).Days switch
         {
-            0 => $"earlier today, in the {part}",
-            1 when part == "night" => $"last night ({at.ToString("dddd d MMMM", CultureInfo.InvariantCulture)})",
-            1 => $"yesterday {part} ({at.ToString("dddd d MMMM", CultureInfo.InvariantCulture)})",
-            < 7 => $"on {at.ToString("dddd", CultureInfo.InvariantCulture)} {part} ({at.ToString("d MMMM", CultureInfo.InvariantCulture)})",
-            _ => $"on {at.ToString("dddd d MMMM", CultureInfo.InvariantCulture)}, in the {part}",
+            <= 0 => $"earlier today, in the {part}",
+            1 when part == "night" => $"last night ({named})",
+            1 => $"yesterday {part} ({named})",
+            < 7 => $"on {day.ToString("dddd", CultureInfo.InvariantCulture)} {part} ({day.ToString("d MMMM", CultureInfo.InvariantCulture)})",
+            _ => $"on {named}, in the {part}",
         };
     }
 }

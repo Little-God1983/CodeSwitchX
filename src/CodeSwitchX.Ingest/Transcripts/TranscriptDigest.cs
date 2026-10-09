@@ -67,7 +67,7 @@ public static class TranscriptDigest
     /// <paramref name="maxChars"/>: the latest that fit, with the first prompt among them when they do not all fit. The
     /// whole file is read, line by line. Null when no step falls in that time, or the file cannot be read.
     /// </summary>
-    public static string? ReadBetween(string? path, DateTimeOffset from, DateTimeOffset to, int maxChars = 4_000)
+    public static string? ReadBetween(string? path, DateTimeOffset from, DateTimeOffset to, int maxChars = 4_000, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(path))
         {
@@ -79,9 +79,26 @@ public static class TranscriptDigest
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream, Encoding.UTF8);
+            var lines = 0;
             while (reader.ReadLine() is { } line)
             {
-                if (TimeOf(line) is { } at && at >= from && at <= to && StepOf(line) is { } step)
+                if (++lines % 1000 == 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                }
+
+                if (TimeOf(line) is not { } at)
+                {
+                    continue;
+                }
+
+                // Lines come in the order they were written: well past the end, the rest of a long conversation is later still.
+                if (at > to + PastEnd)
+                {
+                    break;
+                }
+
+                if (at >= from && at <= to && StepOf(line) is { } step)
                 {
                     steps.Add(step);
                 }
@@ -95,6 +112,9 @@ public static class TranscriptDigest
         var first = steps.FirstOrDefault(s => s.StartsWith("User: ", StringComparison.Ordinal) || s.StartsWith("Asked through", StringComparison.Ordinal));
         return steps.Count == 0 ? null : Compose(first, steps, maxChars, complete: true);
     }
+
+    /// <summary>How far past the end a line may be written and the reading still go on: a sub-agent's lines come a little out of order.</summary>
+    internal static readonly TimeSpan PastEnd = TimeSpan.FromMinutes(30);
 
     /// <summary>The time a line was written ("timestamp"); null for a line without one.</summary>
     private static DateTimeOffset? TimeOf(string line)

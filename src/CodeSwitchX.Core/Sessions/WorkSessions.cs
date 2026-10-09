@@ -30,7 +30,8 @@ public static class WorkSessions
         var sessions = new List<List<IGrouping<DateTimeOffset, UsageBucket>>>();
         foreach (var minute in minutes)
         {
-            if (sessions.Count == 0 || minute.Key - sessions[^1][^1].Key >= Break)
+            // The idle time between two minutes with work: from the end of the one to the start of the next.
+            if (sessions.Count == 0 || minute.Key - (sessions[^1][^1].Key + OneMinute) >= Break)
             {
                 sessions.Add([]);
             }
@@ -38,7 +39,7 @@ public static class WorkSessions
             sessions[^1].Add(minute);
         }
 
-        var going = now - sessions[^1][^1].Key < Break;
+        var going = now - (sessions[^1][^1].Key + OneMinute) < Break;
         if (going && sessions.Count < 2)
         {
             return null;
@@ -47,6 +48,8 @@ public static class WorkSessions
         var last = sessions[going ? ^2 : ^1];
         var byChat = last.SelectMany(m => m.Select(b => b.SessionId).Distinct()).GroupBy(id => id)
             .ToDictionary(g => g.Key, g => g.Count());
-        return new WorkSession(last[0].Key, last[^1].Key + TimeSpan.FromMinutes(1), byChat);
+        return new WorkSession(last[0].Key, last[^1].Key + OneMinute, byChat);
     }
+
+    private static readonly TimeSpan OneMinute = TimeSpan.FromMinutes(1);
 }

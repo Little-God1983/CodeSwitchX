@@ -941,6 +941,28 @@ public sealed class RavenActionsTests
         _shell.Summaries.ShouldHaveSingleItem().ShouldBe(((string?)null, "Your last working session: On Friday the docs got done."));
     }
 
+    [Fact]
+    public async Task A_recap_that_fails_late_writes_why_and_one_that_fails_at_once_says_it()
+    {
+        var recaps = new FakeRecaps { Hold = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var asking = WithRecaps(recaps).RecapLastSessionAsync("overview", Ct);
+        await Task.Delay(50, Ct);
+        _time.Advance(RavenActions.RecapWait);
+        await asking;
+        recaps.Hold.SetException(new YardActionException("No working session before this one shows in the last 14 days."));
+        for (var i = 0; i < 200 && _shell.Summaries.Count == 0; i++)
+        {
+            await Task.Delay(10, Ct);
+        }
+
+        _shell.Summaries.ShouldHaveSingleItem().ShouldBe(("overview", "No working session before this one shows in the last 14 days."));
+
+        var broken = new FakeRecaps { Hold = new TaskCompletionSource<string>() };
+        broken.Hold.SetException(new TimeoutException("The window did not answer."));
+        (await Should.ThrowAsync<YardActionException>(() => WithRecaps(broken).RecapLastSessionAsync(null, Ct))).Message
+            .ShouldBe("Summing up your last working session failed: The window did not answer.");
+    }
+
     /// <summary>#234: Raven says the short part; the whole summary is written where the user asked.</summary>
     [Fact]
     public async Task A_chat_s_summary_is_said_short_and_written_whole_where_it_was_asked()
