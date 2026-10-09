@@ -689,6 +689,19 @@ public sealed class VsCodeChats : IVsCodeChats
         }
     }
 
+    /// <summary>The session's conversation file, in whichever project folder it is; null for none, or a folder that cannot be read. Never throws.</summary>
+    public static string? ConversationPathOf(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            return ConversationFile(projectsDirectory, sessionId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>
     private static string? ConversationFile(string projectsDirectory, string sessionId) =>
         !Directory.Exists(projectsDirectory) || sessionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ? null

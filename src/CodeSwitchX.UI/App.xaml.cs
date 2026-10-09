@@ -229,6 +229,11 @@ public partial class App : Application
         services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.TellerKey, (sp, _) => ToollessBrain(sp, BrainRole.Teller));
         // The summarizer, likewise with no tools, words the line chat 0 knows each window's chat by.
         services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.SummarizerKey, (sp, _) => ToollessBrain(sp, BrainRole.Summarizer));
+        // Sums a Claude Code chat up from its conversation when Raven is asked to (#234).
+        services.AddKeyedSingleton<IConductorBrain>(ChatSummaries.BrainKey, (sp, _) => ToollessBrain(sp, BrainRole.ChatSummarizer));
+        services.AddSingleton<IChatSummaries>(sp => new ChatSummaries(sp.GetRequiredKeyedService<IConductorBrain>(ChatSummaries.BrainKey),
+            id => VsCodeChats.ConversationPathOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<ChatSummaries>>()));
         static ClaudeCliBrain ToollessBrain(IServiceProvider sp, BrainRole role) => new(sp.GetRequiredService<AppPaths>(),
             sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
@@ -269,7 +274,8 @@ public partial class App : Application
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
-            sp.GetRequiredService<TurnStops>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>()));
+            sp.GetRequiredService<TurnStops>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>(),
+            sp.GetRequiredService<IChatSummaries>()));
 
         // The app's own settings by voice (#126): the tools read and change them as the Settings page does.
         services.AddSingleton<IAppSettings>(sp => new AppSettings(() => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),

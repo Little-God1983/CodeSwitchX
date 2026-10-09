@@ -258,6 +258,21 @@ public sealed partial class RavenPanelViewModelTests
         SpokenSince(before).ShouldBe("DiffusionNexus, chat \"Task c\" asks: Which fruit? Apple or Banana.");
     }
 
+    /// <summary>#234: a chat's summary is written in the Raven chat it was asked in.</summary>
+    [Fact]
+    public async Task A_summary_is_written_where_it_was_asked()
+    {
+        var (vm, _) = await NextQuestionVmAsync();
+
+        vm.WriteSummary("overview", "Summary one");
+        vm.WriteSummary(FakeYardDirectory.WorkspaceOf("DiffusionNexus").ToString(), "Summary two");
+        vm.WriteSummary(null, "Summary three");
+
+        vm.Log.Single(e => e.Text == "Summary one").Chat.ShouldBe(vm.YardChat);
+        vm.Log.Single(e => e.Text == "Summary two").Chat.ShouldBe(ChatNumbered(vm, 2));
+        vm.Log.Single(e => e.Text == "Summary three").Chat.ShouldBe(ChatNumbered(vm, 1), "the chat the user is in");
+    }
+
     [Fact]
     public async Task The_brain_s_next_question_with_none_open_is_null()
     {

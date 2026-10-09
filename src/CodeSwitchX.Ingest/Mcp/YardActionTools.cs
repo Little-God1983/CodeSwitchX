@@ -181,6 +181,22 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
     }
 
+    // Not read-only: it writes in Raven's panel and gives out what a chat said, so a message from another session is refused it.
+    [McpServerTool(Name = "summarize_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Sums one Claude Code chat up from its conversation (\"summarize the upload chat\", \"what did the docs chat do?\", "
+        + "\"where does it stand?\"): what it was asked, what it did, where it stands and what it waits for. Takes some seconds. "
+        + "The full summary is written in Raven's panel; returns the short summary to say: say only that summary, in your own voice.")]
+    public async Task<string> SummarizeChat(
+        [Description("The chat's id from list_chats; its start is enough. Left out: the one chat of the window the user is in.")]
+        string? chat = null,
+        CancellationToken cancellationToken = default)
+    {
+        var one = string.IsNullOrWhiteSpace(chat)
+            ? await WindowChatAsync(_ => true, "to sum up", "is shown", cancellationToken).ConfigureAwait(false)
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        return await Act(() => actions.SummarizeChatAsync(one, scope?.Key, cancellationToken)).ConfigureAwait(false);
+    }
+
     [McpServerTool(Name = "next_question", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
     [Description("Takes the user to the oldest question or permission prompt waiting in any window (\"next question\", \"go through my "
         + "questions\", \"what's next\", \"the next one\"): its window's Raven chat is shown, and its card is read out there once you "

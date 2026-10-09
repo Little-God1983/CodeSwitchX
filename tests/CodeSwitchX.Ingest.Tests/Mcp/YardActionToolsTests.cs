@@ -291,6 +291,21 @@ public sealed class YardActionToolsTests
         _actions.Calls.ShouldBeEmpty();
     }
 
+    /// <summary>#234: a chat named by its id, or the one chat of the window the user is in; the summary goes where they asked.</summary>
+    [Fact]
+    public async Task A_chat_is_summed_up_by_its_id_or_as_the_one_of_the_window()
+    {
+        (await Tools.SummarizeChat("aaaa", Ct)).ShouldBe("Speech gate is summed up.");
+        _actions.Summarized.ShouldNotBeNull().Chat.Title.ShouldBe("Speech gate");
+
+        await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).SummarizeChat(cancellationToken: Ct);
+        _actions.Summarized.ShouldNotBeNull().Chat.Title.ShouldBe("Installer icons");
+        _actions.Summarized!.Value.AskedIn.ShouldBe(FakeYard.DiffusionId.ToString());
+
+        (await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: ChatScope.Yard).SummarizeChat(cancellationToken: Ct)))
+            .Message.ShouldContain("Say which chat to sum up");
+    }
+
     [Fact]
     public async Task A_working_chat_is_stopped_at_once()
     {
