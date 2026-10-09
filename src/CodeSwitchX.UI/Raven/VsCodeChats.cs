@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
@@ -38,10 +39,42 @@ public interface IVsCodeChats
     /// </summary>
     /// <exception cref="YardActionException">It could not be shown; the message says why.</exception>
     Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct);
+
+    /// <summary>
+    /// Compacts the chat (#226): its tab is closed, Claude Code compacts the conversation, and the tab is opened again in
+    /// the same window, also when the compaction failed. A chat VS Code would not open again, as it has no name, is named
+    /// first. A chat with no tab is only compacted. Returns once it is done.
+    /// </summary>
+    /// <param name="folder">The folder the chat runs in, for when its conversation does not say the one it started in.</param>
+    /// <param name="title">The title the Yard shows it by: its name, when it needs one.</param>
+    /// <param name="keep">What the summary is to keep; null for a plain <c>/compact</c>.</param>
+    /// <param name="tab">Told what becomes of its tab, as it happens (<see cref="CompactionTab"/>); null for nothing.</param>
+    /// <returns>Whether its tab was opened again: false for a chat that had none.</returns>
+    /// <exception cref="YardActionException">It was not compacted, or not opened again; the message says which and why.</exception>
+    Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct);
 }
 
 /// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
+/// <remarks>See <see cref="ConversationStart"/> for how it started.</remarks>
 public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);
+
+/// <summary>How a chat's conversation started (<see cref="VsCodeChats.StartOf"/>).</summary>
+/// <param name="Listed">Whether VS Code's Claude Code lists it, and so opens it again by its id.</param>
+/// <param name="Folder">The folder it started in, which Claude Code finds it by; null when no line says.</param>
+public sealed record ConversationStart(bool Listed, string? Folder);
+
+/// <summary>What becomes of a chat's tab while it is compacted (#226).</summary>
+public enum CompactionTab
+{
+    /// <summary>It is about to close, every refusal past: the turn it cuts off ends now, before the close is done.</summary>
+    Closing,
+
+    /// <summary>It did not close after all; nothing was compacted.</summary>
+    NotClosed,
+
+    /// <summary>It is open again.</summary>
+    Reopened,
+}
 
 /// <param name="Folder">The folder it runs in.</param>
 /// <param name="SendTo">The name it is messaged by (<c>SendMessage</c>).</param>
@@ -91,11 +124,13 @@ public sealed class VsCodeChats : IVsCodeChats
 
     private readonly ICompanionWindows _windows;
     private readonly ICompanionInstaller _installer;
+    private readonly IChatCompactor _compactor;
     private readonly Func<Workspace, CancellationToken, Task<string?>> _openVsCode;
     private readonly Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> _running;
     private readonly Func<IReadOnlyDictionary<int, int>> _parents;
     private readonly Func<string, bool> _hasConversation;
     private readonly Func<string, bool> _runsOutside;
+    private readonly Func<string, ConversationStart?> _startOf;
     private readonly string _pendingSettings;
     private readonly TimeProvider _time;
     private readonly ILogger<VsCodeChats> _logger;
@@ -107,10 +142,14 @@ public sealed class VsCodeChats : IVsCodeChats
     /// <param name="hasConversation">Whether a session has a conversation on disk: one it goes on, not a new chat.</param>
     /// <param name="runsOutside">Whether a session runs right now outside a VS Code tab, in a terminal or by <c>claude -p</c> (<see cref="ClaudeLiveSessions.RunsOutsideVsCode"/>).</param>
     /// <param name="pendingSettings">Where what puts a folder's settings back is kept while a chat starts (<see cref="StartSettings"/>).</param>
+    /// <param name="compactor">Compacts a conversation whose tab is closed (#226).</param>
+    /// <param name="startOf">What a session's conversation says of how it started (<see cref="StartOf"/>); null when it cannot be read.</param>
     public VsCodeChats(ICompanionWindows windows, ICompanionInstaller installer, Func<Workspace, CancellationToken, Task<string?>> openVsCode,
         Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> running, Func<IReadOnlyDictionary<int, int>> parents, Func<string, bool> hasConversation,
-        Func<string, bool> runsOutside, string pendingSettings, TimeProvider time, ILogger<VsCodeChats> logger)
+        Func<string, bool> runsOutside, string pendingSettings, IChatCompactor compactor, Func<string, ConversationStart?> startOf, TimeProvider time, ILogger<VsCodeChats> logger)
     {
+        _compactor = compactor;
+        _startOf = startOf;
         _runsOutside = runsOutside;
         _pendingSettings = pendingSettings;
         _windows = windows;
@@ -237,18 +276,21 @@ public sealed class VsCodeChats : IVsCodeChats
     /// </summary>
     public async Task CloseAsync(string sessionId, CancellationToken ct)
     {
-        var chat = _running(null).FirstOrDefault(c => string.Equals(c.SessionId, sessionId, StringComparison.OrdinalIgnoreCase))
-            ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
-        var window = _parents().TryGetValue(chat.Pid, out var host) ? _windows.Of(host) : null;
-        if (window is null)
-        {
-            throw new YardActionException("The VS Code window that chat runs in does not run the CodeSwitchX companion, so it cannot be closed from "
-                + "here. Close its tab in VS Code.");
-        }
-
+        var chat = RunningTab(sessionId) ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        var window = WindowOf(chat, "closed");
         Requires(window, ClosesSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
             + "Reload that window (Developer: Reload Window) and try again.");
+        await CloseTabAsync(chat, window, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>The window whose companion runs the chat's tab; refused when it runs none, as the tab is then out of reach.</summary>
+    private CompanionWindow WindowOf(LiveChat chat, string what) =>
+        (_parents().TryGetValue(chat.Pid, out var host) ? _windows.Of(host) : null)
+        ?? throw new YardActionException($"The VS Code window that chat runs in does not run the CodeSwitchX companion, so it cannot be {what} from "
+            + "here." + (what == "closed" ? " Close its tab in VS Code." : ""));
+
+    private async Task CloseTabAsync(LiveChat chat, CompanionWindow window, CancellationToken ct)
+    {
         var answer = await _windows.SendAsync(window, CompanionWindows.CloseChat, chat.SessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
         {
@@ -267,6 +309,102 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         _logger.LogInformation("Closed chat {Id} ({Name}) in VS Code", chat.SessionId, chat.Name);
+    }
+
+    public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct)
+    {
+        // Claude Code finds a conversation by the folder it started in; a chat may work elsewhere since (a worktree).
+        var start = _startOf(sessionId);
+        folder = start?.Folder ?? folder;
+        if (RunningTab(sessionId) is not { } chat)
+        {
+            if (_runsOutside(sessionId))
+            {
+                throw new YardActionException("That chat runs outside VS Code's chat tabs right now (in a terminal, a script or another app), "
+                    + "which holds its whole conversation: compacted from here, it would carry on from that. Compact it where it runs, with /compact.");
+            }
+
+            await _compactor.CompactAsync(sessionId, folder, keep, ct).ConfigureAwait(false);
+            return false;
+        }
+
+        var window = WindowOf(chat, "compacted");
+        Requires(window, ShowsSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot open the chat "
+            + "again after compacting it. Reload that window (Developer: Reload Window) and try again.");
+        if (start is null)
+        {
+            // Whether VS Code could open it again is not known: its tab is not closed on a guess.
+            throw new YardActionException("CodeSwitchX cannot read that chat's conversation yet, so it cannot tell whether VS Code could open it "
+                + "again. Nothing was compacted.");
+        }
+
+        // Told before the close is sent: the turn it cuts off may be over before the close is done.
+        tab?.Invoke(CompactionTab.Closing);
+        try
+        {
+            // Not ended with the caller once asked: a tab closed must be waited for, and opened again.
+            await CloseTabAsync(chat, window, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (YardActionException ex)
+        {
+            if (RunningTab(sessionId) is not null)
+            {
+                tab?.Invoke(CompactionTab.NotClosed);
+            }
+
+            throw new YardActionException($"{ex.Message} Nothing was compacted.");
+        }
+
+        // Its tab is closed: from here on it is carried through, so the chat is never left closed halfway. By the id as its
+        // record has it, which Claude Code resumes it by.
+        sessionId = chat.SessionId;
+        var named = start.Listed;
+        string? failed = null;
+        try
+        {
+            if (!named)
+            {
+                // Only ever messaged by Raven, it has no name, and VS Code opens no chat again that it does not list.
+                await _compactor.NameAsync(sessionId, folder, title, CancellationToken.None).ConfigureAwait(false);
+                named = true;
+            }
+
+            await _compactor.CompactAsync(sessionId, folder, keep, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (ex is not YardActionException)
+            {
+                _logger.LogError(ex, "Compacting chat {Id} failed", sessionId);
+            }
+
+            failed = ex is YardActionException ? ex.Message : $"Compacting the chat failed: {ex.Message}";
+        }
+
+        if (!named)
+        {
+            // A tab asked for it would open blank.
+            throw new YardActionException($"{failed} Nothing was compacted, and with no name VS Code cannot open the chat again: in a terminal "
+                + $"in {folder}, claude --resume {sessionId} goes on with it.");
+        }
+
+        try
+        {
+            await OpenTabAsync(window, sessionId, "", CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (YardActionException ex)
+        {
+            throw new YardActionException((failed is null ? "The chat is compacted, but " : $"{failed} And ")
+                + $"its tab did not open again: {ex.Message} It can be opened from VS Code's session list.");
+        }
+
+        tab?.Invoke(CompactionTab.Reopened);
+        if (failed is not null)
+        {
+            throw new YardActionException($"{failed} Its tab is open again, as it was.");
+        }
+
+        return true;
     }
 
     public async Task ShowAsync(Workspace workspace, string sessionId, CancellationToken ct)
@@ -292,27 +430,47 @@ public sealed class VsCodeChats : IVsCodeChats
         Requires(window, ShowsSince, $"The VS Code window of {workspace.Name} still runs an older CodeSwitchX companion, which cannot show a "
             + "chat. Reload that window (Developer: Reload Window) and try again.");
 
+        if (running is null)
+        {
+            await OpenTabAsync(window, sessionId, $" in {workspace.Name}", ct).ConfigureAwait(false);
+        }
+        else
+        {
+            var answer = await _windows.SendAsync(window, CompanionWindows.OpenChat, sessionId, ct).ConfigureAwait(false);
+            if (!answer.Ok)
+            {
+                throw new YardActionException($"VS Code did not show the chat: {answer.Error}");
+            }
+        }
+
+        _logger.LogInformation("Showed chat {Id} in VS Code for {Workspace}", sessionId, workspace.Name);
+    }
+
+    /// <summary>
+    /// Opens a tab for a chat that has none in the window, and returns once its Claude Code runs there. For an id Claude
+    /// Code does not find from that window it opens a blank chat and says nothing: the chat is open once its own Claude
+    /// Code runs.
+    /// </summary>
+    /// <param name="where">" in App", for what is said when it does not start; empty for none.</param>
+    private async Task OpenTabAsync(CompanionWindow window, string sessionId, string where, CancellationToken ct)
+    {
         var answer = await _windows.SendAsync(window, CompanionWindows.OpenChat, sessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
         {
             throw new YardActionException($"VS Code did not show the chat: {answer.Error}");
         }
 
-        // A chat with no tab gets one, and its Claude Code starts with it. For an id Claude Code does not find from that
-        // window it opens a blank chat and says nothing: the chat is shown once its own Claude Code runs.
         var until = _time.GetUtcNow() + ShowWait;
-        while (running is null && RunningTab(sessionId) is null)
+        while (RunningTab(sessionId) is null)
         {
             if (_time.GetUtcNow() >= until)
             {
-                throw new YardActionException($"VS Code opened a tab in {workspace.Name}, but that chat did not start in it within "
-                    + $"{ShowWait.TotalSeconds:0} seconds: Claude Code may not have found its conversation from that window. Look at the tab in VS Code.");
+                throw new YardActionException($"VS Code opened a tab{where}, but that chat did not start in it within {ShowWait.TotalSeconds:0} seconds: "
+                    + "Claude Code may not have found its conversation from that window. Look at the tab in VS Code.");
             }
 
             await Task.Delay(Poll, _time, ct).ConfigureAwait(false);
         }
-
-        _logger.LogInformation("Showed chat {Id} in VS Code for {Workspace}", sessionId, workspace.Name);
     }
 
     /// <summary>The chat's Claude Code, when it runs in a VS Code tab right now; null when it does not.</summary>
@@ -446,6 +604,62 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         return (made, given);
+    }
+
+    /// <summary>
+    /// What the session's conversation says of how it started (#226): the folder it started in, which Claude Code finds
+    /// it by, and whether VS Code's Claude Code lists it, which it opens it again by its id only then (2.1.294). It lists
+    /// one with a title, given (/rename) or made, a summary, or a prompt the user typed; a chat only ever messaged by
+    /// another session (Raven) has none of these, and a tab asked for it opens blank. Null when it has no conversation or
+    /// it cannot be read: nothing is done to a chat on a guess. Never throws.
+    /// </summary>
+    public static ConversationStart? StartOf(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            if (ConversationFile(projectsDirectory, sessionId) is not { } file)
+            {
+                return null;
+            }
+
+            string? folder = null;
+            var listed = false;
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            while ((folder is null || !listed) && reader.ReadLine() is { } line)
+            {
+                // Claude Code writes these lines type first; a turn that only speaks of them is no title.
+                listed |= line.StartsWith("{\"type\":\"custom-title\"", StringComparison.Ordinal) || line.StartsWith("{\"type\":\"ai-title\"", StringComparison.Ordinal)
+                    || line.StartsWith("{\"type\":\"summary\"", StringComparison.Ordinal)
+                    || (line.StartsWith("{\"type\":\"last-prompt\"", StringComparison.Ordinal) && line.Contains("\"lastPrompt\":\"", StringComparison.Ordinal)
+                        && !line.Contains("\"lastPrompt\":\"\"", StringComparison.Ordinal));
+                if (folder is null && line.Contains("\"cwd\":\"", StringComparison.Ordinal))
+                {
+                    folder = FolderIn(line);
+                }
+            }
+
+            return new ConversationStart(listed, folder);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The <c>cwd</c> of a conversation's line; null when it has none, or the line does not parse.</summary>
+    private static string? FolderIn(string line)
+    {
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(line);
+            return json.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object && json.RootElement.TryGetProperty("cwd", out var cwd)
+                && cwd.ValueKind == System.Text.Json.JsonValueKind.String && cwd.GetString() is { Length: > 0 } path ? path : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>

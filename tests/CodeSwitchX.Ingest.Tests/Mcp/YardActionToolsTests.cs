@@ -254,6 +254,43 @@ public sealed class YardActionToolsTests
         _actions.Calls.ShouldBeEmpty();
     }
 
+    /// <summary>#226: compacted on the user's yes, with what they said to keep.</summary>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("  ", null)]
+    [InlineData(" keep the test plan ", "keep the test plan")]
+    public async Task An_idle_chat_is_compacted_with_what_to_keep(string? keep, string? passed)
+    {
+        (await Tools.CompactChat("CCCCCCCC", keep, cancellationToken: Ct)).ShouldBe("compacted");
+
+        var (chat, kept) = _actions.Compacted.ShouldNotBeNull();
+        chat.Title.ShouldBe("Installer icons");
+        kept.ShouldBe(passed);
+    }
+
+    [Theory]
+    [InlineData("aaaaaaaa", "The Speech gate chat is still working")]
+    [InlineData("bbbbbbbb", "The Raven brain chat is waiting for the user in the middle of its turn")]
+    public async Task A_chat_in_the_middle_of_its_turn_is_compacted_only_anyway(string chat, string said)
+    {
+        var error = await Should.ThrowAsync<McpException>(() => Tools.CompactChat(chat, cancellationToken: Ct));
+
+        error.Message.ShouldStartWith(said);
+        error.Message.ShouldContain("Compact it anyway?");
+        _actions.Calls.ShouldBeEmpty("nothing is compacted without the user's second yes");
+
+        await Tools.CompactChat(chat, "keep the plan", anyway: true, cancellationToken: Ct);
+        _actions.Calls.ShouldBe(["compact_chat"]);
+        _actions.Compacted!.Value.Keep.ShouldBe("keep the plan");
+    }
+
+    [Fact]
+    public async Task A_chat_to_compact_must_be_one_the_Yard_shows()
+    {
+        (await Should.ThrowAsync<McpException>(() => Tools.CompactChat("zzzz", anyway: true, cancellationToken: Ct))).Message.ShouldContain("no chat 'zzzz'");
+        _actions.Calls.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task A_working_chat_is_stopped_at_once()
     {
