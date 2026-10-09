@@ -11,6 +11,7 @@ public sealed class ChatSummariesTests : IDisposable
 {
     private readonly string _path = Path.Combine(Path.GetTempPath(), "csx-sum-" + Guid.NewGuid().ToString("N") + ".jsonl");
     private readonly FakeBrain _brain = new();
+    private readonly FakeTimeProvider _time = new();
     private readonly ChatSummaries _summaries;
 
     public ChatSummariesTests()
@@ -19,7 +20,7 @@ public sealed class ChatSummariesTests : IDisposable
             """{"type":"user","isSidechain":false,"message":{"role":"user","content":"Fix the upload retry."}}""",
             """{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"Done: the retry backs off."}]}}""",
         ]);
-        _summaries = new ChatSummaries(_brain, id => id == "a" ? _path : null, new FakeTimeProvider(), NullLogger<ChatSummaries>.Instance);
+        _summaries = new ChatSummaries(_brain, id => id == "a" ? _path : null, _time, NullLogger<ChatSummaries>.Instance);
     }
 
     public void Dispose() => File.Delete(_path);
@@ -41,6 +42,29 @@ public sealed class ChatSummariesTests : IDisposable
         summary.Full.ShouldBe("Asked: Fix the upload retry.\nDone: Changed src/Upload.cs.\nNow: Idle.\nWaiting: nothing");
         _brain.Asked.ShouldHaveSingleItem().ShouldBe("The chat \"Fix the upload\" in ContentAutomatorX, idle, its turn over.\n\n"
             + "Its conversation, in short:\nUser: Fix the upload retry.\nClaude: Done: the retry backs off.");
+    }
+
+    [Theory]
+    [InlineData("Short:\nIt fixed it.\nAsked: Fix it.", "It fixed it.", "Asked: Fix it.")]
+    [InlineData("```\n1. Short: It fixed it.\n2. Asked: Fix it.\n```", "It fixed it.", "Asked: Fix it.")]
+    [InlineData("Here is the summary.\n- **Short:** It fixed it.\n- Waiting: nothing", "It fixed it.", "Here is the summary.\nWaiting: nothing")]
+    public void Shapes_a_model_may_add_are_read(string reply, string said, string written)
+    {
+        ChatSummaries.Parse(reply).ShouldBe(new ChatSummary(said, written));
+    }
+
+    [Fact]
+    public async Task A_summary_waiting_behind_another_too_long_says_so()
+    {
+        _brain.Gate = new TaskCompletionSource();
+        var first = _summaries.SummarizeAsync(Chat("a"), Ct);
+        var second = _summaries.SummarizeAsync(Chat("a"), Ct);
+
+        _time.Advance(ChatSummaries.Limit);
+
+        (await Should.ThrowAsync<YardActionException>(() => second)).Message
+            .ShouldBe("Summing up the Fix the upload chat took longer than 60 seconds and was given up.");
+        (await Should.ThrowAsync<YardActionException>(() => first)).Message.ShouldEndWith("was given up.");
     }
 
     [Fact]

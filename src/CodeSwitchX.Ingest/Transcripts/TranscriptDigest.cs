@@ -16,8 +16,14 @@ public static class TranscriptDigest
     /// <summary>How much of the file's end is read for the latest steps.</summary>
     public const int TailBytes = 2 * 1024 * 1024;
 
-    /// <summary>How much of the file's start is looked through for the first prompt.</summary>
-    public const int HeadBytes = 512 * 1024;
+    /// <summary>
+    /// How much of the file's start is looked through for the first prompt, line by line: a prompt with a pasted image
+    /// carries it in its own line.
+    /// </summary>
+    public const int HeadChars = 4 * 1024 * 1024;
+
+    /// <summary>A file this long or shorter is read whole: its start and end would overlap.</summary>
+    internal const int WholeBytes = TailBytes + 512 * 1024;
 
     /// <summary>The most one step is given: a long reply says what it is about in its start.</summary>
     internal const int MaxStepChars = 1200;
@@ -36,23 +42,23 @@ public static class TranscriptDigest
             return null;
         }
 
-        string head, tail;
+        string tail;
+        string? first;
         bool whole;
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            whole = stream.Length <= TailBytes;
-            head = whole ? "" : ReadAt(stream, 0, HeadBytes);
-            tail = ReadAt(stream, Math.Max(0, stream.Length - TailBytes), TailBytes);
+            whole = stream.Length <= WholeBytes;
+            tail = ReadAt(stream, whole ? 0 : stream.Length - TailBytes, whole ? (int)stream.Length : TailBytes);
+            first = whole ? tail.Split('\n').Select(PromptOf).OfType<string>().FirstOrDefault() : FirstPromptIn(stream);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }
 
-        // A cut line at either edge of what was read does not parse, and is passed over.
+        // A cut line at the edge of the end read does not parse, and is passed over.
         var steps = tail.Split('\n').Select(StepOf).OfType<string>().ToList();
-        var first = (whole ? tail : head).Split('\n').Select(PromptOf).OfType<string>().FirstOrDefault();
         if (steps.Count == 0 && first is null)
         {
             return null;
@@ -85,6 +91,24 @@ public static class TranscriptDigest
         }
 
         return text.ToString().TrimEnd();
+    }
+
+    /// <summary>The first prompt in the file's first <see cref="HeadChars"/>, line by line; null for none.</summary>
+    private static string? FirstPromptIn(FileStream stream)
+    {
+        stream.Seek(0, SeekOrigin.Begin);
+        using var reader = new StreamReader(stream, Encoding.UTF8, false, 64 * 1024, leaveOpen: true);
+        long read = 0;
+        while (read < HeadChars && reader.ReadLine() is { } line)
+        {
+            read += line.Length + 1;
+            if (PromptOf(line) is { } prompt)
+            {
+                return prompt;
+            }
+        }
+
+        return null;
     }
 
     private static string ReadAt(FileStream stream, long start, int count)
@@ -149,7 +173,8 @@ public static class TranscriptDigest
                 ? string.Join(" ", content.EnumerateArray()
                     .Where(b => b.ValueKind == JsonValueKind.Object && b.TryGetProperty("type", out var t) && t.GetString() == "text"
                         && b.TryGetProperty("text", out var v) && v.ValueKind == JsonValueKind.String)
-                    .Select(b => b.GetProperty("text").GetString()))
+                    .Select(b => b.GetProperty("text").GetString()!)
+                    .Where(t => !Aside(t))) // VS Code's open file and selection go along as blocks of their own
                 : null; // a tool's result is in the chat's own words after it
         text = text?.Trim();
         if (string.IsNullOrEmpty(text))
@@ -163,9 +188,9 @@ public static class TranscriptDigest
         }
 
         if (text.StartsWith("<command-", StringComparison.Ordinal) || text.StartsWith("<local-command", StringComparison.Ordinal)
-            || text.StartsWith("Caveat:", StringComparison.Ordinal))
+            || text.StartsWith("Caveat:", StringComparison.Ordinal) || Aside(text))
         {
-            return null; // a slash command and its output: no request
+            return null; // a slash command and its output, or what goes along with a prompt: no request
         }
 
         if (text.StartsWith("<task-notification>", StringComparison.Ordinal))
@@ -213,6 +238,14 @@ public static class TranscriptDigest
         }
 
         return steps.Count == 0 ? null : string.Join('\n', steps);
+    }
+
+    /// <summary>What goes along with a prompt, and is none: a reminder, VS Code's open file or selection, a shell command typed with "!" and its output.</summary>
+    private static bool Aside(string text)
+    {
+        var start = text.TrimStart();
+        return start.StartsWith("<system-reminder>", StringComparison.Ordinal) || start.StartsWith("<ide_", StringComparison.Ordinal)
+            || start.StartsWith("<bash-", StringComparison.Ordinal);
     }
 
     /// <summary>"Changed a file: src/App.cs", "Ran: npm test", "Used Grep: upload".</summary>

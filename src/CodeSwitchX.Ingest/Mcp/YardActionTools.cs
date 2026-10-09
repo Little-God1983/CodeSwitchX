@@ -181,10 +181,11 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
     }
 
-    [McpServerTool(Name = "summarize_chat", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    // Not read-only: it writes in Raven's panel and gives out what a chat said, so a message from another session is refused it.
+    [McpServerTool(Name = "summarize_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Sums one Claude Code chat up from its conversation (\"summarize the upload chat\", \"what did the docs chat do?\", "
         + "\"where does it stand?\"): what it was asked, what it did, where it stands and what it waits for. Takes some seconds. "
-        + "The full summary is written in Raven's panel; returns the short part: say only that.")]
+        + "The full summary is written in Raven's panel; returns the short summary to say: say only that summary, in your own voice.")]
     public async Task<string> SummarizeChat(
         [Description("The chat's id from list_chats; its start is enough. Left out: the one chat of the window the user is in.")]
         string? chat = null,

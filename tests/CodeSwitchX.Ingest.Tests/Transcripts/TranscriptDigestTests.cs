@@ -74,6 +74,41 @@ public sealed class TranscriptDigestTests : IDisposable
         digest.ShouldNotContain("Step 1 of");
     }
 
+    private static string BigResult(int chars) =>
+        $$$"""{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"{{{new string('x', chars)}}}"}]}}""";
+
+    [Fact]
+    public void A_file_just_over_two_megabytes_is_read_whole_with_its_prompt_once()
+    {
+        File.WriteAllLines(_path, [User("Fix the icons."), BigResult(2_200_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path).ShouldBe("User: Fix the icons.\nClaude: Done.");
+    }
+
+    [Fact]
+    public void A_big_file_keeps_its_first_prompt_however_long_its_line()
+    {
+        File.WriteAllLines(_path, [User("Fix the icons. " + new string('y', 700_000)), BigResult(3_000_000), Assistant("Done.")]);
+
+        var digest = TranscriptDigest.Read(_path)!;
+
+        digest.ShouldStartWith("First asked: Fix the icons. yyy");
+        digest.ShouldEndWith("[earlier steps left out]\nClaude: Done.");
+    }
+
+    [Fact]
+    public void What_goes_along_with_a_prompt_and_stops_and_background_tasks_are_told_as_such()
+    {
+        File.WriteAllLines(_path, [
+            User("<system-reminder>Be brief.</system-reminder>"),
+            """{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened a.cs</ide_opened_file>"},{"type":"text","text":"Rename it."}]}}""",
+            User("[Request interrupted by user for tool use]"),
+            User("<task-notification><task-id>b1</task-id></task-notification>"),
+        ]);
+
+        TranscriptDigest.Read(_path).ShouldBe("User: Rename it.\nThe user stopped it.\nA background task of the chat ended.");
+    }
+
     [Fact]
     public void No_file_and_no_step_are_null()
     {

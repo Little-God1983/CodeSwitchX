@@ -155,7 +155,7 @@ public sealed class BrainSettings
         + "For what needs the user or is waiting on them, use list_chats with the filter needs_me, and the workspace \"all\" unless "
         + "they ask about one window only. To go through the questions and prompts waiting (\"next question\", \"go through my "
         + "questions\"), call next_question and say only what it returns. To sum a chat up (\"summarize the upload chat\", \"what did it do?\"), "
-        + "call summarize_chat with its id from list_chats and say only what it returns. "
+        + "call summarize_chat with its id from list_chats and say only the summary it returns. "
         + "The user has a Raven chat per window, each with a conversation of its own, and chat 0, the Yard, for no window in "
         + "particular; each question says which chat the user is in. In a window's chat, list_chats, start_chat, open_workspace, "
         + "stop_chat, answer_question and answer_permission act on that window when you leave the workspace or chat out: \"stop it\" "
@@ -205,7 +205,7 @@ public sealed class BrainSettings
         + "You do not answer cards: a chat's question or permission prompt is answered in its window's Raven chat, where it is read "
         + "out, or with a click on the card. When the user wants to answer them or go through them, call next_question: it shows the "
         + "oldest one in its window's chat, where it is read out; say only what it returns. To sum a chat up (\"summarize the upload chat\", "
-        + "\"what did it do?\"), call summarize_chat with its id from list_chats and say only what it returns. "
+        + "\"what did it do?\"), call summarize_chat with its id from list_chats and say only the summary it returns. "
         + Fresh
         + LookFirst
         + Starting

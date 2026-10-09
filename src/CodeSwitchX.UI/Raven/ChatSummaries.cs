@@ -42,11 +42,14 @@ public sealed class ChatSummaries(IConductorBrain summarizer, Func<string, strin
             ?? throw new YardActionException($"CodeSwitchX cannot read the conversation of the {chat.Title} chat, so it cannot sum it up.");
         var question = $"The chat \"{chat.Title}\" in {chat.Workspace}, {Where(chat)}.\n\nIts conversation, in short:\n{digest}";
 
+        // The limit counts the wait behind another summary too: the brain's patience with the tool does.
         using var limit = new CancellationTokenSource(Limit, time);
         using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, limit.Token);
-        await _one.WaitAsync(both.Token).ConfigureAwait(false);
+        var held = false;
         try
         {
+            await _one.WaitAsync(both.Token).ConfigureAwait(false);
+            held = true;
             var reply = new StringBuilder();
             await foreach (var e in summarizer.AskAsync(question, both.Token).ConfigureAwait(false))
             {
@@ -71,7 +74,10 @@ public sealed class ChatSummaries(IConductorBrain summarizer, Func<string, strin
         }
         finally
         {
-            _one.Release();
+            if (held)
+            {
+                _one.Release();
+            }
         }
     }
 
@@ -89,17 +95,38 @@ public sealed class ChatSummaries(IConductorBrain summarizer, Func<string, strin
     /// </summary>
     internal static ChatSummary? Parse(string reply)
     {
+        // Bullets, numbers, bold and code fences a model may add are no part of it.
         var lines = reply.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(l => l.TrimStart('*', '-', ' ').Replace("**", "")).Where(l => l.Length > 0).ToList();
+            .Where(l => !l.StartsWith("```", StringComparison.Ordinal))
+            .Select(l => Marks.Replace(l, "").Replace("**", "").Trim())
+            .Where(l => l.Length > 0).ToList();
         if (lines.Count == 0)
         {
             return null;
         }
 
-        var said = lines.FirstOrDefault(l => l.StartsWith("Short:", StringComparison.OrdinalIgnoreCase));
-        var rest = lines.Where(l => l != said).ToList();
-        return said is null
-            ? new ChatSummary(string.Join(' ', lines), string.Join('\n', lines))
-            : new ChatSummary(said["Short:".Length..].Trim(), rest.Count > 0 ? string.Join('\n', rest) : said["Short:".Length..].Trim());
+        var at = lines.FindIndex(l => l.StartsWith("Short:", StringComparison.OrdinalIgnoreCase));
+        if (at < 0)
+        {
+            return new ChatSummary(string.Join(' ', lines), string.Join('\n', lines));
+        }
+
+        // "Short:" alone on its line has its sentences on the next.
+        var said = lines[at]["Short:".Length..].Trim();
+        var taken = 1;
+        if (said.Length == 0 && at + 1 < lines.Count && !IsLabel(lines[at + 1]))
+        {
+            said = lines[at + 1];
+            taken = 2;
+        }
+
+        var rest = lines.Where((_, i) => i < at || i >= at + taken).ToList();
+        return said.Length == 0 ? null : new ChatSummary(said, rest.Count > 0 ? string.Join('\n', rest) : said);
     }
+
+    /// <summary>A bullet or a number before a line: "- ", "* ", "• ", "1. ", "2) ".</summary>
+    private static readonly System.Text.RegularExpressions.Regex Marks = new(@"^(?:[*\-•]\s*|\d+[.)]\s*)+");
+
+    private static bool IsLabel(string line) =>
+        new[] { "Asked:", "Done:", "Now:", "Waiting:" }.Any(l => line.StartsWith(l, StringComparison.OrdinalIgnoreCase));
 }
