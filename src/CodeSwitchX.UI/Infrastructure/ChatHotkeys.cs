@@ -37,7 +37,7 @@ public sealed partial class ChatHotkeys : ObservableObject
 
         rows.Add(new("previous", "Previous chat", "Ctrl+Alt+PageUp", null, -1, this));
         rows.Add(new("next", "Next chat", "Ctrl+Alt+PageDown", null, 1, this));
-        rows.Add(new("nextQuestion", "Next question", "Ctrl+Alt+End", null, 0, this)); // #230
+        rows.Add(new("nextQuestion", "Next question", "Ctrl+Alt+Insert", null, 0, this)); // #230; not End: Remote Desktop takes Ctrl+Alt+End
         Rows = rows;
         Check();
     }

@@ -61,6 +61,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        await WithinAsync(_voice.WhenQuietAsync());
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
         _brain.Asked.ShouldBeEmpty("the app goes there itself");
     }
@@ -97,6 +98,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        await WithinAsync(_voice.WhenQuietAsync());
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
         _brain.Asked.ShouldBeEmpty("the yes goes to no brain");
     }
@@ -147,6 +149,62 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_card_answered_while_the_offer_stands_offers_again_with_the_new_count()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        var first = await AsksFruitAsync(vm, asks, "a");
+        var second = await AsksFruitAsync(vm, asks, "c");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext);
+        vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("2 more questions are waiting. Next?");
+
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "c").Questions[0].Options[0]); // clicked in chat 2's card from Activity, say
+        await WithinAsync(second);
+        vm.OffersNext.ShouldBeFalse("the offer counted the card just answered");
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext);
+
+        vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("One more question is waiting. Next?");
+    }
+
+    [Fact]
+    public async Task Words_before_the_offer_is_said_drop_it()
+    {
+        _brain.Answer = _ => [new BrainText("Sure.")];
+        var (vm, asks) = await NextQuestionVmAsync();
+        var first = await AsksFruitAsync(vm, asks, "a");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        Type(vm, "what time is it"); // before the floor was free for the offer
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _speech.Spoken.ShouldNotContain("Next?", "the user moved on");
+        vm.OffersNext.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task The_card_the_brain_asked_for_is_read_with_chat_news_only_written()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        vm.SpeakNews = false;
+        _ = await AsksFruitAsync(vm, asks, "c");
+        var before = _speech.Spoken.Count;
+
+        vm.NextQuestionForBrain().ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
+        await GraceAsync(vm);
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_card_left_to_VS_Code_offers_no_next_one()
     {
         var (vm, asks) = await NextQuestionVmAsync();
@@ -175,6 +233,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         await GraceAsync(vm);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        await WithinAsync(_voice.WhenQuietAsync());
         SpokenSince(before).ShouldBe("DiffusionNexus, chat \"Task c\" asks: Which fruit? Apple or Banana.");
     }
 
