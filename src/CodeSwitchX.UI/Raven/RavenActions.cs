@@ -32,6 +32,9 @@ public interface IRavenShell
     /// <summary>Takes a chat that was closed on purpose off its tile at once; it shows again only if it is opened again.</summary>
     void ForgetChat(string sessionId);
 
+    /// <summary>Writes a line in Raven's panel: what came of something after its question was answered.</summary>
+    void Note(string text);
+
     /// <summary>Minimizes, maximizes or restores the window, as its title bar buttons do; returns what Raven says of it.</summary>
     string SetWindow(WindowRequest request);
 
@@ -61,6 +64,12 @@ public sealed class RavenActions : IYardActions
 
     /// <summary>How long a stop is waited for before Raven says it lands at the chat's next step: a step takes seconds.</summary>
     internal static readonly TimeSpan StopWait = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long a compaction is waited for before Raven says it goes on (#226): well under the brain's own patience with a
+    /// tool (<see cref="ClaudeCliBrain.Silence"/>), as a long chat takes a minute or two.
+    /// </summary>
+    internal static readonly TimeSpan CompactWait = TimeSpan.FromSeconds(60);
 
     private readonly IVsCodeChats _vsCode;
     private readonly ChatSettings _chats;
@@ -149,27 +158,50 @@ public sealed class RavenActions : IYardActions
     public async Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
     {
         var folder = chat.Cwd ?? throw new YardActionException($"CodeSwitchX does not know the folder the {chat.Title} chat runs in, so it cannot compact it.");
-        _logger.LogInformation("Raven compacts chat {Id} in {Workspace}", chat.Id, chat.Workspace);
-        if (chat.State == SessionState.Working || chat.NeedsYou)
+        if (!_compacting.TryAdd(chat.Id, true))
         {
-            _stops.CutOff(chat.Id); // compacted anyway: the turn its tab's close cuts off is no news
+            throw new YardActionException($"The {chat.Title} chat is being compacted already; its tab opens again when that is done.");
         }
 
-        bool reopened;
-        _compacting[chat.Id] = true;
+        _logger.LogInformation("Raven compacts chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        var cutsOff = chat.State == SessionState.Working || chat.NeedsYou;
+
+        // Not ended with the question: once begun, a compaction is carried through, and its tab opened again.
+        var compacting = CompactAsync(chat, folder, keep, cutsOff ? () => _stops.CutOff(chat.Id) : null);
         try
         {
-            reopened = await _vsCode.CompactAsync(chat.Id, folder, chat.Title, keep, ct).ConfigureAwait(false);
+            return await compacting.WaitAsync(CompactWait, _time, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+        {
+            // What comes of it is written in the panel when it is done.
+            _ = compacting.ContinueWith(done => _ui.Post(() => _shell().Note(done.Exception?.InnerException is YardActionException failed
+                ? failed.Message : done.IsCompletedSuccessfully ? done.Result : $"Compacting the {chat.Title} chat failed.")), TaskScheduler.Default);
+            if (ex is OperationCanceledException)
+            {
+                throw;
+            }
+
+            return $"Compacting the {chat.Title} chat takes a while; its tab opens again when it is done.";
+        }
+    }
+
+    /// <summary>The compaction itself; what Raven says of it. Raven's mark stays on the chat while its tab is closed for it.</summary>
+    /// <param name="tabClosed">Called once its tab is closed: the turn that cut off is no news.</param>
+    private async Task<string> CompactAsync(YardChat chat, string folder, string? keep, Action? tabClosed)
+    {
+        try
+        {
+            var reopened = await _vsCode.CompactAsync(chat.Id, folder, chat.Title, keep, tabClosed, CancellationToken.None).ConfigureAwait(false);
+            _logger.LogInformation("Raven compacted chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+            return reopened
+                ? $"The {chat.Title} chat is compacted, and its tab is open again."
+                : $"The {chat.Title} chat is compacted.";
         }
         finally
         {
             _compacting.TryRemove(chat.Id, out _);
         }
-
-        _logger.LogInformation("Raven compacted chat {Id} in {Workspace}", chat.Id, chat.Workspace);
-        return reopened
-            ? $"The {chat.Title} chat is compacted, and its tab is open again."
-            : $"The {chat.Title} chat is compacted.";
     }
 
     public async Task<string> StopChatAsync(YardChat chat, CancellationToken ct)

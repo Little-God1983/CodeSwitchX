@@ -136,6 +136,44 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
+    public async Task A_turn_whose_compaction_was_refused_before_its_tab_closed_is_still_news()
+    {
+        _vsCode.Failure = "The VS Code window that chat runs in does not run the CodeSwitchX companion, so it cannot be compacted from here.";
+
+        await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(
+            Chat("busy", "Fix the upload") with { Cwd = @"E:\Repos\App", State = SessionState.Working }, null, Ct));
+
+        _stops.StoppedLately("busy").ShouldBeFalse("nothing was cut off");
+    }
+
+    /// <summary>The brain gives a tool 90 s: a long compaction goes on, and what comes of it is written in the panel.</summary>
+    [Fact]
+    public async Task A_long_compaction_goes_on_and_is_noted_when_done()
+    {
+        _vsCode.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var compact = _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct);
+        for (var i = 0; i < 200 && !compact.IsCompleted; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        (await compact).ShouldBe("Compacting the Fix the upload chat takes a while; its tab opens again when it is done.");
+        _shell.Notes.ShouldBeEmpty();
+        (await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct)))
+            .Message.ShouldBe("The Fix the upload chat is being compacted already; its tab opens again when that is done.");
+
+        _vsCode.Hold.SetResult();
+        for (var i = 0; i < 200 && _shell.Notes.Count == 0; i++)
+        {
+            await Task.Delay(5, Ct);
+        }
+
+        _shell.Notes.ShouldBe(["The Fix the upload chat is compacted, and its tab is open again."]);
+        (await _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct)).ShouldEndWith("open again.");
+    }
+
+    [Fact]
     public async Task A_chat_with_no_tab_is_only_compacted()
     {
         _vsCode.Reopens = false;
@@ -473,6 +511,10 @@ public sealed class RavenActionsTests
 
         public void ForgetChat(string sessionId) => Forgotten.Add(sessionId);
 
+        public List<string> Notes { get; } = [];
+
+        public void Note(string text) => Notes.Add(text);
+
         public List<(string AskedIn, Guid WorkspaceId)> Followed { get; } = [];
 
         public void FollowWork(string askedIn, Guid workspaceId) => Followed.Add((askedIn, workspaceId));
@@ -519,11 +561,25 @@ public sealed class RavenActionsTests
         /// <summary>What the compaction does meanwhile: the chat's tab closes, so it ends for a while.</summary>
         public Action During { get; set; } = () => { };
 
-        public Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, CancellationToken ct)
+        /// <summary>When set, a compaction waits for it: a long chat takes a while.</summary>
+        public TaskCompletionSource? Hold { get; set; }
+
+        public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action? tabClosed, CancellationToken ct)
         {
             Sequence.Add($"compact {sessionId} ({title}) in {folder}{(keep is null ? "" : $" keeping {keep}")}");
+            if (Failure is { } failure)
+            {
+                throw new YardActionException(failure); // refused before its tab was closed
+            }
+
+            tabClosed?.Invoke();
             During();
-            return Failure is { } failure ? Task.FromException<bool>(new YardActionException(failure)) : Task.FromResult(Reopens);
+            if (Hold is { } hold)
+            {
+                await hold.Task;
+            }
+
+            return Reopens;
         }
     }
 

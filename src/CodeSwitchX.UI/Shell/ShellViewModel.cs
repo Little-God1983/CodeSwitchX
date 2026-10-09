@@ -661,6 +661,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     void IRavenShell.ForgetChat(string sessionId) => Yard.ForgetChat(sessionId);
 
+    void IRavenShell.Note(string text) => Raven.Note(text);
+
     void IRavenShell.FollowWork(string askedIn, Guid workspaceId) => Raven.FollowWork(askedIn, workspaceId);
 
     [RelayCommand]

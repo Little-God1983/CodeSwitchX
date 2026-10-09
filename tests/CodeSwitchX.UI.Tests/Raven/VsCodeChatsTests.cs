@@ -25,6 +25,7 @@ public sealed class VsCodeChatsTests : IDisposable
     private readonly HashSet<string> _conversations = [];
     private readonly HashSet<string> _outside = [];
     private readonly HashSet<string> _nameless = [];
+    private readonly Dictionary<string, string> _startedIn = [];
     private readonly List<IReadOnlySet<int>?> _skipped = [];
     private readonly List<string> _opened = [];
     private readonly FakeTimeProvider _time = new();
@@ -61,7 +62,7 @@ public sealed class VsCodeChatsTests : IDisposable
                     return new Dictionary<int, int>(_parents);
                 }
             },
-            id => _conversations.Contains(id), id => _outside.Contains(id), Path.Combine(_root, "pending"), _compactor, id => !_nameless.Contains(id), _time, NullLogger<VsCodeChats>.Instance);
+            id => _conversations.Contains(id), id => _outside.Contains(id), Path.Combine(_root, "pending"), _compactor, id => new ConversationStart(!_nameless.Contains(id), _startedIn.GetValueOrDefault(id)), _time, NullLogger<VsCodeChats>.Instance);
         _compactor.Commands = _windows.Commands;
     }
 
@@ -584,7 +585,7 @@ public sealed class VsCodeChatsTests : IDisposable
         Starts(300, "a-chat", Host);
         _windows.Close = () => Ends(300);
 
-        (await _chats.CompactAsync("A-CHAT", @"E:\Repos\App", "A chat", "keep the plan", Ct)).ShouldBeTrue();
+        (await _chats.CompactAsync("A-CHAT", @"E:\Repos\App", "A chat", "keep the plan", null, Ct)).ShouldBeTrue();
 
         _compactor.Calls.ShouldBe([(@"a-chat", @"E:\Repos\App", "keep the plan", 1)], "compacted by the id its record has, once its tab was closed");
         _compactor.Named.ShouldBeEmpty("VS Code lists it: it has a name");
@@ -601,7 +602,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Close = () => Ends(300);
         _nameless.Add("raven-chat");
 
-        await _chats.CompactAsync("raven-chat", @"E:\Repos\App", "Fix the upload", null, Ct);
+        await _chats.CompactAsync("raven-chat", @"E:\Repos\App", "Fix the upload", null, null, Ct);
 
         _compactor.Named.ShouldBe([("raven-chat", "Fix the upload", 1)]);
         _compactor.Calls.ShouldHaveSingleItem().CommandsBefore.ShouldBe(1);
@@ -617,14 +618,44 @@ public sealed class VsCodeChatsTests : IDisposable
         _nameless.Add("raven-chat");
         _compactor.NameFailure = "Claude Code did not name the chat: it broke.";
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("raven-chat", @"E:\Repos\App", "Fix the upload", null, Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("raven-chat", @"E:\Repos\App", "Fix the upload", null, null, Ct))).Message
             .ShouldStartWith("Claude Code did not name the chat: it broke.");
         _compactor.Calls.ShouldBeEmpty();
         _windows.Commands.ShouldBe([CompanionWindows.CloseChat, CompanionWindows.OpenChat], "it is asked for again all the same");
     }
 
+    /// <summary>Claude Code finds a conversation by the folder it started in; the chat may work in a worktree since.</summary>
     [Fact]
-    public void A_session_VS_Code_lists_has_a_title_a_summary_or_a_typed_prompt()
+    public async Task A_chat_is_compacted_in_the_folder_its_conversation_started_in_once_its_tab_is_closed()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "a-chat", Host);
+        _windows.Close = () => Ends(300);
+        _startedIn["a-chat"] = @"E:\Repos\App";
+        var closedFirst = new List<int>();
+
+        await _chats.CompactAsync("a-chat", @"E:\Repos\App\.claude\worktrees\x", "A chat", null, () => closedFirst.Add(_windows.Commands.Count), Ct);
+
+        _compactor.Calls.ShouldHaveSingleItem().Folder.ShouldBe(@"E:\Repos\App");
+        closedFirst.ShouldBe([1], "told once the tab is closed, before it is compacted");
+    }
+
+    [Fact]
+    public async Task A_tab_that_does_not_close_says_nothing_was_compacted_and_tells_no_close()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "a-chat", Host);
+        _windows.Answer = new CompanionAnswer(false, Error: "That chat is not in a tab of this VS Code window.");
+        var told = false;
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, () => told = true, Ct))).Message
+            .ShouldBe("VS Code did not close the chat: That chat is not in a tab of this VS Code window. Nothing was compacted.");
+        told.ShouldBeFalse();
+        _compactor.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_conversation_says_the_folder_it_started_in_and_whether_VS_Code_lists_it()
     {
         var projects = Path.Combine(_root, "projects");
         var project = Path.Combine(projects, "e--Repos-App");
@@ -632,17 +663,21 @@ public sealed class VsCodeChatsTests : IDisposable
         void Write(string id, params string[] lines) => File.WriteAllLines(Path.Combine(project, id + ".jsonl"), lines);
 
         // Lines as Claude Code 2.1.294 writes them (captured 2026-10-09, cut down).
-        Write("typed", "{\"type\":\"last-prompt\",\"lastPrompt\":\"Fix the upload\",\"leafUuid\":\"1\",\"sessionId\":\"typed\"}");
+        Write("typed", "{\"type\":\"user\",\"cwd\":\"e:\\\\Repos\\\\App\",\"sessionId\":\"typed\"}",
+            "{\"type\":\"user\",\"cwd\":\"e:\\\\Repos\\\\App\\\\.claude\\\\worktrees\\\\x\",\"sessionId\":\"typed\"}",
+            "{\"type\":\"last-prompt\",\"lastPrompt\":\"Fix the upload\",\"leafUuid\":\"1\",\"sessionId\":\"typed\"}");
+        Write("blank", "{\"type\":\"last-prompt\",\"lastPrompt\":\"\",\"leafUuid\":\"3\",\"sessionId\":\"blank\"}");
         Write("titled", "{\"type\":\"ai-title\",\"aiTitle\":\"Upload fix\",\"sessionId\":\"titled\"}");
         Write("renamed", "{\"type\":\"custom-title\",\"customTitle\":\"Mine\",\"sessionId\":\"renamed\"}");
         Write("messaged", "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Another Claude session sent a message about \\\"lastPrompt\\\":\\\"x\\\"\"}}",
             "{\"type\":\"last-prompt\",\"leafUuid\":\"2\",\"sessionId\":\"messaged\"}");
 
-        VsCodeChats.ListedByVsCode(projects, "typed").ShouldBeTrue();
-        VsCodeChats.ListedByVsCode(projects, "titled").ShouldBeTrue();
-        VsCodeChats.ListedByVsCode(projects, "renamed").ShouldBeTrue();
-        VsCodeChats.ListedByVsCode(projects, "messaged").ShouldBeFalse("only ever messaged by another session");
-        VsCodeChats.ListedByVsCode(projects, "missing").ShouldBeTrue("nothing is done to a chat on a guess");
+        VsCodeChats.StartOf(projects, "typed").ShouldBe(new ConversationStart(true, @"e:\Repos\App"), "the first folder it ran in");
+        VsCodeChats.StartOf(projects, "titled").ShouldBe(new ConversationStart(true, null));
+        VsCodeChats.StartOf(projects, "renamed")!.Listed.ShouldBeTrue();
+        VsCodeChats.StartOf(projects, "messaged")!.Listed.ShouldBeFalse("only ever messaged by another session");
+        VsCodeChats.StartOf(projects, "blank")!.Listed.ShouldBeFalse("a last prompt with no words is none");
+        VsCodeChats.StartOf(projects, "missing").ShouldBeNull("nothing is done to a chat on a guess");
     }
 
     [Fact]
@@ -653,7 +688,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Close = () => Ends(300);
         _compactor.Failure = "Claude Code did not compact the chat: Not enough messages to compact.";
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, null, Ct))).Message
             .ShouldBe("Claude Code did not compact the chat: Not enough messages to compact. Its tab is open again, as it was.");
         _windows.Commands.ShouldBe([CompanionWindows.CloseChat, CompanionWindows.OpenChat]);
     }
@@ -666,7 +701,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Close = () => Ends(300);
         _windows.Reveal = _ => { }; // Claude Code did not find the conversation from that window
 
-        var compact = _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, Ct);
+        var compact = _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, null, Ct);
         await Advance(() => compact.IsCompleted);
 
         (await Should.ThrowAsync<YardActionException>(() => compact)).Message.ShouldBe("The chat is compacted, but its tab did not open again: VS Code "
@@ -679,7 +714,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _windows.Shown = Showing();
 
-        (await _chats.CompactAsync("closed-chat", @"E:\Repos\App", "A chat", null, Ct)).ShouldBeFalse();
+        (await _chats.CompactAsync("closed-chat", @"E:\Repos\App", "A chat", null, null, Ct)).ShouldBeFalse();
 
         _compactor.Calls.ShouldHaveSingleItem().SessionId.ShouldBe("closed-chat");
         _windows.Commands.ShouldBeEmpty();
@@ -690,7 +725,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _outside.Add("in-a-terminal");
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("in-a-terminal", @"E:\Repos\App", "A chat", null, Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("in-a-terminal", @"E:\Repos\App", "A chat", null, null, Ct))).Message
             .ShouldStartWith("That chat runs outside VS Code's chat tabs right now");
         _compactor.Calls.ShouldBeEmpty();
     }
@@ -701,7 +736,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Shown = Closing(); // 0.2.0 closes chats, but cannot open one
         Starts(300, "a-chat", Host);
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", "A chat", null, null, Ct))).Message
             .ShouldContain("cannot open the chat again after compacting it. Reload that window");
         _windows.Commands.ShouldBeEmpty();
         _compactor.Calls.ShouldBeEmpty();
