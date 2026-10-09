@@ -260,7 +260,11 @@ public partial class App : Application
             sp.GetRequiredService<ClaudeLiveSessions>().RunningNow, ProcessParents.Snapshot,
             id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
             sp.GetRequiredService<ClaudeLiveSessions>().RunsOutsideVsCode,
-            sp.GetRequiredService<AppPaths>().StartSettingsDirectory, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
+            sp.GetRequiredService<AppPaths>().StartSettingsDirectory,
+            // Claude Code compacts a conversation whose tab is closed (#226).
+            new ChatCompactor(sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<ChatCompactor>>()),
+            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),

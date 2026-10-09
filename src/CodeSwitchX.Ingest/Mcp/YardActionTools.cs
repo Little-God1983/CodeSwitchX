@@ -248,6 +248,30 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.CloseChatAsync(one, cancellationToken)).ConfigureAwait(false);
     }
 
+    [McpServerTool(Name = "compact_chat", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
+    [Description("Compacts a chat as /compact typed in its tab would (\"compact the … chat\"): Claude Code sums its conversation up, and the "
+        + "chat goes on from that summary with room in its context again; the whole conversation stays on disk. Its tab closes for the "
+        + "compaction, which takes about half a minute and longer for a long chat, and opens again. Never call it before you have asked "
+        + "the user \"Compact the <title> chat?\" and they said yes in their next words. A chat that is working or waiting for the user "
+        + "is refused unless anyway is true: compacting it cuts its turn off. Returns once it is done; say what it returns.")]
+    public async Task<string> CompactChat(
+        [Description("The chat's id from list_chats; its start is enough.")] string chat,
+        [Description("What the summary is to keep, in the user's words (\"compact it but keep the test plan\": \"keep the test plan\"); "
+            + "left out when they said nothing of it.")] string? keep = null,
+        [Description("True only once the user, told the chat is still working and asked \"Compact it anyway?\", said yes.")] bool anyway = false,
+        CancellationToken cancellationToken = default)
+    {
+        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        if (!anyway && (one.State == SessionState.Working || one.NeedsYou))
+        {
+            throw new McpException($"The {one.Title} chat is {(one.NeedsYou ? "waiting for the user in the middle of its turn" : "still working")}: "
+                + "compacting it now cuts that turn off. Nothing was compacted. Tell the user so and ask \"Compact it anyway?\"; only after a "
+                + "yes call compact_chat again with anyway true.");
+        }
+
+        return await Act(() => actions.CompactChatAsync(one, string.IsNullOrWhiteSpace(keep) ? null : keep.Trim(), cancellationToken)).ConfigureAwait(false);
+    }
+
     [McpServerTool(Name = "stop_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Stops what a working chat is doing (\"stop the … chat\"), as its stop button would, and keeps the chat with all it did. "
         + "Call it at once, without asking first. The stop lands at the chat's next tool step: one that is writing its answer or in a "

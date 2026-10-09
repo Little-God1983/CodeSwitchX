@@ -1,4 +1,5 @@
 using System.IO;
+using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Hosting.VsCode.Companion;
@@ -17,6 +18,7 @@ public sealed class VsCodeChatsTests : IDisposable
     private readonly Workspace _workspace;
     private readonly FakeWindows _windows = new();
     private readonly FakeInstaller _installer = new();
+    private readonly FakeCompactor _compactor = new();
     private readonly Lock _gate = new();
     private readonly List<LiveChat> _running = [];
     private readonly Dictionary<int, int> _parents = [];
@@ -58,7 +60,8 @@ public sealed class VsCodeChatsTests : IDisposable
                     return new Dictionary<int, int>(_parents);
                 }
             },
-            id => _conversations.Contains(id), id => _outside.Contains(id), Path.Combine(_root, "pending"), _time, NullLogger<VsCodeChats>.Instance);
+            id => _conversations.Contains(id), id => _outside.Contains(id), Path.Combine(_root, "pending"), _compactor, _time, NullLogger<VsCodeChats>.Instance);
+        _compactor.Commands = _windows.Commands;
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -572,6 +575,83 @@ public sealed class VsCodeChatsTests : IDisposable
             .ShouldBe("VS Code did not show the chat: Claude Code's VS Code extension is not installed in this window.");
     }
 
+    /// <summary>#226: closed, compacted with its tab closed, and opened again in the window it was in.</summary>
+    [Fact]
+    public async Task A_chat_is_compacted_with_its_tab_closed_and_opened_again_in_its_window()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "a-chat", Host);
+        _windows.Close = () => Ends(300);
+
+        (await _chats.CompactAsync("A-CHAT", @"E:\Repos\App", "keep the plan", Ct)).ShouldBeTrue();
+
+        _compactor.Calls.ShouldBe([(@"a-chat", @"E:\Repos\App", "keep the plan", 1)], "compacted by the id its record has, once its tab was closed");
+        _windows.Commands.ShouldBe([CompanionWindows.CloseChat, CompanionWindows.OpenChat]);
+        _windows.SessionIds.ShouldBe(["a-chat", "a-chat"]);
+    }
+
+    [Fact]
+    public async Task A_chat_whose_compaction_failed_is_opened_again_and_said()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "a-chat", Host);
+        _windows.Close = () => Ends(300);
+        _compactor.Failure = "Claude Code did not compact the chat: Not enough messages to compact.";
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", null, Ct))).Message
+            .ShouldBe("Claude Code did not compact the chat: Not enough messages to compact. Its tab is open again, as it was.");
+        _windows.Commands.ShouldBe([CompanionWindows.CloseChat, CompanionWindows.OpenChat]);
+    }
+
+    [Fact]
+    public async Task A_compacted_chat_whose_tab_does_not_open_again_is_said()
+    {
+        _windows.Shown = Showing();
+        Starts(300, "a-chat", Host);
+        _windows.Close = () => Ends(300);
+        _windows.Reveal = _ => { }; // Claude Code did not find the conversation from that window
+
+        var compact = _chats.CompactAsync("a-chat", @"E:\Repos\App", null, Ct);
+        await Advance(() => compact.IsCompleted);
+
+        (await Should.ThrowAsync<YardActionException>(() => compact)).Message.ShouldBe("The chat is compacted, but its tab did not open again: VS Code "
+            + "opened a tab, but that chat did not start in it within 30 seconds: Claude Code may not have found its conversation from that window. "
+            + "Look at the tab in VS Code. It can be opened from VS Code's session list.");
+    }
+
+    [Fact]
+    public async Task A_chat_with_no_tab_is_only_compacted()
+    {
+        _windows.Shown = Showing();
+
+        (await _chats.CompactAsync("closed-chat", @"E:\Repos\App", null, Ct)).ShouldBeFalse();
+
+        _compactor.Calls.ShouldHaveSingleItem().SessionId.ShouldBe("closed-chat");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_running_outside_VS_Code_is_not_compacted_under_its_feet()
+    {
+        _outside.Add("in-a-terminal");
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("in-a-terminal", @"E:\Repos\App", null, Ct))).Message
+            .ShouldStartWith("That chat runs outside VS Code's chat tabs right now");
+        _compactor.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_window_whose_companion_cannot_open_the_chat_again_keeps_it_open()
+    {
+        _windows.Shown = Closing(); // 0.2.0 closes chats, but cannot open one
+        Starts(300, "a-chat", Host);
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CompactAsync("a-chat", @"E:\Repos\App", null, Ct))).Message
+            .ShouldContain("cannot open the chat again after compacting it. Reload that window");
+        _windows.Commands.ShouldBeEmpty();
+        _compactor.Calls.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task A_chat_whose_Claude_Code_outlives_its_tab_is_said()
     {
@@ -715,6 +795,22 @@ public sealed class VsCodeChatsTests : IDisposable
             }
 
             return Answer;
+        }
+    }
+
+    private sealed class FakeCompactor : IChatCompactor
+    {
+        /// <summary>Each compaction, with how many commands the window had been sent by then.</summary>
+        public List<(string SessionId, string Folder, string? Keep, int CommandsBefore)> Calls { get; } = [];
+
+        public List<string> Commands { get; set; } = [];
+
+        public string? Failure { get; set; }
+
+        public Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct)
+        {
+            Calls.Add((sessionId, folder, keep, Commands.Count));
+            return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
     }
 

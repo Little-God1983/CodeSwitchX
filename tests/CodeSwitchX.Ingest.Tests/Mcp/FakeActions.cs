@@ -46,6 +46,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult("closed");
     }
 
+    public (YardChat Chat, string? Keep)? Compacted { get; private set; }
+
+    public Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
+    {
+        Act("compact_chat");
+        Compacted = (chat, keep);
+        return Task.FromResult("compacted");
+    }
+
     public YardChat? Stopped { get; private set; }
 
     public Task<string> StopChatAsync(YardChat chat, CancellationToken ct)

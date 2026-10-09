@@ -103,6 +103,9 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
 
     public Exception? Failure { get; set; }
 
+    /// <summary>Whether closing a new process's input ends it (<see cref="FakeBrainProcess.ExitsOnClosedInput"/>); true by default.</summary>
+    public bool ExitsOnClosedInput { get; set; } = true;
+
     public FakeBrainProcess Last => Started[^1].Process;
 
     public IBrainProcess Start(string executable, IReadOnlyList<string> arguments, string workingDirectory,
@@ -113,7 +116,7 @@ internal sealed class FakeLauncher : IBrainProcessLauncher
             throw Failure;
         }
 
-        var process = new FakeBrainProcess { Answer = Answer, LineRead = lineRead };
+        var process = new FakeBrainProcess { Answer = Answer, LineRead = lineRead, ExitsOnClosedInput = ExitsOnClosedInput };
 
         Started.Add((executable, arguments, workingDirectory, process));
         Environments.Add(environment);

@@ -103,6 +103,44 @@ public sealed class RavenActionsTests
         said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
     }
 
+    /// <summary>#226: compacted in the folder it runs in, with what to keep; its tab closing for that is no end of the chat.</summary>
+    [Fact]
+    public async Task A_compacted_chat_keeps_its_mark_while_its_tab_is_closed_for_it()
+    {
+        await StartAsync("Fable", "high");
+        var now = _time.GetUtcNow();
+        _vsCode.During = () => _bus.Publish(new SessionChanged(ChatNewsTests.Chat("new-chat", SessionState.Idle, now),
+            ChatNewsTests.Chat("new-chat", SessionState.Ended, now)));
+
+        var said = await _actions.CompactChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, "keep the test plan", Ct);
+
+        _sequence[^1].ShouldBe(@"compact new-chat in E:\Repos\DiffusionNexus keeping keep the test plan");
+        said.ShouldBe("The Fix the upload chat is compacted, and its tab is open again.");
+        _actions.StartedByRaven("new-chat").ShouldBeTrue();
+        _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high")]);
+        _shell.Forgotten.ShouldBeEmpty("its row comes back with its tab");
+
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("new-chat", SessionState.Idle, now), ChatNewsTests.Chat("new-chat", SessionState.Ended, now)));
+        _actions.StartedByRaven("new-chat").ShouldBeFalse("an end after the compaction is an end");
+    }
+
+    [Fact]
+    public async Task A_chat_with_no_tab_is_only_compacted()
+    {
+        _vsCode.Reopens = false;
+
+        (await _actions.CompactChatAsync(Chat("closed", "Docs") with { Cwd = @"E:\Repos\Docs" }, null, Ct)).ShouldBe("The Docs chat is compacted.");
+        _sequence.ShouldBe([@"compact closed in E:\Repos\Docs"]);
+    }
+
+    [Fact]
+    public async Task A_chat_whose_folder_is_not_known_is_not_compacted()
+    {
+        (await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(Chat("lost", "Docs"), null, Ct))).Message
+            .ShouldBe("CodeSwitchX does not know the folder the Docs chat runs in, so it cannot compact it.");
+        _sequence.ShouldBeEmpty();
+    }
+
     private HookEvent Step(string session) => new() { SessionId = session, EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "Bash" };
 
     [Fact]
@@ -462,6 +500,19 @@ public sealed class RavenActionsTests
         {
             Sequence.Add($"show {workspace.Name} {sessionId}");
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
+        }
+
+        /// <summary>Whether the chat compacted had a tab, opened again; true by default.</summary>
+        public bool Reopens { get; set; } = true;
+
+        /// <summary>What the compaction does meanwhile: the chat's tab closes, so it ends for a while.</summary>
+        public Action During { get; set; } = () => { };
+
+        public Task<bool> CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct)
+        {
+            Sequence.Add($"compact {sessionId} in {folder}{(keep is null ? "" : $" keeping {keep}")}");
+            During();
+            return Failure is { } failure ? Task.FromException<bool>(new YardActionException(failure)) : Task.FromResult(Reopens);
         }
     }
 

@@ -200,10 +200,10 @@ public sealed class McpEndpointTests : IAsyncLifetime
             var start = await client.CallToolAsync("start_chat", new Dictionary<string, object?> { ["workspace"] = "CodeSwitchX" },
                 cancellationToken: TestContext.Current.CancellationToken);
 
-            tools.Select(t => t.Name).Order().ShouldBe(["answer_permission", "answer_question", "back_to_yard", "close_chat", "find_workspace", "get_chat", "list_chats",
+            tools.Select(t => t.Name).Order().ShouldBe(["answer_permission", "answer_question", "back_to_yard", "close_chat", "compact_chat", "find_workspace", "get_chat", "list_chats",
                 "list_workspaces", "mute_chat", "open_workspace", "set_defaults", "set_window", "start_chat", "stop_chat", "switch_chat"]);
             tools.Where(t => t.ProtocolTool.Annotations!.DestructiveHint == true).Select(t => t.Name)
-                .ShouldBe(["close_chat"], "closing a chat cuts off what it is doing; nothing else Raven does on the Yard destroys anything");
+                .ShouldBe(["close_chat", "compact_chat"], "closing or compacting a chat may cut off what it is doing; nothing else Raven does on the Yard destroys anything");
             start.IsError.ShouldBe(true);
             start.Content.OfType<TextContentBlock>().ShouldHaveSingleItem().Text.ShouldContain("VS Code executable not found.");
         }

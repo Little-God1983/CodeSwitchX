@@ -73,6 +73,9 @@ public sealed class RavenActions : IYardActions
     private readonly ILogger<RavenActions> _logger;
     private readonly ConcurrentDictionary<string, bool> _started = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The chats being compacted: their tab closes and opens again, which is no end of the chat (#226).</summary>
+    private readonly ConcurrentDictionary<string, bool> _compacting = new(StringComparer.OrdinalIgnoreCase);
+
     /// <param name="bus">Where the chats' changes come: one that ends is Raven's no more.</param>
     /// <param name="claim">Puts a chat on a tile before its first event (<c>SessionEngine.Claim</c>).</param>
     /// <param name="shell">The window; asked for when first needed, since it is made after the services that call this.</param>
@@ -98,7 +101,7 @@ public sealed class RavenActions : IYardActions
     private void Ended(SessionChanged change)
     {
         var id = change.Current.SessionId;
-        if (!SessionStateMachine.IsLive(change.Current.State) && _started.TryRemove(id, out _))
+        if (!SessionStateMachine.IsLive(change.Current.State) && !_compacting.ContainsKey(id) && _started.TryRemove(id, out _))
         {
             _ui.Post(() => _shell().MarkVoice(id, null));
         }
@@ -141,6 +144,27 @@ public sealed class RavenActions : IYardActions
         _ui.Post(() => _shell().ForgetChat(chat.Id));
         _logger.LogInformation("Raven closed chat {Id} in {Workspace}", chat.Id, chat.Workspace);
         return $"The {chat.Title} chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.";
+    }
+
+    public async Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
+    {
+        var folder = chat.Cwd ?? throw new YardActionException($"CodeSwitchX does not know the folder the {chat.Title} chat runs in, so it cannot compact it.");
+        _logger.LogInformation("Raven compacts chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        bool reopened;
+        _compacting[chat.Id] = true;
+        try
+        {
+            reopened = await _vsCode.CompactAsync(chat.Id, folder, keep, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _compacting.TryRemove(chat.Id, out _);
+        }
+
+        _logger.LogInformation("Raven compacted chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        return reopened
+            ? $"The {chat.Title} chat is compacted, and its tab is open again."
+            : $"The {chat.Title} chat is compacted.";
     }
 
     public async Task<string> StopChatAsync(YardChat chat, CancellationToken ct)
