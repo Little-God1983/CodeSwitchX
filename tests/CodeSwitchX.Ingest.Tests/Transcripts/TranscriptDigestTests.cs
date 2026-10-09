@@ -117,9 +117,10 @@ public sealed class TranscriptDigestTests : IDisposable
         File.WriteAllLines(_path, [
             Timed(User("Old task."), "2026-10-07T10:00:00.000Z"),
             Timed(User("Fix the upload."), "2026-10-08T14:00:00.000Z"),
-            Timed(Assistant("Fixed it."), "2026-10-08T14:20:00.000Z"),
-            Timed(User("Next day."), "2026-10-09T09:00:00.000Z"),
+            Timed(Assistant("Fixed it.").Insert(1, "\"uuid\":\"u2\","), "2026-10-08T14:20:00.000Z"),
+            Timed(Assistant("Fixed it.").Insert(1, "\"uuid\":\"u2\","), "2026-10-08T14:20:00.000Z"), // a resumed chat writes it again
             Assistant("No time on this line."),
+            Timed(User("Next day."), "2026-10-09T09:00:00.000Z"),
         ]);
 
         var ct = TestContext.Current.CancellationToken;

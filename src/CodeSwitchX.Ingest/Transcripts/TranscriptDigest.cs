@@ -80,6 +80,7 @@ public static class TranscriptDigest
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream, Encoding.UTF8);
             var lines = 0;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
             while (reader.ReadLine() is { } line)
             {
                 if (++lines % 1000 == 0)
@@ -98,7 +99,8 @@ public static class TranscriptDigest
                     break;
                 }
 
-                if (at >= from && at <= to && StepOf(line) is { } step)
+                // A resumed conversation writes its history again, under the same ids: each step counts once.
+                if (at >= from && at <= to && (IdOf(line) is not { } id || seen.Add(id)) && StepOf(line) is { } step)
                 {
                     steps.Add(step);
                 }
@@ -115,6 +117,22 @@ public static class TranscriptDigest
 
     /// <summary>How far past the end a line may be written and the reading still go on: a sub-agent's lines come a little out of order.</summary>
     internal static readonly TimeSpan PastEnd = TimeSpan.FromMinutes(30);
+
+    /// <summary>The line's own id ("uuid"); null for a line without one.</summary>
+    private static string? IdOf(string line) => Field(line, "\"uuid\":\"");
+
+    private static string? Field(string line, string key)
+    {
+        var at = line.IndexOf(key, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        at += key.Length;
+        var end = line.IndexOf('"', at);
+        return end > at ? line[at..end] : null;
+    }
 
     /// <summary>The time a line was written ("timestamp"); null for a line without one.</summary>
     private static DateTimeOffset? TimeOf(string line)

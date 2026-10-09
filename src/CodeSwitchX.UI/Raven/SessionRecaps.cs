@@ -113,7 +113,9 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, I
 
         foreach (var snapshot in sessions().Where(s => s.WorkspaceId is not null))
         {
-            chats[snapshot.SessionId] = new ChatFacts(snapshot.WorkspaceId, snapshot.Title, snapshot.TranscriptPath);
+            // A chat resumed since the restart comes back with no title until it has a prompt: the saved one stands meanwhile.
+            var saved = chats.GetValueOrDefault(snapshot.SessionId);
+            chats[snapshot.SessionId] = new ChatFacts(snapshot.WorkspaceId, snapshot.Title ?? saved?.Title, snapshot.TranscriptPath ?? saved?.TranscriptPath);
         }
 
         var buckets = await usage.GetBucketsAsync(now - LookBack, now, ct).ConfigureAwait(false);
@@ -141,7 +143,9 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, I
             told++;
         }
 
-        var commits = await CommitsAsync(workspaces, session, ct).ConfigureAwait(false);
+        // A folder two workspaces share goes to the one the session's chats worked in.
+        var worked = session.MinutesByChat.Keys.Select(id => chats[id].WorkspaceId).ToHashSet();
+        var commits = await CommitsAsync([.. workspaces.OrderByDescending(w => worked.Contains(w.Id))], session, ct).ConfigureAwait(false);
         if (told == 0 && commits.Count == 0)
         {
             throw new YardActionException("Your last working session left nothing that can be summed up: its chats' conversations cannot be read.");
@@ -199,9 +203,10 @@ public sealed class SessionRecaps(IConductorBrain recapper, IUsageStore usage, I
         };
 
         // The small hours belong to the night before: 01:00 on Thursday is Wednesday night.
-        var day = at.Hour < 5 ? at.Date.AddDays(-1) : at.Date;
+        static DateTime DayOf(DateTimeOffset local) => local.Hour < 5 ? local.Date.AddDays(-1) : local.Date;
+        var day = DayOf(at);
         var named = day.ToString("dddd d MMMM", CultureInfo.InvariantCulture);
-        return (Local(now).Date - day).Days switch
+        return (DayOf(Local(now)) - day).Days switch
         {
             <= 0 => $"earlier today, in the {part}",
             1 when part == "night" => $"last night ({named})",
