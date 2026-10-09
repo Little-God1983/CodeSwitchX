@@ -231,6 +231,11 @@ public partial class App : Application
         services.AddKeyedSingleton<IConductorBrain>(RavenPanelViewModel.SummarizerKey, (sp, _) => ToollessBrain(sp, BrainRole.Summarizer));
         // Sums a Claude Code chat up from its conversation when Raven is asked to (#234).
         services.AddKeyedSingleton<IConductorBrain>(ChatSummaries.BrainKey, (sp, _) => ToollessBrain(sp, BrainRole.ChatSummarizer));
+        // Sums the user's last working session up when Raven is asked to (#237).
+        services.AddKeyedSingleton<IConductorBrain>(SessionRecaps.BrainKey, (sp, _) => ToollessBrain(sp, BrainRole.Recapper));
+        services.AddSingleton<ISessionRecaps>(sp => new SessionRecaps(sp.GetRequiredKeyedService<IConductorBrain>(SessionRecaps.BrainKey),
+            sp.GetRequiredService<IUsageStore>(), () => sp.GetRequiredService<SessionEngine>().Snapshots, sp.GetRequiredService<IYardDirectory>(),
+            GitInspector.RunGitAsync, sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<SessionRecaps>>()));
         services.AddSingleton<IChatSummaries>(sp => new ChatSummaries(sp.GetRequiredKeyedService<IConductorBrain>(ChatSummaries.BrainKey),
             id => VsCodeChats.ConversationPathOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id), sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<ChatSummaries>>()));
@@ -275,7 +280,7 @@ public partial class App : Application
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),
             async (id, ct) => (await sp.GetRequiredService<IWorkspaceStore>().GetAllAsync(ct).ConfigureAwait(false)).FirstOrDefault(w => w.Id == id),
             sp.GetRequiredService<TurnStops>(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<RavenActions>>(),
-            sp.GetRequiredService<IChatSummaries>()));
+            sp.GetRequiredService<IChatSummaries>(), sp.GetRequiredService<ISessionRecaps>()));
 
         // The app's own settings by voice (#126): the tools read and change them as the Settings page does.
         services.AddSingleton<IAppSettings>(sp => new AppSettings(() => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),

@@ -306,6 +306,15 @@ public sealed class YardActionToolsTests
             .Message.ShouldContain("Say which chat to sum up");
     }
 
+    /// <summary>#237: the summary of the last working session goes to the Raven chat it was asked in.</summary>
+    [Fact]
+    public async Task The_last_session_is_summed_up_for_the_chat_that_asked()
+    {
+        (await new YardActionTools(_yard, _actions, scope: ChatScope.Yard).SummarizeLastSession(Ct)).ShouldBe("Yesterday it got done.");
+
+        _actions.RecappedFor.ShouldBe("overview");
+    }
+
     [Fact]
     public async Task A_working_chat_is_stopped_at_once()
     {
