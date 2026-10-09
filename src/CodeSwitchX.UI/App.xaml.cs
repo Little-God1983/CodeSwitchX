@@ -264,6 +264,7 @@ public partial class App : Application
             // Claude Code compacts a conversation whose tab is closed (#226).
             new ChatCompactor(sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<ILogger<ChatCompactor>>()),
+            id => VsCodeChats.ListedByVsCode(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
         services.AddSingleton<IYardActions>(sp => new RavenActions(sp.GetRequiredService<IVsCodeChats>(), sp.GetRequiredService<ChatSettings>(),
             sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<SessionEngine>().Claim, () => sp.GetRequiredService<ShellViewModel>(), sp.GetRequiredService<IUiDispatcher>(),

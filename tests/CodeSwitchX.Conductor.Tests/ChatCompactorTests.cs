@@ -47,6 +47,26 @@ public sealed class ChatCompactorTests
         process.Disposed.ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task A_chat_is_named_as_rename_in_its_tab_would()
+    {
+        var name = Compactor().NameAsync("chat-1", @"E:\Repos\App", "Fix the\nupload", Ct);
+        _launcher.Last.Emit("""{"type":"result","subtype":"success","is_error":false,"result":"","local_command":"rename","session_id":"chat-1"}""");
+        _launcher.Last.Die(0);
+        await name;
+
+        _launcher.Started.ShouldHaveSingleItem().Arguments.ShouldBe(["-p", "/rename Fix the upload", "--resume", "chat-1", "--output-format", "json"]);
+    }
+
+    [Fact]
+    public async Task A_name_Claude_Code_refuses_says_so()
+    {
+        var name = Compactor().NameAsync("chat-1", @"E:\Repos\App", "Fix", Ct);
+        _launcher.Last.Die(1);
+
+        (await Should.ThrowAsync<YardActionException>(() => name)).Message.ShouldBe("Claude Code did not name the chat: error: something broke");
+    }
+
     [Theory]
     [InlineData(null, "/compact")]
     [InlineData("  ", "/compact")]

@@ -15,6 +15,13 @@ public interface IChatCompactor
     /// <param name="keep">What the summary is to keep ("the test plan"); null for a plain <c>/compact</c>.</param>
     /// <exception cref="YardActionException">It was not compacted; the message says why.</exception>
     Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct);
+
+    /// <summary>
+    /// Names the chat as <c>/rename</c> typed in its tab would. Its tab must be closed. VS Code lists, and opens again, only
+    /// a chat with a name: one that was only ever messaged by another session (Raven) has none (#226).
+    /// </summary>
+    /// <exception cref="YardActionException">It was not named; the message says why.</exception>
+    Task NameAsync(string sessionId, string folder, string name, CancellationToken ct);
 }
 
 /// <summary>
@@ -31,10 +38,18 @@ public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> 
     /// <summary>How long a compaction may take: a short chat takes about 15 seconds, a long one a minute or two.</summary>
     internal static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
 
-    public async Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct)
+    public Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct) =>
+        RunAsync(sessionId, folder, Command(keep), "compact", "Compacted", "Compacting", ct);
+
+    public Task NameAsync(string sessionId, string folder, string name, CancellationToken ct) =>
+        RunAsync(sessionId, folder, $"/rename {OneLine(name)}", "name", "Named", "Naming", ct);
+
+    /// <summary>Runs the command on the conversation; returns once Claude Code has done it.</summary>
+    /// <param name="what">What the command does to the chat, for what is said: "compact".</param>
+    private async Task RunAsync(string sessionId, string folder, string command, string what, string done, string doing, CancellationToken ct)
     {
-        var claude = findClaude() ?? throw new YardActionException("Claude Code is not installed where CodeSwitchX looks for it, so it cannot compact the chat.");
-        var arguments = new[] { "-p", Command(keep), "--resume", sessionId, "--output-format", "json" };
+        var claude = findClaude() ?? throw new YardActionException($"Claude Code is not installed where CodeSwitchX looks for it, so it cannot {what} the chat.");
+        var arguments = new[] { "-p", command, "--resume", sessionId, "--output-format", "json" };
         IBrainProcess process;
         try
         {
@@ -42,7 +57,7 @@ public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> 
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            throw new YardActionException($"Claude Code did not start to compact the chat: {ex.Message}");
+            throw new YardActionException($"Claude Code did not start to {what} the chat: {ex.Message}");
         }
 
         using (process)
@@ -62,26 +77,27 @@ public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> 
             }
             catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
             {
-                logger.LogWarning("Compacting chat {Id} took longer than {Limit}; stopped", sessionId, Limit);
-                throw new YardActionException($"Compacting the chat took longer than {Limit.TotalMinutes:0} minutes and was stopped; it is as it was.");
+                logger.LogWarning("{Doing} chat {Id} took longer than {Limit}; stopped", doing, sessionId, Limit);
+                throw new YardActionException($"{doing} the chat took longer than {Limit.TotalMinutes:0} minutes and was stopped; it is as it was.");
             }
 
             var result = lines.Select(ResultOf).LastOrDefault(r => r is not null);
             if (result is { Failed: false })
             {
-                logger.LogInformation("Compacted chat {Id}", sessionId);
+                logger.LogInformation("{Done} chat {Id}", done, sessionId);
                 return;
             }
 
             var why = result?.Text is { Length: > 0 } text ? text : LastLine(process.ErrorTail) ?? "it gave no reason";
-            logger.LogWarning("Compacting chat {Id} failed: {Why}", sessionId, why);
-            throw new YardActionException($"Claude Code did not compact the chat: {why}");
+            logger.LogWarning("{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
+            throw new YardActionException($"Claude Code did not {what} the chat: {why}");
         }
     }
 
     /// <summary>The command, with what to keep on one line: <c>/compact keep the test plan</c>.</summary>
-    internal static string Command(string? keep) =>
-        string.Join(' ', (keep ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)) is { Length: > 0 } words ? $"/compact {words}" : "/compact";
+    internal static string Command(string? keep) => OneLine(keep) is { Length: > 0 } words ? $"/compact {words}" : "/compact";
+
+    private static string OneLine(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private sealed record Result(bool Failed, string? Text);
 

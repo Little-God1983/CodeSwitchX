@@ -42,13 +42,15 @@ public interface IVsCodeChats
 
     /// <summary>
     /// Compacts the chat (#226): its tab is closed, Claude Code compacts the conversation, and the tab is opened again in
-    /// the same window, also when the compaction failed. A chat with no tab is only compacted. Returns once it is done.
+    /// the same window, also when the compaction failed. A chat VS Code would not open again, as it has no name, is named
+    /// first. A chat with no tab is only compacted. Returns once it is done.
     /// </summary>
     /// <param name="folder">The folder the chat runs in.</param>
+    /// <param name="title">The title the Yard shows it by: its name, when it needs one.</param>
     /// <param name="keep">What the summary is to keep; null for a plain <c>/compact</c>.</param>
     /// <returns>Whether its tab was opened again: false for a chat that had none.</returns>
     /// <exception cref="YardActionException">It was not compacted, or not opened again; the message says which and why.</exception>
-    Task<bool> CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct);
+    Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, CancellationToken ct);
 }
 
 /// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
@@ -108,6 +110,7 @@ public sealed class VsCodeChats : IVsCodeChats
     private readonly Func<IReadOnlyDictionary<int, int>> _parents;
     private readonly Func<string, bool> _hasConversation;
     private readonly Func<string, bool> _runsOutside;
+    private readonly Func<string, bool> _listed;
     private readonly string _pendingSettings;
     private readonly TimeProvider _time;
     private readonly ILogger<VsCodeChats> _logger;
@@ -120,11 +123,13 @@ public sealed class VsCodeChats : IVsCodeChats
     /// <param name="runsOutside">Whether a session runs right now outside a VS Code tab, in a terminal or by <c>claude -p</c> (<see cref="ClaudeLiveSessions.RunsOutsideVsCode"/>).</param>
     /// <param name="pendingSettings">Where what puts a folder's settings back is kept while a chat starts (<see cref="StartSettings"/>).</param>
     /// <param name="compactor">Compacts a conversation whose tab is closed (#226).</param>
+    /// <param name="listed">Whether VS Code lists a session, and so opens it again once its tab is closed (<see cref="ListedByVsCode"/>).</param>
     public VsCodeChats(ICompanionWindows windows, ICompanionInstaller installer, Func<Workspace, CancellationToken, Task<string?>> openVsCode,
         Func<IReadOnlySet<int>?, IReadOnlyList<LiveChat>> running, Func<IReadOnlyDictionary<int, int>> parents, Func<string, bool> hasConversation,
-        Func<string, bool> runsOutside, string pendingSettings, IChatCompactor compactor, TimeProvider time, ILogger<VsCodeChats> logger)
+        Func<string, bool> runsOutside, string pendingSettings, IChatCompactor compactor, Func<string, bool> listed, TimeProvider time, ILogger<VsCodeChats> logger)
     {
         _compactor = compactor;
+        _listed = listed;
         _runsOutside = runsOutside;
         _pendingSettings = pendingSettings;
         _windows = windows;
@@ -286,7 +291,7 @@ public sealed class VsCodeChats : IVsCodeChats
         _logger.LogInformation("Closed chat {Id} ({Name}) in VS Code", chat.SessionId, chat.Name);
     }
 
-    public async Task<bool> CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct)
+    public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, CancellationToken ct)
     {
         if (RunningTab(sessionId) is not { } chat)
         {
@@ -311,6 +316,12 @@ public sealed class VsCodeChats : IVsCodeChats
         YardActionException? failed = null;
         try
         {
+            if (!_listed(sessionId))
+            {
+                // Only ever messaged by Raven, it has no name, and VS Code opens no chat again that it does not list.
+                await _compactor.NameAsync(sessionId, folder, title, CancellationToken.None).ConfigureAwait(false);
+            }
+
             await _compactor.CompactAsync(sessionId, folder, keep, CancellationToken.None).ConfigureAwait(false);
         }
         catch (YardActionException ex)
@@ -533,6 +544,42 @@ public sealed class VsCodeChats : IVsCodeChats
         }
 
         return (made, given);
+    }
+
+    /// <summary>
+    /// Whether VS Code's Claude Code lists the session, which it opens again by its id only then (2.1.294): it lists one
+    /// with a title, given (/rename) or made, a summary, or a prompt the user typed. A chat only ever messaged by another
+    /// session (Raven) has none of these, and a tab asked for it opens blank (#226). True when it cannot be read: nothing
+    /// is done to a chat on a guess. Never throws.
+    /// </summary>
+    public static bool ListedByVsCode(string projectsDirectory, string sessionId)
+    {
+        try
+        {
+            if (ConversationFile(projectsDirectory, sessionId) is not { } file)
+            {
+                return true;
+            }
+
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            while (reader.ReadLine() is { } line)
+            {
+                // Claude Code writes these lines type first; a turn that only speaks of them is no title.
+                if (line.StartsWith("{\"type\":\"custom-title\"", StringComparison.Ordinal) || line.StartsWith("{\"type\":\"ai-title\"", StringComparison.Ordinal)
+                    || line.StartsWith("{\"type\":\"summary\"", StringComparison.Ordinal)
+                    || (line.StartsWith("{\"type\":\"last-prompt\"", StringComparison.Ordinal) && line.Contains("\"lastPrompt\":\"", StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     /// <summary>The session's conversation file, in whichever project folder it is; null for none. Throws what reading a folder throws.</summary>

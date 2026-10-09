@@ -150,11 +150,16 @@ public sealed class RavenActions : IYardActions
     {
         var folder = chat.Cwd ?? throw new YardActionException($"CodeSwitchX does not know the folder the {chat.Title} chat runs in, so it cannot compact it.");
         _logger.LogInformation("Raven compacts chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        if (chat.State == SessionState.Working || chat.NeedsYou)
+        {
+            _stops.CutOff(chat.Id); // compacted anyway: the turn its tab's close cuts off is no news
+        }
+
         bool reopened;
         _compacting[chat.Id] = true;
         try
         {
-            reopened = await _vsCode.CompactAsync(chat.Id, folder, keep, ct).ConfigureAwait(false);
+            reopened = await _vsCode.CompactAsync(chat.Id, folder, chat.Title, keep, ct).ConfigureAwait(false);
         }
         finally
         {

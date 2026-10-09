@@ -145,6 +145,18 @@ public sealed class TurnStops : IDisposable
         }
     }
 
+    /// <summary>
+    /// The chat's running turn is cut off on the user's word another way: its tab closes for a compaction (#226). Its end
+    /// is no news, as for a stop asked here.
+    /// </summary>
+    public void CutOff(string sessionId)
+    {
+        lock (_lock)
+        {
+            _stopped[sessionId] = _time.GetUtcNow();
+        }
+    }
+
     /// <summary>Whether the chat's last turn ended because it was stopped here, and no new turn began since: its end is no news.</summary>
     public bool StoppedLately(string sessionId)
     {

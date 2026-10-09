@@ -42,6 +42,20 @@ public sealed class TurnStopsTests : IDisposable
         _stops.StoppedLately("s1").ShouldBeTrue();
     }
 
+    /// <summary>#226: the turn a compaction's closed tab cuts off ends as if stopped here; the chat's next turn is news again.</summary>
+    [Fact]
+    public void A_turn_cut_off_on_purpose_ends_as_no_news_until_the_next_turn()
+    {
+        Turn("s1", SessionState.Working, SessionState.Idle);
+
+        _stops.CutOff("s1");
+        Turn("s1", SessionState.Ended, SessionState.Working);
+        _stops.StoppedLately("s1").ShouldBeTrue();
+
+        Turn("s1", SessionState.Working, SessionState.Idle);
+        _stops.StoppedLately("s1").ShouldBeFalse();
+    }
+
     [Fact]
     public void Another_chat_a_sub_agent_or_an_event_that_is_no_step_leaves_it()
     {

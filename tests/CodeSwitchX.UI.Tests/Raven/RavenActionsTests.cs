@@ -114,7 +114,7 @@ public sealed class RavenActionsTests
 
         var said = await _actions.CompactChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, "keep the test plan", Ct);
 
-        _sequence[^1].ShouldBe(@"compact new-chat in E:\Repos\DiffusionNexus keeping keep the test plan");
+        _sequence[^1].ShouldBe(@"compact new-chat (Fix the upload) in E:\Repos\DiffusionNexus keeping keep the test plan");
         said.ShouldBe("The Fix the upload chat is compacted, and its tab is open again.");
         _actions.StartedByRaven("new-chat").ShouldBeTrue();
         _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high")]);
@@ -124,13 +124,24 @@ public sealed class RavenActionsTests
         _actions.StartedByRaven("new-chat").ShouldBeFalse("an end after the compaction is an end");
     }
 
+    [Theory]
+    [InlineData(SessionState.Working, false, true)]
+    [InlineData(SessionState.Waiting, true, true)]
+    [InlineData(SessionState.Idle, false, false)]
+    public async Task A_turn_compacted_anyway_ends_as_no_news(SessionState state, bool needsYou, bool cutOff)
+    {
+        await _actions.CompactChatAsync(Chat("busy", "Fix the upload") with { Cwd = @"E:\Repos\App", State = state, NeedsYou = needsYou }, null, Ct);
+
+        _stops.StoppedLately("busy").ShouldBe(cutOff);
+    }
+
     [Fact]
     public async Task A_chat_with_no_tab_is_only_compacted()
     {
         _vsCode.Reopens = false;
 
         (await _actions.CompactChatAsync(Chat("closed", "Docs") with { Cwd = @"E:\Repos\Docs" }, null, Ct)).ShouldBe("The Docs chat is compacted.");
-        _sequence.ShouldBe([@"compact closed in E:\Repos\Docs"]);
+        _sequence.ShouldBe([@"compact closed (Docs) in E:\Repos\Docs"]);
     }
 
     [Fact]
@@ -508,9 +519,9 @@ public sealed class RavenActionsTests
         /// <summary>What the compaction does meanwhile: the chat's tab closes, so it ends for a while.</summary>
         public Action During { get; set; } = () => { };
 
-        public Task<bool> CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct)
+        public Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, CancellationToken ct)
         {
-            Sequence.Add($"compact {sessionId} in {folder}{(keep is null ? "" : $" keeping {keep}")}");
+            Sequence.Add($"compact {sessionId} ({title}) in {folder}{(keep is null ? "" : $" keeping {keep}")}");
             During();
             return Failure is { } failure ? Task.FromException<bool>(new YardActionException(failure)) : Task.FromResult(Reopens);
         }
