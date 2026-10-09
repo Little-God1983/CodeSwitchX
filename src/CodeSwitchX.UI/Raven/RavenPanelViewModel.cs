@@ -1382,6 +1382,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public void Warn(string text) => AddEntry(RavenLogKind.Warning, text);
 
+    /// <summary>
+    /// A chat's summary (#234), written in the Raven chat it was asked in (by its key, as its brain sends it), unspoken: Raven
+    /// says its short part. The chat the user is in for null, or for a chat the list no longer shows.
+    /// </summary>
+    public void WriteSummary(string? askedIn, string text)
+    {
+        var chat = askedIn == YardMcp.OverviewChat ? YardChat
+            : Guid.TryParse(askedIn, out var window) ? Chats.FirstOrDefault(c => c.WorkspaceId == window) ?? CurrentChat : CurrentChat;
+        AddSaid(text, chat, said: false);
+    }
+
     private const string NoMicrophoneWarning = "No microphone found. Plug one in or check Windows sound settings.";
 
     /// <summary>

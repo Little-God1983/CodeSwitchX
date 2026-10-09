@@ -716,6 +716,10 @@ public sealed class RavenActionsTests
 
         public string? MuteChat(int number, bool muted) => number == 4 ? $"Chat 4, Diffusion-Full, muted: {muted}." : null;
 
+        public List<(string? AskedIn, string Text)> Summaries { get; } = [];
+
+        public void WriteSummary(string? askedIn, string text) => Summaries.Add((askedIn, text));
+
         /// <summary>What the panel says of the next question; null when none waits.</summary>
         public string? Next { get; set; }
 
@@ -888,6 +892,26 @@ public sealed class RavenActionsTests
             tab?.Invoke(CompactionTab.Reopened);
             return Reopens;
         }
+    }
+
+    private sealed class FakeSummaries : IChatSummaries
+    {
+        public Task<ChatSummary> SummarizeAsync(YardChat chat, CancellationToken ct) =>
+            Task.FromResult(new ChatSummary("It fixed the retry.", "Asked: Fix the retry.\nDone: Changed Upload.cs.\nNow: Idle.\nWaiting: nothing"));
+    }
+
+    /// <summary>#234: Raven says the short part; the whole summary is written where the user asked.</summary>
+    [Fact]
+    public async Task A_chat_s_summary_is_said_short_and_written_whole_where_it_was_asked()
+    {
+        var actions = new RavenActions(_vsCode, _chats, _bus, (_, _) => { }, () => _shell, new ImmediateDispatcher(),
+            (_, _) => Task.FromResult<Workspace?>(null), _stops, _time, NullLogger<RavenActions>.Instance, new FakeSummaries());
+
+        var said = await actions.SummarizeChatAsync(Chat("new-chat", "Fix the upload"), "overview", Ct);
+
+        said.ShouldBe("It fixed the retry. The full summary is written in Raven's panel.");
+        _shell.Summaries.ShouldHaveSingleItem().ShouldBe(("overview",
+            "The Fix the upload chat in Diffusion-Full:\nAsked: Fix the retry.\nDone: Changed Upload.cs.\nNow: Idle.\nWaiting: nothing"));
     }
 
     /// <summary>#230: the panel shows the chat of the oldest card; with none waiting, Raven says so.</summary>

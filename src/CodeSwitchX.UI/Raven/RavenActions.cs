@@ -50,6 +50,9 @@ public interface IRavenShell
     /// </summary>
     string? NextQuestion();
 
+    /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
+    void WriteSummary(string? askedIn, string text);
+
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
     /// (#180): the user is moved to that window's Raven chat, with the question and its answer.
@@ -95,6 +98,7 @@ public sealed class RavenActions : IYardActions
     private readonly TurnStops _stops;
     private readonly TimeProvider _time;
     private readonly ILogger<RavenActions> _logger;
+    private readonly IChatSummaries? _summaries;
     private readonly ConcurrentDictionary<string, bool> _started = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The chats being compacted: their tab closes and opens again, which is no end of the chat (#226).</summary>
@@ -111,9 +115,12 @@ public sealed class RavenActions : IYardActions
     /// <param name="shell">The window; asked for when first needed, since it is made after the services that call this.</param>
     /// <param name="workspaceOf">The registered workspace with this id; null when it is gone.</param>
     /// <param name="stops">Where a stop for a chat's running turn is asked for, which its hook takes at its next step.</param>
+    /// <param name="summaries">Sums a chat up from its conversation (#234); null sums none up.</param>
     public RavenActions(IVsCodeChats vsCode, ChatSettings chats, IEventBus bus, Action<string, Guid> claim, Func<IRavenShell> shell, IUiDispatcher ui,
-        Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TurnStops stops, TimeProvider time, ILogger<RavenActions> logger)
+        Func<Guid, CancellationToken, Task<Workspace?>> workspaceOf, TurnStops stops, TimeProvider time, ILogger<RavenActions> logger,
+        IChatSummaries? summaries = null)
     {
+        _summaries = summaries;
         _vsCode = vsCode;
         _chats = chats;
         _claim = claim;
@@ -472,6 +479,15 @@ public sealed class RavenActions : IYardActions
 
     public Task<string> SetWindowAsync(WindowRequest request, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().SetWindow(request), UiTimeout, ct);
+
+    public async Task<string> SummarizeChatAsync(YardChat chat, string? askedIn, CancellationToken ct)
+    {
+        var summaries = _summaries ?? throw new YardActionException("This CodeSwitchX cannot sum chats up.");
+        var summary = await summaries.SummarizeAsync(chat, ct).ConfigureAwait(false);
+        _ui.Post(() => _shell().WriteSummary(askedIn, $"The {chat.Title} chat in {chat.Workspace}:\n{summary.Full}"));
+        _logger.LogInformation("Raven summed up chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        return $"{summary.Short} The full summary is written in Raven's panel.";
+    }
 
     public Task<string> NextQuestionAsync(CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().NextQuestion() ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);

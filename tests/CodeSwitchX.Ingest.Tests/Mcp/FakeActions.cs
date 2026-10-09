@@ -82,6 +82,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult($"Chat {number} muted: {muted}.");
     }
 
+    public (YardChat Chat, string? AskedIn)? Summarized { get; private set; }
+
+    public Task<string> SummarizeChatAsync(YardChat chat, string? askedIn, CancellationToken ct)
+    {
+        Act("summarize_chat");
+        Summarized = (chat, askedIn);
+        return Task.FromResult($"{chat.Title} is summed up.");
+    }
+
     public Task<string> NextQuestionAsync(CancellationToken ct)
     {
         Act("next_question");

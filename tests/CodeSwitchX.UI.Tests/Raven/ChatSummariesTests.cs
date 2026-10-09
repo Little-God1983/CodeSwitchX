@@ -1,0 +1,64 @@
+using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Yard;
+using CodeSwitchX.UI.Raven;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+namespace CodeSwitchX.UI.Tests.Raven;
+
+public sealed class ChatSummariesTests : IDisposable
+{
+    private readonly string _path = Path.Combine(Path.GetTempPath(), "csx-sum-" + Guid.NewGuid().ToString("N") + ".jsonl");
+    private readonly FakeBrain _brain = new();
+    private readonly ChatSummaries _summaries;
+
+    public ChatSummariesTests()
+    {
+        File.WriteAllLines(_path, [
+            """{"type":"user","isSidechain":false,"message":{"role":"user","content":"Fix the upload retry."}}""",
+            """{"type":"assistant","isSidechain":false,"message":{"role":"assistant","content":[{"type":"text","text":"Done: the retry backs off."}]}}""",
+        ]);
+        _summaries = new ChatSummaries(_brain, id => id == "a" ? _path : null, new FakeTimeProvider(), NullLogger<ChatSummaries>.Instance);
+    }
+
+    public void Dispose() => File.Delete(_path);
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private static YardChat Chat(string id, SessionState state = SessionState.Idle, bool needsYou = false) =>
+        new(id, "Fix the upload", Guid.Empty, "ContentAutomatorX", state, needsYou, DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null);
+
+    [Fact]
+    public async Task The_summarizer_is_given_the_conversation_and_its_short_part_is_said()
+    {
+        _brain.Answer = _ => [new BrainText("Short: It fixed the upload retry, and the tests pass. It waits for nothing.\n"),
+            new BrainText("Asked: Fix the upload retry.\nDone: Changed src/Upload.cs.\nNow: Idle.\nWaiting: nothing")];
+
+        var summary = await _summaries.SummarizeAsync(Chat("a"), Ct);
+
+        summary.Short.ShouldBe("It fixed the upload retry, and the tests pass. It waits for nothing.");
+        summary.Full.ShouldBe("Asked: Fix the upload retry.\nDone: Changed src/Upload.cs.\nNow: Idle.\nWaiting: nothing");
+        _brain.Asked.ShouldHaveSingleItem().ShouldBe("The chat \"Fix the upload\" in ContentAutomatorX, idle, its turn over.\n\n"
+            + "Its conversation, in short:\nUser: Fix the upload retry.\nClaude: Done: the retry backs off.");
+    }
+
+    [Fact]
+    public void A_reply_out_of_shape_is_said_and_written_whole()
+    {
+        ChatSummaries.Parse("**It fixed it.**\nAll good.").ShouldBe(new ChatSummary("It fixed it. All good.", "It fixed it.\nAll good."));
+        ChatSummaries.Parse("  ").ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_chat_with_no_conversation_or_a_failed_summarizer_says_why()
+    {
+        (await Should.ThrowAsync<YardActionException>(() => _summaries.SummarizeAsync(Chat("b"), Ct))).Message
+            .ShouldBe("CodeSwitchX cannot read the conversation of the Fix the upload chat, so it cannot sum it up.");
+
+        _brain.Answer = _ => [new BrainFailed("Claude Code is not installed.")];
+        (await Should.ThrowAsync<YardActionException>(() => _summaries.SummarizeAsync(Chat("a", SessionState.Waiting, needsYou: true), Ct))).Message
+            .ShouldBe("Summing up the Fix the upload chat failed: Claude Code is not installed.");
+        _brain.Asked[^1].ShouldStartWith("The chat \"Fix the upload\" in ContentAutomatorX, waiting on the user right now.");
+    }
+}

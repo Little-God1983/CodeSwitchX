@@ -78,6 +78,14 @@ public interface IYardActions
     /// </summary>
     Task<string> NextQuestionAsync(CancellationToken ct);
 
+    /// <summary>
+    /// Sums the chat up from its conversation (#234): what it was asked, what it did, where it stands, what it waits for. The
+    /// whole summary is written in the Raven chat <paramref name="askedIn"/> names (the one the user is in for null); returns
+    /// the short part, which Raven says.
+    /// </summary>
+    /// <exception cref="YardActionException">It could not be summed up; the message says why.</exception>
+    Task<string> SummarizeChatAsync(YardChat chat, string? askedIn, CancellationToken ct);
+
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
 }
