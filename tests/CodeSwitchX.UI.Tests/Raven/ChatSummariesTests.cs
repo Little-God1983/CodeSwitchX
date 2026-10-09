@@ -48,6 +48,8 @@ public sealed class ChatSummariesTests : IDisposable
     [InlineData("Short:\nIt fixed it.\nAsked: Fix it.", "It fixed it.", "Asked: Fix it.")]
     [InlineData("```\n1. Short: It fixed it.\n2. Asked: Fix it.\n```", "It fixed it.", "Asked: Fix it.")]
     [InlineData("Here is the summary.\n- **Short:** It fixed it.\n- Waiting: nothing", "It fixed it.", "Here is the summary.\nWaiting: nothing")]
+    [InlineData("Short:\nAsked: Fix it.\nWaiting: nothing", "Asked: Fix it. Waiting: nothing", "Asked: Fix it.\nWaiting: nothing")]
+    [InlineData("Short: 1.5 MB of logs were cut.\n1. Done: Cut 1.5 MB.", "1.5 MB of logs were cut.", "Done: Cut 1.5 MB.")]
     public void Shapes_a_model_may_add_are_read(string reply, string said, string written)
     {
         ChatSummaries.Parse(reply).ShouldBe(new ChatSummary(said, written));

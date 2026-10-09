@@ -121,11 +121,17 @@ public sealed class ChatSummaries(IConductorBrain summarizer, Func<string, strin
         }
 
         var rest = lines.Where((_, i) => i < at || i >= at + taken).ToList();
-        return said.Length == 0 ? null : new ChatSummary(said, rest.Count > 0 ? string.Join('\n', rest) : said);
+        if (said.Length == 0)
+        {
+            // No short part: the rest is said and written whole, as a reply with no shape is.
+            return rest.Count == 0 ? null : new ChatSummary(string.Join(' ', rest), string.Join('\n', rest));
+        }
+
+        return new ChatSummary(said, rest.Count > 0 ? string.Join('\n', rest) : said);
     }
 
-    /// <summary>A bullet or a number before a line: "- ", "* ", "• ", "1. ", "2) ".</summary>
-    private static readonly System.Text.RegularExpressions.Regex Marks = new(@"^(?:[*\-•]\s*|\d+[.)]\s*)+");
+    /// <summary>A bullet or a number before a line: "- ", "* ", "• ", "1. ", "2) "; not the "1." of "1.5 MB".</summary>
+    private static readonly System.Text.RegularExpressions.Regex Marks = new(@"^(?:[*\-•]\s*|\d+[.)]\s+)+");
 
     private static bool IsLabel(string line) =>
         new[] { "Asked:", "Done:", "Now:", "Waiting:" }.Any(l => line.StartsWith(l, StringComparison.OrdinalIgnoreCase));

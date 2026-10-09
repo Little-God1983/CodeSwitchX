@@ -18,7 +18,7 @@ public static class TranscriptDigest
 
     /// <summary>
     /// How much of the file's start is looked through for the first prompt, line by line: a prompt with a pasted image
-    /// carries it in its own line.
+    /// carries it in its own line. Counted between lines: one line longer than this is still read whole, once.
     /// </summary>
     public const int HeadChars = 4 * 1024 * 1024;
 
@@ -73,9 +73,11 @@ public static class TranscriptDigest
         }
 
         // The first prompt says what the chat is for: it stays when the steps after it are too many to keep.
-        var all = whole && kept.Count == steps.Count;
+        // A first prompt that is among the steps kept (in a big file, after much that is no prompt) is told once, there.
+        var told = first is not null && kept.Contains(first);
+        var all = kept.Count == steps.Count && (whole || told);
         var text = new StringBuilder();
-        if (!all && first is not null)
+        if (!all && first is not null && !told)
         {
             text.Append("First asked: ").Append(first[(first.IndexOf(": ", StringComparison.Ordinal) + 2)..]).Append('\n');
         }
