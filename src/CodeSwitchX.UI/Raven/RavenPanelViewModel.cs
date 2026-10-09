@@ -312,6 +312,36 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Questions shown and not yet read out: they go before the news when the floor is free (UI thread).</summary>
     private readonly List<ChatAskCard> _untold = [];
 
+    /// <summary>
+    /// A card was answered here and others wait: the next one is offered ("2 more questions are waiting. Next?", #230) once
+    /// the floor is free (UI thread).
+    /// </summary>
+    private bool _nextOfferDue;
+
+    /// <summary>
+    /// When the offer of the next question was heard to its end, or written: a yes said within <see cref="NextOfferLifetime"/>
+    /// after it takes it, also when its words come later. Kept until the user's next words (UI thread).
+    /// </summary>
+    private DateTimeOffset? _nextOffered;
+
+    /// <summary>The offer stands: heard, and neither answered, let go nor lapsed. Raven says nothing of its own meanwhile, as while an allow waits for its yes (UI thread).</summary>
+    private bool _offerStands;
+
+    /// <summary>Counts the offers: a callback of one that is over (heard late, or its lapse) does nothing (UI thread).</summary>
+    private int _offerNumber;
+
+    /// <summary>Lets the offer lapse once <see cref="NextOfferLifetime"/> is over, and the news held for it is told.</summary>
+    private ITimer? _offerTimer;
+
+    /// <summary>The card "next question" asked the brain for (#230): read out with chat news only written too (UI thread).</summary>
+    private ChatAskCard? _requested;
+
+    /// <summary>Whether "Next?" stands (UI thread).</summary>
+    internal bool OffersNext => _offerStands;
+
+    /// <summary>How long a yes to "Next?" counts: as long as one to an allow.</summary>
+    internal static readonly TimeSpan NextOfferLifetime = ChatAsks.ProposalLifetime;
+
     /// <param name="asks">What chats ask, held while the user answers it here; null shows no questions.</param>
     /// <param name="yard">Names the chat that asks, as the Yard shows it.</param>
     public RavenPanelViewModel(IMicrophoneCatalog catalog, IMicrophoneRecorder recorder, IDictationService dictation,
@@ -1879,6 +1909,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return false;
         }
 
+        // "Next?" stands (#230): a yes answers it without the name. Nothing else does: the offer may follow a click, with the
+        // user not talking, and talk around the room must stay out.
+        // Judged by the instant Ask judges it by, so a yes let through here is never a question to the brain.
+        if (_nextOffered is { } offered && ended >= offered && ended - offered <= NextOfferLifetime && SpokenYes.IsYes(text)
+            && !WhisperNoise.Is(text))
+        {
+            _calledAt = null;
+            return true;
+        }
+
         // A word on its own counts only as a yes: a cough Whisper writes as "Thank you." must not be asked. Begun soon after
         // a turn with the name, a turn is the rest of that (#219); only a turn with the name, or the words right after the
         // name alone, start that window, so a TV line taken this way does not open it again.
@@ -1944,6 +1984,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private Question? Ask(string text, DateTimeOffset ended, RavenChat chat, RavenLogEntry? asked = null, bool openMic = false, string earlier = "")
     {
         _brainAsked = false; // these words answer it, whatever they are
+        // "Next?" after an answer (#230): these words answer it or let it go, and one not said yet is not said any more.
+        var offered = _nextOffered;
+        DropOffer();
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
         // goes no further; anything else drops the proposal and is the next question. Words are judged by when they were
         // said, not when they were transcribed: said before the read-back was heard to its end, they answer something
@@ -1963,6 +2006,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Said before its read-back was heard to its end, these words take the floor from it: the brain's answer to
             // them comes after the read-back, and a yes to that answer must not allow the prompt.
             _asks.Cancel(standing);
+        }
+
+        // A yes said after "Next?" was heard, and in time, goes to the next card, and to no brain: judged by when it was said,
+        // as a yes to an allow is.
+        if (offered is { } at && ended >= at && ended - at <= NextOfferLifetime && SpokenYes.IsYes(text))
+        {
+            GoToNextQuestion();
+            return null;
         }
 
         return AskBrain(text, ended, chat, earlier, asked: asked, openMic: openMic);
@@ -2432,7 +2483,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void ScheduleNews()
     {
-        if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null) && FloorIsFree)
+        if ((_news is { HasNews: true } || _untold.Count > 0 || _catchUpDue is not null || _nextOfferDue) && FloorIsFree)
         {
             _newsTimer.Change(Traffic.WaitBeforeTelling, Timeout.InfiniteTimeSpan);
         }
@@ -2459,7 +2510,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool FloorIsFree => TrafficWatcher.IsFree(Floor);
 
     private TrafficWatcher.Floor Floor => new(Capturing: _capturing, Holding: _heldInputs.Count > 0, Pending: _pending, Asking: _asking,
-        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null);
+        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null || _offerStands);
 
     /// <summary>The floor as a telling sees it: free but for the telling itself.</summary>
     private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false });
@@ -2479,7 +2530,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private void TellNewsIfFree()
     {
-        if ((_news is not { HasNews: true } && _untold.Count == 0 && _catchUpDue is null) || !FloorIsFree)
+        if ((_news is not { HasNews: true } && _untold.Count == 0 && _catchUpDue is null && !_nextOfferDue) || !FloorIsFree)
         {
             return; // the next change of state schedules it again
         }
@@ -2503,7 +2554,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_catchUpDue is not null && catchUp is null)
         {
             DropCatchUp(); // a digest heard since the switch said it all
-            if (_news is not { HasNews: true } && _untold.Count == 0)
+            if (_news is not { HasNews: true } && _untold.Count == 0 && !_nextOfferDue)
             {
                 return;
             }
@@ -2527,6 +2578,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (_untold.Count > 0)
             {
                 _conversation = TellQuestionsAsync(_conversation, _digest.Token);
+            }
+            else if (_nextOfferDue)
+            {
+                _conversation = OfferNextAsync(_conversation, _digest.Token); // before the news: it answers what the user just did
             }
             else
             {
@@ -2656,6 +2711,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Remove(card);
+        if (card == _requested)
+        {
+            _requested = null;
+        }
+
         if (_tellerWarm && !_telling)
         {
             RestTellerIfIdle(); // warmed up for a long command that may not be read out now
@@ -2669,6 +2729,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
         Summarize(card.ShownIn);
+        if (closed.Outcome == ChatAskOutcome.Answered)
+        {
+            OfferNext(); // answered here: the next card is offered (#230)
+        }
     }
 
     /// <summary>
@@ -2922,15 +2986,26 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (!SpeakNews || IsMuted)
+            // The card "next question" asked for (#230) is read out with chat news only written too; muted, none is.
+            if (IsMuted || (!SpeakNews && (_requested is null || !_untold.Contains(_requested))))
             {
                 _untold.Clear(); // none is read out: they need not wait for a telling each
+                _requested = null;
                 _tellerWarm = false;
                 return;
             }
 
+            if (!SpeakNews)
+            {
+                _untold.RemoveAll(c => c != _requested);
+            }
+
             var card = _untold[0];
             _untold.RemoveAt(0);
+            if (card == _requested)
+            {
+                _requested = null;
+            }
             // Still warm for a long command's card after this one; a card that comes while this is told warms it up again.
             _tellerWarm = warmed && _untold.Any(PermissionLine.NeedsTeller);
             if (floor.IsCancellationRequested)
@@ -4002,6 +4077,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _brainAsked = false; // moved to another chat: the user moved on from what Raven asked
+        DropOffer(); // and from "Next?": a yes now is for something in the chat shown
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
         // something in the chat shown, not for that prompt.
@@ -4024,6 +4100,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (_untold.RemoveAll(c => c.ShownIn != CurrentChat) > 0 && _tellerWarm && !_telling)
         {
             RestTellerIfIdle(); // warmed up for a long command among them
+        }
+
+        if (_requested is not null && !_untold.Contains(_requested))
+        {
+            _requested = null; // the card "next question" asked for is not read out here
         }
 
         ShowSelected();
@@ -4464,7 +4545,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// "Chat three", "zu Chat drei", "activity", "open chat three": the app switches the chat itself, at once and without
-    /// a brain turn (<see cref="SpokenChatSwitch"/>), and says where the user is now. Navigation, not a question: nothing
+    /// a brain turn (<see cref="SpokenChatSwitch"/>), and says where the user is now. "Next question" goes to the oldest open
+    /// card (<see cref="GoToNextQuestion"/>, #230). Navigation, not a question: nothing
     /// is written to a chat, and the brain's answer still on its way goes on in the chat it was asked in. A switch to
     /// another window's chat ends an allow waiting for a yes, as one by hotkey or click does (see
     /// <see cref="OnSelectedChatChanged"/>): a yes said there must not allow another chat's prompt.
@@ -4472,6 +4554,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private bool SwitchBySaying(string text)
     {
+        if (!_brainAsked && SpokenNextQuestion.Is(text))
+        {
+            GoToNextQuestion();
+            return true;
+        }
+
         if (_brainAsked || !SpokenChatSwitch.TryRead(text, out var target))
         {
             return false; // after Raven asked something, "chat three" may be the answer: the brain hears it, and can still switch
@@ -4546,6 +4634,192 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var next = chats[((at + step) % chats.Count + chats.Count) % chats.Count];
         SelectedChat = next;
         return next;
+    }
+
+    /// <summary>What Raven says when "next question" finds none open.</summary>
+    internal const string NoQuestionsLine = "No questions are waiting.";
+
+    /// <summary>The open cards of the window chats the list shows, oldest first (#230).</summary>
+    private List<ChatAskCard> OpenCards() =>
+        [.. _askCards.Values.Where(c => c.IsOpen && c.ShownIn is { } chat && Chats.Contains(chat)).OrderBy(c => c.Ask.At)];
+
+    /// <summary>
+    /// "Next question", said, typed, by its hotkey or as a yes to "Next?" (#230): the oldest open card in any window. Raven
+    /// switches to that window's chat and reads the card out at once, taking the floor as a switch by voice does; with none
+    /// open it says so. The window is not shown in the Cab: there its VS Code would ask the questions itself (UI thread).
+    /// </summary>
+    public void GoToNextQuestion()
+    {
+        var card = ShowNextQuestion();
+        var line = card is null ? NoQuestionsLine : QuestionSentence([card]);
+        if (card is null)
+        {
+            AddEntry(RavenLogKind.Note, line);
+        }
+
+        _voice.Hush(); // the user moved on, as a press of the mic stops Raven
+        if (!IsMuted && !_openSpeech)
+        {
+            var spoken = _voice.Begin();
+            spoken.Add(line);
+            spoken.Complete();
+        }
+    }
+
+    /// <summary>
+    /// "Next question" asked of the brain (next_question, #230): as <see cref="GoToNextQuestion"/>, but the card is read out
+    /// once the brain's answer is over, as a card that comes is. What the brain says of it; null when no card is open.
+    /// </summary>
+    public string? NextQuestionForBrain()
+    {
+        if (ShowNextQuestion() is not { } card)
+        {
+            return null;
+        }
+
+        if (IsMuted)
+        {
+            return $"{SwitchLine(card.ShownIn!)} Its card is shown there.";
+        }
+
+        _requested = card; // asked for: read out with chat news only written too
+        _untold.Insert(0, card);
+        ScheduleNews();
+        return $"{SwitchLine(card.ShownIn!)} Its question is read out next.";
+    }
+
+    /// <summary>
+    /// Shows the chat of the oldest open card, without its catch-up: the question is what the user asked for, and the
+    /// chat's other cards are read after it. The card is taken off the ones to read out; null when none is open.
+    /// </summary>
+    private ChatAskCard? ShowNextQuestion()
+    {
+        DropOffer();
+        _requested = null;
+        if (OpenCards() is not [var card, ..])
+        {
+            return null;
+        }
+
+        SelectedChat = card.ShownIn!;
+        DropCatchUp();
+        _untold.Remove(card);
+        return card;
+    }
+
+    /// <summary>"2 more questions are waiting. Next?": what Raven offers after an answer (#230).</summary>
+    internal static string NextOfferLine(int open) =>
+        open == 1 ? "One more question is waiting. Next?" : $"{open} more questions are waiting. Next?";
+
+    /// <summary>
+    /// A card was answered here, by voice or a click (#230): the next one is offered once the floor is free, unless a card of
+    /// the chat the user is in is read out anyway.
+    /// </summary>
+    private void OfferNext()
+    {
+        DropOffer(); // one that stands counted the card just answered
+        if (_untold.Any(c => c.IsOpen) || OpenCards().Count == 0)
+        {
+            return;
+        }
+
+        _nextOfferDue = true;
+        ScheduleNews();
+    }
+
+    /// <summary>
+    /// Says the offer of the next card, counted when it is said; a yes heard after it goes there (see <see cref="Ask"/>).
+    /// Muted, with no voice, or while the user talks in Open mic, it is only written, and a yes still takes it. Never faults.
+    /// </summary>
+    private async Task OfferNextAsync(Task previous, CancellationToken floor)
+    {
+        try
+        {
+            await previous;
+            if (!_nextOfferDue)
+            {
+                return; // the user moved on meanwhile
+            }
+
+            _nextOfferDue = false;
+            var open = OpenCards().Count;
+            if (open == 0 || _untold.Count > 0 || floor.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var line = NextOfferLine(open);
+            var number = _offerNumber;
+            if (!VoiceSpeaks || _openSpeech)
+            {
+                AddSaid(line, CurrentChat, said: false);
+                Offered(number);
+                return;
+            }
+
+            var spoken = _voice.Begin();
+            AddSaid(line, CurrentChat, spoken);
+            spoken.Add(line);
+            spoken.Complete();
+            _ = OfferHeardAsync(spoken.Played, number);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Offering the next question failed");
+        }
+        finally
+        {
+            _telling = false;
+            UpdateState();
+        }
+    }
+
+    /// <summary>The offer counts once it was heard to its end: one hushed midway asked nothing.</summary>
+    private async Task OfferHeardAsync(Task<bool> played, int number)
+    {
+        if (await played.ConfigureAwait(false))
+        {
+            _dispatcher.Post(() => Offered(number));
+        }
+    }
+
+    /// <summary>The offer was heard, or written: it stands for <see cref="NextOfferLifetime"/>, unless it is over already.</summary>
+    private void Offered(int number)
+    {
+        if (number != _offerNumber)
+        {
+            return;
+        }
+
+        _nextOffered = _time.GetUtcNow();
+        _offerStands = true;
+        _offerTimer?.Dispose();
+        _offerTimer = _time.CreateTimer(_ => _dispatcher.Post(() => OfferLapsed(number)), null, NextOfferLifetime, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>No yes came in time: what Raven held for the offer may be said. A yes said in time still counts when its words come later.</summary>
+    private void OfferLapsed(int number)
+    {
+        if (number == _offerNumber && _offerStands)
+        {
+            _offerStands = false;
+            ScheduleNews();
+        }
+    }
+
+    /// <summary>Any offer of the next question is over, said, due or standing: the user answered it, or moved on.</summary>
+    private void DropOffer()
+    {
+        _offerNumber++;
+        _nextOfferDue = false;
+        _nextOffered = null;
+        _offerTimer?.Dispose();
+        _offerTimer = null;
+        if (_offerStands)
+        {
+            _offerStands = false;
+            ScheduleNews(); // what Raven held for it may be said
+        }
     }
 
     /// <summary>The Cab opened a workspace: its chat is shown. The list never opens a workspace itself.</summary>

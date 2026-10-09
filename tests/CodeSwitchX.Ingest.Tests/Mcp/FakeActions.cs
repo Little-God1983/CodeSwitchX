@@ -82,6 +82,12 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult($"Chat {number} muted: {muted}.");
     }
 
+    public Task<string> NextQuestionAsync(CancellationToken ct)
+    {
+        Act("next_question");
+        return Task.FromResult("Chat 3, RawCutX. Its question is read out next.");
+    }
+
     public Task<string> SwitchChatAsync(ChatSwitch target, CancellationToken ct)
     {
         Act("switch_chat");

@@ -181,6 +181,13 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
     }
 
+    [McpServerTool(Name = "next_question", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
+    [Description("Takes the user to the oldest question or permission prompt waiting in any window (\"next question\", \"go through my "
+        + "questions\", \"what's next\", \"the next one\"): its window's Raven chat is shown, and its card is read out there once you "
+        + "are done. Returns what you say: say only that.")]
+    public Task<string> NextQuestion(CancellationToken cancellationToken = default) =>
+        Act(() => actions.NextQuestionAsync(cancellationToken));
+
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)

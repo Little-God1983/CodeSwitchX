@@ -716,6 +716,11 @@ public sealed class RavenActionsTests
 
         public string? MuteChat(int number, bool muted) => number == 4 ? $"Chat 4, Diffusion-Full, muted: {muted}." : null;
 
+        /// <summary>What the panel says of the next question; null when none waits.</summary>
+        public string? Next { get; set; }
+
+        public string? NextQuestion() => Next;
+
         public void SetChatDefaults(ChatDefaults defaults)
         {
             Defaults.Add(defaults);
@@ -883,6 +888,17 @@ public sealed class RavenActionsTests
             tab?.Invoke(CompactionTab.Reopened);
             return Reopens;
         }
+    }
+
+    /// <summary>#230: the panel shows the chat of the oldest card; with none waiting, Raven says so.</summary>
+    [Fact]
+    public async Task Next_question_says_what_the_panel_says_or_that_none_waits()
+    {
+        _shell.Next = "Chat 4, Diffusion-Full. Its question is read out next.";
+        (await _actions.NextQuestionAsync(Ct)).ShouldBe("Chat 4, Diffusion-Full. Its question is read out next.");
+
+        _shell.Next = null;
+        (await _actions.NextQuestionAsync(Ct)).ShouldBe("No questions are waiting.");
     }
 
     [Fact]

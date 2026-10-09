@@ -9,8 +9,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace CodeSwitchX.UI.Infrastructure;
 
 /// <summary>
-/// The global hotkeys that switch Raven's chat (#121), set in Settings → Shortcuts: chat 0 (the Yard's), chats 1–11, and
-/// the previous and next chat. Like push to talk they work while VS Code has the focus and do not bring the shell up.
+/// The global hotkeys that switch Raven's chat (#121), set in Settings → Shortcuts: chat 0 (the Yard's), chats 1–11, the
+/// previous and next chat, and the chat of the next question waiting (#230), which is read out. Like push to talk they work while VS Code has the focus and do not bring the shell up.
 /// <see cref="HotkeyService"/> registers them, again after every change, and marks a binding Windows refuses as taken.
 /// Ctrl+Alt+digit is not offered: AltGr counts as Ctrl+Alt (<see cref="HotkeyChord.WhyNot"/>).
 /// </summary>
@@ -37,6 +37,7 @@ public sealed partial class ChatHotkeys : ObservableObject
 
         rows.Add(new("previous", "Previous chat", "Ctrl+Alt+PageUp", null, -1, this));
         rows.Add(new("next", "Next chat", "Ctrl+Alt+PageDown", null, 1, this));
+        rows.Add(new("nextQuestion", "Next question", "Ctrl+Alt+Insert", null, 0, this)); // #230; not End: Remote Desktop takes Ctrl+Alt+End
         Rows = rows;
         Check();
     }

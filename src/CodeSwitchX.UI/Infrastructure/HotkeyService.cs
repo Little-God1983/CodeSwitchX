@@ -311,7 +311,11 @@ public sealed class HotkeyService
         else if (_chatIds.TryGetValue(id, out var chat))
         {
             // Like push to talk: the shell stays where it is, and VS Code keeps the focus. Switching never opens a window.
-            if (chat.Target is null)
+            if (chat.Target is null && chat.Step == 0)
+            {
+                _shell.Raven.GoToNextQuestion();
+            }
+            else if (chat.Target is null)
             {
                 _shell.Raven.StepChat(chat.Step);
             }
