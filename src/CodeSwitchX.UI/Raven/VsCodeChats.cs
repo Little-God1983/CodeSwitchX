@@ -28,7 +28,7 @@ public interface IVsCodeChats
 
     /// <summary>
     /// Closes the chat's tab in the VS Code window it runs in, and returns once its Claude Code has ended. The conversation
-    /// stays in Claude Code's session list.
+    /// stays in Claude Code's session list when it has a name (<see cref="NameAsync"/>).
     /// </summary>
     /// <exception cref="YardActionException">It could not be closed; the message says why.</exception>
     Task CloseAsync(string sessionId, CancellationToken ct);
@@ -52,6 +52,17 @@ public interface IVsCodeChats
     /// <returns>Whether its tab was opened again: false for a chat that had none.</returns>
     /// <exception cref="YardActionException">It was not compacted, or not opened again; the message says which and why.</exception>
     Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct);
+
+    /// <summary>
+    /// Names a chat VS Code does not list (#228): one only ever messaged by Raven has no name, and once its tab is closed VS
+    /// Code neither lists it nor opens it again by its id. A chat VS Code lists already is left as it is. Its tab may be
+    /// open. Returns once it is done.
+    /// </summary>
+    /// <param name="folder">The folder the chat runs in, for when its conversation does not say the one it started in.</param>
+    /// <param name="title">The title the Yard shows it by: its name.</param>
+    /// <returns>Whether it was named: false for a chat VS Code lists already; null when its conversation cannot be read.</returns>
+    /// <exception cref="YardActionException">It was not named; the message says why.</exception>
+    Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct);
 }
 
 /// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
@@ -61,19 +72,19 @@ public sealed record TabConversation(DateTimeOffset WrittenAt, string? Title);
 /// <summary>How a chat's conversation started (<see cref="VsCodeChats.StartOf"/>).</summary>
 /// <param name="Listed">Whether VS Code's Claude Code lists it, and so opens it again by its id.</param>
 /// <param name="Folder">The folder it started in, which Claude Code finds it by; null when no line says.</param>
-public sealed record ConversationStart(bool Listed, string? Folder);
-
-/// <summary>What becomes of a chat's tab while it is compacted (#226).</summary>
-public enum CompactionTab
-{
-    /// <summary>It is about to close, every refusal past: the turn it cuts off ends now, before the close is done.</summary>
-    Closing,
-
-    /// <summary>It did not close after all; nothing was compacted.</summary>
-    NotClosed,
-
-    /// <summary>It is open again.</summary>
-    Reopened,
+public sealed record ConversationStart(bool Listed, string? Folder);
+
+/// <summary>What becomes of a chat's tab while it is compacted (#226).</summary>
+public enum CompactionTab
+{
+    /// <summary>It is about to close, every refusal past: the turn it cuts off ends now, before the close is done.</summary>
+    Closing,
+
+    /// <summary>It did not close after all; nothing was compacted.</summary>
+    NotClosed,
+
+    /// <summary>It is open again.</summary>
+    Reopened,
 }
 
 /// <param name="Folder">The folder it runs in.</param>
@@ -404,6 +415,22 @@ public sealed class VsCodeChats : IVsCodeChats
             throw new YardActionException($"{failed} Its tab is open again, as it was.");
         }
 
+        return true;
+    }
+
+    public async Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+    {
+        if (_startOf(sessionId) is not { } start)
+        {
+            return null; // no conversation yet, or none that can be read: whether VS Code lists it is not known
+        }
+
+        if (start.Listed)
+        {
+            return false;
+        }
+
+        await _compactor.NameAsync(sessionId, start.Folder ?? folder, title, ct).ConfigureAwait(false);
         return true;
     }
 

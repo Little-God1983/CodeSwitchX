@@ -40,7 +40,8 @@ public sealed class ChatCompactorTests
 
         var (exe, arguments, folder, process) = _launcher.Started.ShouldHaveSingleItem();
         exe.ShouldBe(Claude);
-        arguments.ShouldBe(["-p", "/compact keep the test plan", "--resume", "chat-1", "--output-format", "json"]);
+        arguments.ShouldBe(["-p", "/compact keep the test plan", "--resume", "chat-1", "--output-format", "json", "--settings", """{"disableAllHooks":true}"""],
+            "its hooks would tell CodeSwitchX that the chat ended");
         folder.ShouldBe(@"E:\Repos\App", "Claude Code finds a conversation by the folder it runs in");
         _launcher.Environments[0]!["CLAUDE_CODE_ENTRYPOINT"].ShouldBe("claude-vscode", "so VS Code keeps the chat in its session list");
         process.InputClosed.ShouldBeTrue();
@@ -55,7 +56,7 @@ public sealed class ChatCompactorTests
         _launcher.Last.Die(0);
         await name;
 
-        _launcher.Started.ShouldHaveSingleItem().Arguments.ShouldBe(["-p", "/rename Fix the upload", "--resume", "chat-1", "--output-format", "json"]);
+        _launcher.Started.ShouldHaveSingleItem().Arguments.ShouldBe(["-p", "/rename Fix the upload", "--resume", "chat-1", "--output-format", "json", "--settings", """{"disableAllHooks":true}"""]);
     }
 
     [Fact]

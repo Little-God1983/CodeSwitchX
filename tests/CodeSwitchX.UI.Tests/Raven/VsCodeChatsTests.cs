@@ -626,6 +626,41 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Commands.ShouldBe([CompanionWindows.CloseChat], "a tab asked for it would open blank");
     }
 
+    /// <summary>#228: a chat VS Code does not list is named with its tab open, in the folder its conversation started in.</summary>
+    [Fact]
+    public async Task A_chat_VS_Code_does_not_list_is_named_with_its_tab_left_as_it_is()
+    {
+        _nameless.Add("raven-chat");
+        _startedIn["raven-chat"] = @"E:\Repos\App";
+
+        (await _chats.NameAsync("raven-chat", @"E:\Repos\App\.claude\worktrees\x", "Fix the upload", Ct)).ShouldBe(true);
+
+        _compactor.Named.ShouldBe([("raven-chat", "Fix the upload", 0)]);
+        _compactor.NamedIn.ShouldBe([@"E:\Repos\App"]);
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_VS_Code_lists_or_whose_conversation_cannot_be_read_is_not_named()
+    {
+        _unreadable.Add("unread");
+
+        (await _chats.NameAsync("listed", @"E:\Repos\App", "Docs", Ct)).ShouldBe(false);
+        (await _chats.NameAsync("unread", @"E:\Repos\App", "Docs", Ct)).ShouldBeNull("whether VS Code lists it is not known");
+
+        _compactor.Named.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_naming_that_fails_says_why()
+    {
+        _nameless.Add("raven-chat");
+        _compactor.NameFailure = "Claude Code did not name the chat: it broke.";
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.NameAsync("raven-chat", @"E:\Repos\App", "Fix the upload", Ct))).Message
+            .ShouldBe("Claude Code did not name the chat: it broke.");
+    }
+
     [Fact]
     public async Task A_chat_whose_conversation_cannot_be_read_keeps_its_tab()
     {
@@ -928,6 +963,9 @@ public sealed class VsCodeChatsTests : IDisposable
 
         public List<(string SessionId, string Name, int CommandsBefore)> Named { get; } = [];
 
+        /// <summary>The folder each naming ran in.</summary>
+        public List<string> NamedIn { get; } = [];
+
         public string? NameFailure { get; set; }
 
         /// <summary>What a compaction throws that is no refusal: a bug, a pipe gone.</summary>
@@ -943,6 +981,7 @@ public sealed class VsCodeChatsTests : IDisposable
         public Task NameAsync(string sessionId, string folder, string name, CancellationToken ct)
         {
             Named.Add((sessionId, name, Commands.Count));
+            NamedIn.Add(folder);
             return NameFailure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
     }

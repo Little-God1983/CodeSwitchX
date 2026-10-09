@@ -122,6 +122,8 @@ public sealed class ShellTestHarness
         public Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct) =>
             throw new NotSupportedException();
 
+        public Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct) => throw new NotSupportedException();
+
         /// <summary>When set, a show waits until it is ended: VS Code is slow to start.</summary>
         public bool Hangs { get; set; }
 
