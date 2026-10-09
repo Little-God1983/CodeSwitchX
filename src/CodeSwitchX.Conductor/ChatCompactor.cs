@@ -17,8 +17,9 @@ public interface IChatCompactor
     Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct);
 
     /// <summary>
-    /// Names the chat as <c>/rename</c> typed in its tab would. Its tab must be closed. VS Code lists, and opens again, only
-    /// a chat with a name: one that was only ever messaged by another session (Raven) has none (#226).
+    /// Names the chat as <c>/rename</c> typed in its tab would. VS Code lists, and opens again, only a chat with a name: one
+    /// that was only ever messaged by another session (Raven) has none (#226). Its tab may be open: the tab takes the name
+    /// up at its next write, and goes on from its own last step (spike, #228).
     /// </summary>
     /// <exception cref="YardActionException">It was not named; the message says why.</exception>
     Task NameAsync(string sessionId, string folder, string name, CancellationToken ct);
@@ -29,7 +30,8 @@ public interface IChatCompactor
 /// the compact boundary and the summary into the conversation as the tab's own <c>/compact</c> does (spike, 2026-10-08).
 /// It runs as VS Code's Claude Code (<c>CLAUDE_CODE_ENTRYPOINT</c>), which keeps the chat in VS Code's session list, and
 /// with no model given: Claude Code's own, as for a chat in a new tab. Its JSON result says whether it compacted; one
-/// that fails says why there or on standard error.
+/// that fails says why there or on standard error. It runs with hooks off: its SessionStart and SessionEnd carry the
+/// chat's own id, and would tell CodeSwitchX that the chat ended while its tab still runs.
 /// </summary>
 /// <param name="findClaude">The <c>claude.exe</c> to run (<see cref="ClaudeCliLocator"/>); null when none is installed.</param>
 public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time, ILogger<ChatCompactor> logger)
@@ -49,7 +51,7 @@ public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> 
     private async Task RunAsync(string sessionId, string folder, string command, string what, string done, string doing, CancellationToken ct)
     {
         var claude = findClaude() ?? throw new YardActionException($"Claude Code is not installed where CodeSwitchX looks for it, so it cannot {what} the chat.");
-        var arguments = new[] { "-p", command, "--resume", sessionId, "--output-format", "json" };
+        var arguments = new[] { "-p", command, "--resume", sessionId, "--output-format", "json", "--settings", ClaudeCliBrain.NoHooks };
         IBrainProcess process;
         try
         {

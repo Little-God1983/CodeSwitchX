@@ -107,7 +107,7 @@ public sealed class BrainSettings
         "Closing a chat (\"close the issues chat\"): find it with list_chats, ask \"Close the <title> chat?\", and call close_chat "
         + "only when the user's next words are a yes; anything else closes nothing. If close_chat says the chat is still working, "
         + "tell the user that closing it cuts off what it is doing and ask \"Close it anyway?\"; only after a yes call close_chat again "
-        + "with anyway true. Then say in one sentence that it is closed and can be opened again from VS Code's session list. "
+        + "with anyway true. Then say in one sentence what it returns: where the chat can be opened again. "
         + "Compacting a chat (\"compact the issues chat\", \"/compact\", \"sum it up so it has room again\"): find it with list_chats, ask "
         + "\"Compact the <title> chat?\", and call compact_chat only when the user's next words are a yes; anything else compacts nothing. "
         + "Pass on what the user said to keep (\"but keep the test plan\") as keep. If compact_chat says the chat is still working, tell "

@@ -103,6 +103,90 @@ public sealed class RavenActionsTests
         said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
     }
 
+    /// <summary>A turn of the chat: it works, then it is idle in the folder it runs in, with the title the Yard gives it.</summary>
+    private void Turn(string id, string title = "Fix the upload", SessionState end = SessionState.Idle)
+    {
+        var now = _time.GetUtcNow();
+        var idle = ChatNewsTests.Chat(id, SessionState.Idle, now) with { Title = title, Cwd = @"E:\Repos\DiffusionNexus" };
+        _bus.Publish(new SessionChanged(idle, idle with { State = SessionState.Working }));
+        _bus.Publish(new SessionChanged(idle with { State = SessionState.Working }, idle with { State = end }));
+    }
+
+    /// <summary>#228: VS Code lists, and opens again, only a chat with a name; one only Raven ever messaged has none.</summary>
+    [Fact]
+    public async Task A_chat_Raven_started_is_named_once_after_its_first_turn()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+
+        Turn("new-chat");
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        Turn("new-chat");
+
+        _vsCode.Names.ShouldBe([@"name new-chat (Fix the upload) in E:\Repos\DiffusionNexus"]);
+    }
+
+    [Fact]
+    public async Task A_chat_is_not_named_during_a_turn_nor_one_Raven_did_not_start()
+    {
+        await StartAsync();
+        var now = _time.GetUtcNow();
+        var idle = ChatNewsTests.Chat("new-chat", SessionState.Idle, now) with { Cwd = @"E:\Repos\DiffusionNexus" };
+
+        _bus.Publish(new SessionChanged(idle, idle with { State = SessionState.Working }));
+        _bus.Publish(new SessionChanged(idle with { State = SessionState.Working }, idle with { State = SessionState.Waiting }));
+        Turn("by-hand");
+
+        _vsCode.Names.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_whose_naming_failed_is_named_after_its_next_turn()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+        _vsCode.NameFailure = "Claude Code did not name the chat: it broke.";
+
+        Turn("new-chat");
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        _vsCode.NameFailure = null;
+
+        // The failure is let go of on the thread pool: turns until the next one is tried.
+        for (var i = 0; i < 200 && _vsCode.Names.Count < 2; i++)
+        {
+            Turn("new-chat");
+            await Task.Delay(10, Ct);
+        }
+
+        (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
+        _vsCode.Names.Count.ShouldBe(2);
+        _vsCode.Unlisted.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_closed_chat_with_no_name_is_named_and_said_to_stay_in_the_session_list()
+    {
+        await StartAsync();
+        _vsCode.Unlisted.Add("new-chat");
+
+        var said = await _actions.CloseChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, Ct);
+
+        _vsCode.Names.ShouldBe([@"name new-chat (Fix the upload) in E:\Repos\DiffusionNexus"]);
+        said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
+    }
+
+    [Fact]
+    public async Task A_closed_chat_that_could_not_be_named_is_said_to_go_on_from_a_terminal()
+    {
+        await StartAsync();
+        _vsCode.NameFailure = "Claude Code did not name the chat: it broke.";
+
+        var said = await _actions.CloseChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\DiffusionNexus" }, Ct);
+
+        said.ShouldBe(@"The Fix the upload chat is closed. VS Code does not list it, as it has no name: in a terminal in E:\Repos\DiffusionNexus, "
+            + "claude --resume new-chat goes on with it.");
+    }
+
     /// <summary>#226: compacted in the folder it runs in, with what to keep; its tab closing for that is no end of the chat.</summary>
     [Fact]
     public async Task A_compacted_chat_keeps_its_mark_while_its_tab_is_closed_for_it()
@@ -600,6 +684,34 @@ public sealed class RavenActionsTests
         {
             Sequence.Add($"show {workspace.Name} {sessionId}");
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
+        }
+
+        /// <summary>The chats VS Code does not list until they are named; it lists every other.</summary>
+        public HashSet<string> Unlisted { get; } = [];
+
+        /// <summary>Why naming fails; null when it does not.</summary>
+        public string? NameFailure { get; set; }
+
+        /// <summary>Each naming asked for, done or not.</summary>
+        public List<string> Names { get; } = [];
+
+        /// <summary>Released once for each naming that is over.</summary>
+        public SemaphoreSlim Tried { get; } = new(0);
+
+        public Task<bool> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+        {
+            try
+            {
+                lock (Names)
+                {
+                    Names.Add($"name {sessionId} ({title}) in {folder}");
+                    return NameFailure is { } failure ? throw new YardActionException(failure) : Task.FromResult(Unlisted.Remove(sessionId));
+                }
+            }
+            finally
+            {
+                Tried.Release();
+            }
         }
 
         /// <summary>Whether the chat compacted had a tab, opened again; true by default.</summary>

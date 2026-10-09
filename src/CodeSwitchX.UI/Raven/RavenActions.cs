@@ -88,7 +88,10 @@ public sealed class RavenActions : IYardActions
     /// <summary>The chats being compacted: their tab closes and opens again, which is no end of the chat (#226).</summary>
     private readonly ConcurrentDictionary<string, bool> _compacting = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <param name="bus">Where the chats' changes come: one that ends is Raven's no more.</param>
+    /// <summary>The chats Raven started that are named, or being named, so that VS Code lists them (#228).</summary>
+    private readonly ConcurrentDictionary<string, bool> _named = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <param name="bus">Where the chats' changes come: one that ends is Raven's no more; one whose first turn ends is named.</param>
     /// <param name="claim">Puts a chat on a tile before its first event (<c>SessionEngine.Claim</c>).</param>
     /// <param name="shell">The window; asked for when first needed, since it is made after the services that call this.</param>
     /// <param name="workspaceOf">The registered workspace with this id; null when it is gone.</param>
@@ -106,16 +109,53 @@ public sealed class RavenActions : IYardActions
         _time = time;
         _logger = logger;
         // Lives as long as the app: the subscription is never ended.
-        bus.Subscribe<SessionChanged>(Ended);
+        bus.Subscribe<SessionChanged>(Changed);
     }
 
-    /// <summary>A chat Raven started that has ended (its tab closed, its process gone) loses its mark and is Raven's no more.</summary>
-    private void Ended(SessionChanged change)
+    /// <summary>
+    /// A chat Raven started that has ended (its tab closed, its process gone) loses its mark and is Raven's no more. One
+    /// whose turn has ended is named, once, if it has no name yet (#228).
+    /// </summary>
+    private void Changed(SessionChanged change)
     {
         var id = change.Current.SessionId;
-        if (!SessionStateMachine.IsLive(change.Current.State) && !_compacting.ContainsKey(id) && _started.TryRemove(id, out _))
+        if (!SessionStateMachine.IsLive(change.Current.State))
         {
-            _ui.Post(() => _shell().MarkVoice(id, null));
+            if (!_compacting.ContainsKey(id) && _started.TryRemove(id, out _))
+            {
+                _named.TryRemove(id, out _);
+                _ui.Post(() => _shell().MarkVoice(id, null));
+            }
+
+            return;
+        }
+
+        // After a turn, not during one: named mid-turn, Claude Code writes a side branch off the unfinished turn into the
+        // conversation (spike, #228). A compaction names the chat itself.
+        if (change.Previous?.State is SessionState.Working or SessionState.Waiting && change.Current is { State: SessionState.Idle, Title: { Length: > 0 } title, Cwd: { } folder }
+            && _started.ContainsKey(id) && !_compacting.ContainsKey(id) && _named.TryAdd(id, true))
+        {
+            _ = Task.Run(() => NameAsync(id, folder, title), CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// Names a chat Raven started, which was only ever messaged by Raven, by its title: VS Code lists, and opens again by
+    /// its id, only a chat with a name. One that is not named is tried again after its next turn. Never throws.
+    /// </summary>
+    private async Task NameAsync(string id, string folder, string title)
+    {
+        try
+        {
+            if (await _vsCode.NameAsync(id, folder, title, CancellationToken.None).ConfigureAwait(false))
+            {
+                _logger.LogInformation("Raven named chat {Id} \"{Title}\", so VS Code lists it", id, title);
+            }
+        }
+        catch (Exception ex)
+        {
+            _named.TryRemove(id, out _);
+            _logger.LogWarning(ex, "Naming chat {Id} failed; tried again after its next turn", id);
         }
     }
 
@@ -150,12 +190,43 @@ public sealed class RavenActions : IYardActions
     {
         await _vsCode.CloseAsync(chat.Id, ct).ConfigureAwait(false);
         _started.TryRemove(chat.Id, out _);
+        _named.TryRemove(chat.Id, out _);
 
         // Closed on purpose: no ended row lingers on the tile, and none is news. Its tab is gone either way, so a window
         // too busy to take the row off now does not make the close a failure; it takes it off with the chat's end.
         _ui.Post(() => _shell().ForgetChat(chat.Id));
         _logger.LogInformation("Raven closed chat {Id} in {Workspace}", chat.Id, chat.Workspace);
-        return $"The {chat.Title} chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.";
+        var closed = $"The {chat.Title} chat is closed.";
+        if (await ListedAsync(chat).ConfigureAwait(false) is { } unlisted)
+        {
+            return $"{closed} {unlisted}";
+        }
+
+        return $"{closed} Its conversation stays in VS Code's session list, where the user can open it again.";
+    }
+
+    /// <summary>
+    /// Names a closed chat that has no name yet, so that VS Code lists it (#228): one Raven started that was not named after
+    /// its first turn (started before the app's restart, or its naming failed). Null once VS Code lists it, else what Raven
+    /// says of it instead.
+    /// </summary>
+    private async Task<string?> ListedAsync(YardChat chat)
+    {
+        try
+        {
+            if (await _vsCode.NameAsync(chat.Id, chat.Cwd ?? "", chat.Title, CancellationToken.None).ConfigureAwait(false))
+            {
+                _logger.LogInformation("Raven named closed chat {Id} \"{Title}\", so VS Code lists it", chat.Id, chat.Title);
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Naming closed chat {Id} failed", chat.Id);
+            var where = chat.Cwd is { Length: > 0 } folder ? $"in a terminal in {folder}" : "in a terminal in its folder";
+            return $"VS Code does not list it, as it has no name: {where}, claude --resume {chat.Id} goes on with it.";
+        }
     }
 
     public async Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
