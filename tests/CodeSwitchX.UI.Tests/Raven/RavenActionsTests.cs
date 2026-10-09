@@ -165,10 +165,7 @@ public sealed class RavenActionsTests
 
         Turn("new-chat");
         (await _vsCode.Tried.WaitAsync(TimeSpan.FromSeconds(10), Ct)).ShouldBeTrue();
-        lock (_vsCode.Unreadable)
-        {
-            _vsCode.Unreadable.Clear();
-        }
+        _vsCode.Unreadable.Clear();
 
         await NextNamingAsync();
         _vsCode.Unlisted.ShouldBeEmpty();
@@ -183,7 +180,7 @@ public sealed class RavenActionsTests
             if (await _vsCode.Tried.WaitAsync(TimeSpan.FromMilliseconds(10), Ct))
             {
                 // the naming runs on: wait until the fake has answered it
-                for (var j = 0; j < 500 && _vsCode.Unlisted.Contains("new-chat"); j++)
+                for (var j = 0; j < 500 && _vsCode.IsUnlisted("new-chat"); j++)
                 {
                     await Task.Delay(10, Ct);
                 }
@@ -804,11 +801,25 @@ public sealed class RavenActionsTests
         /// <summary>Released once for each naming that has begun.</summary>
         public SemaphoreSlim Tried { get; } = new(0);
 
-        public async Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+        /// <summary>Whether VS Code does not list the chat right now.</summary>
+        public bool IsUnlisted(string sessionId)
         {
             lock (_names)
             {
+                return Unlisted.Contains(sessionId);
+            }
+        }
+
+        public async Task<bool?> NameAsync(string sessionId, string folder, string title, CancellationToken ct)
+        {
+            // What comes of it is settled before it is told to have begun: a test changes the outcome of the next one then.
+            string? failure;
+            bool unreadable;
+            lock (_names)
+            {
                 _names.Add($"name {sessionId} ({title}) in {folder}");
+                failure = NameFailure;
+                unreadable = Unreadable.Contains(sessionId);
             }
 
             Tried.Release();
@@ -817,14 +828,14 @@ public sealed class RavenActionsTests
                 await hold.Task.WaitAsync(ct);
             }
 
-            if (NameFailure is { } failure)
+            if (failure is not null)
             {
                 throw new YardActionException(failure);
             }
 
             lock (_names)
             {
-                return Unreadable.Contains(sessionId) ? null : Unlisted.Remove(sessionId);
+                return unreadable ? null : Unlisted.Remove(sessionId);
             }
         }
 

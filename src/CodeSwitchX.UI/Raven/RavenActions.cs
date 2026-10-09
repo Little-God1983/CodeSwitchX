@@ -143,7 +143,7 @@ public sealed class RavenActions : IYardActions
         // conversation (spike, #228). A next turn may still begin in the seconds the headless Claude Code takes to start;
         // the tab then goes on from its own last step all the same, as the spike saw. A compaction names the chat itself.
         if (change.Previous?.State is SessionState.Working or SessionState.Waiting && change.Current is { State: SessionState.Idle, Title: { Length: > 0 } title, Cwd: { } folder }
-            && _started.ContainsKey(id) && !_compacting.ContainsKey(id))
+            && _started.ContainsKey(id) && !_compacting.ContainsKey(id) && !_named.ContainsKey(id))
         {
             var naming = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             if (_named.TryAdd(id, naming.Task))
@@ -252,6 +252,9 @@ public sealed class RavenActions : IYardActions
         try
         {
             await NamedAsync(chat.Id, limit.Token).ConfigureAwait(false);
+
+            // Given up on a naming that hangs: a second Claude Code is not started beside it.
+            limit.Token.ThrowIfCancellationRequested();
             var named = await _vsCode.NameAsync(chat.Id, chat.Cwd ?? "", chat.Title, limit.Token).ConfigureAwait(false);
             if (named == true)
             {
