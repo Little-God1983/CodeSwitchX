@@ -48,10 +48,10 @@ public interface IVsCodeChats
     /// <param name="folder">The folder the chat runs in, for when its conversation does not say the one it started in.</param>
     /// <param name="title">The title the Yard shows it by: its name, when it needs one.</param>
     /// <param name="keep">What the summary is to keep; null for a plain <c>/compact</c>.</param>
-    /// <param name="tabClosed">Called once its tab is closed, before it is compacted; null for nothing.</param>
+    /// <param name="tab">Told false once its tab is closed, before it is compacted, and true once it is open again; null for nothing.</param>
     /// <returns>Whether its tab was opened again: false for a chat that had none.</returns>
     /// <exception cref="YardActionException">It was not compacted, or not opened again; the message says which and why.</exception>
-    Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action? tabClosed, CancellationToken ct);
+    Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<bool>? tab, CancellationToken ct);
 }
 
 /// <summary>What a chat's conversation on disk says of it: when it was last written in, and the title Claude Code gave it (or the user, by /rename), null for none.</summary>
@@ -298,7 +298,7 @@ public sealed class VsCodeChats : IVsCodeChats
         _logger.LogInformation("Closed chat {Id} ({Name}) in VS Code", chat.SessionId, chat.Name);
     }
 
-    public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action? tabClosed, CancellationToken ct)
+    public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<bool>? tab, CancellationToken ct)
     {
         // Claude Code finds a conversation by the folder it started in; a chat may work elsewhere since (a worktree).
         var start = _startOf(sessionId);
@@ -318,6 +318,13 @@ public sealed class VsCodeChats : IVsCodeChats
         var window = WindowOf(chat, "compacted");
         Requires(window, ShowsSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot open the chat "
             + "again after compacting it. Reload that window (Developer: Reload Window) and try again.");
+        if (start is null)
+        {
+            // Whether VS Code could open it again is not known: its tab is not closed on a guess.
+            throw new YardActionException("CodeSwitchX cannot read that chat's conversation yet, so it cannot tell whether VS Code could open it "
+                + "again. Nothing was compacted.");
+        }
+
         try
         {
             // Not ended with the caller once asked: a tab closed must be waited for, and opened again.
@@ -328,25 +335,39 @@ public sealed class VsCodeChats : IVsCodeChats
             throw new YardActionException($"{ex.Message} Nothing was compacted.");
         }
 
-        tabClosed?.Invoke();
+        tab?.Invoke(false);
 
         // Its tab is closed: from here on it is carried through, so the chat is never left closed halfway. By the id as its
         // record has it, which Claude Code resumes it by.
         sessionId = chat.SessionId;
-        YardActionException? failed = null;
+        var named = start.Listed;
+        string? failed = null;
         try
         {
-            if (start is { Listed: false })
+            if (!named)
             {
                 // Only ever messaged by Raven, it has no name, and VS Code opens no chat again that it does not list.
                 await _compactor.NameAsync(sessionId, folder, title, CancellationToken.None).ConfigureAwait(false);
+                named = true;
             }
 
             await _compactor.CompactAsync(sessionId, folder, keep, CancellationToken.None).ConfigureAwait(false);
         }
-        catch (YardActionException ex)
+        catch (Exception ex)
         {
-            failed = ex;
+            if (ex is not YardActionException)
+            {
+                _logger.LogError(ex, "Compacting chat {Id} failed", sessionId);
+            }
+
+            failed = ex is YardActionException ? ex.Message : $"Compacting the chat failed: {ex.Message}";
+        }
+
+        if (!named)
+        {
+            // A tab asked for it would open blank.
+            throw new YardActionException($"{failed} Nothing was compacted, and with no name VS Code cannot open the chat again: in a terminal "
+                + $"in {folder}, claude --resume {sessionId} goes on with it.");
         }
 
         try
@@ -355,13 +376,14 @@ public sealed class VsCodeChats : IVsCodeChats
         }
         catch (YardActionException ex)
         {
-            throw new YardActionException((failed is null ? "The chat is compacted, but " : $"{failed.Message} And ")
+            throw new YardActionException((failed is null ? "The chat is compacted, but " : $"{failed} And ")
                 + $"its tab did not open again: {ex.Message} It can be opened from VS Code's session list.");
         }
 
+        tab?.Invoke(true);
         if (failed is not null)
         {
-            throw new YardActionException($"{failed.Message} Its tab is open again, as it was.");
+            throw new YardActionException($"{failed} Its tab is open again, as it was.");
         }
 
         return true;

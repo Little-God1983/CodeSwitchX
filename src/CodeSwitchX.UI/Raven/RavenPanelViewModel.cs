@@ -1333,6 +1333,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     public void Note(string text) => AddEntry(RavenLogKind.Note, text);
 
+    /// <summary>
+    /// Raven's line in the window's chat, written and not said: what came of something after its question was answered
+    /// (a long compaction, #226). Unread where the user does not see it; a failure is a warning.
+    /// </summary>
+    public void Tell(Guid workspaceId, string text, bool failed)
+    {
+        var chat = ChatOf(workspaceId);
+        if (failed)
+        {
+            AddEntry(RavenLogKind.Warning, text, chat);
+        }
+        else
+        {
+            AddSaid(text, chat, said: false);
+        }
+    }
+
     public void Warn(string text) => AddEntry(RavenLogKind.Warning, text);
 
     private const string NoMicrophoneWarning = "No microphone found. Plug one in or check Windows sound settings.";

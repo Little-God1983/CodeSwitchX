@@ -158,19 +158,53 @@ public sealed class RavenActionsTests
             _time.Advance(TimeSpan.FromSeconds(5));
         }
 
-        (await compact).ShouldBe("Compacting the Fix the upload chat takes a while; its tab opens again when it is done.");
-        _shell.Notes.ShouldBeEmpty();
+        (await compact).ShouldBe("Compacting the Fix the upload chat takes a while; Raven's panel says when it is done.");
+        _shell.Told.ShouldBeEmpty();
         (await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct)))
-            .Message.ShouldBe("The Fix the upload chat is being compacted already; its tab opens again when that is done.");
+            .Message.ShouldBe("The Fix the upload chat is being compacted already; Raven's panel says when that is done.");
 
         _vsCode.Hold.SetResult();
-        for (var i = 0; i < 200 && _shell.Notes.Count == 0; i++)
+        for (var i = 0; i < 200 && _shell.Told.Count == 0; i++)
         {
             await Task.Delay(5, Ct);
         }
 
-        _shell.Notes.ShouldBe(["The Fix the upload chat is compacted, and its tab is open again."]);
+        _shell.Told.ShouldBe([(Diffusion.Id, "The Fix the upload chat is compacted, and its tab is open again.", false)], "in the chat's own window");
         (await _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct)).ShouldEndWith("open again.");
+    }
+
+    [Fact]
+    public async Task A_long_compaction_that_fails_is_told_as_a_warning()
+    {
+        _vsCode.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _vsCode.NotReopened = "The chat is compacted, but its tab did not open again.";
+        var compact = _actions.CompactChatAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct);
+        for (var i = 0; i < 200 && !compact.IsCompleted; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(TimeSpan.FromSeconds(5));
+        }
+
+        await compact;
+        _vsCode.Hold.SetResult();
+        for (var i = 0; i < 200 && _shell.Told.Count == 0; i++)
+        {
+            await Task.Delay(5, Ct);
+        }
+
+        _shell.Told.ShouldBe([(Diffusion.Id, "The chat is compacted, but its tab did not open again.", true)]);
+    }
+
+    [Fact]
+    public async Task A_chat_Raven_started_whose_tab_does_not_come_back_loses_its_mark()
+    {
+        await StartAsync("Fable", "high");
+        _vsCode.NotReopened = "The chat is compacted, but its tab did not open again.";
+
+        await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatAsync(Chat("new-chat", "Fix the upload") with { Cwd = @"E:\Repos\App" }, null, Ct));
+
+        _actions.StartedByRaven("new-chat").ShouldBeFalse();
+        _shell.Marks.ShouldBe([("new-chat", "Fable 5.1 · high"), ("new-chat", null)]);
     }
 
     [Fact]
@@ -511,9 +545,9 @@ public sealed class RavenActionsTests
 
         public void ForgetChat(string sessionId) => Forgotten.Add(sessionId);
 
-        public List<string> Notes { get; } = [];
+        public List<(Guid WorkspaceId, string Text, bool Failed)> Told { get; } = [];
 
-        public void Note(string text) => Notes.Add(text);
+        public void Tell(Guid workspaceId, string text, bool failed) => Told.Add((workspaceId, text, failed));
 
         public List<(string AskedIn, Guid WorkspaceId)> Followed { get; } = [];
 
@@ -564,7 +598,10 @@ public sealed class RavenActionsTests
         /// <summary>When set, a compaction waits for it: a long chat takes a while.</summary>
         public TaskCompletionSource? Hold { get; set; }
 
-        public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action? tabClosed, CancellationToken ct)
+        /// <summary>Why the tab, closed, did not open again; null when it did.</summary>
+        public string? NotReopened { get; set; }
+
+        public async Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<bool>? tab, CancellationToken ct)
         {
             Sequence.Add($"compact {sessionId} ({title}) in {folder}{(keep is null ? "" : $" keeping {keep}")}");
             if (Failure is { } failure)
@@ -572,13 +609,19 @@ public sealed class RavenActionsTests
                 throw new YardActionException(failure); // refused before its tab was closed
             }
 
-            tabClosed?.Invoke();
+            tab?.Invoke(false);
             During();
             if (Hold is { } hold)
             {
                 await hold.Task;
             }
 
+            if (NotReopened is { } why)
+            {
+                throw new YardActionException(why);
+            }
+
+            tab?.Invoke(true);
             return Reopens;
         }
     }
