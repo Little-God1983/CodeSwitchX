@@ -171,6 +171,27 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_yes_after_the_offer_lapsed_goes_to_the_brain()
+    {
+        _brain.Answer = _ => [new BrainText("Yes to what?")];
+        var (vm, asks) = await NextQuestionVmAsync();
+        var first = await AsksFruitAsync(vm, asks, "a");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext);
+
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime + TimeSpan.FromSeconds(1));
+        await Until(() => !vm.OffersNext);
+        Type(vm, "yes");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        _brain.Asked.ShouldHaveSingleItem();
+    }
+
+    [Fact]
     public async Task Words_before_the_offer_is_said_drop_it()
     {
         _brain.Answer = _ => [new BrainText("Sure.")];

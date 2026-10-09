@@ -1911,7 +1911,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // "Next?" stands (#230): a yes answers it without the name. Nothing else does: the offer may follow a click, with the
         // user not talking, and talk around the room must stay out.
-        if (_nextOffered is { } offered && turn.Began >= offered && turn.Began - offered <= NextOfferLifetime && SpokenYes.IsYes(text)
+        // Judged by the instant Ask judges it by, so a yes let through here is never a question to the brain.
+        if (_nextOffered is { } offered && ended >= offered && ended - offered <= NextOfferLifetime && SpokenYes.IsYes(text)
             && !WhisperNoise.Is(text))
         {
             _calledAt = null;
@@ -2710,6 +2711,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Remove(card);
+        if (card == _requested)
+        {
+            _requested = null;
+        }
+
         if (_tellerWarm && !_telling)
         {
             RestTellerIfIdle(); // warmed up for a long command that may not be read out now
@@ -4096,6 +4102,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             RestTellerIfIdle(); // warmed up for a long command among them
         }
 
+        if (_requested is not null && !_untold.Contains(_requested))
+        {
+            _requested = null; // the card "next question" asked for is not read out here
+        }
+
         ShowSelected();
         CatchUpOn(value, away);
         WarmTellerForCurrentNews(); // its news, waiting, is told here now
@@ -4684,6 +4695,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private ChatAskCard? ShowNextQuestion()
     {
         DropOffer();
+        _requested = null;
         if (OpenCards() is not [var card, ..])
         {
             return null;
