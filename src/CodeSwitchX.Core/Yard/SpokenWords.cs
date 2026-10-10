@@ -8,5 +8,7 @@ public static class SpokenWords
         [' ', '\t', '\r', '\n', '.', ',', '!', '?', ':', ';', '"', '\'', '’', '‘', '“', '”', '-', '–', '—', '…'];
 
     /// <summary>The words, lower case, "that's" as "that" and "s"; none for nothing said.</summary>
-    public static string[] Of(string? said) => (said ?? "").ToLowerInvariant().Split(Between, StringSplitOptions.RemoveEmptyEntries);
+    /// <remarks>Composed first: an umlaut written as a letter and its dots is the umlaut ("hör").</remarks>
+    public static string[] Of(string? said) =>
+        (said ?? "").Normalize(System.Text.NormalizationForm.FormC).ToLowerInvariant().Split(Between, StringSplitOptions.RemoveEmptyEntries);
 }

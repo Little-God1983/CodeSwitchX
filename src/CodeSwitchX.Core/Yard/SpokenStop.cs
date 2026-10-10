@@ -8,12 +8,14 @@ namespace CodeSwitchX.Core.Yard;
 /// </summary>
 public static class SpokenStop
 {
-    /// <summary>Words that may come before or after it: "Raven, stop, please", "okay, enough", "no, stop", "stop, thanks".</summary>
+    /// <summary>Words that may come before or after it: "Raven, stop, please", "okay, enough", "no, stop".</summary>
     private static readonly HashSet<string> Around = new(StringComparer.Ordinal)
     {
         "raven", "hey", "ok", "okay", "oh", "no", "nein", "please", "bitte", "now", "just", "jetzt", "mal", "nun", "already", "schon",
-        "thanks", "thank", "you", "danke",
     };
+
+    /// <summary>Words that may only come after it: "stop, thanks", "enough, thank you"; before it, they begin a sentence.</summary>
+    private static readonly HashSet<string> After = new(StringComparer.Ordinal) { "thanks", "thank", "you", "danke" };
 
     /// <summary>
     /// What it is, word by word as the user says it, "that's" said as "that s". Not "stop it": in a window's chat that stops
@@ -39,7 +41,7 @@ public static class SpokenStop
             from++;
         }
 
-        while (to > from && Around.Contains(words[to - 1]))
+        while (to > from && (Around.Contains(words[to - 1]) || After.Contains(words[to - 1])))
         {
             to--;
         }

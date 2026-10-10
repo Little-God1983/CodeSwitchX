@@ -913,4 +913,17 @@ public sealed partial class RavenPanelViewModelTests
 
         _brain.Sent.ShouldHaveSingleItem("the stop went to no brain");
     }
+
+    // Round 3 of #250: typed with nothing to silence, "stop" is about a chat's work: the brain hears it
+    [Fact]
+    public async Task A_typed_stop_with_Raven_quiet_goes_to_the_brain()
+    {
+        _brain.Answer = _ => [new BrainText("Stopped chat 1.")];
+        var (vm, _) = await NextQuestionVmAsync();
+
+        Type(vm, "stop");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldEndWith("stop");
+    }
 }

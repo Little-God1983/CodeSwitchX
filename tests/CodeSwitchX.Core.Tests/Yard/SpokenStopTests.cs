@@ -23,6 +23,8 @@ public class SpokenStopTests
     [InlineData("Raven, stop. Thanks.")]
     [InlineData("Stop…")]
     [InlineData("Stop —")]
+    [InlineData("Enough, thank you.")] // round 3
+    [InlineData("Ho\u0308r auf!")] // an umlaut as o and its dots
     public void A_stop_said_alone_is_the_command(string said) => SpokenStop.Is(said).ShouldBeTrue();
 
     [Theory]
@@ -34,6 +36,8 @@ public class SpokenStopTests
     [InlineData("is that enough")]
     [InlineData("quiet hours start at ten")]
     [InlineData("stop, then go on with the tests")]
+    [InlineData("you, enough")] // round 3: before it, "you" begins a sentence
+    [InlineData("thank you, stop")]
     [InlineData("Raven")]
     [InlineData("please")]
     [InlineData("")]
