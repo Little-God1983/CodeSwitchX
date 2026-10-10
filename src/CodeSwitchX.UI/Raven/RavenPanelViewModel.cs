@@ -882,6 +882,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (value)
         {
             StopCatchUp();
+            _requestedAloud = false; // a card asked for aloud and not read yet: muted now, it is only shown
         }
         else
         {
@@ -2829,7 +2830,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        if ((IsMuted && !AloudInFlight) || !TtsReady)
+        var aloud = AloudInFlightFor(ChatOf(proposal.Window));
+        if ((IsMuted && !aloud) || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
@@ -2839,7 +2841,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
         // written, and is not heard.
-        var spoken = _voice.Begin(silent: _openSpeech, whole: true, evenMuted: AloudInFlight);
+        var spoken = _voice.Begin(silent: _openSpeech, whole: true, evenMuted: aloud);
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
@@ -3874,7 +3876,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
     {
-        var entry = AddSaid(text, chat, !spoken.IsSilent && TtsReady && (!IsMuted || spoken.EvenMuted));
+        // Muted, only a reply begun even muted, and not hushed since (muting midway hushes it), says its lines (#242).
+        var entry = AddSaid(text, chat, !spoken.IsSilent && TtsReady && (!IsMuted || (spoken.EvenMuted && !spoken.IsStopped)));
         if (!entry.Said)
         {
             _saidUnseen.Remove(spoken); // the voice stopped between its lines: this one counts for the reply, once
@@ -4001,6 +4004,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// it is Raven's own, and quiet.
     /// </summary>
     private bool AloudInFlight => _questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged)?.Aloud ?? false;
+
+    /// <summary>As <see cref="AloudInFlight"/>, for the question <paramref name="chat"/>'s brain answers: another brain's turn is not it.</summary>
+    private bool AloudInFlightFor(RavenChat chat) =>
+        _questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && BrainOf(q.Chat) == BrainOf(chat))?.Aloud ?? false;
 
     /// <summary>
     /// Collapsed, what was said aloud of an entry counted unread and heard to the end no longer counts: the news lines
@@ -4375,13 +4382,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (IsMuted)
-            {
-                return; // Raven's own: muted, nothing of it is said (#242)
-            }
-
             _voice.Expect();
-            spoken = _catchUpReply = _voice.Begin();
+            spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
             var whole = new StrongBox<bool>();
             var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true, whole: whole);
             if (said && whole.Value)

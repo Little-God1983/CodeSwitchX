@@ -591,6 +591,9 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>Begun to be spoken while muted too: an answer to words said aloud (#242).</summary>
         public bool EvenMuted { get; init; }
 
+        /// <summary>Nothing more of it is spoken: muted when begun, dropped, or hushed since (muting hushes too).</summary>
+        public bool IsStopped => Stopped;
+
         /// <summary>Text of it was left unspoken past <see cref="MaximumSentences"/>: only written, even when it <see cref="Played"/>.</summary>
         public bool IsCut => Volatile.Read(ref _cut) == 1;
 

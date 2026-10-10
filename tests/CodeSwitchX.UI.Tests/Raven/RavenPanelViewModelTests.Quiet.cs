@@ -156,4 +156,60 @@ public sealed partial class RavenPanelViewModelTests
         rest.Said.ShouldBeFalse("the voice was muted: it only wrote it");
         rest.IsUnread.ShouldBeTrue();
     }
+
+    // Review of #242: a card asked for aloud and not read yet is only shown once the user mutes: muted is quiet now
+    [Fact]
+    public async Task A_card_asked_for_aloud_is_not_read_once_Raven_is_muted()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "c");
+        await GraceAsync(vm);
+        vm.Traffic.Pause = TimeSpan.FromSeconds(30);
+        _brain.Gate = new TaskCompletionSource(); // an answer on its way holds the floor: the card waits
+        Type(vm, "anything new?");
+        await Until(() => _brain.Asked.Count == 1);
+        Transcribes(Task.FromResult(new DictationResult("Next question.", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions); // said aloud while the answer holds the floor
+        var before = _speech.Spoken.Count;
+
+        vm.IsMuted = true;
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
+        SpokenSince(before).ShouldBeEmpty("muted before it was read: only shown");
+    }
+
+    // Review of #242: muted midway through an answer to words said aloud, the rest is only written and new to the user
+    [Fact]
+    public async Task Muted_midway_through_an_answer_said_aloud_the_rest_is_unread()
+    {
+        _brain.Answer = _ => [new BrainText("Let me look. One moment"), new BrainToolCall("t1", "list_chats", "{}"), new BrainToolResult("t1", false),
+            new BrainText("There are two chats.")];
+        _brain.Pause = new TaskCompletionSource();
+        var vm = await NewVmAsync();
+        vm.IsOpen = false;
+        Transcribes(Task.FromResult(new DictationResult("How many chats run?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => _speech.Spoken.Contains("Let me look.")); // heard: the voice is ready, and speaking
+
+        vm.IsMuted = true;
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        var rest = vm.Log.Single(e => e.Text.StartsWith("There are two chats.", StringComparison.Ordinal));
+        rest.Said.ShouldBeFalse("the answer was hushed by muting: it only wrote it");
+        rest.IsUnread.ShouldBeTrue();
+    }
 }
