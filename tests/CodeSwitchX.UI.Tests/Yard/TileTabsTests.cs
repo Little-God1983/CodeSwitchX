@@ -57,11 +57,15 @@ public sealed class TileTabsTests
 
     private void Says(SessionSnapshot chat) => _bus.Publish(new SessionChanged(null, chat));
 
-    /// <summary>VS Code writes the tabs of the App window down, now.</summary>
-    private Task VsCodeWrites(params OpenChatTab[] tabs)
+    /// <summary>
+    /// VS Code writes the tabs of the App window down, now, and the tiles look. A look already running (one a stop set off)
+    /// is over first: asked for while it runs, the look gives that one, which may have read the list before this (#238).
+    /// </summary>
+    private async Task VsCodeWrites(params OpenChatTab[] tabs)
     {
+        await _yard.CurrentTabsRefresh;
         _tabs.Of[_app.Id] = new OpenChatTabs(Now, tabs);
-        return _yard.RefreshTabsAsync();
+        await _yard.RefreshTabsAsync();
     }
 
     private static OpenChatTab Tab(string id, string? title = null) => new(id, title);
