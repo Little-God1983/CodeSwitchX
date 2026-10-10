@@ -1,5 +1,6 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 
@@ -9,9 +10,10 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>A brain answer that asks whats_new in its turn, as the brain would, then tells it.</summary>
+    /// <summary>The brain of the chat the user asks in calls whats_new, with that chat's key, as a real brain sends it.</summary>
     private static IEnumerable<BrainEvent> TellsWhatsNew(RavenPanelViewModel vm)
     {
-        vm.WhatsNewForBrain(null, null);
+        vm.WhatsNewForBrain(YardMcp.ChatKey(vm.SelectedChat.WorkspaceId, vm.SelectedChat == vm.YardChat), null);
         yield return new BrainText("Chat 2 finished.");
     }
 
@@ -24,7 +26,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("c", SessionState.Working, SessionState.Idle); // chat 3's, muted
         await GraceAsync(vm);
 
-        var said = vm.WhatsNewForBrain(FakeYardDirectory.WorkspaceOf("DiffusionNexus"), null);
+        var said = vm.WhatsNewForBrain(FakeYardDirectory.WorkspaceOf("DiffusionNexus").ToString(), null);
 
         said.ShouldStartWith("New in chat 3, DiffusionNexus:\n- DiffusionNexus, chat \"Task c\": finished"); // asked from there; the user is in chat 1
         said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
@@ -39,7 +41,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("c", SessionState.Working, SessionState.Idle); // chat 3's
         await GraceAsync(vm);
 
-        var said = vm.WhatsNewForBrain(null, 2);
+        var said = vm.WhatsNewForBrain(YardMcp.OverviewChat, 2);
 
         said.ShouldContain("Task a");
         said.ShouldNotContain("Task c");
@@ -50,7 +52,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await TrafficVmAsync();
 
-        vm.WhatsNewForBrain(null, null).ShouldBe(RavenPanelViewModel.NothingNewLine);
+        vm.WhatsNewForBrain(YardMcp.OverviewChat, null).ShouldBe(RavenPanelViewModel.NothingNewLine);
     }
 
     [Fact]
@@ -59,7 +61,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await NextQuestionVmAsync();
         _ = await AsksFruitAsync(vm, asks, "d");
 
-        var said = vm.WhatsNewForBrain(null, null);
+        var said = vm.WhatsNewForBrain(YardMcp.OverviewChat, null);
 
         said.ShouldContain("- chat 3: RawCutX, chat \"Task d\" asks a question");
         said.ShouldNotContain("Which fruit?", Case.Sensitive, "the chat's own words never go to the brain that acts");
@@ -124,7 +126,7 @@ public sealed partial class RavenPanelViewModelTests
     /// <summary>As <see cref="TellsWhatsNew"/>, in two parts: the second waits for the brain's pause.</summary>
     private static IEnumerable<BrainEvent> TellsWhatsNewAtLength(RavenPanelViewModel vm)
     {
-        vm.WhatsNewForBrain(null, null);
+        vm.WhatsNewForBrain(YardMcp.OverviewChat, null);
         yield return new BrainText("Chat 2 finished. ");
         yield return new BrainText("That is all.");
     }
@@ -182,7 +184,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await TrafficVmAsync();
 
-        vm.WhatsNewForBrain(null, 2).ShouldStartWith("Nothing new in chat 2");
+        vm.WhatsNewForBrain(YardMcp.OverviewChat, 2).ShouldStartWith("Nothing new in chat 2");
     }
 
     [Fact]
@@ -190,7 +192,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await TrafficVmAsync();
 
-        vm.WhatsNewForBrain(null, 9).ShouldBe("There is no chat 9.");
+        vm.WhatsNewForBrain(YardMcp.OverviewChat, 9).ShouldBe("There is no chat 9.");
     }
 
     // A whats_new nobody's answer tells is not read: it was not heard
@@ -201,7 +203,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
         await GraceAsync(vm);
 
-        vm.WhatsNewForBrain(null, null);
+        vm.WhatsNewForBrain(YardMcp.OverviewChat, null);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);

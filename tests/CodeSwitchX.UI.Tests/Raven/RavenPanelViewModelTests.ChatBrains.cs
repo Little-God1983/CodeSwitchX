@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.UI.Tests.Raven;
@@ -389,6 +390,40 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+    }
+
+    [Fact]
+    public async Task Muted_an_allow_proposed_from_a_window_gone_is_only_written_though_chat_0_answers_words_said_aloud()
+    {
+        // Round 1 of #254: a window gone took its brain along; the Yard's turn answering spoken words is not its turn.
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+        vm.IsMuted = true;
+        vm.SelectedChat = vm.YardChat;
+        _brain.Gate = new TaskCompletionSource(); // chat 0's brain answers words said aloud, and is still at it
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => _brain.Sent.Count == 1);
+
+        asks.Propose("p1", Guid.NewGuid()); // from a window no longer on the Yard
+
+        await WithinAsync(_voice.WhenQuietAsync());
+        _speech.Spoken.ShouldNotContain(s => s.Contains("Say yes."), "muted, and no turn of the user's answers there");
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.EndsWith("Say yes.", StringComparison.Ordinal));
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
     }
 
     [Fact]

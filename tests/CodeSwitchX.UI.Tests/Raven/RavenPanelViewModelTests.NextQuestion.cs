@@ -1,5 +1,6 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,7 +14,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>Three windows: ContentAutomatorX (1, chat "a"), DiffusionNexus (2, chat "c"), RawCutX (3, chat "d"); the user is in chat 1.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false)
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false, IChatBrains? brains = null)
     {
         string[] workspaces = ["ContentAutomatorX", "DiffusionNexus", "RawCutX"];
         string[] ids = ["a", "c", "d"];
@@ -24,7 +25,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard, brains: brains);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -222,7 +223,7 @@ public sealed partial class RavenPanelViewModelTests
         _ = await AsksFruitAsync(vm, asks, "c");
         var before = _speech.Spoken.Count;
 
-        vm.NextQuestionForBrain().ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
         await GraceAsync(vm);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
     }
@@ -251,7 +252,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         var before = _speech.Spoken.Count;
 
-        vm.NextQuestionForBrain().ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         await GraceAsync(vm);
@@ -280,7 +281,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await NextQuestionVmAsync();
 
-        vm.NextQuestionForBrain().ShouldBeNull();
+        vm.NextQuestionForBrain(null).ShouldBeNull();
     }
 
     /// <summary>
@@ -737,5 +738,113 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         _time.Advance(TrafficWatcher.NewsGrace); // said in Open mic: the user may go on after a breath
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+    }
+
+    // #254: muted, next_question from a brain's own turn read the card when another brain answered words said aloud
+    [Fact]
+    public async Task Muted_the_card_next_question_finds_is_read_out_only_for_the_brain_answering_words_said_aloud()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var (vm, asks) = await NextQuestionVmAsync(brains: brains);
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3
+        vm.IsMuted = true;
+        var one = (FakeBrain)brains.For(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"));
+        one.Gate = new TaskCompletionSource(); // chat 1's brain answers words said aloud, and is still at it
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => one.Sent.Count == 1);
+
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX").ToString())
+            .ShouldBe("Chat 3, RawCutX. Its card is shown there.", "chat 3's brain began its turn itself");
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 3, RawCutX. Its card is shown there.", "a caller that is no Raven chat");
+        vm.NextQuestionForBrain(Guid.NewGuid().ToString()).ShouldBe("Chat 3, RawCutX. Its card is shown there.", "a window gone, its brain with it");
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX").ToString())
+            .ShouldBe("Chat 3, RawCutX. Its question is read out next.", "chat 1's brain answers what the user said");
+        one.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    // Round 2 of #254: a window removed while its brain answers spoken words does not make that chat 0's turn
+    [Fact]
+    public async Task Muted_a_window_s_spoken_question_does_not_count_for_chat_0_once_the_window_is_gone()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var (vm, asks) = await NextQuestionVmAsync(brains: brains);
+        _ = await AsksFruitAsync(vm, asks, "c"); // in window 2
+        vm.IsMuted = true;
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        var three = (FakeBrain)brains.For(FakeYardDirectory.WorkspaceOf("RawCutX"));
+        three.Gate = new TaskCompletionSource(); // chat 3's brain answers words said aloud, and is still at it
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => three.Sent.Count == 1);
+
+        vm.SetWorkspaces([.. new[] { "ContentAutomatorX", "DiffusionNexus" }.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
+
+        vm.NextQuestionForBrain(YardMcp.OverviewChat).ShouldBe("Chat 2, DiffusionNexus. Its card is shown there.", "chat 0 began its turn itself");
+        three.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    /// <summary>The user asks in chat 1 with a press of the mic, while muted; its brain is held at the answer.</summary>
+    private async Task AskAloudInChatOneHeldAsync(RavenPanelViewModel vm, FakeBrain brain)
+    {
+        vm.IsMuted = true;
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        brain.Gate = new TaskCompletionSource();
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => brain.Sent.Count == 1);
+    }
+
+    // Round 3 of #254: with one brain for every chat, the chat that asks still decides, by its key
+    [Fact]
+    public async Task With_one_brain_muted_the_card_is_read_out_only_for_the_chat_whose_words_were_said_aloud()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3
+        await AskAloudInChatOneHeldAsync(vm, _brain);
+
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX").ToString()).ShouldBe("Chat 3, RawCutX. Its card is shown there.");
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX").ToString()).ShouldBe("Chat 3, RawCutX. Its question is read out next.");
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    // Round 3 of #254: chat 0 proposes nothing, so an allow with no window comes from a caller that is no Raven chat
+    [Fact]
+    public async Task Muted_an_allow_proposed_with_no_window_is_only_written_while_a_chat_answers_words_said_aloud()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        var ask = new ChatAsk("p_a",
+            new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", ToolInputHash = "npm test" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null));
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        await AskAloudInChatOneHeldAsync(vm, _brain);
+        var before = _speech.Spoken.Count;
+
+        asks.Propose("p_a"); // no chat header: no window
+
+        await WithinAsync(_voice.WhenQuietAsync());
+        SpokenSince(before).ShouldNotContain("Say yes.");
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.EndsWith("Say yes.", StringComparison.Ordinal));
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
     }
 }

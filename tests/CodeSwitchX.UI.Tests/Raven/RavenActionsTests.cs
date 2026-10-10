@@ -723,9 +723,15 @@ public sealed class RavenActionsTests
         /// <summary>What the panel says of the next question; null when none waits.</summary>
         public string? Next { get; set; }
 
-        public string? NextQuestion() => Next;
+        public string? NextFrom { get; private set; }
 
-        public string WhatsNew(Guid? askedFrom, int? number) => $"News for {askedFrom?.ToString() ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
+        public string? NextQuestion(string? askedIn)
+        {
+            NextFrom = askedIn;
+            return Next;
+        }
+
+        public string WhatsNew(string? askedIn, int? number) => $"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
 
         public void SetChatDefaults(ChatDefaults defaults)
         {
@@ -984,10 +990,11 @@ public sealed class RavenActionsTests
     public async Task Next_question_says_what_the_panel_says_or_that_none_waits()
     {
         _shell.Next = "Chat 4, Diffusion-Full. Its question is read out next.";
-        (await _actions.NextQuestionAsync(Ct)).ShouldBe("Chat 4, Diffusion-Full. Its question is read out next.");
+        (await _actions.NextQuestionAsync(Diffusion.Id.ToString(), Ct)).ShouldBe("Chat 4, Diffusion-Full. Its question is read out next.");
+        _shell.NextFrom.ShouldBe(Diffusion.Id.ToString(), "the brain that asks: muted, only its own turn's words said aloud read the card (#254)");
 
         _shell.Next = null;
-        (await _actions.NextQuestionAsync(Ct)).ShouldBe("No questions are waiting.");
+        (await _actions.NextQuestionAsync(null, Ct)).ShouldBe("No questions are waiting.");
     }
 
     [Fact]

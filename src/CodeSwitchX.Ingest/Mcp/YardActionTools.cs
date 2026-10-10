@@ -211,7 +211,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "questions\", \"what's next\", \"the next one\"): its window's Raven chat is shown, and its card is read out there once you "
         + "are done. Returns what you say: say only that.")]
     public Task<string> NextQuestion(CancellationToken cancellationToken = default) =>
-        Act(() => actions.NextQuestionAsync(cancellationToken));
+        Act(() => actions.NextQuestionAsync(scope?.Key, cancellationToken));
 
     // Not read-only: what it gives counts as read once the answer that tells it is heard (#243).
     [McpServerTool(Name = "whats_new", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
@@ -235,7 +235,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
                     ?? throw new McpException("Activity only lists every chat's lines: leave the chat out for every window's news.");
         }
 
-        return await Act(() => actions.WhatsNewAsync(scope?.WorkspaceId, number, cancellationToken)).ConfigureAwait(false);
+        return await Act(() => actions.WhatsNewAsync(scope?.Key, number, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>"all", "all chats", "every window", "everything", "everywhere": no one chat (#243).</summary>

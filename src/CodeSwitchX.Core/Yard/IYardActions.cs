@@ -76,15 +76,19 @@ public interface IYardActions
     /// Takes the user to the oldest question or permission prompt waiting in any window (#230): its window's Raven chat is
     /// shown, and its card is read out once Raven's answer is over. Returns what Raven says of it.
     /// </summary>
-    Task<string> NextQuestionAsync(CancellationToken ct);
+    /// <param name="askedIn">The key of the Raven chat whose brain asks, as its chat header names it; null for a caller that is
+    /// no Raven chat. Muted, the card is read out only when that brain answers words said aloud (#254).</param>
+    Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct);
 
     /// <summary>
-    /// What is new for the user (#243): the news not read yet in every window's Raven chat, muted ones too, the chat of the
-    /// window <paramref name="askedFrom"/> first (chat 0's for none), or only chat <paramref name="number"/>'s; and what waits
-    /// for the user. Facts only, never what a chat said. What it gives counts as read once the answer that tells it is heard,
-    /// or at once when that is only written.
+    /// What is new for the user (#243): the news not read yet in every window's Raven chat, muted ones too, the chat
+    /// <paramref name="askedIn"/> names first (chat 0's for none), or only chat <paramref name="number"/>'s; and what waits
+    /// for the user. Facts only, never what a chat said. What it gives counts as read once the answer of the brain that
+    /// asked is heard, or at once when that is only written.
     /// </summary>
-    Task<string> WhatsNewAsync(Guid? askedFrom, int? number, CancellationToken ct);
+    /// <param name="askedIn">The key of the Raven chat whose brain asks, as its chat header names it; null for a caller that
+    /// is no Raven chat, whose answer nothing counts as read by (#254).</param>
+    Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct);
 
     /// <summary>
     /// Sums the chat up from its conversation (#234): what it was asked, what it did, where it stands, what it waits for. The
