@@ -39,14 +39,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _tabsTimer;
 
-    /// <summary>The reads of the tabs that run, or the last ones; under <see cref="_tabsGate"/>.</summary>
-    private Task _tabsRead = Task.CompletedTask;
+    /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
+    private readonly HashSet<ITimer> _closedListTimers = [];
 
-    /// <summary>Whether <see cref="_tabsRead"/> still reads, and so takes a look asked for now; under <see cref="_tabsGate"/>.</summary>
-    private bool _tabsReading;
+    private bool _disposed;
 
-    /// <summary>A look was asked for while a read ran: it reads once more; under <see cref="_tabsGate"/>.</summary>
-    private bool _tabsReadAgain;
+    /// <summary>Ends with the read of the tabs that runs; null while none does. Under <see cref="_tabsGate"/>.</summary>
+    private TaskCompletionSource? _tabsRead;
+
+    /// <summary>Whether <see cref="_tabsRead"/> has begun to take the list: a look asked before that is covered by it. Under <see cref="_tabsGate"/>.</summary>
+    private bool _tabsReadBegun;
+
+    /// <summary>Ends with the read after it, asked for while it ran; null while none was. Under <see cref="_tabsGate"/>.</summary>
+    private TaskCompletionSource? _tabsReadNext;
 
     /// <summary>
     /// Whether a read runs and whether another was asked for are decided under one lock, as for git: in the app it all
@@ -73,6 +78,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>How often VS Code's lists of open chat tabs are looked at; a list is read again only when its file changed.</summary>
     public static readonly TimeSpan TabsInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long after a stop the tabs are read again: VS Code writes the list it comes back with as its window goes, within
+    /// about 50 ms of it on this machine (measured 2026-10-10), so the look a stop sets off may take the list before that (#248).
+    /// </summary>
+    internal static readonly TimeSpan ClosedListWait = TimeSpan.FromSeconds(1);
 
     private TimeSpan _keepClosed;
     private TimeSpan? _hideIdleAfter;
@@ -236,6 +247,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
             await RefreshTabsAsync();
+            if (_disposed)
+            {
+                return; // closed during the read: no timer is made that nothing would dispose
+            }
+
             _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync(again: false)), null, TabsInterval, TabsInterval);
         }
 
@@ -344,74 +360,87 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Reads the chat tabs open in the workspaces' VS Code windows, off the UI thread, and shows them on the tiles (#164).
-    /// Called on the UI thread. Asked for while a read runs, it gives that read, which reads once more after: VS Code may
-    /// have written its list since the read took it (as it closes, #238). However often it is asked meanwhile, one more read
-    /// covers it.
+    /// Called on the UI thread. Asked for while a read runs, it gives the read after it: VS Code may have written its list
+    /// since the read took it (as it closes, #238). However often it is asked meanwhile, that one more read covers it, and
+    /// the task ends with the read that covers the look, not with the looks asked after it (#248).
     /// </summary>
     /// <param name="again">False for the timer's look: the read that runs is enough, or reads slower than the timer would
     /// run back to back.</param>
     internal Task RefreshTabsAsync(bool again = true)
     {
-        if (_openTabs is not { } openTabs)
+        if (_openTabs is not { } openTabs || _disposed)
         {
             return Task.CompletedTask;
         }
 
         lock (_tabsGate)
         {
-            if (_tabsReading)
+            if (_tabsRead is { } running)
             {
-                _tabsReadAgain |= again;
-                return _tabsRead;
+                return again && _tabsReadBegun ? (_tabsReadNext ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task
+                    : running.Task;
             }
 
-            _tabsReading = true;
-            _tabsReadAgain = false;
-            _tabsRead = ReadTabsUntilAskedAsync(openTabs);
-            return _tabsRead;
+            _tabsRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _tabsReadBegun = false;
+            _ = ReadTabsUntilAskedAsync(openTabs);
+            return _tabsRead.Task;
         }
     }
 
     /// <summary>Reads the tabs, and once more for as long as a look was asked for while it read.</summary>
     private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
     {
+        await Task.Yield(); // out of the lock it was started in: none of the read runs under it
         try
         {
-            await Task.Yield(); // out of the lock it was started in: none of the read runs under it
-            do
+            while (true)
             {
-                await ReadTabsAsync(openTabs);
+                lock (_tabsGate)
+                {
+                    _tabsReadBegun = true;
+                }
+
+                await ReadTabsAsync(openTabs); // never throws: a failure is logged
+
+                TaskCompletionSource read;
+                TaskCompletionSource? next;
+                bool more;
+                lock (_tabsGate)
+                {
+                    // Decided in one critical section with the asking, so no look is lost.
+                    read = _tabsRead!;
+                    _tabsRead = _disposed ? null : _tabsReadNext; // disposed, the read asked for is not made
+                    next = _disposed ? _tabsReadNext : null;
+                    _tabsReadNext = null;
+                    _tabsReadBegun = false;
+                    more = _tabsRead is not null;
+                }
+
+                read.SetResult();
+                next?.SetResult();
+                if (!more)
+                {
+                    return;
+                }
             }
-            while (AnotherTabsReadWasAskedFor());
         }
-        catch
+        catch (Exception ex)
         {
+            // Not foreseen: the looks waiting fail rather than wait for good, and the next look reads afresh.
+            TaskCompletionSource? read, next;
             lock (_tabsGate)
             {
-                _tabsReading = false; // a fault must not leave every later look given this read
-                _tabsReadAgain = false;
+                (read, next) = (_tabsRead, _tabsReadNext);
+                (_tabsRead, _tabsReadNext, _tabsReadBegun) = (null, null, false);
             }
 
-            throw;
+            read?.TrySetException(ex);
+            next?.TrySetException(ex);
         }
     }
 
-    /// <summary>True to read once more; otherwise the reads are over, decided in the same critical section, so no look is lost.</summary>
-    private bool AnotherTabsReadWasAskedFor()
-    {
-        lock (_tabsGate)
-        {
-            if (_tabsReadAgain)
-            {
-                _tabsReadAgain = false;
-                return true;
-            }
-
-            _tabsReading = false;
-            return false;
-        }
-    }
-
+    /// <summary>One read of the tabs onto the tiles; never throws: a failure is logged, and the tiles keep what they show.</summary>
     private async Task ReadTabsAsync(IVsCodeOpenTabs openTabs)
     {
         try
@@ -774,8 +803,30 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         CurrentTabsRefresh = RefreshTabsAsync(); // a read that runs now was not asked about the tile: another follows it
     }
 
-    /// <summary>Reads the tabs again now, or after the read that runs (UI thread): a tile's VS Code closed, and wrote its tabs.</summary>
-    internal void RefreshTabsSoon() => CurrentTabsRefresh = RefreshTabsAsync();
+    /// <summary>
+    /// Reads the tabs again now, or after the read that runs (UI thread): a tile's VS Code stopped running. When it
+    /// <paramref name="closed"/>, once more <see cref="ClosedListWait"/> later: it writes the tabs it comes back with as its
+    /// window goes.
+    /// </summary>
+    internal void RefreshTabsSoon(bool closed = false)
+    {
+        CurrentTabsRefresh = RefreshTabsAsync();
+        if (closed && !_disposed) // not for a state posted before the app closed
+        {
+            // One for each close: a window closed soon after another does not put off the first one's look.
+            ITimer? timer = null;
+            timer = _time.CreateTimer(_ => _ui.Post(() =>
+            {
+                if (_closedListTimers.Remove(timer!))
+                {
+                    timer!.Dispose();
+                    CurrentTabsRefresh = RefreshTabsAsync();
+                }
+            }), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _closedListTimers.Add(timer);
+            timer.Change(ClosedListWait, Timeout.InfiniteTimeSpan); // armed once it is in the set
+        }
+    }
 
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
     private async Task ReloadTrackNamesAsync()
@@ -854,6 +905,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
         _tabsTimer?.Dispose();
+        _disposed = true;
+        foreach (var timer in _closedListTimers)
+        {
+            timer.Dispose();
+        }
+
+        _closedListTimers.Clear();
         _spotlightTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {

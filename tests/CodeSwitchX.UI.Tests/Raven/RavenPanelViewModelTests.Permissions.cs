@@ -587,10 +587,8 @@ public sealed partial class RavenPanelViewModelTests
         asks.Propose("p1");
         ui.RunHeld(); // the read-back begins, and fails
         (await Task.WhenAny(vm.PendingFollowUp, Task.Delay(500, TestContext.Current.CancellationToken))).ShouldNotBe(vm.PendingFollowUp, "the note has not run yet");
-        ui.Holding = false;
-        ui.RunHeld();
+        await RunHeldUntil(ui, () => vm.PendingFollowUp.IsCompleted);
 
-        await WithinAsync(vm.PendingFollowUp);
         Lines(vm).ShouldContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine));
     }
 
@@ -615,8 +613,7 @@ public sealed partial class RavenPanelViewModelTests
             return vm.PendingFollowUp.IsCompleted;
         });
         Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine), "not run yet");
-        ui.Holding = false;
-        ui.RunHeld();
+        await RunHeldUntil(ui, () => Lines(vm).Contains((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)));
 
         Lines(vm).Count(l => l == (RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)).ShouldBe(1, "run late, not lost");
     }
@@ -643,9 +640,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.IsMuted = true; // before the UI thread ends the proposal it was not heard for
 
         asks.IsHeard(proposal).ShouldBeFalse();
-        ui.Holding = false;
-        ui.RunHeld();
-        await WithinAsync(vm.PendingFollowUp);
+        await RunHeldUntil(ui, () => vm.PendingFollowUp.IsCompleted);
         asks.Proposed.ShouldBeNull("not heard, it ends");
     }
 
@@ -668,12 +663,20 @@ public sealed partial class RavenPanelViewModelTests
 
         asks.IsHeard(proposal).ShouldBeFalse();
         _speech.Gate.SetResult();
-        ui.Holding = false;
-        ui.RunHeld();
-        await WithinAsync(vm.PendingFollowUp);
+        await RunHeldUntil(ui, () => vm.PendingFollowUp.IsCompleted);
         asks.Proposed.ShouldBeNull();
         Lines(vm).ShouldContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine));
     }
+
+    /// <summary>
+    /// Runs what the UI thread holds, on the test thread, until <paramref name="done"/>. The hold is never let go: a post
+    /// from another thread would then run there, beside the test reading the log.
+    /// </summary>
+    private static async Task RunHeldUntil(HoldingDispatcher ui, Func<bool> done) => await Until(() =>
+    {
+        ui.RunHeld();
+        return done();
+    });
 
     /// <summary>Runs posts inline, like <see cref="ImmediateDispatcher"/>, except while <see cref="Holding"/>: then they wait for <see cref="RunHeld"/>.</summary>
     private sealed class HoldingDispatcher : IUiDispatcher
