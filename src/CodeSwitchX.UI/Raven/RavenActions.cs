@@ -57,6 +57,9 @@ public interface IRavenShell
     /// </summary>
     string WhatsNew(string? askedIn, int? number);
 
+    /// <summary>Writes the news still held back as its cards, unsaid, for <see cref="WhatsNew"/> to tell (#256). Started on the UI thread.</summary>
+    Task WriteHeldNewsAsync();
+
     /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
     void WriteSummary(string? askedIn, string text);
 
@@ -554,8 +557,21 @@ public sealed class RavenActions : IYardActions
         }
     }
 
-    public Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct) =>
-        _ui.InvokeAsync(() => _shell().WhatsNew(askedIn, number), UiTimeout, ct);
+    public async Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct)
+    {
+        // News held back for the pause or a busy floor is news too: written as its cards first, it is told with the rest (#256).
+        try
+        {
+            var writing = await _ui.InvokeAsync(() => _shell().WriteHeldNewsAsync(), UiTimeout, ct).ConfigureAwait(false);
+            await writing.WaitAsync(UiTimeout, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Writing the news held back for what's new failed; what is written is told");
+        }
+
+        return await _ui.InvokeAsync(() => _shell().WhatsNew(askedIn, number), UiTimeout, ct).ConfigureAwait(false);
+    }
 
     public Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().NextQuestion(askedIn) ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);

@@ -653,6 +653,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     string IRavenShell.WhatsNew(string? askedIn, int? number) => Raven.WhatsNewForBrain(askedIn, number);
 
+    Task IRavenShell.WriteHeldNewsAsync() => Raven.WriteHeldNewsAsync();
+
     void IRavenShell.WriteSummary(string? askedIn, string text) => Raven.WriteSummary(askedIn, text);
 
     string? IRavenShell.MuteChat(int number, bool muted) =>

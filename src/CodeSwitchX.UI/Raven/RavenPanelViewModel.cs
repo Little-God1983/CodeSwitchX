@@ -2369,7 +2369,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (question.ToRead.Count > 0 && whole.Value)
             {
                 // What whats_new told counts as read once the answer is heard to its end, or once it is written (#243).
-                _pendingReads.Add(ReadOnceToldAsync(spoken, question, question.ToRead));
+                _pendingReads.Add(ReadOnceAsync(spoken, question.ToRead, seenWith: question));
             }
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
@@ -3349,23 +3349,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             var taken = _time.GetUtcNow();
-            var appended = new Dictionary<RavenChat, RavenLogEntry>();
-
-            // A card per window, in that window's chat: the news of a chat is read where its window's other cards are.
-            // The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the
-            // facts with the next question either way, so "open it" finds what "it" is; each line the brain of its own
-            // window's chat only (#137).
-            foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
-            {
-                var ofWindow = group.ToList();
-                var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
-                appended[group.Key] = Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
-                Summarize(group.Key);
-                foreach (var line in ofWindow)
-                {
-                    Tell(Fact(line), group.Key, taken);
-                }
-            }
+            var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
             // A muted chat's news is only written, here and as another chat's sound (#153).
@@ -3431,6 +3415,49 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             spoken?.Complete();
             _telling = false;
             UpdateState();
+        }
+    }
+
+    /// <summary>
+    /// The news as cards, one per window, in that window's chat: the news of a chat is read where its window's other cards
+    /// are. The user sees the card, and maybe hears part of it before a press stops it: the brain that acts is told the facts
+    /// with the next question either way, so "open it" finds what "it" is; each line the brain of its own window's chat
+    /// only (#137). Returns the card written in each chat.
+    /// </summary>
+    private Dictionary<RavenChat, RavenLogEntry> WriteNews(IReadOnlyList<ChatNewsLine> lines, DateTimeOffset taken)
+    {
+        var appended = new Dictionary<RavenChat, RavenLogEntry>();
+        foreach (var group in lines.GroupBy(l => ChatOf(l.WorkspaceId)))
+        {
+            var ofWindow = group.ToList();
+            var title = ofWindow.Count == 1 ? "Chat news" : $"Chat news · {ofWindow.Count}";
+            appended[group.Key] = Append(new RavenLogEntry(RavenLogKind.News, title, _time.GetUtcNow()) { Lines = ofWindow }, group.Key);
+            Summarize(group.Key);
+            foreach (var line in ofWindow)
+            {
+                Tell(Fact(line), group.Key, taken);
+            }
+        }
+
+        return appended;
+    }
+
+    /// <summary>
+    /// News still held back, for the pause or a busy floor, is written as its cards now and not said: whats_new is about to
+    /// tell it, and the brain's answer is how the user hears it (#256). A telling that takes the news first leaves none here.
+    /// Started on the UI thread.
+    /// </summary>
+    public async Task WriteHeldNewsAsync()
+    {
+        if (_news is not { HasNews: true } news)
+        {
+            return;
+        }
+
+        var lines = await news.TakeAsync(CancellationToken.None);
+        if (lines.Count > 0)
+        {
+            WriteNews(lines, _time.GetUtcNow());
         }
     }
 
@@ -3925,36 +3952,32 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (said.Count > 0)
         {
-            _pendingReads.Add(ReadOnceHeardAsync(spoken, said));
+            _pendingReads.Add(ReadOnceAsync(spoken, said));
         }
     }
 
     /// <summary>The reads waiting for their reply to be heard: a catch-up is worded once they are done.</summary>
     private readonly PendingTasks _pendingReads = new();
 
-    private async Task ReadOnceHeardAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
-    {
-        if (await spoken.HeardWholeAsync().ConfigureAwait(false))
-        {
-            _dispatcher.Post(() => MarkRead(said));
-        }
-    }
-
     /// <summary>
-    /// The news an answer told (#243) is read as its answer is: heard to its end, or seen, written in the open panel (muted
-    /// and typed, say). Neither heard nor seen (cut off, the panel collapsed), it stays unread, as the answer does.
+    /// The lines <paramref name="spoken"/> said are read once it is heard to its end. The news an answer told (#243) is read
+    /// as its answer is: heard, or seen, written in the open panel (muted and typed, say), <paramref name="seenWith"/>.
+    /// Neither heard nor seen (cut off, the panel collapsed), they stay unread, as the answer does.
     /// </summary>
-    private async Task ReadOnceToldAsync(ReplyVoice.SpokenReply spoken, Question question,
-        IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> told)
+    private async Task ReadOnceAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> lines,
+        Question? seenWith = null)
     {
         var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
-        _dispatcher.Post(() =>
+        if (heard || seenWith is not null)
         {
-            if (heard || (IsOpen && question.Entries.Any(e => e.Kind == RavenLogKind.Raven && Log.Contains(e) && IsShown(e))))
+            _dispatcher.Post(() =>
             {
-                MarkRead(told);
-            }
-        });
+                if (heard || (IsOpen && seenWith!.Entries.Any(e => e.Kind == RavenLogKind.Raven && Log.Contains(e) && IsShown(e))))
+                {
+                    MarkRead(lines);
+                }
+            });
+        }
     }
 
     /// <summary>The lines given are read: heard, or told in an answer only written (UI thread).</summary>

@@ -33,6 +33,23 @@ public sealed partial class RavenPanelViewModelTests
         said.ShouldNotContain("Done.", Case.Sensitive, "what a chat said never goes to the brain that acts");
     }
 
+    // #256: news still held back (for the pause, or a busy floor) was missed: "nothing new", and a moment later the digest told it
+    [Fact]
+    public async Task Whats_new_tells_the_news_still_held_back_and_writes_its_card_unsaid()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's, held for the grace
+        var before = _speech.Spoken.Count;
+
+        await WithinAsync(vm.WriteHeldNewsAsync());
+        var said = vm.WhatsNewForBrain(YardMcp.OverviewChat, null);
+
+        said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
+        ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0, "its card is written in its chat, read once the answer telling it is heard");
+        await GraceAsync(vm);
+        _speech.Spoken.Count.ShouldBe(before, "the brain tells it: Raven's own digest has nothing left to say");
+    }
+
     [Fact]
     public async Task Whats_new_of_one_chat_gives_only_its_news()
     {
