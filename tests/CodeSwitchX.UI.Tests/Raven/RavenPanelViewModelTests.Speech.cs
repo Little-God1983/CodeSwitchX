@@ -200,7 +200,7 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task The_startup_warm_up_gets_the_voice_ready_unless_muted()
+    public async Task The_startup_warm_up_gets_the_voice_ready_muted_too()
     {
         var vm = await NewVmAsync();
         vm.ScheduleWarmUp();
@@ -211,6 +211,6 @@ public sealed partial class RavenPanelViewModelTests
         muted.IsMuted = true;
         muted.ScheduleWarmUp();
         _time.Advance(RavenPanelViewModel.StartupWarmUpDelay);
-        _speech.Prepares.ShouldBe(1);
+        _speech.Prepares.ShouldBe(2, "muted, what is asked aloud is still answered aloud (#242)");
     }
 }

@@ -233,6 +233,23 @@ public sealed class ReplyVoiceTests : IDisposable
         _player.Stops.ShouldBe(1, "only the play-out's own stop: no hush");
     }
 
+    // #242: muted, an answer to words said aloud is still spoken; anything else stays quiet
+    [Fact]
+    public async Task Muted_only_a_reply_begun_even_muted_is_spoken()
+    {
+        _voice.Muted = true;
+        var quiet = _voice.Begin();
+        quiet.Add("Not said.");
+        quiet.Complete();
+        var asked = _voice.Begin(evenMuted: true);
+        asked.Add("Said.");
+        asked.Complete();
+        await _voice.WhenQuietAsync();
+
+        _tts.Spoken.ShouldBe(["Said."]);
+        (quiet.IsSilent, quiet.EvenMuted, asked.IsSilent, asked.EvenMuted).ShouldBe((true, false, false, true));
+    }
+
     [Fact]
     public async Task Nothing_is_spoken_while_muted_and_muting_hushes()
     {
@@ -365,7 +382,7 @@ public sealed class ReplyVoiceTests : IDisposable
     {
         _keepAlive.Opening = new TaskCompletionSource();
 
-        var expect = Task.Run(_voice.Expect, TestContext.Current.CancellationToken);
+        var expect = Task.Run(() => _voice.Expect(), TestContext.Current.CancellationToken);
 
         (await Task.WhenAny(expect, Task.Delay(1000, TestContext.Current.CancellationToken))).ShouldBe(expect, "the mic press must not wait for a headset to wake");
         _keepAlive.Opening.TrySetResult();

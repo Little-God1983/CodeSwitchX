@@ -313,7 +313,7 @@ public sealed class HotkeyService
             // Like push to talk: the shell stays where it is, and VS Code keeps the focus. Switching never opens a window.
             if (chat.Target is null && chat.Step == 0)
             {
-                _shell.Raven.GoToNextQuestion();
+                _shell.Raven.GoToNextQuestionByKey();
             }
             else if (chat.Target is null)
             {
