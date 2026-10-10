@@ -581,6 +581,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
     internal Task PendingHeardCheck => Task.WhenAll(_pendingCounts, _pendingReads);
 
+    /// <summary>The last wait for an Open mic answer to be heard before its follow-up runs from then (#217).</summary>
+    internal Task PendingFollowUp { get; private set; } = Task.CompletedTask;
+
     /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178; UI thread).</summary>
     private Task _pendingCounts = Task.CompletedTask;
 
@@ -2317,7 +2320,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
             {
-                _ = OpenFollowUpOnceHeardAsync(spoken); // one cut off by the next question leaves the follow-up to that one's
+                PendingFollowUp = OpenFollowUpOnceHeardAsync(spoken); // one cut off by the next question leaves the follow-up to that one's
             }
             UpdateState();
         }

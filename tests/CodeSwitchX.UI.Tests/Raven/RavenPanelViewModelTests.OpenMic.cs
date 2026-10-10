@@ -162,7 +162,8 @@ public sealed partial class RavenPanelViewModelTests
         said = "And in chat seven?";
         _time.Advance(TimeSpan.FromSeconds(6));
         await TurnAsync(vm);
-        await Until(() => vm.TakesTurnsWithoutName);
+        await WithinAsync(vm.PendingFollowUp); // the second answer heard: the window of the first is still open before (#231)
+        vm.TakesTurnsWithoutName.ShouldBeTrue();
         said = "Wohnzimmer 100%.";
         _time.Advance(TimeSpan.FromSeconds(11));
         await TurnAsync(vm);
