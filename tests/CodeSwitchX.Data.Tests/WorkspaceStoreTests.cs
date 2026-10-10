@@ -178,20 +178,28 @@ public class WorkspaceStoreTests : IAsyncLifetime
     {
         // The duplicate check reads before it inserts, and no unique index backs it up: both must happen in one transaction.
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        // Each add says how it ended, so a failure (seen twice in full-suite runs, #269) says which way, not only that it failed.
         var adds = Enumerable.Range(0, 16).Select(i => Task.Run(async () =>
         {
             try
             {
                 await _store.AddAsync(new Workspace { Name = $"A{i}", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
-                return true;
+                return "added";
             }
             catch (DuplicateWorkspaceException)
             {
-                return false;
+                return "duplicate";
+            }
+            catch (Exception ex)
+            {
+                return $"{ex.GetType().Name}: {ex.Message}";
             }
         }));
 
-        (await Task.WhenAll(adds)).Count(added => added).ShouldBe(1);
+        var ended = await Task.WhenAll(adds);
+        var told = string.Join("; ", ended.GroupBy(e => e).Select(g => $"{g.Count()}x {g.Key}"));
+        ended.Count(e => e == "added").ShouldBe(1, told);
+        ended.ShouldAllBe(e => e == "added" || e == "duplicate", told);
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
     }
 
