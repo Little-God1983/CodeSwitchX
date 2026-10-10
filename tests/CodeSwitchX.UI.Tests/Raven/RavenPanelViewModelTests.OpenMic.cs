@@ -851,7 +851,7 @@ public sealed partial class RavenPanelViewModelTests
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
         // "Stop." goes to the brain after the name (#250): it answers nothing here, so only the hush is checked (#245).
-        _brain.Answer = q => q.Contains("stop.", StringComparison.OrdinalIgnoreCase) ? [] : [new BrainText("You have one chat waiting.")];
+        _brain.Answer = q => q.TrimEnd().EndsWith("stop.", StringComparison.OrdinalIgnoreCase) ? [] : [new BrainText("You have one chat waiting.")];
         var transcript = new TaskCompletionSource<DictationResult>();
         Transcribes(transcript.Task);
         var vm = await InOpenMicAsync(voice);
@@ -869,6 +869,8 @@ public sealed partial class RavenPanelViewModelTests
         voice.IsSpeaking.ShouldBeFalse();
         await Until(() => player.Stops > stops);
         await WithinAsync(vm.PendingAnswers);
+        _brain.Sent.ShouldContain(q => q.TrimEnd().EndsWith("stop.", StringComparison.OrdinalIgnoreCase)); // what the empty answer stands for (#250)
+        await WithinAsync(vm.PendingFollowUp);
     }
 
     // #217: the TV talking over Raven cut it off, and then got in as a follow-up
