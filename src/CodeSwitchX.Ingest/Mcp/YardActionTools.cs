@@ -218,7 +218,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     [Description("What is new for the user (\"what's new?\", \"anything new?\", \"what happened?\", \"catch me up\", \"any news?\"): "
         + "the news they have not read yet in every window's Raven chat (a chat finished, failed or needs them), muted chats too, "
         + "the chat you are in first; and the questions and prompts waiting for them. Name a chat or window for its news only. "
-        + "Tell it in a sentence or two, the most pressing first, in your own voice. What it gives counts as read once your answer is heard.")]
+        + "Tell it briefly in your own voice, the most pressing first, and name every chat it lists: what it gives counts as read "
+        + "once your answer is heard.")]
     public async Task<string> WhatsNew(
         [Description("Only this chat's news: its number (\"2\", \"two\") or a window's name as the user said it. Left out: every window's.")]
         string? chat = null,

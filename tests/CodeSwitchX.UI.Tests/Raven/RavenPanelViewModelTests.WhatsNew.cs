@@ -1,6 +1,7 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -126,6 +127,43 @@ public sealed partial class RavenPanelViewModelTests
         vm.WhatsNewForBrain(null, null);
         yield return new BrainText("Chat 2 finished. ");
         yield return new BrainText("That is all.");
+    }
+
+    // Review of #243: muted, an answer said aloud that the user cut off by talking was not heard: the news stays unread
+    [Fact]
+    public async Task Muted_an_answer_said_aloud_and_cut_off_by_talking_leaves_the_news_unread()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+        await GraceAsync(vm);
+        vm.IsMuted = true;
+        _speech.Gate = new TaskCompletionSource(); // the answer is being heard
+        _brain.Answer = q => q.Contains("new") ? TellsWhatsNew(vm) : [];
+
+        Transcribes(Task.FromResult(new DictationResult("What's new?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+        await Until(() => _speech.Spoken.Count > 0);
+        vm.PressMic(TalkInput.MicButton); // the user talks over it
+        _speech.Gate.TrySetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+    }
+
+    [Fact]
+    public async Task Whats_new_of_one_chat_with_nothing_says_so_for_that_chat()
+    {
+        var (vm, _) = await TrafficVmAsync();
+
+        vm.WhatsNewForBrain(null, 2).ShouldStartWith("Nothing new in chat 2");
     }
 
     [Fact]
