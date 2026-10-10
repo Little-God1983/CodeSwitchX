@@ -324,6 +324,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private DateTimeOffset? _nextOffered;
 
+    /// <summary>
+    /// The offer was heard, not only written (#233): only then does a bare yes in Open mic take it. Written, as with chat
+    /// news only written, a yes from the TV must not read a card aloud the user chose to keep quiet (UI thread).
+    /// </summary>
+    private bool _nextOfferHeard;
+
     /// <summary>The offer stands: heard, and neither answered, let go nor lapsed. Raven says nothing of its own meanwhile, as while an allow waits for its yes (UI thread).</summary>
     private bool _offerStands;
 
@@ -1956,10 +1962,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return false;
         }
 
-        // "Next?" stands (#230): a yes answers it without the name. Nothing else does: the offer may follow a click, with the
+        // "Next?" stands (#230), heard (#233): a yes answers it without the name. Nothing else does: the offer may follow a click, with the
         // user not talking, and talk around the room must stay out.
         // Judged by the instant Ask judges it by, so a yes let through here is never a question to the brain.
-        if (_nextOffered is { } offered && ended >= offered && ended - offered <= NextOfferLifetime && SpokenYes.IsYes(text)
+        if (_nextOfferHeard && _nextOffered is { } offered && ended >= offered && ended - offered <= NextOfferLifetime && SpokenYes.IsYes(text)
             && !WhisperNoise.Is(text))
         {
             _calledAt = null;
@@ -4711,6 +4717,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public void GoToNextQuestion()
     {
         _voice.Hush(); // the user moved on, as a press of the mic stops Raven
+        if (_asks?.Proposed is { } standing)
+        {
+            // An allow waiting for its yes ends, as with any words of the user's: a yes now must not allow it, and the card
+            // asked for would wait behind it (the brain is told, OnProposalEnded).
+            _asks.Cancel(standing);
+        }
+
         if (ShowNextQuestion() is not { } card)
         {
             AddEntry(RavenLogKind.Note, NoQuestionsLine);
@@ -4724,11 +4737,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        Request(card);
-        if (FloorIsFree)
-        {
-            TellNewsIfFree(); // the user waits for it: no pause first
-        }
+        Request(card); // read once the floor is free, with no pause first: the user waits for it
     }
 
     /// <summary>The card the user asked for goes first to be read out, with chat news only written too (#230).</summary>
@@ -4835,7 +4844,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (!VoiceSpeaks || _openSpeech || !SpeakNews || CurrentChat.IsMuted)
             {
                 AddSaid(line, CurrentChat, said: false);
-                Offered(number);
+                Offered(number, heard: false);
                 return;
             }
 
@@ -4861,12 +4870,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (await played.ConfigureAwait(false))
         {
-            _dispatcher.Post(() => Offered(number));
+            _dispatcher.Post(() => Offered(number, heard: true));
         }
     }
 
     /// <summary>The offer was heard, or written: it stands for <see cref="NextOfferLifetime"/>, unless it is over already.</summary>
-    private void Offered(int number)
+    private void Offered(int number, bool heard)
     {
         if (number != _offerNumber)
         {
@@ -4874,6 +4883,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _nextOffered = _time.GetUtcNow();
+        _nextOfferHeard = heard;
         _offerStands = true;
         _offerTimer?.Dispose();
         _offerTimer = _time.CreateTimer(_ => _dispatcher.Post(() => OfferLapsed(number)), null, NextOfferLifetime, Timeout.InfiniteTimeSpan);

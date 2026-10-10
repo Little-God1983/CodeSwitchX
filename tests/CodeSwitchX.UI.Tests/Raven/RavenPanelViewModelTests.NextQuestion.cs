@@ -376,6 +376,7 @@ public sealed partial class RavenPanelViewModelTests
         _ = await AsksFruitAsync(vm, asks, "d"); // in window 3: not read here
         await AnsweredAMomentAgoAsync(vm);
         _openMic.Speak(); // in the follow-up: the user's, and it takes the floor
+        vm.State.ShouldBe(RavenState.Listening);
         var before = _speech.Spoken.Count;
 
         vm.GoToNextQuestion(); // its hotkey
@@ -383,6 +384,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Task.Delay(100, TestContext.Current.CancellationToken);
         SpokenSince(before).ShouldBeEmpty("Raven does not talk over the user");
+        vm.State.ShouldBe(RavenState.Listening, "the user still has the floor");
         _openMic.EndTurn();
         rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
@@ -392,13 +394,16 @@ public sealed partial class RavenPanelViewModelTests
 
     // #233: in Open mic, "Next?" takes a bare yes; other talk around the room stays out
     [Theory]
-    [InlineData("Yes.", true)]
-    [InlineData("Sounds good to me.", false)]
-    public async Task In_Open_mic_the_offer_takes_a_yes_without_the_name_and_nothing_else(string said, bool taken)
+    [InlineData("Yes.", true, true)]
+    [InlineData("Sounds good to me.", true, false)]
+    [InlineData("Yes.", false, false)] // only written: talk around the room must not read a card aloud
+    [InlineData("Raven, yes.", false, true)]
+    public async Task In_Open_mic_the_offer_heard_takes_a_yes_without_the_name_and_nothing_else(string said, bool speakNews, bool taken)
     {
         _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
         var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.SpeakNews = speakNews;
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
         await OfferedAfterAnAnswerAsync(vm, asks);
@@ -467,5 +472,27 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         vm.Log.Single(e => e.Kind == RavenLogKind.You && e.Text == "what is it doing").Chat.ShouldBe(ChatNumbered(vm, 3));
         _brain.Asked.ShouldHaveSingleItem().ShouldContain("[The user is in chat 3, RawCutX");
+    }
+
+    // #233: "next question" ends an allow waiting for its yes: a yes then must not allow it, nor the card wait behind it
+    [Fact]
+    public async Task Next_question_ends_an_allow_waiting_for_its_yes()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "a"); // the oldest card, in the chat the user is in: no switch ends the allow
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None); // chat "a" too
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        await GraceAsync(vm);
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+
+        asks.Proposed.ShouldBeNull("the user moved on");
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        card.IsOpen.ShouldBeTrue("only the proposal ended: the card waits for a click or a new allow");
     }
 }
