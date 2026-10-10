@@ -495,7 +495,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.FollowUpSeconds = 0;
 
         await TurnAsync(vm);
-        await Task.Delay(100, TestContext.Current.CancellationToken); // the answer heard
+        await WithinAsync(vm.PendingFollowUp); // the answer heard
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         said = "Yes.";
         await TurnAsync(vm);

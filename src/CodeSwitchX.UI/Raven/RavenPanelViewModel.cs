@@ -601,12 +601,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Guards <see cref="_pendingFollowUp"/>: an answer's end and a read-back may add to it from different threads in tests.</summary>
     private readonly object _followUpWaits = new();
 
-    /// <summary>Adds a wait to <see cref="PendingFollowUp"/>; once all before it are over, it starts the chain again.</summary>
+    /// <summary>Adds a wait to <see cref="PendingFollowUp"/>; once all before it ran, it starts the chain again (a fault stays to be seen).</summary>
     private void AwaitFollowUp(Task wait)
     {
         lock (_followUpWaits)
         {
-            _pendingFollowUp = _pendingFollowUp.IsCompleted ? wait : Task.WhenAll(_pendingFollowUp, wait);
+            _pendingFollowUp = _pendingFollowUp.IsCompletedSuccessfully ? wait : Task.WhenAll(_pendingFollowUp, wait);
         }
     }
 
