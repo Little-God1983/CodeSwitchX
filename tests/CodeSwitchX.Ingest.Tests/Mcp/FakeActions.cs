@@ -100,6 +100,15 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult("Yesterday it got done.");
     }
 
+    public (Guid? AskedFrom, int? Number)? WhatsNewFor { get; private set; }
+
+    public Task<string> WhatsNewAsync(Guid? askedFrom, int? number, CancellationToken ct)
+    {
+        Act("whats_new");
+        WhatsNewFor = (askedFrom, number);
+        return Task.FromResult("New in chat 2: a chat finished.");
+    }
+
     public Task<string> NextQuestionAsync(CancellationToken ct)
     {
         Act("next_question");

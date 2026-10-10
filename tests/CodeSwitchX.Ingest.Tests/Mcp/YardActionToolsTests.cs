@@ -199,6 +199,21 @@ public sealed class YardActionToolsTests
         _actions.MuteSet.ShouldBe((number, true));
     }
 
+    /// <summary>#243: what's new covers every window, from the chat it is asked in; a chat named narrows it.</summary>
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("all", null)]
+    [InlineData("four", 4)]
+    [InlineData("code switch ex", 1)]
+    [InlineData("this chat", 4)]
+    [InlineData("the Yard", 0)]
+    public async Task Whats_new_covers_every_window_from_the_chat_it_is_asked_in_or_the_chat_named(string? chat, int? number)
+    {
+        (await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).WhatsNew(chat, Ct)).ShouldBe("New in chat 2: a chat finished.");
+
+        _actions.WhatsNewFor.ShouldBe(((Guid?)FakeYard.DiffusionId, number));
+    }
+
     [Fact]
     public async Task Switch_chat_opens_the_window_only_when_asked_and_activity_never()
     {

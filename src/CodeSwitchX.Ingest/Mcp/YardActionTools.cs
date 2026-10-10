@@ -213,6 +213,30 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     public Task<string> NextQuestion(CancellationToken cancellationToken = default) =>
         Act(() => actions.NextQuestionAsync(cancellationToken));
 
+    // Not read-only: what it gives counts as read once the answer that tells it is heard (#243).
+    [McpServerTool(Name = "whats_new", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
+    [Description("What is new for the user (\"what's new?\", \"anything new?\", \"what happened?\", \"catch me up\", \"any news?\"): "
+        + "the news they have not read yet in every window's Raven chat (a chat finished, failed or needs them), muted chats too, "
+        + "the chat you are in first; and the questions and prompts waiting for them. Name a chat or window for its news only. "
+        + "Tell it in a sentence or two, the most pressing first, in your own voice. What it gives counts as read once your answer is heard.")]
+    public async Task<string> WhatsNew(
+        [Description("Only this chat's news: its number (\"2\", \"two\") or a window's name as the user said it. Left out: every window's.")]
+        string? chat = null,
+        CancellationToken cancellationToken = default)
+    {
+        int? number = null;
+        var said = chat?.Trim() ?? "";
+        if (said.Length > 0 && !said.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            number = ThisChat(said)
+                ? (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number ?? 0
+                : (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
+                    ?? throw new McpException("Activity only lists every chat's lines: leave the chat out for every window's news.");
+        }
+
+        return await Act(() => actions.WhatsNewAsync(scope?.WorkspaceId, number, cancellationToken)).ConfigureAwait(false);
+    }
+
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)

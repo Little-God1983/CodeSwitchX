@@ -79,6 +79,14 @@ public interface IYardActions
     Task<string> NextQuestionAsync(CancellationToken ct);
 
     /// <summary>
+    /// What is new for the user (#243): the news not read yet in every window's Raven chat, muted ones too, the chat of the
+    /// window <paramref name="askedFrom"/> first (chat 0's for none), or only chat <paramref name="number"/>'s; and what waits
+    /// for the user. Facts only, never what a chat said. What it gives counts as read once the answer that tells it is heard,
+    /// or at once when that is only written.
+    /// </summary>
+    Task<string> WhatsNewAsync(Guid? askedFrom, int? number, CancellationToken ct);
+
+    /// <summary>
     /// Sums the chat up from its conversation (#234): what it was asked, what it did, where it stands, what it waits for. The
     /// whole summary is written in the Raven chat <paramref name="askedIn"/> names (the one the user is in for null); returns
     /// the short part, which Raven says.
