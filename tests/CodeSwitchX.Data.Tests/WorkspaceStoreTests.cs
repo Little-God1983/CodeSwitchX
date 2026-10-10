@@ -1,5 +1,6 @@
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Workspaces;
+using Microsoft.Data.Sqlite;
 
 namespace CodeSwitchX.Data.Tests;
 
@@ -178,28 +179,30 @@ public class WorkspaceStoreTests : IAsyncLifetime
     {
         // The duplicate check reads before it inserts, and no unique index backs it up: both must happen in one transaction.
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
-        // Each add says how it ended, so a failure (seen twice in full-suite runs, #269) says which way, not only that it failed.
+        // Each add says how it ended, so a failure (seen twice in full-suite runs on 2026-10-10, #269) says which way, not
+        // only that it failed: a database error is given with its SQLite codes.
         var adds = Enumerable.Range(0, 16).Select(i => Task.Run(async () =>
         {
             try
             {
                 await _store.AddAsync(new Workspace { Name = $"A{i}", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
-                return "added";
+                return (Added: true, Error: (Exception?)null);
             }
             catch (DuplicateWorkspaceException)
             {
-                return "duplicate";
+                return (Added: false, Error: null);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return $"{ex.GetType().Name}: {ex.Message}";
+                return (Added: false, Error: ex);
             }
         }));
 
         var ended = await Task.WhenAll(adds);
-        var told = string.Join("; ", ended.GroupBy(e => e).Select(g => $"{g.Count()}x {g.Key}"));
-        ended.Count(e => e == "added").ShouldBe(1, told);
-        ended.ShouldAllBe(e => e == "added" || e == "duplicate", told);
+        var errors = ended.Select(e => e.Error).OfType<Exception>().Select(e => e.GetBaseException() is SqliteException sqlite
+            ? $"{e.GetType().Name} ({sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}): {sqlite.Message}" : e.ToString()).ToList();
+        errors.ShouldBeEmpty("a racing add waits for the one before it, and then sees its row");
+        ended.Count(e => e.Added).ShouldBe(1);
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
     }
 

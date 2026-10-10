@@ -14,7 +14,10 @@ public static class DataServiceCollectionExtensions
         {
             DataSource = databaseFile,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            // A cache of its own per connection (#269): in shared-cache mode connections of one process fight over table
+            // locks (SQLITE_LOCKED), which the busy wait does not cover, so a racing write could fail at once instead of
+            // waiting. With write-ahead logging, readers do not wait for a writer anyway.
+            Cache = SqliteCacheMode.Private,
             Pooling = true,
         }.ToString();
 
