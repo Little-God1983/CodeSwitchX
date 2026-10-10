@@ -898,6 +898,24 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.ShouldNotContain(e => e.Text.Contains("one chat waiting"), "the answer on its way stopped");
     }
 
+    // Round 2 of #250: a lone "Stop." in Open mic's follow-up is let through as a lone "Yes." is, and only silences
+    [Fact]
+    public async Task A_lone_stop_in_the_follow_up_is_taken_and_goes_to_no_brain()
+    {
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(new DictationResult("Stop.", TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        await AnsweredAMomentAgoAsync(vm);
+
+        _openMic.SayShort();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem("the stop went to no brain");
+        vm.TakesTurnsWithoutName.ShouldBeFalse("after a stop the room's next words need the name");
+    }
+
     // #250: a request that names what to stop is a question for the brain
     [Fact]
     public async Task Raven_stop_chat_two_still_goes_to_the_brain()

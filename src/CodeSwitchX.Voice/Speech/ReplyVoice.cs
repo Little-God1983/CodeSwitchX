@@ -113,6 +113,9 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
+    /// <summary>Something is said or still waits to be: what Raven says is not heard to its end yet (#250). Any thread.</summary>
+    public bool IsBusy => IsSpeaking || Volatile.Read(ref _pending) > 0;
+
     public bool IsSpeaking
     {
         get

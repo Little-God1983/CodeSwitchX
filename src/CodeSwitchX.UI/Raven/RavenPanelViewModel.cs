@@ -1281,6 +1281,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         switch (_gesture.Press(sinceKeyDown))
         {
             case PushToTalkAction.Start:
+                _pressedOverRaven = _voice.IsBusy; // before the press hushes it: a stop said now cuts Raven off (#250)
                 StartRecording();
                 return Task.CompletedTask;
             case PushToTalkAction.Stop:
@@ -1289,6 +1290,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return Task.CompletedTask;
         }
     }
+
+    /// <summary>The last press of the mic began while Raven spoke (UI thread).</summary>
+    private bool _pressedOverRaven;
 
     /// <summary>
     /// Button mouse-up or hotkey up; completes once the recording it stopped has been transcribed. Only the release of
@@ -1367,7 +1371,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         TypedText = "";
-        if (StopBySaying(text))
+        if (StopBySaying(text, overRaven: _voice.IsBusy))
         {
             return;
         }
@@ -1870,12 +1874,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
 
             // The rest of a request split by a pause (#219) is that request's, "stop" too.
-            if (text.Length > 0 && !continues && StopBySaying(text))
+            if (text.Length > 0 && !continues && StopBySaying(text, overRaven: open?.OverRaven ?? _pressedOverRaven))
             {
                 if (named)
                 {
                     _namedQuestion = null; // asked nothing: its rest goes on from no question
-                    _namedEndedAt = null; // and no rest follows a stop: the TV's next words need the name
                 }
             }
             // Said: answered aloud, muted too (#242).
@@ -1977,7 +1980,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // name alone, start that window, so a TV line taken this way does not open it again.
         var called = Within(_calledAt, CallWindow, turn.Began);
         continues = !called && !turn.OverRaven && Within(_namedEndedAt, ContinueWindow, turn.Began);
-        if ((turn.FollowUp || called || continues) && (!turn.Short || SpokenYes.IsYes(text)))
+        if ((turn.FollowUp || called || continues) && (!turn.Short || SpokenYes.IsYes(text) || SpokenStop.Is(text)))
         {
             if (WhisperNoise.Is(text))
             {
@@ -4887,16 +4890,21 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// "Raven, stop", "be quiet", "enough" (#250): Raven goes quiet, and that is all. What it says stops, and so does an answer
     /// on its way, a catch-up, the offer of the next question and an allow waiting for its yes (its brain is told with the
     /// next question, as for any words). Nothing goes to a brain, nothing is written, nothing is said back. Cards and news
-    /// still waiting, a card asked for too, are told later, after the pause, as Raven's own. After Raven asked something, a
-    /// stop may be the answer, and goes to the brain. Returns whether the words were that.
+    /// still waiting, a card asked for too, are told later, after the pause, as Raven's own. After Raven asked something,
+    /// heard to its end, a stop may be the answer, and goes to the brain. Returns whether the words were that.
     /// </summary>
-    private bool StopBySaying(string text)
+    /// <param name="overRaven">Begun while Raven spoke: a stop then cuts it off, also when what it read out ends in a question.</param>
+    private bool StopBySaying(string text, bool overRaven)
     {
-        // After Raven asked something ("keep the build running, or stop it?"), "stop" may be the answer: the brain hears it.
-        if (_brainAsked || !SpokenStop.Is(text))
+        // After Raven asked something ("keep the build running, or stop it?"), and the user heard it, "stop" may be the
+        // answer: the brain hears it.
+        if ((_brainAsked && !overRaven) || !SpokenStop.Is(text))
         {
             return false;
         }
+
+        // The room's next words need the name again: no follow-up, no rest of a named turn after a stop.
+        (_followUpFrom, _calledAt, _namedEndedAt) = (null, null, null);
 
         DropOffer();
         DropNoQuestions();
@@ -4912,7 +4920,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         TakeFloor();
-        _brainAsked = false; // what it asked is not answered by a stop
+        _brainAsked = false; // a question cut off by the stop is not answered by it
         _logger.LogInformation("Raven was told to stop: quiet, and nothing asked");
         UpdateState();
         return true;

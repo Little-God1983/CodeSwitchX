@@ -888,10 +888,29 @@ public sealed partial class RavenPanelViewModelTests
 
         Type(vm, "how is the build?");
         await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync()); // heard to its end
         Type(vm, "stop");
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.Count.ShouldBe(2);
         _brain.Sent[^1].ShouldEndWith("stop");
+    }
+
+    // Round 2 of #250: Raven still reads out an answer that ends in a question: a stop now cuts it off, it does not answer it
+    [Fact]
+    public async Task A_stop_while_Raven_reads_out_its_question_silences_it()
+    {
+        _brain.Answer = _ => [new BrainText("The build is running. Should I keep it running or stop it?")];
+        var (vm, _) = await NextQuestionVmAsync();
+        _speech.Gate = new TaskCompletionSource(); // the answer is still being read out
+        Type(vm, "how is the build?");
+        await WithinAsync(vm.PendingAnswers);
+        await Until(() => _speech.Spoken.Count > 0);
+
+        Type(vm, "stop");
+        _speech.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem("the stop went to no brain");
     }
 }
