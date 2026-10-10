@@ -1,5 +1,6 @@
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Workspaces;
+using Microsoft.Data.Sqlite;
 
 namespace CodeSwitchX.Data.Tests;
 
@@ -178,21 +179,46 @@ public class WorkspaceStoreTests : IAsyncLifetime
     {
         // The duplicate check reads before it inserts, and no unique index backs it up: both must happen in one transaction.
         var track = (await _store.GetTracksAsync(TestContext.Current.CancellationToken))[0];
+        // Each add says how it ended, so a failure (seen twice in full-suite runs on 2026-10-10, #269) says which way, not
+        // only that it failed: a database error is given with its SQLite codes.
         var adds = Enumerable.Range(0, 16).Select(i => Task.Run(async () =>
         {
             try
             {
                 await _store.AddAsync(new Workspace { Name = $"A{i}", RootPath = @"c:\repo\sdk", WorkspaceFile = @"c:\repo\installer.code-workspace", TrackId = track.Id }, TestContext.Current.CancellationToken);
-                return true;
+                return (Added: true, Error: (Exception?)null);
             }
             catch (DuplicateWorkspaceException)
             {
-                return false;
+                return (Added: false, Error: null);
+            }
+            catch (Exception ex) when (!TestContext.Current.CancellationToken.IsCancellationRequested) // only the test's own cancel ends it
+            {
+                return (Added: false, Error: ex);
             }
         }));
 
-        (await Task.WhenAll(adds)).Count(added => added).ShouldBe(1);
+        var ended = await Task.WhenAll(adds);
+        // With its SQLite codes and the whole stack: which statement (the transaction's start, the read, the insert, the commit) failed.
+        var errors = ended.Select(e => e.Error).OfType<Exception>().Select(e => SqliteIn(e) is { } sqlite
+            ? $"SQLite {sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}: {e}" : e.ToString()).ToList();
+        errors.ShouldBeEmpty("a racing add waits for the one before it, and then sees its row");
+        ended.Count(e => e.Added).ShouldBe(1);
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
+
+    /// <summary>The first SQLite error in the chain of <paramref name="error"/>, however deep EF wrapped it.</summary>
+    private static SqliteException? SqliteIn(Exception? error)
+    {
+        for (; error is not null; error = error.InnerException)
+        {
+            if (error is SqliteException sqlite)
+            {
+                return sqlite;
+            }
+        }
+
+        return null;
     }
 
     [Fact]
