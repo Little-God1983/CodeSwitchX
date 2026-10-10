@@ -167,6 +167,7 @@ public sealed class TranscriptDigestTests : IDisposable
     [InlineData("<system-reminder>Wrapped in <system-reminder> tags.</system-reminder> Rename it.", "User: Rename it.")] // round 1 of #258
     [InlineData("<system-reminder>a <system-reminder /> b</system-reminder> Do it.", "User: Do it.")]
     [InlineData("<system-reminder>o <system-reminder>i</system-reminder> <system-reminder /> o</system-reminder> Do it.", "User: Do it.")] // round 2
+    [InlineData("<system-reminder>see <system-reminder and <br/> then</system-reminder> Do it.", "User: Do it.")] // round 3
     public void A_prompt_with_a_reminder_or_a_selection_before_its_words_keeps_its_words(string prompt, string? step)
     {
         File.WriteAllLines(_path, [User(prompt)]);
@@ -308,11 +309,34 @@ public sealed class TranscriptDigestTests : IDisposable
         TranscriptDigest.Read(_path).ShouldBe("First asked: Fix the icons.\n[earlier steps left out]\nClaude: Resumed.\nUser: Fix the icons.\nClaude: Done.");
     }
 
+    // Round 3 of #258: the end read begins after the first prompt's line ended, and a resumed chat's copy of it comes later
+    [Fact]
+    public void A_copy_of_the_first_prompt_s_line_after_the_end_read_began_past_the_original_does_not_stand_for_it()
+    {
+        var prompt = User("Fix the icons.")[..^1] + ",\"uuid\":\"u-first\"}";
+        var before = BigResult(600_000);
+        var reply = Assistant("On it.");
+        // The end read begins in the reply after the prompt's line: well within a few kilobytes of it, but past it.
+        WriteWithEndReadAt(before.Length + 1 + prompt.Length + 1 + 3, User("A later one."), new UTF8Encoding(false),
+            before, prompt, reply, Assistant("Resumed."), prompt);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix the icons.\n[earlier steps left out]\n");
+    }
+
+    // Round 3 of #258: a prompt of many pasted images, each kept as its start and its end, is still read in the head
+    [Fact]
+    public void A_first_prompt_of_many_pasted_images_keeps_its_words()
+    {
+        File.WriteAllLines(_path, [UserWithImages("Make them alike.", images: 12, chars: 200_000), BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Make them alike.\n");
+    }
+
     // Round 1 of #258: a user line too long to read may be the first prompt: a later one does not stand for it
     [Fact]
     public void A_user_line_too_long_to_read_in_the_head_leaves_the_first_prompt_unknown()
     {
-        var blocks = string.Join(",", Enumerable.Repeat("""{"type":"text","text":"ab"}""", 45_000));
+        var blocks = string.Join(",", Enumerable.Repeat("""{"type":"text","text":"ab"}""", TranscriptDigest.LongestLine / 27 + 1000));
         var huge = "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":[" + blocks + "]}}";
         huge.Length.ShouldBeGreaterThan(TranscriptDigest.LongestLine);
         File.WriteAllLines(_path, [huge, User("A later one."), BigResult(3_000_000), Assistant("Done.")]);

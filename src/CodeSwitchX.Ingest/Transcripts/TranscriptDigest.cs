@@ -31,15 +31,9 @@ public static class TranscriptDigest
 
     /// <summary>
     /// The longest line of the head held (#258): its strings are cut, but a line of very many short ones is not; one longer
-    /// is passed over, as no prompt is that long once its strings are cut.
+    /// is passed over. A prompt of dozens of pasted images, each kept as its start and its end, still fits.
     /// </summary>
-    internal const int LongestLine = 1024 * 1024;
-
-    /// <summary>
-    /// How far the end read may begin past where the head counted the first prompt's line, and its id still count (#258):
-    /// more than a byte order mark and a few bad bytes shift the count by, less than a resumed chat's copy of the line is away.
-    /// </summary>
-    internal const int IdSlack = 4 * 1024;
+    internal const int LongestLine = 8 * 1024 * 1024;
 
     /// <summary>A file this long or shorter is read whole: its start and end would overlap.</summary>
     internal const int WholeBytes = TailBytes + 512 * 1024;
@@ -75,15 +69,16 @@ public static class TranscriptDigest
             tail = ReadAt(stream, tailAt, whole ? (int)stream.Length : TailBytes);
             if (!whole)
             {
-                first = FirstPromptIn(stream, out var firstAt, out firstId);
+                first = FirstPromptIn(stream, out var firstAt, out firstId, out var firstBytes);
                 // The end read has the first prompt only when it began at or before it (#236): a later prompt of the same
                 // words, the same task sent twice, is not it. Its line's id says which it is (#258). With no prompt in the
                 // head, firstAt is where the head stopped, and the first prompt comes after it: an end read that begins
                 // before that has it, one that begins later does not stand for it.
                 reachesFirst = tailAt <= firstAt;
-                // A resumed chat writes its lines again, under the same ids: only the line where the count put it, give or take
-                // what a byte order mark or bad bytes shift the count by, is the first prompt's (#258).
-                idCounts = tailAt <= firstAt + IdSlack;
+                // A resumed chat writes its lines again, under the same ids: a match by id is the first prompt's own line only
+                // when the end read begins before that line ends (#258). Begun inside it, the cut line's id, written at its
+                // end, is seen first, and a copy later counts no more.
+                idCounts = tailAt < firstAt + firstBytes;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -251,10 +246,10 @@ public static class TranscriptDigest
     /// The first prompt in the file's first <see cref="HeadChars"/>, line by line; null for none, or when a user line
     /// before it was too long to read (<see cref="LongestLine"/>): what was asked first is then not known. <paramref name="id"/>
     /// is its line's own id, which finds it in the end read (#258); null for a line without one, or none found.
-    /// <paramref name="at"/> is where its line begins, or with none where the head stopped, in bytes (UTF-8, as the file is
-    /// written, about: a byte order mark or a bad byte shifts it a little).
+    /// <paramref name="at"/> is where its line begins, or with none where the head stopped, and <paramref name="lineBytes"/>
+    /// how long its line is, in bytes (UTF-8, as the file is written, about: a byte order mark or a bad byte shifts it a little).
     /// </summary>
-    private static string? FirstPromptIn(FileStream stream, out long at, out string? id)
+    private static string? FirstPromptIn(FileStream stream, out long at, out string? id, out long lineBytes)
     {
         stream.Seek(0, SeekOrigin.Begin);
         using var reader = new StreamReader(stream, Encoding.UTF8, false, 64 * 1024, leaveOpen: true);
@@ -262,13 +257,16 @@ public static class TranscriptDigest
         long read = 0;
         long bytes = 0;
         id = null;
-        while (read < HeadChars && ReadSlimLine(reader, end, out var length, out var lineBytes, out var tooLong) is { } line)
+        lineBytes = 0;
+        while (read < HeadChars && ReadSlimLine(reader, end, out var length, out lineBytes, out var tooLong) is { } line)
         {
             at = bytes;
             read += length + 1;
             bytes += lineBytes + 1;
-            // A user line that is no tool's result may be the first prompt: a later one does not stand for it.
-            if (tooLong && line.Contains("\"type\":\"user\"", StringComparison.Ordinal) && !line.Contains("\"tool_result\"", StringComparison.Ordinal))
+            // A user line of the main chat, no tool's result nor the app's own (meta), may be the first prompt: a later one
+            // does not stand for it.
+            if (tooLong && line.Contains("\"type\":\"user\"", StringComparison.Ordinal) && !line.Contains("\"tool_result\"", StringComparison.Ordinal)
+                && !line.Contains("\"isMeta\":true", StringComparison.Ordinal) && !line.Contains("\"isSidechain\":true", StringComparison.Ordinal))
             {
                 return null;
             }
@@ -626,38 +624,34 @@ public static class TranscriptDigest
     private static int ClosingOf(string text, string name)
     {
         var close = "</" + name + ">";
-        return ClosingAtDepth(text, name, close) is var nested and >= 0 ? nested
-            : text.IndexOf(close, StringComparison.Ordinal) is var first and >= 0 ? first + close.Length : -1;
-    }
-
-    private static int ClosingAtDepth(string text, string name, string close)
-    {
         var open = "<" + name;
         var depth = 0;
+        var first = -1; // the first closing tag: what ends the block when the depth never comes back
         var nextOpen = -1;
         var nextClose = -1;
         for (var at = 0; at < text.Length;)
         {
             // Each found once: searched again only once passed, so the scan stays linear however many tags there are.
-            nextOpen = nextOpen >= at || nextOpen == int.MaxValue ? nextOpen : text.IndexOf(open, at, StringComparison.Ordinal) is var o and >= 0 ? o : int.MaxValue;
+            nextOpen = nextOpen >= at ? nextOpen : text.IndexOf(open, at, StringComparison.Ordinal) is var o and >= 0 ? o : int.MaxValue;
             nextClose = nextClose >= at ? nextClose : text.IndexOf(close, at, StringComparison.Ordinal);
             if (nextClose < 0)
             {
-                return -1;
+                break;
+            }
+
+            if (first < 0)
+            {
+                first = nextClose + close.Length;
             }
 
             if (nextOpen < nextClose)
             {
-                // Another block of the name opens before this one closes: "<name>", "<name ...>"; not "<names>", nor one
-                // that closes itself, "<name/>" or "<name />".
-                var after = nextOpen + open.Length;
-                var tagEnd = text.IndexOf('>', after);
-                if (after < text.Length && text[after] is '>' or ' ' or '\t' or '\r' or '\n' && !(tagEnd > 0 && text[tagEnd - 1] == '/'))
+                at = nextOpen + open.Length;
+                if (OpensBlock(text, at))
                 {
                     depth++;
                 }
 
-                at = after;
                 continue;
             }
 
@@ -669,7 +663,32 @@ public static class TranscriptDigest
             at = nextClose + close.Length;
         }
 
-        return -1;
+        return first;
+    }
+
+    /// <summary>
+    /// The tag whose name ends at <paramref name="after"/> opens a block: "&lt;name&gt;" or "&lt;name ...&gt;", its own '&gt;'
+    /// before any other tag begins; not "&lt;names&gt;", one that closes itself, nor the name in a sentence with no '&gt;'.
+    /// </summary>
+    private static bool OpensBlock(string text, int after)
+    {
+        if (after >= text.Length || text[after] is not ('>' or ' ' or '\t' or '\r' or '\n'))
+        {
+            return false;
+        }
+
+        for (var i = after; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '>':
+                    return text[i - 1] != '/';
+                case '<':
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>What goes along with a prompt, and is none: a reminder, VS Code's open file or selection, a shell command typed with "!" and its output.</summary>
