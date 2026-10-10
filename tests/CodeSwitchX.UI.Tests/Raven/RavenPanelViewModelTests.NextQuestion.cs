@@ -926,4 +926,26 @@ public sealed partial class RavenPanelViewModelTests
 
         _brain.Sent.ShouldHaveSingleItem().ShouldEndWith("stop");
     }
+
+    // #261 (decided A): "next question" takes the floor like a new question: an answer on its way stops, the card is read at once
+    [Fact]
+    public async Task Next_question_stops_an_answer_on_its_way_and_reads_the_card_at_once()
+    {
+        _brain.Answer = _ => [new BrainText("The release notes changed a lot."), new BrainText(" And the rest of it.")];
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        _brain.Pause = new TaskCompletionSource(); // its first words came; the rest is still on its way, and stays so
+        Type(vm, "what changed in the release notes?");
+        await Until(() => vm.Log.Any(e => e.Text.StartsWith("The release notes changed", StringComparison.Ordinal)));
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestionByKey();
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // not after the answer
+        await WithinAsync(vm.PendingAnswers);
+        vm.Log.ShouldContain(e => e.Text.StartsWith("The release notes changed", StringComparison.Ordinal) && e.Text.Contains("(interrupted)"));
+        vm.Log.ShouldNotContain(e => e.Text.Contains("the rest of it"), "the answer stopped");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
+    }
 }

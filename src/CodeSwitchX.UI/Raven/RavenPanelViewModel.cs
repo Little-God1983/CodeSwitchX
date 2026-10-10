@@ -4854,8 +4854,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// "Chat three", "zu Chat drei", "activity", "open chat three": the app switches the chat itself, at once and without
     /// a brain turn (<see cref="SpokenChatSwitch"/>), and says where the user is now. "Next question" goes to the oldest open
-    /// card (<see cref="GoToNextQuestion"/>, #230). Navigation, not a question: nothing
-    /// is written to a chat, and the brain's answer still on its way goes on in the chat it was asked in. A switch to
+    /// card (<see cref="GoToNextQuestion"/>, #230), and takes the floor when it finds one (#261). Navigation, not a
+    /// question: nothing is written to a chat, and after a switch the brain's answer still on its way goes on in the chat
+    /// it was asked in. A switch to
     /// another window's chat ends an allow waiting for a yes, as one by hotkey or click does (see
     /// <see cref="OnSelectedChatChanged"/>): a yes said there must not allow another chat's prompt.
     /// Returns whether the words were a switch.
@@ -5013,8 +5014,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// "Next question", said, typed, by its hotkey or as a yes to "Next?" (#230): the oldest open card in any window. Raven
-    /// switches to that window's chat, taking the floor as a switch by voice does, and reads the card out as soon as the
-    /// floor is free: at once, or once the user stops talking in Open mic; a long command in the teller's words (#233). With
+    /// switches to that window's chat, taking the floor as a new question does: an answer on its way stops (#261). It reads
+    /// the card out as soon as the floor is free: at once, or once the user stops talking in Open mic; a long command in
+    /// the teller's words (#233). With
     /// none open it says so. The window is not shown in the Cab: there its VS Code would ask the questions itself (UI thread).
     /// </summary>
     /// <param name="aloud">Asked for aloud: muted, the card is read out too (#242); by a key or typed, only shown.</param>
@@ -5049,7 +5051,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        _digest?.Cancel(); // a telling on its way, news or a card being worded, need not end first (#252)
+        // It takes the floor as a new question does (#261): an answer on its way stops with "(interrupted)", and so does a
+        // telling, news or a card being worded (#252); the card is read at once, in Open mic after the grace.
+        TakeFloor();
         Request(card, aloud); // read once the floor is free, with no pause first: the user waits for it
     }
 
