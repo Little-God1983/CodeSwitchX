@@ -407,7 +407,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.Log.Any(e => e.Ask is not null));
         vm.SelectedChat = vm.YardChat;
 
-        asks.Propose("p1", window: null, fromRavenChat: false);
+        asks.Propose("p1", window: null); // no chat header
         Type(vm, "what now");
         await WithinAsync(vm.PendingAnswers);
 

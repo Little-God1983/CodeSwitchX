@@ -467,8 +467,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
         try
         {
-            // The brain of this chat is told what comes of it; a caller that is no Raven chat sends no chat key (#265).
-            asks!.Propose(prompt.Id, scope?.WorkspaceId, fromRavenChat: scope?.Key is not null);
+            asks!.Propose(prompt.Id, scope?.WorkspaceId); // the brain of this chat is told what comes of it
         }
         catch (ArgumentException)
         {

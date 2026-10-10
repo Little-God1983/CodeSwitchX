@@ -2853,8 +2853,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        // Judged by the chat that proposes; a caller that is no Raven chat: no turn of the user's answers there (#254, #265).
-        var aloud = proposal.FromRavenChat && AloudInFlightIn(YardMcp.ChatKey(proposal.Window, overview: proposal.Window is null));
+        // Judged by the window's chat that proposes, as chat 0 proposes nothing. No window, it is a caller that is no Raven
+        // chat, and no turn of the user's answers there (#254, #265).
+        var aloud = proposal.Window is { } window && AloudInFlightIn(YardMcp.ChatKey(window, overview: false));
         if (!MaySpeak(aloud) || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
@@ -2987,8 +2988,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>The brain that proposed the allow: the one of the chat its tool call came from; null for a window gone, whose brain went with it.</summary>
+    /// <remarks>
+    /// No window: chat 0 proposes nothing (answer_permission refuses it), so it came from a caller that is no Raven chat,
+    /// and no brain of the user's proposed it (#265).
+    /// </remarks>
     private IConductorBrain? Proposer(ChatAllowProposal proposal) =>
-        !proposal.FromRavenChat || (proposal.Window is { } window && Chats.All(c => c.WorkspaceId != window)) ? null : BrainOf(ChatOf(proposal.Window));
+        proposal.Window is { } window && Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == window) is { } chat ? BrainOf(chat) : null;
 
     /// <summary>What became of a proposed allow, for the brain that proposed it, and no other.</summary>
     private void TellProposer(ChatAllowProposal proposal, string fact)
