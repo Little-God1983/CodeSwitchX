@@ -55,6 +55,8 @@ public sealed class WorkspaceStore : IWorkspaceStore
     public async Task UpdateAsync(Workspace workspace, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // Read and written in one transaction: an edit and a worktree refresh at once do not work on each other's stale rows (#273).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var existing = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == workspace.Id, ct)
             ?? throw new KeyNotFoundException($"Workspace {workspace.Id} not found.");
 
@@ -80,11 +82,13 @@ public sealed class WorkspaceStore : IWorkspaceStore
         }
 
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task ReplaceWorktreesAsync(Guid workspaceId, IReadOnlyList<Worktree> worktrees, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct); // as UpdateAsync (#273)
         var existing = await db.Worktrees.Where(t => t.WorkspaceId == workspaceId).ToListAsync(ct);
         db.Worktrees.RemoveRange(existing.Where(t => worktrees.All(n => n.Id != t.Id)));
         foreach (var worktree in worktrees)
@@ -102,6 +106,7 @@ public sealed class WorkspaceStore : IWorkspaceStore
         }
 
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     /// <summary>The lowest number from 1 not in <paramref name="taken"/> (see <see cref="Workspace.Number"/>).</summary>
