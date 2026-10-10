@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
@@ -25,9 +26,10 @@ public sealed class TileTabsTests
     private readonly Workspace _shop;
     private readonly SessionEngine _engine;
     private readonly FakeTabs _tabs = new();
-    private readonly Dictionary<string, DateTimeOffset> _writtenIn = [];
-    private readonly Dictionary<string, string> _titles = [];
-    private readonly Dictionary<string, bool> _running = new(StringComparer.OrdinalIgnoreCase);
+    // Read by the looks on the thread pool, as the fake's list is.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _writtenIn = new();
+    private readonly ConcurrentDictionary<string, string> _titles = new();
+    private readonly ConcurrentDictionary<string, bool> _running = new(StringComparer.OrdinalIgnoreCase);
     private readonly YardViewModel _yard;
 
     public TileTabsTests()
@@ -573,16 +575,24 @@ public sealed class TileTabsTests
     {
         await _yard.InitializeAsync(CancellationToken.None);
         var before = _tabs.Reads; // the start's own look
-        _tabs.Hold = new ManualResetEventSlim();
+        using var hold = _tabs.Hold = new ManualResetEventSlim();
         var running = _yard.RefreshTabsAsync();
         for (var i = 0; i < 500 && _tabs.Reads == before; i++)
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
 
-        _tabs.Reads.ShouldBe(before + 1, "the running look took the list before VS Code wrote it");
-        var look = VsCodeWrites(Tab("a"));
-        _tabs.Hold.Set();
+        Task look;
+        try
+        {
+            _tabs.Reads.ShouldBe(before + 1, "the running look took the list before VS Code wrote it");
+            look = VsCodeWrites(Tab("a"));
+        }
+        finally
+        {
+            _tabs.Hold.Set(); // a failure must not leave a pool thread held
+        }
+
         await running;
         await look;
 
@@ -593,7 +603,7 @@ public sealed class TileTabsTests
     private sealed class FakeTabs : IVsCodeOpenTabs
     {
         // Written by the test while a look reads it on the thread pool.
-        public System.Collections.Concurrent.ConcurrentDictionary<Guid, OpenChatTabs> Of { get; } = new();
+        public ConcurrentDictionary<Guid, OpenChatTabs> Of { get; } = new();
 
         /// <summary>Holds each read once it took the list, until set.</summary>
         public ManualResetEventSlim? Hold { get; set; }

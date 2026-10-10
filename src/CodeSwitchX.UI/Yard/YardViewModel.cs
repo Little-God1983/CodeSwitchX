@@ -236,7 +236,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
             await RefreshTabsAsync();
-            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync()), null, TabsInterval, TabsInterval);
+            _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync(again: false)), null, TabsInterval, TabsInterval);
         }
 
         _tickTimer = _time.CreateTimer(_ => _ui.Post(() => Tick(_time.GetUtcNow())), null, TickInterval, TickInterval);
@@ -348,7 +348,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// have written its list since the read took it (as it closes, #238). However often it is asked meanwhile, one more read
     /// covers it.
     /// </summary>
-    internal Task RefreshTabsAsync()
+    /// <param name="again">False for the timer's look: the read that runs is enough, or reads slower than the timer would
+    /// run back to back.</param>
+    internal Task RefreshTabsAsync(bool again = true)
     {
         if (_openTabs is not { } openTabs)
         {
@@ -357,8 +359,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         lock (_tabsLock)
         {
-            _tabsAsked++;
-            if (!_tabsReading)
+            if (_tabsReading)
+            {
+                _tabsAsked += again ? 1 : 0;
+            }
+            else
             {
                 _tabsReading = true;
                 _tabsRead = ReadTabsUntilAskedAsync(openTabs);
@@ -371,21 +376,32 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>Reads the tabs, and again for as long as a look was asked for while it read.</summary>
     private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
     {
-        while (true)
+        var done = false;
+        try
         {
-            long asked;
-            lock (_tabsLock)
+            while (!done)
             {
-                asked = _tabsAsked;
-            }
-
-            await ReadTabsAsync(openTabs);
-            lock (_tabsLock)
-            {
-                if (_tabsAsked == asked)
+                long asked;
+                lock (_tabsLock)
                 {
-                    _tabsReading = false;
-                    return;
+                    asked = _tabsAsked;
+                }
+
+                await ReadTabsAsync(openTabs);
+                lock (_tabsLock)
+                {
+                    done = _tabsAsked == asked;
+                    _tabsReading = !done;
+                }
+            }
+        }
+        finally
+        {
+            if (!done)
+            {
+                lock (_tabsLock)
+                {
+                    _tabsReading = false; // a fault must not leave every later look given this read
                 }
             }
         }
