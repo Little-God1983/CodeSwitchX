@@ -731,7 +731,8 @@ public sealed class RavenActionsTests
             return Next;
         }
 
-        public string WhatsNew(string? askedIn, int? number) => $"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
+        public Task<string> WhatsNewAsync(string? askedIn, int? number) =>
+            Task.FromResult($"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}.");
 
         public void SetChatDefaults(ChatDefaults defaults)
         {

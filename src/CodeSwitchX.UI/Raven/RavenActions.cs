@@ -55,7 +55,8 @@ public interface IRavenShell
     /// The news not read yet in every window's Raven chat, the chat of <paramref name="askedFrom"/> first, or only chat
     /// <paramref name="number"/>'s, and what waits for the user (#243); counted read once the answer telling it is heard.
     /// </summary>
-    string WhatsNew(string? askedIn, int? number);
+    /// <remarks>News still held back for the pause or a busy floor is told too (#256). Started on the UI thread.</remarks>
+    Task<string> WhatsNewAsync(string? askedIn, int? number);
 
     /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
     void WriteSummary(string? askedIn, string text);
@@ -554,8 +555,15 @@ public sealed class RavenActions : IYardActions
         }
     }
 
-    public Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct) =>
-        _ui.InvokeAsync(() => _shell().WhatsNew(askedIn, number), UiTimeout, ct);
+    public async Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct)
+    {
+        var answer = await _ui.InvokeAsync(() => _shell().WhatsNewAsync(askedIn, number), UiTimeout, ct).ConfigureAwait(false);
+        // Longer than a hop to the UI thread: news held back is taken first, with the end of each of its chats' transcripts (#256).
+        return await answer.WaitAsync(WhatsNewTimeout, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>How long whats_new waits for its answer once the UI thread took it: the held news it reads included.</summary>
+    internal static readonly TimeSpan WhatsNewTimeout = TimeSpan.FromSeconds(30);
 
     public Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().NextQuestion(askedIn) ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);

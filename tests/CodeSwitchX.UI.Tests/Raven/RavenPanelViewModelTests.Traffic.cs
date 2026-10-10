@@ -358,6 +358,9 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
         await Until(() => _chime.Plays == 1); // nothing was heard of chat 1's news
+        // #256: the log is read once the telling and the voice are done with it; read while they wrote, it failed once.
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
 
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }

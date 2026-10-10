@@ -157,13 +157,32 @@ public sealed class ChatNews : IDisposable
     /// from the board is left out, and so is news the chat has moved past since without new news (it needed the user
     /// and works again, it finished and works again). Oldest first. The chats' last replies are read together.
     /// </summary>
-    public async Task<IReadOnlyList<ChatNewsLine>> TakeAsync(CancellationToken ct)
+    /// <param name="which">Takes only the news of chats whose workspace (null for none) it takes; the rest waits (#256).
+    /// Called on the caller's thread, outside the lock, before anything is awaited.</param>
+    public async Task<IReadOnlyList<ChatNewsLine>> TakeAsync(CancellationToken ct, Func<Guid?, bool>? which = null)
     {
         List<KeyValuePair<string, Slot>> taken;
         lock (_lock)
         {
             taken = [.. _slots];
-            _slots.Clear();
+            if (which is null)
+            {
+                _slots.Clear();
+            }
+        }
+
+        if (which is not null)
+        {
+            // The caller's choice is made out of the lock the bus threads take; news that came for a chat meanwhile is newer, and waits.
+            taken = [.. taken.Where(s => which(s.Value.WorkspaceId))];
+            lock (_lock)
+            {
+                taken = [.. taken.Where(s => _slots.TryGetValue(s.Key, out var now) && ReferenceEquals(now, s.Value))];
+                foreach (var (id, _) in taken)
+                {
+                    _slots.Remove(id);
+                }
+            }
         }
 
         if (taken.Count == 0)

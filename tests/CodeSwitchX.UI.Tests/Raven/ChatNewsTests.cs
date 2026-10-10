@@ -79,6 +79,23 @@ public sealed class ChatNewsTests : IDisposable
         (await TakeAsync()).ShouldBeEmpty("taken news is gone");
     }
 
+    // #256: whats_new of one chat takes only that chat's news; the rest waits for the digest
+    [Fact]
+    public async Task Taking_the_news_of_some_chats_leaves_the_others_waiting()
+    {
+        var window = Guid.NewGuid();
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()), Chat("a", SessionState.Idle, _time.GetUtcNow())));
+        _bus.Publish(new SessionChanged(Chat("c", SessionState.Working, _time.GetUtcNow()) with { WorkspaceId = window },
+            Chat("c", SessionState.Errored, _time.GetUtcNow()) with { WorkspaceId = window }));
+        _yard.Now("a", SessionState.Idle, needsYou: false);
+        _yard.Now("c", SessionState.Errored, needsYou: false);
+
+        (await _news.TakeAsync(TestContext.Current.CancellationToken, workspace => workspace == window)).Select(l => l.SessionId).ShouldBe(["c"]);
+
+        _news.HasNews.ShouldBeTrue();
+        (await TakeAsync()).Select(l => l.SessionId).ShouldBe(["a"]);
+    }
+
     [Fact]
     public async Task The_end_of_a_turn_Raven_stopped_is_no_news_but_a_later_wait_is()
     {

@@ -165,19 +165,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("False to unmute.")] bool muted = true,
         CancellationToken cancellationToken = default)
     {
-        int number;
-        var said = chat?.Trim() ?? "";
-        if (said.Length == 0 || ThisChat(said))
-        {
-            number = (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number
-                ?? throw new McpException("Say which chat: the user is in chat 0, which has no mute of its own.");
-        }
-        else
-        {
-            number = (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
-                ?? throw new McpException("Activity has no mute of its own: it only lists every chat's lines. Say which window's chat.");
-        }
-
+        var number = await ChatNumberAsync(chat?.Trim() ?? "", "Activity has no mute of its own: it only lists every chat's lines. Say which window's chat.",
+            cancellationToken).ConfigureAwait(false) ?? throw new McpException("Say which chat: the user is in chat 0, which has no mute of its own.");
         return await Act(() => actions.MuteChatAsync(number, muted, cancellationToken)).ConfigureAwait(false);
     }
 
@@ -229,10 +218,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         var said = chat?.Trim() ?? "";
         if (said.Length > 0 && !EveryChat(said))
         {
-            number = ThisChat(said)
-                ? (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number ?? 0
-                : (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
-                    ?? throw new McpException("Activity only lists every chat's lines: leave the chat out for every window's news.");
+            number = await ChatNumberAsync(said, "Activity only lists every chat's lines: leave the chat out for every window's news.",
+                cancellationToken).ConfigureAwait(false) ?? 0; // chat 0's own
         }
 
         return await Act(() => actions.WhatsNewAsync(scope?.Key, number, cancellationToken)).ConfigureAwait(false);
@@ -516,6 +503,22 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             [] => throw new McpException($"The Yard shows no chat '{chat}'.{otherwise}"),
             _ => throw new McpException($"'{chat}' fits more than one chat. Give more of its id."),
         };
+    }
+
+    /// <summary>
+    /// The number of the chat <paramref name="said"/> names: the one the user is in for nothing or "this chat", or a chat
+    /// by its number or its window's name, as the user said it. Null when the user is in chat 0, which has no window:
+    /// the caller says what that means for it.
+    /// </summary>
+    /// <param name="activity">The refusal for Activity, which has no number.</param>
+    private async Task<int?> ChatNumberAsync(string said, string activity, CancellationToken ct)
+    {
+        if (said.Length == 0 || ThisChat(said))
+        {
+            return (await WindowAsync(ct).ConfigureAwait(false))?.Number;
+        }
+
+        return (await NamedChatAsync(said, open: false, ct).ConfigureAwait(false)).Number ?? throw new McpException(activity);
     }
 
     /// <summary>Chat 0 knows the windows' chats by their summaries only: a card is answered in its window's chat, which reads it out.</summary>
