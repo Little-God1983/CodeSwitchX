@@ -132,10 +132,14 @@ public sealed class WorkspaceStore : IWorkspaceStore
     public async Task<Track> AddTrackAsync(string name, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // The read and the insert in one transaction, begun IMMEDIATE: a track added at the same time waits, and then sees
+        // this one's order (#273: a read no longer waits for a write in progress).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var maxOrder = await db.Tracks.Select(t => (int?)t.SortOrder).MaxAsync(ct) ?? -1;
         var track = new Track { Name = name, SortOrder = maxOrder + 1 };
         db.Tracks.Add(track);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
         return track;
     }
 

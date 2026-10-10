@@ -25,11 +25,10 @@ public sealed class ConnectionTests : IAsyncLifetime
         writer.Tracks.Add(new Track { Name = "Not committed yet", SortOrder = 9 });
         await writer.SaveChangesAsync(ct);
 
-        // Stopped after 5 s if it waits: the read itself ends, rather than going on past the test.
-        using var waitedTooLong = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        waitedTooLong.CancelAfter(TimeSpan.FromSeconds(5));
-        var tracks = await _db.Get<IWorkspaceStore>().GetTracksAsync(waitedTooLong.Token);
+        // Awaited here: a read that waits (the busy wait does not watch a token) fails at the 30 s command timeout, inside the test.
+        var tracks = await _db.Get<IWorkspaceStore>().GetTracksAsync(ct);
 
+        tracks.ShouldContain(t => t.Name == DatabaseInitializer.DefaultTrackName, "it reads what was committed");
         tracks.ShouldNotContain(t => t.Name == "Not committed yet");
         await transaction.RollbackAsync(ct);
     }

@@ -52,6 +52,8 @@ public sealed class SettingsStore : ISettingsStore
     public async Task UpsertPricingAsync(IReadOnlyCollection<PricingRule> rules, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // The read and the writes in one transaction, begun IMMEDIATE: two saves of a new model's rule cannot both insert it (#273).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var models = rules.Select(r => r.Model).ToArray();
         var existing = await db.PricingRules.Where(p => models.Contains(p.Model)).ToDictionaryAsync(p => p.Model, ct);
         foreach (var rule in rules)
@@ -67,5 +69,6 @@ public sealed class SettingsStore : ISettingsStore
         }
 
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 }
