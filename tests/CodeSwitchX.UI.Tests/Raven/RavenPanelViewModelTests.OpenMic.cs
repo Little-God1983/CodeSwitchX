@@ -869,8 +869,11 @@ public sealed partial class RavenPanelViewModelTests
 
         voice.IsSpeaking.ShouldBeFalse();
         await Until(() => player.Stops > stops);
+        await Until(() => _brain.Sent.LastOrDefault()?.Contains("stop.", StringComparison.OrdinalIgnoreCase) == true); // the gate holds the answer to it: nothing else could speak
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
+        vm.Log.Count(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.").ShouldBe(2);
+        voice.Hush(); // the held player never finishes: nothing goes on playing past the test
     }
 
     // #217: the TV talking over Raven cut it off, and then got in as a follow-up
