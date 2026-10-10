@@ -857,6 +857,8 @@ public sealed partial class RavenPanelViewModelTests
         Type(vm, "What's waiting on me?");
         await Until(() => vm.State == RavenState.Speaking);
         var stops = player.Stops;
+        // "stop." is asked of the brain after the name: its answer, held, must not be what speaks at the check (#245).
+        _brain.Gate = new TaskCompletionSource();
 
         _openMic.Speak(); // the TV, as far as anyone knows yet
         voice.IsSpeaking.ShouldBeTrue();
@@ -867,6 +869,8 @@ public sealed partial class RavenPanelViewModelTests
 
         voice.IsSpeaking.ShouldBeFalse();
         await Until(() => player.Stops > stops);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
     }
 
     // #217: the TV talking over Raven cut it off, and then got in as a follow-up
