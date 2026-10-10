@@ -157,32 +157,27 @@ public sealed partial class RavenPanelViewModelTests
         rest.IsUnread.ShouldBeTrue();
     }
 
-    // Review of #242: a card asked for aloud and not read yet is only shown once the user mutes: muted is quiet now
+    // Review of #242: a card asked for aloud and not read yet is only shown once the user mutes: muted is quiet now.
+    // Since #261 an answer on its way no longer holds it back: it waits Open mic's grace here.
     [Fact]
     public async Task A_card_asked_for_aloud_is_not_read_once_Raven_is_muted()
     {
-        var (vm, asks) = await NextQuestionVmAsync();
+        Transcribes(Task.FromResult(new DictationResult("Raven, next question.", TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
         _ = await AsksFruitAsync(vm, asks, "c");
         await GraceAsync(vm);
-        vm.Traffic.Pause = TimeSpan.FromSeconds(30);
-        _brain.Gate = new TaskCompletionSource(); // an answer on its way holds the floor: the card waits
-        Type(vm, "anything new?");
-        await Until(() => _brain.Asked.Count == 1);
-        Transcribes(Task.FromResult(new DictationResult("Next question.", TimeSpan.FromSeconds(1))));
-        vm.PressMic(TalkInput.MicButton);
-        await WithinAsync(vm.PendingStart);
-        Speak();
-        _time.Advance(Hold);
-        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
-        await WithinAsync(vm.PendingTranscriptions); // said aloud while the answer holds the floor
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions); // said aloud: the card waits the grace
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         var before = _speech.Spoken.Count;
 
         vm.IsMuted = true;
-        _brain.Gate.SetResult();
-        await WithinAsync(vm.PendingAnswers);
+        _time.Advance(TrafficWatcher.NewsGrace);
         await GraceAsync(vm);
 
-        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         SpokenSince(before).ShouldBeEmpty("muted before it was read: only shown");
     }
 

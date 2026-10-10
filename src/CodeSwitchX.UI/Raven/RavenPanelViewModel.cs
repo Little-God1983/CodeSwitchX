@@ -5013,8 +5013,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// "Next question", said, typed, by its hotkey or as a yes to "Next?" (#230): the oldest open card in any window. Raven
-    /// switches to that window's chat, taking the floor as a switch by voice does, and reads the card out as soon as the
-    /// floor is free: at once, or once the user stops talking in Open mic; a long command in the teller's words (#233). With
+    /// switches to that window's chat, taking the floor as a new question does: an answer on its way stops (#261). It reads
+    /// the card out as soon as the floor is free: at once, or once the user stops talking in Open mic; a long command in
+    /// the teller's words (#233). With
     /// none open it says so. The window is not shown in the Cab: there its VS Code would ask the questions itself (UI thread).
     /// </summary>
     /// <param name="aloud">Asked for aloud: muted, the card is read out too (#242); by a key or typed, only shown.</param>
@@ -5049,7 +5050,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        _digest?.Cancel(); // a telling on its way, news or a card being worded, need not end first (#252)
+        // It takes the floor as a new question does (#261): an answer on its way stops with "(interrupted)", and so does a
+        // telling, news or a card being worded (#252); the card is read at once.
+        TakeFloor();
         Request(card, aloud); // read once the floor is free, with no pause first: the user waits for it
     }
 
