@@ -578,6 +578,33 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => SpokenSince(before) == RavenPanelViewModel.NoQuestionsLine);
     }
 
+    // Round 1 of #252: a card that came while "No questions are waiting." waited for the turn is gone to instead
+    [Fact]
+    public async Task Next_question_with_none_open_goes_to_a_card_that_came_while_the_user_talked()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak();
+        var before = _speech.Spoken.Count;
+        vm.GoToNextQuestionByKey(); // none open yet
+
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3, while the user talks
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        _time.Advance(TrafficWatcher.NewsGrace);
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        SpokenSince(before).ShouldNotContain(RavenPanelViewModel.NoQuestionsLine);
+    }
+
     // #252: the Open mic grace is for a user who may go on talking, not for a key pressed in silence
     [Fact]
     public async Task Next_question_by_its_hotkey_in_Open_mic_with_the_user_quiet_reads_the_card_at_once()
