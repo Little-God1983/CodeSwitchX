@@ -2993,7 +2993,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// and no brain of the user's proposed it (#265).
     /// </remarks>
     private IConductorBrain? Proposer(ChatAllowProposal proposal) =>
-        proposal.Window is { } window && Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == window) is { } chat ? BrainOf(chat) : null;
+        proposal.Window is { } window && ChatOfBrain(YardMcp.ChatKey(window, overview: false)) is { } chat ? BrainOf(chat) : null;
 
     /// <summary>What became of a proposed allow, for the brain that proposed it, and no other.</summary>
     private void TellProposer(ChatAllowProposal proposal, string fact)

@@ -412,6 +412,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+        brains.Windows.Values.ShouldAllBe(b => b.Sent.All(q => !q.Contains("allow you proposed")), "nor a window's brain");
     }
 
     [Fact]
