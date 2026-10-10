@@ -247,6 +247,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             // Read before the window shows: the tiles are never drawn without the tabs VS Code comes back with.
             await RefreshTabsAsync();
+            if (_disposed)
+            {
+                return; // closed during the read: no timer is made that nothing would dispose
+            }
+
             _tabsTimer = _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync(again: false)), null, TabsInterval, TabsInterval);
         }
 
@@ -399,18 +404,21 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 await ReadTabsAsync(openTabs); // never throws: a failure is logged
 
                 TaskCompletionSource read;
+                TaskCompletionSource? next;
                 bool more;
                 lock (_tabsGate)
                 {
                     // Decided in one critical section with the asking, so no look is lost.
                     read = _tabsRead!;
-                    _tabsRead = _tabsReadNext;
+                    _tabsRead = _disposed ? null : _tabsReadNext; // disposed, the read asked for is not made
+                    next = _disposed ? _tabsReadNext : null;
                     _tabsReadNext = null;
                     _tabsReadBegun = false;
                     more = _tabsRead is not null;
                 }
 
                 read.SetResult();
+                next?.SetResult();
                 if (!more)
                 {
                     return;

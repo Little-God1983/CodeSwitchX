@@ -715,6 +715,32 @@ public sealed class TileTabsTests
         _tabs.Reads.ShouldBe(reads);
     }
 
+    [Fact]
+    public async Task A_read_asked_for_while_one_runs_is_not_made_once_disposed_and_its_wait_ends()
+    {
+        // Round 3 of #248: the loop made the read asked for meanwhile after the app closed.
+        await _yard.InitializeAsync(CancellationToken.None);
+        var before = _tabs.Reads;
+        var held = new ManualResetEventSlim(); // not disposed: a late read may still wait on it
+        _tabs.Hold = held;
+        try
+        {
+            var running = _yard.RefreshTabsAsync();
+            await UntilReads(before + 1);
+            var asked = _yard.RefreshTabsAsync();
+            _yard.Dispose();
+            held.Set();
+
+            await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await asked.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            _tabs.Reads.ShouldBe(before + 1);
+        }
+        finally
+        {
+            held.Set();
+        }
+    }
+
     private async Task UntilReads(int reads)
     {
         for (var i = 0; i < 500 && _tabs.Reads < reads; i++)
