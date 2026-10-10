@@ -1,4 +1,5 @@
 using CodeSwitchX.UI.Infrastructure;
+using Microsoft.Extensions.Time.Testing;
 
 namespace CodeSwitchX.UI.Tests.Infrastructure;
 
@@ -68,6 +69,37 @@ public sealed class UiDispatcherExtensionsTests
             new Thread(() => action()) { IsBackground = true }.Start();
             began.Wait(TimeSpan.FromSeconds(10));
         }
+    }
+
+    [Fact]
+    public async Task Run_completes_once_the_action_has_run()
+    {
+        var ui = new HeldDispatcher();
+        var done = false;
+
+        var run = ui.RunAsync(() => done = true, TimeSpan.FromSeconds(5), new FakeTimeProvider());
+        run.IsCompleted.ShouldBeFalse();
+        ui.RunHeld();
+
+        await run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        done.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Run_on_a_busy_UI_thread_stops_waiting_after_the_timeout_and_still_runs_later()
+    {
+        // #246: a dispatcher that never ran the post (the app closing) held the wait for good; one only busy must lose nothing.
+        var ui = new HeldDispatcher();
+        var time = new FakeTimeProvider();
+        var done = false;
+
+        var run = ui.RunAsync(() => done = true, TimeSpan.FromSeconds(5), time);
+        time.Advance(TimeSpan.FromSeconds(5));
+
+        await run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        done.ShouldBeFalse();
+        ui.RunHeld();
+        done.ShouldBeTrue();
     }
 
     /// <summary>A UI thread that is busy: what is posted waits until the test runs it.</summary>

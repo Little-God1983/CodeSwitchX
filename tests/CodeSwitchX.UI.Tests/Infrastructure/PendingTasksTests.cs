@@ -27,15 +27,18 @@ public sealed class PendingTasksTests
     }
 
     [Fact]
-    public void Once_all_succeeded_it_starts_afresh_and_holds_only_what_comes_after()
+    public void A_wait_taken_before_a_task_is_added_does_not_wait_for_it()
     {
         var pending = new PendingTasks();
-        pending.Add(Task.CompletedTask);
-        var later = new TaskCompletionSource();
+        var first = new TaskCompletionSource();
+        pending.Add(first.Task);
+        var before = pending.All;
 
-        pending.Add(later.Task);
+        pending.Add(new TaskCompletionSource().Task); // never ends
+        first.SetResult();
 
-        pending.All.ShouldBeSameAs(later.Task, "what was done before is not kept");
+        before.IsCompletedSuccessfully.ShouldBeTrue();
+        pending.All.IsCompleted.ShouldBeFalse();
     }
 
     [Fact]
@@ -55,12 +58,20 @@ public sealed class PendingTasksTests
         var pending = new PendingTasks();
         pending.Add(Task.FromException(new InvalidOperationException("broke")));
         pending.Add(Task.CompletedTask);
-        var first = pending.All;
-        pending.Add(Task.CompletedTask);
+        pending.Add(Task.FromException(new InvalidOperationException("broke again")));
         pending.Add(Task.CompletedTask);
 
-        pending.All.ShouldNotBeSameAs(first);
         pending.All.Exception!.InnerExceptions.ShouldHaveSingleItem().Message.ShouldBe("broke");
+    }
+
+    [Fact]
+    public void A_cancelled_task_leaves_the_wait_cancelled()
+    {
+        var pending = new PendingTasks();
+        pending.Add(Task.FromCanceled(new CancellationToken(canceled: true)));
+        pending.Add(Task.CompletedTask);
+
+        pending.All.IsCanceled.ShouldBeTrue();
     }
 
     [Fact]

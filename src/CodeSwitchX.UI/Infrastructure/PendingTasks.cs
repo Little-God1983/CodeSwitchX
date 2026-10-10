@@ -2,25 +2,31 @@ namespace CodeSwitchX.UI.Infrastructure;
 
 /// <summary>
 /// Work still running that something (a step that must come after it, or a test) waits for as one: <see cref="All"/>
-/// completes once every task added is done. Once all are done it starts afresh, so it does not grow for its owner's life;
-/// the first fault stays in it, to be seen by what waits. Safe to add to from any thread.
+/// completes once every task added so far is done. Only tasks still running are held, so a task that never ends keeps no
+/// others alive; the first fault stays, to be seen by what waits. Safe to add to from any thread.
 /// </summary>
 internal sealed class PendingTasks
 {
     private readonly object _lock = new();
-    private Task _all = Task.CompletedTask;
+    private readonly HashSet<Task> _running = [];
 
-    /// <summary>The first task that faulted, kept once the rest are let go.</summary>
+    /// <summary>The first task that faulted or was cancelled, as one task of its own.</summary>
     private Task? _fault;
 
-    /// <summary>Completes once every task added so far is done; faults if any of them did.</summary>
+    /// <summary>Completes once every task added so far is done; faults (or is cancelled) if any of them, or any before, did.</summary>
     public Task All
     {
         get
         {
             lock (_lock)
             {
-                return _all;
+                if (_running.Count == 0)
+                {
+                    return _fault ?? Task.CompletedTask;
+                }
+
+                var running = Task.WhenAll(_running.ToArray());
+                return _fault is null ? running : Task.WhenAll(_fault, running);
             }
         }
     }
@@ -32,21 +38,21 @@ internal sealed class PendingTasks
     {
         lock (_lock)
         {
-            if (!_all.IsCompleted)
-            {
-                _all = Task.WhenAll(_all, task);
-                return;
-            }
-
-            if (_fault is null && !_all.IsCompletedSuccessfully)
-            {
-                _fault = _all.IsFaulted ? FirstFault(_all) : _all;
-            }
-
-            _all = _fault is null ? task : Task.WhenAll(_fault, task);
+            _running.Add(task);
         }
+
+        task.ContinueWith(Finished, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    /// <summary>One task with the first exception of <paramref name="faulted"/>, not the chain it ended.</summary>
-    private static Task FirstFault(Task faulted) => Task.FromException(faulted.Exception!.InnerException ?? faulted.Exception);
+    private void Finished(Task task)
+    {
+        lock (_lock)
+        {
+            _running.Remove(task);
+            if (_fault is null && !task.IsCompletedSuccessfully)
+            {
+                _fault = task.IsFaulted ? Task.FromException(task.Exception!.InnerException ?? task.Exception) : task;
+            }
+        }
+    }
 }
