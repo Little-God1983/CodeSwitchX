@@ -853,7 +853,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         // Before the hush, which would settle it as not heard; and, as for one written while muted, a bare yes may answer it
         // (#217, #246).
-        if (value && _asks?.Proposed is { } proposal && !_asks.IsHeard(proposal) && _asks.MarkHeard(proposal, _time.GetUtcNow()))
+        if (value && _mutable is { } proposal && !_asks!.IsHeard(proposal) && _asks.MarkHeard(proposal, _time.GetUtcNow()))
         {
             _followUpFrom = _time.GetUtcNow();
         }
@@ -2388,22 +2388,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private Task FollowUpFromNowAsync() => OnUiAsync(() => _followUpFrom = _time.GetUtcNow());
 
     /// <summary>
-    /// Runs <paramref name="action"/> on the UI thread and completes once it has; or, when the UI thread has not taken it
-    /// within <see cref="RavenActions.UiTimeout"/> (its dispatcher shut down with the app), drops it, so no wait hangs on it.
+    /// Runs <paramref name="action"/> on the UI thread, and completes once it has run, or after <see cref="RavenActions.UiTimeout"/>
+    /// with the UI thread still busy: it still runs when the thread gets to it, but no wait hangs on a dispatcher that shut
+    /// down with the app (#246).
     /// </summary>
     private async Task OnUiAsync(Action action)
     {
+        var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var wait = ran.Task.WaitAsync(RavenActions.UiTimeout, _time); // armed before the post: the clock runs from it
+        _dispatcher.Post(() =>
+        {
+            try
+            {
+                action(); // a fault is the UI thread's, as any post's
+            }
+            finally
+            {
+                ran.TrySetResult();
+            }
+        });
+
         try
         {
-            await _dispatcher.InvokeAsync(() =>
-            {
-                action();
-                return true;
-            }, RavenActions.UiTimeout, time: _time).ConfigureAwait(false);
+            await wait.ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            // Never begun, and now it never will: the app is closing.
+            // Left to run when it can.
         }
     }
 
@@ -2848,11 +2859,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
         // written, and is not heard.
         var spoken = _voice.Begin(silent: _openSpeech, whole: true, evenMuted: aloud);
+        _mutable = _openSpeech ? null : proposal;
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
         _followUpWaits.Add(HeardAsync(proposal, spoken.Played));
     }
+
+    /// <summary>
+    /// The proposal whose read-back a mute cuts off, if it is still being said; not one only written while the user talked,
+    /// which was never heard, so a mute settles nothing of it (#246).
+    /// </summary>
+    private ChatAllowProposal? _mutable;
 
     /// <summary>
     /// Marks the proposal's read-back heard once it has played to its end. One not heard (hushed midway, dropped, or only
@@ -2863,12 +2881,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var chat = ChatOfAsk(proposal.Ask);
         if (await played.ConfigureAwait(false))
         {
-            // A bare yes may answer it (#217); not one over meanwhile (replaced, lapsed, answered by a click), which no yes answers (#246).
-            if (_asks?.MarkHeard(proposal, _time.GetUtcNow()) == true)
+            var at = _time.GetUtcNow();
+            // A bare yes may answer it (#217); not one over (replaced, lapsed, answered by a click), which no yes answers. On
+            // the UI thread, where a click ends it: none can come between the two (#246).
+            await OnUiAsync(() =>
             {
-                await FollowUpFromNowAsync().ConfigureAwait(false);
-            }
-
+                if (_asks?.MarkHeard(proposal, at) == true)
+                {
+                    _followUpFrom = _time.GetUtcNow();
+                }
+            }).ConfigureAwait(false);
             return;
         }
 
@@ -4406,7 +4428,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             await previous;
             // Worded now, once what was heard before (a digest, a catch-up hushed at its last sentence) is noted: none of it
             // is told again.
-            await _pendingReads.All;
+            await _pendingReads.Done;
             if (stop.IsCancellationRequested || CatchUpLeft(away) is not var (lines, covered))
             {
                 return;

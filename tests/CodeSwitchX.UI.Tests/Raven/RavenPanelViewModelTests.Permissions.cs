@@ -595,9 +595,10 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task A_read_back_note_the_UI_thread_never_takes_is_dropped_and_holds_no_wait()
+    public async Task A_read_back_note_the_UI_thread_is_slow_to_take_holds_no_wait_and_still_runs()
     {
-        // #246: a dispatcher that never runs the post (the app closing) left the wait pending for good.
+        // #246: a dispatcher that never runs the post (the app closing) left the wait pending for good. Round 1: a UI
+        // thread only busy for a while must not lose the note.
         var ui = new HoldingDispatcher();
         var (vm, asks) = await QuestionsVmAsync(dispatcher: ui);
         _ = asks.HoldAsync(Permitting(), CancellationToken.None);
@@ -605,15 +606,47 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Fails = new InvalidOperationException("the sidecar broke");
         ui.Holding = true;
         asks.Propose("p1");
-        ui.RunHeld();
-        await Task.Delay(100, TestContext.Current.CancellationToken); // the read-back fails and posts its note, which waits
+        ui.RunHeld(); // the read-back begins, and fails
 
-        _time.Advance(RavenActions.UiTimeout);
-
-        await WithinAsync(vm.PendingFollowUp);
+        // The clock moves on a second at a time until the wait gives up: the read-back fails on another thread.
+        await Until(() =>
+        {
+            _time.Advance(TimeSpan.FromSeconds(1));
+            return vm.PendingFollowUp.IsCompleted;
+        });
+        Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine), "not run yet");
         ui.Holding = false;
         ui.RunHeld();
-        Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine), "given up on, it never runs");
+
+        Lines(vm).Count(l => l == (RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)).ShouldBe(1, "run late, not lost");
+    }
+
+    [Fact]
+    public async Task Muting_a_read_back_only_written_while_the_user_talks_does_not_count_it_heard()
+    {
+        // Round 1 of #246: it was never heard, so muting cuts nothing off.
+        var ui = new HoldingDispatcher();
+        var (vm, asks) = await QuestionsVmAsync(openMic: true, dispatcher: ui);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        var first = asks.Propose("p1");
+        await Until(() => asks.IsHeard(first));
+        await WithinAsync(vm.PendingFollowUp);
+        await Until(() => vm.TakesTurnsWithoutName);
+        _openMic.Speak(); // the user talks, in the follow-up: surely theirs
+
+        ui.Holding = true;
+        var proposal = asks.Propose("p1"); // proposed again while they talk: only written
+        ui.RunHeld();
+        vm.IsMuted = true; // before the UI thread ends the proposal it was not heard for
+
+        asks.IsHeard(proposal).ShouldBeFalse();
+        ui.Holding = false;
+        ui.RunHeld();
+        await WithinAsync(vm.PendingFollowUp);
+        asks.Proposed.ShouldBeNull("not heard, it ends");
     }
 
     /// <summary>Runs posts inline, like <see cref="ImmediateDispatcher"/>, except while <see cref="Holding"/>: then they wait for <see cref="RunHeld"/>.</summary>

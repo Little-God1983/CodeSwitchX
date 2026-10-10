@@ -49,6 +49,38 @@ public sealed class PendingTasksTests
     }
 
     [Fact]
+    public void After_a_fault_it_keeps_only_the_first_fault_not_every_task_since()
+    {
+        // Round 1 of #246: the chain grew with every task added after a fault.
+        var pending = new PendingTasks();
+        pending.Add(Task.FromException(new InvalidOperationException("broke")));
+        pending.Add(Task.CompletedTask);
+        var first = pending.All;
+        pending.Add(Task.CompletedTask);
+        pending.Add(Task.CompletedTask);
+
+        pending.All.ShouldNotBeSameAs(first);
+        pending.All.Exception!.InnerExceptions.ShouldHaveSingleItem().Message.ShouldBe("broke");
+    }
+
+    [Fact]
+    public async Task Done_waits_for_every_task_and_never_faults()
+    {
+        // Round 1 of #246: one faulted read ended every catch-up after it.
+        var pending = new PendingTasks();
+        var running = new TaskCompletionSource();
+        pending.Add(Task.FromException(new InvalidOperationException("broke")));
+        pending.Add(running.Task);
+
+        var done = pending.Done;
+        done.IsCompleted.ShouldBeFalse();
+        running.SetResult();
+
+        await done.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        done.IsCompletedSuccessfully.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Tasks_added_from_many_threads_at_once_are_all_waited_for()
     {
         var pending = new PendingTasks();
