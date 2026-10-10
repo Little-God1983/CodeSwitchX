@@ -4725,7 +4725,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public void GoToNextQuestion()
     {
         _voice.Hush(); // the user moved on, as a press of the mic stops Raven
-        _digest?.Cancel(); // a telling on its way too: its words would come before the card asked for
         if (_asks?.Proposed is { } standing)
         {
             // An allow waiting for its yes ends, as with any words of the user's: a yes now must not allow it, and the card
@@ -4878,7 +4877,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>The offer was heard, or written: it stands for <see cref="NextOfferLifetime"/>, unless it is over already.</summary>
+    /// <summary>
+    /// The offer was heard, or written: a yes takes it for <see cref="NextOfferLifetime"/>, unless it is over already. One
+    /// Raven kept quiet (#233) does not hold the floor meanwhile: nobody heard it, and other chats' sounds go on.
+    /// </summary>
     private void Offered(int number, bool bareYes)
     {
         if (number != _offerNumber)
@@ -4888,7 +4890,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _nextOffered = _time.GetUtcNow();
         _nextOfferTakesBareYes = bareYes;
-        _offerStands = true;
+        _offerStands = bareYes; // false only for one Raven kept quiet
         _offerTimer?.Dispose();
         _offerTimer = _time.CreateTimer(_ => _dispatcher.Post(() => OfferLapsed(number)), null, NextOfferLifetime, Timeout.InfiniteTimeSpan);
     }
@@ -4909,6 +4911,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _offerNumber++;
         _nextOfferDue = false;
         _nextOffered = null;
+        _nextOfferTakesBareYes = false;
         _offerTimer?.Dispose();
         _offerTimer = null;
         if (_offerStands)

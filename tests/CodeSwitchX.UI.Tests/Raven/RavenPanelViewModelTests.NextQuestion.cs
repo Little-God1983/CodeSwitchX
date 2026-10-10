@@ -283,8 +283,11 @@ public sealed partial class RavenPanelViewModelTests
         vm.NextQuestionForBrain().ShouldBeNull();
     }
 
-    /// <summary>Chat "a" asks, then "d"; the card of "a" is answered by a click: the next one is offered.</summary>
-    private async Task OfferedAfterAnAnswerAsync(RavenPanelViewModel vm, ChatAsks asks)
+    /// <summary>
+    /// Chat "a" asks, then "d"; the card of "a" is answered by a click: the next one is offered, heard, or only written
+    /// when Raven keeps quiet (<paramref name="quiet"/>), which then holds no floor.
+    /// </summary>
+    private async Task OfferedAfterAnAnswerAsync(RavenPanelViewModel vm, ChatAsks asks, bool quiet = false)
     {
         var first = await AsksFruitAsync(vm, asks, "a");
         _ = await AsksFruitAsync(vm, asks, "d");
@@ -292,7 +295,15 @@ public sealed partial class RavenPanelViewModelTests
         vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
         await WithinAsync(first);
         await GraceAsync(vm);
-        await Until(() => vm.OffersNext);
+        if (quiet)
+        {
+            await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven && e.Text.EndsWith("Next?", StringComparison.Ordinal)));
+            vm.OffersNext.ShouldBeFalse("only written: it holds no floor");
+        }
+        else
+        {
+            await Until(() => vm.OffersNext);
+        }
     }
 
     // #233: the offer is Raven speaking up on its own; the card a yes asks for is read out all the same
@@ -311,7 +322,7 @@ public sealed partial class RavenPanelViewModelTests
             vm.SpeakNews = false;
         }
 
-        await OfferedAfterAnAnswerAsync(vm, asks);
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: true);
 
         vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("One more question is waiting. Next?");
         _speech.Spoken.ShouldNotContain(s => s.Contains("Next?"));
@@ -409,7 +420,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SpeakNews = speakNews;
         vm.MicMode = MicMode.OpenMic;
         await WithinAsync(vm.PendingOpenMic);
-        await OfferedAfterAnAnswerAsync(vm, asks);
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: !speakNews);
         vm.TakesTurnsWithoutName.ShouldBeFalse("the offer followed a click: only a yes gets through");
 
         _openMic.Speak();
@@ -418,7 +429,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, taken ? 3 : 1));
         _brain.Asked.ShouldBeEmpty();
-        vm.OffersNext.ShouldBe(!taken);
+        vm.OffersNext.ShouldBe(!taken && speakNews);
     }
 
     // #233: a new offer stands for its own lifetime, not what was left of the one before it
@@ -499,9 +510,9 @@ public sealed partial class RavenPanelViewModelTests
         card.IsOpen.ShouldBeTrue("only the proposal ended: the card waits for a click or a new allow");
     }
 
-    // #233: "next question" stops a news telling on its way: the card asked for would wait for the teller
+    // #233: "next question" while news is being worded: the telling ends, unsaid in the chat switched to, and the card follows
     [Fact]
-    public async Task Next_question_stops_a_news_telling_on_its_way()
+    public async Task Next_question_during_a_news_telling_reads_the_card_once_it_ends_and_not_the_news()
     {
         _teller.Answer = _ => [new BrainText("Task a is done.")];
         var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."));
@@ -514,11 +525,29 @@ public sealed partial class RavenPanelViewModelTests
         var before = _speech.Spoken.Count;
 
         vm.GoToNextQuestion();
+        _teller.Gate.SetResult();
 
-        // The card does not wait for the teller, which never answers here.
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         await WithinAsync(_voice.WhenQuietAsync());
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
-        _teller.Gate.SetResult();
+    }
+
+    // #233: an offer Raven kept quiet holds no floor: a card that comes meanwhile in the muted chat is read at once
+    [Fact]
+    public async Task An_offer_kept_quiet_holds_no_floor()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        ChatNumbered(vm, 1).IsMuted = true; // its cards are still read; its news and the offer are not
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: true);
+        var before = _speech.Spoken.Count;
+
+        var ask = new ChatAsk("toolu_a2",
+            new HookEvent { SessionId = "a", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = "toolu_a2" },
+            [Fruit]);
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.Question) == 3);
+        await GraceAsync(vm);
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // not 30 s later
     }
 }
