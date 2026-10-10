@@ -577,15 +577,11 @@ public sealed class TileTabsTests
         var before = _tabs.Reads; // the start's own look
         _tabs.Hold = new ManualResetEventSlim(); // not disposed: a late read may still wait on it
         var running = _yard.RefreshTabsAsync();
-        for (var i = 0; i < 500 && _tabs.Reads == before; i++)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
 
         Task look;
         try
         {
-            _tabs.Reads.ShouldBe(before + 1, "the running look took the list before VS Code wrote it");
+            await UntilReads(before + 1); // the running look took the list before VS Code wrote it
             look = VsCodeWrites(Tab("a"));
         }
         finally
@@ -640,15 +636,52 @@ public sealed class TileTabsTests
         await _yard.InitializeAsync(CancellationToken.None);
         App.HostState = HostState.Running;
         await VsCodeWrites(Tab("a"), Tab("b"));
-        await Pass(TimeSpan.FromMinutes(1));
+        await Pass(YardViewModel.TabsInterval); // the timer's look is just over: the next is a whole interval away
         App.HostState = HostState.Stopped;
         await _yard.CurrentTabsRefresh;
         Rows.ShouldBe(["a", "b"]);
 
         _tabs.Of[_app.Id] = new OpenChatTabs(Now, [Tab("b")]); // written as it closed: "a" was closed just before
+        YardViewModel.ClosedListWait.ShouldBeLessThan(YardViewModel.TabsInterval);
         await Pass(YardViewModel.ClosedListWait);
 
-        Rows.ShouldBe(["b"], "well before the next 5 s look");
+        Rows.ShouldBe(["b"], "well before the timer's next look");
+    }
+
+    [Fact]
+    public async Task A_window_closed_soon_after_another_does_not_put_off_the_first_one_s_look()
+    {
+        // Round 1 of #248: one shared timer, set again by each close, looked only after the last.
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        var shop = _yard.FindTile(_shop.Id)!;
+        shop.HostState = HostState.Running;
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        await Pass(YardViewModel.TabsInterval);
+        App.HostState = HostState.Stopped;
+        await _yard.CurrentTabsRefresh;
+        await Pass(YardViewModel.ClosedListWait / 2);
+
+        shop.HostState = HostState.Stopped;
+        await _yard.CurrentTabsRefresh;
+        _tabs.Of[_app.Id] = new OpenChatTabs(Now, [Tab("b")]); // the App window's list, written late: after the Shop's look
+        await Pass(YardViewModel.ClosedListWait / 2);
+
+        Rows.ShouldBe(["b"], "the App window's own look, not one after the Shop window closed");
+    }
+
+    [Fact]
+    public async Task A_window_that_never_ran_is_not_read_again_a_moment_later()
+    {
+        // Round 1 of #248: only a window that ran writes its list as it goes.
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Starting;
+        await _yard.CurrentTabsRefresh;
+        var reads = _tabs.Reads;
+
+        await Pass(YardViewModel.ClosedListWait);
+
+        _tabs.Reads.ShouldBe(reads);
     }
 
     private async Task UntilReads(int reads)

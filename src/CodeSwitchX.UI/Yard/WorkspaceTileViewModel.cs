@@ -256,18 +256,19 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// VS Code started or stopped: what its list means changes with it (<see cref="InTab"/>). Seen to run since now: a chat
     /// that ended before is a tab VS Code brought back.
     /// </summary>
-    partial void OnHostStateChanged(HostState value)
+    partial void OnHostStateChanged(HostState oldValue, HostState newValue)
     {
-        _runningSince = value == HostState.Running ? _owner.Now : null;
-        if (value == HostState.Running)
+        _runningSince = newValue == HostState.Running ? _owner.Now : null;
+        if (newValue == HostState.Running)
         {
             Arrange(_owner.Now);
         }
         else
         {
             // Closed, VS Code wrote the tabs it comes back with: read before the tile changes, or a tab closed earlier,
-            // still in the list read before, would show again for a moment.
-            _owner.RefreshTabsSoon();
+            // still in the list read before, would show again for a moment. A window that ran writes it as it goes, so
+            // that one is read again a moment later (#248).
+            _owner.RefreshTabsSoon(closed: oldValue == HostState.Running);
         }
     }
 

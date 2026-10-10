@@ -39,11 +39,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _tabsTimer;
 
-    /// <summary>The look a moment after a stop (<see cref="ClosedListWait"/>); each stop sets it again.</summary>
-    private ITimer? _closedListTimer;
+    /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
+    private readonly HashSet<ITimer> _closedListTimers = [];
+
+    private bool _disposed;
 
     /// <summary>Ends with the read of the tabs that runs; null while none does. Under <see cref="_tabsGate"/>.</summary>
     private TaskCompletionSource? _tabsRead;
+
+    /// <summary>Whether <see cref="_tabsRead"/> has begun to take the list: a look asked before that is covered by it. Under <see cref="_tabsGate"/>.</summary>
+    private bool _tabsReadBegun;
 
     /// <summary>Ends with the read after it, asked for while it ran; null while none was. Under <see cref="_tabsGate"/>.</summary>
     private TaskCompletionSource? _tabsReadNext;
@@ -367,30 +372,29 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             if (_tabsRead is { } running)
             {
-                return again ? (_tabsReadNext ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task : running.Task;
+                return again && _tabsReadBegun ? (_tabsReadNext ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task
+                    : running.Task;
             }
 
             _tabsRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _tabsReadBegun = false;
             _ = ReadTabsUntilAskedAsync(openTabs);
             return _tabsRead.Task;
         }
     }
 
-    /// <summary>Reads the tabs, and once more for as long as a look was asked for while it read; never faults.</summary>
+    /// <summary>Reads the tabs, and once more for as long as a look was asked for while it read.</summary>
     private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
     {
         await Task.Yield(); // out of the lock it was started in: none of the read runs under it
         while (true)
         {
-            Exception? failed = null;
-            try
+            lock (_tabsGate)
             {
-                await ReadTabsAsync(openTabs);
+                _tabsReadBegun = true;
             }
-            catch (Exception ex)
-            {
-                failed = ex; // its own looks fail; the next read is still made
-            }
+
+            await ReadTabsAsync(openTabs); // never throws: a failure is logged
 
             TaskCompletionSource read;
             bool more;
@@ -400,18 +404,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 read = _tabsRead!;
                 _tabsRead = _tabsReadNext;
                 _tabsReadNext = null;
+                _tabsReadBegun = false;
                 more = _tabsRead is not null;
             }
 
-            if (failed is null)
-            {
-                read.SetResult();
-            }
-            else
-            {
-                read.SetException(failed);
-            }
-
+            read.SetResult();
             if (!more)
             {
                 return;
@@ -419,6 +416,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>One read of the tabs onto the tiles; never throws: a failure is logged, and the tiles keep what they show.</summary>
     private async Task ReadTabsAsync(IVsCodeOpenTabs openTabs)
     {
         try
@@ -782,15 +780,33 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Reads the tabs again now, or after the read that runs, and once more <see cref="ClosedListWait"/> later (UI thread):
-    /// a tile's VS Code closed, and writes the tabs it comes back with as its window goes.
+    /// Reads the tabs again now, or after the read that runs (UI thread): a tile's VS Code stopped running. When it
+    /// <paramref name="closed"/>, once more <see cref="ClosedListWait"/> later: it writes the tabs it comes back with as its
+    /// window goes.
     /// </summary>
-    internal void RefreshTabsSoon()
+    internal void RefreshTabsSoon(bool closed = false)
     {
+        if (_disposed)
+        {
+            return; // a state posted before the app closed
+        }
+
         CurrentTabsRefresh = RefreshTabsAsync();
-        _closedListTimer ??= _time.CreateTimer(_ => _ui.Post(() => CurrentTabsRefresh = RefreshTabsAsync()), null, Timeout.InfiniteTimeSpan,
-            Timeout.InfiniteTimeSpan);
-        _closedListTimer.Change(ClosedListWait, Timeout.InfiniteTimeSpan); // a burst of stops looks once, after the last
+        if (closed)
+        {
+            // One for each close: a window closed soon after another does not put off the first one's look.
+            ITimer? timer = null;
+            timer = _time.CreateTimer(_ => _ui.Post(() =>
+            {
+                if (_closedListTimers.Remove(timer!))
+                {
+                    timer!.Dispose();
+                    CurrentTabsRefresh = RefreshTabsAsync();
+                }
+            }), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            _closedListTimers.Add(timer);
+            timer.Change(ClosedListWait, Timeout.InfiniteTimeSpan); // armed once it is in the set
+        }
     }
 
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
@@ -870,7 +886,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
         _tabsTimer?.Dispose();
-        _closedListTimer?.Dispose();
+        _disposed = true;
+        foreach (var timer in _closedListTimers)
+        {
+            timer.Dispose();
+        }
+
+        _closedListTimers.Clear();
         _spotlightTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {
