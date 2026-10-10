@@ -93,16 +93,20 @@ public static class TranscriptDigest
 
         // A cut line at the edge of the end read does not parse, and is passed over. Steps are in file order: the first
         // prompt step the end read has is the first prompt, when it reaches it; or the one of the head's first prompt line.
+        // A resumed chat writes its history again, under the same ids: each line counts once, where it is first (#258). A
+        // line cut at the edge does not parse, but its id is at its end: a copy of it later is not taken for it.
         var steps = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         int? firstIndex = null;
         foreach (var line in tail.Split('\n'))
         {
-            if (StepOf(line) is not { } step)
+            var id = IdOf(line);
+            if ((id is not null && !seen.Add(id)) || StepOf(line) is not { } step)
             {
                 continue;
             }
 
-            if (firstIndex is null && IsPrompt(step) && (firstId is null ? reachesFirst : idCounts && IdOf(line) == firstId))
+            if (firstIndex is null && IsPrompt(step) && (firstId is null ? reachesFirst : idCounts && id == firstId))
             {
                 firstIndex = steps.Count;
             }
@@ -263,9 +267,10 @@ public static class TranscriptDigest
             at = bytes;
             read += length + 1;
             bytes += lineBytes + 1;
-            if (tooLong && line.Contains("\"user\"", StringComparison.Ordinal))
+            // A user line that is no tool's result may be the first prompt: a later one does not stand for it.
+            if (tooLong && line.Contains("\"type\":\"user\"", StringComparison.Ordinal) && !line.Contains("\"tool_result\"", StringComparison.Ordinal))
             {
-                return null; // it may be the first prompt: a later one does not stand for it
+                return null;
             }
 
             if (line.Length > 0 && !tooLong && PromptOf(line) is { } prompt)
@@ -330,16 +335,9 @@ public static class TranscriptDigest
 
             if (c == '"' && !escaped && hexLeft == 0)
             {
-                if (!end.LeftOut)
-                {
-                    line.Append(text); // the start and the end meet: nothing between them is left out
-                    end.AppendTo(line);
-                }
-                else
-                {
-                    line.Append(text.ToString(0, safe)).Append(LeftOutOfString);
-                    end.AppendTo(line);
-                }
+                // The start and the end meet, or chars between them are left out: then the start ends where it parses.
+                line.Append(end.LeftOut ? text.ToString(0, safe) + LeftOutOfString : text.ToString());
+                end.AppendTo(line);
 
                 line.Append('"');
                 text.Clear();
@@ -636,27 +634,30 @@ public static class TranscriptDigest
     {
         var open = "<" + name;
         var depth = 0;
+        var nextOpen = -1;
+        var nextClose = -1;
         for (var at = 0; at < text.Length;)
         {
-            var nextOpen = text.IndexOf(open, at, StringComparison.Ordinal);
-            var nextClose = text.IndexOf(close, at, StringComparison.Ordinal);
+            // Each found once: searched again only once passed, so the scan stays linear however many tags there are.
+            nextOpen = nextOpen >= at || nextOpen == int.MaxValue ? nextOpen : text.IndexOf(open, at, StringComparison.Ordinal) is var o and >= 0 ? o : int.MaxValue;
+            nextClose = nextClose >= at ? nextClose : text.IndexOf(close, at, StringComparison.Ordinal);
             if (nextClose < 0)
             {
                 return -1;
             }
 
-            // Another block of the name opens before this one closes: "<name>", "<name ...>", not "<names>" nor "<name/>".
-            if (nextOpen >= 0 && nextOpen < nextClose && nextOpen + open.Length < text.Length
-                && text[nextOpen + open.Length] is '>' or ' ' or '\t' or '\r' or '\n')
+            if (nextOpen < nextClose)
             {
-                depth++;
-                at = nextOpen + open.Length;
-                continue;
-            }
+                // Another block of the name opens before this one closes: "<name>", "<name ...>"; not "<names>", nor one
+                // that closes itself, "<name/>" or "<name />".
+                var after = nextOpen + open.Length;
+                var tagEnd = text.IndexOf('>', after);
+                if (after < text.Length && text[after] is '>' or ' ' or '\t' or '\r' or '\n' && !(tagEnd > 0 && text[tagEnd - 1] == '/'))
+                {
+                    depth++;
+                }
 
-            if (nextOpen >= 0 && nextOpen < nextClose)
-            {
-                at = nextOpen + open.Length; // a name that only starts the same, or one that closes itself: no depth
+                at = after;
                 continue;
             }
 
