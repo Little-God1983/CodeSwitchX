@@ -4854,8 +4854,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>
     /// "Chat three", "zu Chat drei", "activity", "open chat three": the app switches the chat itself, at once and without
     /// a brain turn (<see cref="SpokenChatSwitch"/>), and says where the user is now. "Next question" goes to the oldest open
-    /// card (<see cref="GoToNextQuestion"/>, #230). Navigation, not a question: nothing
-    /// is written to a chat, and the brain's answer still on its way goes on in the chat it was asked in. A switch to
+    /// card (<see cref="GoToNextQuestion"/>, #230), and takes the floor when it finds one (#261). Navigation, not a
+    /// question: nothing is written to a chat, and after a switch the brain's answer still on its way goes on in the chat
+    /// it was asked in. A switch to
     /// another window's chat ends an allow waiting for a yes, as one by hotkey or click does (see
     /// <see cref="OnSelectedChatChanged"/>): a yes said there must not allow another chat's prompt.
     /// Returns whether the words were a switch.
