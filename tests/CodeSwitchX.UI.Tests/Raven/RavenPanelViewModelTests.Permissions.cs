@@ -650,23 +650,24 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task Muting_after_a_read_back_failed_does_not_count_it_heard()
+    public async Task Muting_after_a_read_back_was_cut_off_does_not_count_it_heard()
     {
         // Round 2 of #246: it ended unheard, and the UI thread had not yet ended its proposal when the mute came.
         var ui = new HoldingDispatcher();
         var (vm, asks) = await QuestionsVmAsync(dispatcher: ui);
         _ = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        _speech.Fails = new InvalidOperationException("the sidecar broke");
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
         ui.Holding = true;
         var proposal = asks.Propose("p1");
-        ui.RunHeld(); // the read-back begins, and fails
-        await WithinAsync(_voice.WhenQuietAsync());
-        await Task.Delay(100, TestContext.Current.CancellationToken); // its end is settled; the note waits for the UI thread
+        ui.RunHeld(); // the read-back begins
+        await Until(() => _speech.Spoken.Count > 0);
+        _voice.Hush(); // cut off: its end is settled at once, and its note waits for the UI thread
 
         vm.IsMuted = true;
 
         asks.IsHeard(proposal).ShouldBeFalse();
+        _speech.Gate.SetResult();
         ui.Holding = false;
         ui.RunHeld();
         await WithinAsync(vm.PendingFollowUp);

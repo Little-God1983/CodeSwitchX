@@ -854,8 +854,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         // Before the hush, which would settle it as not heard; and, as for one written while muted, a bare yes may answer it
         // (#217, #246).
-        if (value && _mutable is { Played.IsCompleted: false } readBack && !_asks!.IsHeard(readBack.Proposal)
-            && _asks.MarkHeard(readBack.Proposal, _time.GetUtcNow()))
+        if (value && _mutable is { Played.IsCompleted: false } readBack && _asks!.MarkHeard(readBack.Proposal, _time.GetUtcNow(), out var first)
+            && first)
         {
             _followUpFrom = _time.GetUtcNow();
         }
@@ -2859,16 +2859,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var chat = ChatOfAsk(proposal.Ask);
         if (await played.ConfigureAwait(false))
         {
-            var at = _time.GetUtcNow();
-            // A bare yes may answer it (#217); not one over (replaced, lapsed, answered by a click), which no yes answers. On
-            // the UI thread, where a click ends it: none can come between the two (#246).
-            await OnUiAsync(() =>
+            // Heard now, which a yes after it needs. A bare yes may answer it (#217), but not once it is over (replaced,
+            // lapsed, answered by a click): that is judged on the UI thread, where a click ends it (#246).
+            if (_asks?.MarkHeard(proposal, _time.GetUtcNow()) == true)
             {
-                if (_asks?.MarkHeard(proposal, at) == true)
+                await OnUiAsync(() =>
                 {
-                    _followUpFrom = at;
-                }
-            }).ConfigureAwait(false);
+                    if (ReferenceEquals(_asks.Proposed, proposal))
+                    {
+                        _followUpFrom = _time.GetUtcNow();
+                    }
+                }).ConfigureAwait(false);
+            }
+
             return;
         }
 
@@ -2891,6 +2894,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void OnProposalEnded(ChatAllowProposal proposal, ChatProposalEnd end)
     {
+        if (ReferenceEquals(_mutable?.Proposal, proposal))
+        {
+            _mutable = null; // nothing of it for a mute to settle
+        }
+
         _askCards.TryGetValue(proposal.Ask.Id, out var card);
         if (card is not null)
         {

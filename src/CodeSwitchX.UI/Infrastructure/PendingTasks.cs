@@ -10,7 +10,7 @@ internal sealed class PendingTasks
     private readonly object _lock = new();
     private readonly HashSet<Task> _running = [];
 
-    /// <summary>The first task that faulted or was cancelled, as one task of its own.</summary>
+    /// <summary>The first task added that faulted or was cancelled.</summary>
     private Task? _fault;
 
     /// <summary>Completes once every task added so far is done; faults (or is cancelled) if any of them, or any before, did.</summary>
@@ -49,9 +49,9 @@ internal sealed class PendingTasks
         lock (_lock)
         {
             _running.Remove(task);
-            if (_fault is null && !task.IsCompletedSuccessfully)
+            if (!task.IsCompletedSuccessfully)
             {
-                _fault = task.IsFaulted ? Task.FromException(task.Exception!.InnerException ?? task.Exception) : task;
+                _fault ??= task;
             }
         }
     }
