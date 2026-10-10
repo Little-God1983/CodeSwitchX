@@ -388,6 +388,9 @@ public sealed partial class RavenPanelViewModelTests
         _openMic.EndTurn();
         rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
         await WithinAsync(vm.PendingTranscriptions);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("the grace first: the user may go on after a breath");
+        _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
     }
@@ -494,5 +497,28 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         card.IsOpen.ShouldBeTrue("only the proposal ended: the card waits for a click or a new allow");
+    }
+
+    // #233: "next question" stops a news telling on its way: the card asked for would wait for the teller
+    [Fact]
+    public async Task Next_question_stops_a_news_telling_on_its_way()
+    {
+        _teller.Answer = _ => [new BrainText("Task a is done.")];
+        var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."));
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user asks
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _teller.Asked.Count > 0);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+
+        // The card does not wait for the teller, which never answers here.
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        await WithinAsync(_voice.WhenQuietAsync());
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
+        _teller.Gate.SetResult();
     }
 }
