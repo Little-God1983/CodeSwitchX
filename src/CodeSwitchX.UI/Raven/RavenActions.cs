@@ -558,8 +558,12 @@ public sealed class RavenActions : IYardActions
     public async Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct)
     {
         var answer = await _ui.InvokeAsync(() => _shell().WhatsNewAsync(askedIn, number), UiTimeout, ct).ConfigureAwait(false);
-        return await answer.WaitAsync(UiTimeout, ct).ConfigureAwait(false);
+        // Longer than a hop to the UI thread: news held back is taken first, with the end of each of its chats' transcripts (#256).
+        return await answer.WaitAsync(WhatsNewTimeout, ct).ConfigureAwait(false);
     }
+
+    /// <summary>How long whats_new waits for its answer once the UI thread took it: the held news it reads included.</summary>
+    internal static readonly TimeSpan WhatsNewTimeout = TimeSpan.FromSeconds(30);
 
     public Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().NextQuestion(askedIn) ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);
