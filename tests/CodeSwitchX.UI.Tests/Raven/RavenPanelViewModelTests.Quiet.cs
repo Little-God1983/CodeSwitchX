@@ -211,7 +211,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         await GraceAsync(vm);
 
-        SpokenSince(before).ShouldNotContain("Banana", Case.Sensitive, "muted before it was read: only shown");
+        SpokenSince(before).ShouldNotContain("Which fruit", Case.Sensitive, "muted before it was read: only shown");
     }
 
     // Review of #242: muted midway through an answer to words said aloud, the rest is only written and new to the user
