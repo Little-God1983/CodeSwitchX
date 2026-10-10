@@ -60,8 +60,8 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = vm.WhatsNewForBrain(null, null);
 
-        said.ShouldContain("- chat 3: RawCutX, chat \"Task d\": ");
-        said.ShouldContain("Which fruit?");
+        said.ShouldContain("- chat 3: RawCutX, chat \"Task d\" asks a question");
+        said.ShouldNotContain("Which fruit?", Case.Sensitive, "the chat's own words never go to the brain that acts");
     }
 
     // Decided on #243: once the answer that tells it is heard to its end, the news counts as read and its badge clears
@@ -94,8 +94,46 @@ public sealed partial class RavenPanelViewModelTests
 
         Type(vm, "what's new?");
         await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
 
         ChatNumbered(vm, 2).Unread.ShouldBe(0);
+    }
+
+    // Review of #243: an answer cut off by words the user typed told nothing to its end: the news stays unread
+    [Fact]
+    public async Task The_news_of_an_answer_cut_off_stays_unread()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+        await GraceAsync(vm);
+        vm.IsMuted = true;
+        _brain.Pause = new TaskCompletionSource();
+        _brain.Answer = q => q.Contains("new") ? TellsWhatsNewAtLength(vm) : [new BrainText("It is noon.")];
+
+        Type(vm, "what's new?");
+        await Until(() => vm.Log.Any(e => e.Text.StartsWith("Chat 2", StringComparison.Ordinal)));
+        Type(vm, "what time is it?"); // takes the floor
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);
+    }
+
+    /// <summary>As <see cref="TellsWhatsNew"/>, in two parts: the second waits for the brain's pause.</summary>
+    private static IEnumerable<BrainEvent> TellsWhatsNewAtLength(RavenPanelViewModel vm)
+    {
+        vm.WhatsNewForBrain(null, null);
+        yield return new BrainText("Chat 2 finished. ");
+        yield return new BrainText("That is all.");
+    }
+
+    [Fact]
+    public async Task Whats_new_of_a_chat_that_is_not_there_says_so()
+    {
+        var (vm, _) = await TrafficVmAsync();
+
+        vm.WhatsNewForBrain(null, 9).ShouldBe("There is no chat 9.");
     }
 
     // A whats_new nobody's answer tells is not read: it was not heard
