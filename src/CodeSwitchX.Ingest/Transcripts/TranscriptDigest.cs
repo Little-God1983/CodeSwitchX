@@ -60,7 +60,7 @@ public static class TranscriptDigest
             tail = ReadAt(stream, tailAt, whole ? (int)stream.Length : TailBytes);
             if (whole)
             {
-                first = tail.Split('\n').Select(PromptOf).OfType<string>().FirstOrDefault();
+                first = null; // the first prompt step, below: the lines are parsed once
             }
             else
             {
@@ -77,8 +77,12 @@ public static class TranscriptDigest
 
         // A cut line at the edge of the end read does not parse, and is passed over.
         var steps = tail.Split('\n').Select(StepOf).OfType<string>().ToList();
-        // Steps are in file order: the first of the first prompt's words is the prompt itself.
-        int? firstIndex = first is not null && reachesFirst && steps.IndexOf(first) is var at and >= 0 ? at : null;
+        // Steps are in file order: the first prompt step the end read has is the first prompt, when it reaches it.
+        int? firstIndex = reachesFirst && steps.FindIndex(IsPrompt) is var at and >= 0 ? at : null;
+        if (whole)
+        {
+            first = firstIndex is { } index ? steps[index] : null;
+        }
         return steps.Count == 0 && first is null ? null : Compose(first, firstIndex, steps, maxChars, whole);
     }
 
@@ -131,8 +135,8 @@ public static class TranscriptDigest
             return null;
         }
 
-        var first = steps.FirstOrDefault(s => s.StartsWith("User: ", StringComparison.Ordinal) || s.StartsWith("Asked through", StringComparison.Ordinal));
-        return steps.Count == 0 ? null : Compose(first, first is null ? null : steps.IndexOf(first), steps, maxChars, complete: true);
+        var index = steps.FindIndex(IsPrompt);
+        return steps.Count == 0 ? null : Compose(index < 0 ? null : steps[index], index < 0 ? null : index, steps, maxChars, complete: true);
     }
 
     /// <summary>How far past the end a line may be written and the reading still go on: a sub-agent's lines come a little out of order.</summary>
@@ -248,7 +252,9 @@ public static class TranscriptDigest
         var inString = false;
         var escaped = false; // the char before was a backslash that begins an escape
         var hexLeft = 0; // the hex digits of a "\u" escape still to come
-        var safe = 0; // how much of the string read so far ends outside an escape
+        var safe = 0; // how much of the string read so far ends outside an escape, and not after half a surrogate pair
+        var halfPair = false; // the last char, or the last escape, is the first half of a surrogate pair
+        var hex = 0; // the value of the "\\u" escape being read
         length = 0;
         bytes = 0;
         var ended = false;
@@ -280,22 +286,29 @@ public static class TranscriptDigest
 
             if (hexLeft > 0)
             {
-                hexLeft--;
+                hex = (hex << 4) | (c is >= '0' and <= '9' ? c - '0' : (c | 0x20) is >= 'a' and <= 'f' ? (c | 0x20) - 'a' + 10 : 0); // a bad digit: no pair
+                if (--hexLeft == 0)
+                {
+                    halfPair = hex is >= 0xD800 and <= 0xDBFF;
+                }
             }
             else if (escaped)
             {
                 escaped = false;
                 hexLeft = c == 'u' ? 4 : 0;
+                hex = 0;
+                halfPair = false;
             }
             else
             {
                 escaped = c == '\\';
+                halfPair = !escaped && char.IsHighSurrogate((char)c);
             }
 
             if (text.Length <= LongestString)
             {
                 text.Append((char)c);
-                if (!escaped && hexLeft == 0 && text.Length <= LongestString)
+                if (!escaped && hexLeft == 0 && !halfPair && text.Length <= LongestString)
                 {
                     safe = text.Length;
                 }
@@ -329,8 +342,10 @@ public static class TranscriptDigest
     }
 
     /// <summary>A prompt as a step ("User: …", or one handed over by another session); null for any other line.</summary>
-    private static string? PromptOf(string line) => line.Contains("\"user\"", StringComparison.Ordinal) && StepOf(line) is { } step
-        && (step.StartsWith("User: ", StringComparison.Ordinal) || step.StartsWith("Asked through", StringComparison.Ordinal)) ? step : null;
+    private static string? PromptOf(string line) => line.Contains("\"user\"", StringComparison.Ordinal) && StepOf(line) is { } step && IsPrompt(step) ? step : null;
+
+    /// <summary>The step is a prompt: the user's, or one handed over by another session.</summary>
+    private static bool IsPrompt(string step) => step.StartsWith("User: ", StringComparison.Ordinal) || step.StartsWith("Asked through", StringComparison.Ordinal);
 
     /// <summary>What the line adds to the digest, one or more lines of it; null for a line that adds nothing.</summary>
     private static string? StepOf(string line)
@@ -359,9 +374,9 @@ public static class TranscriptDigest
                 _ => null,
             };
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
-            return null;
+            return null; // not JSON, or a string that is not text (a lone surrogate): no step
         }
     }
 

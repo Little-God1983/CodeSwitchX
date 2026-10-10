@@ -173,6 +173,23 @@ public sealed class TranscriptDigestTests : IDisposable
         TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix it. éé");
     }
 
+    // Review of #236: an emoji right at the cut, escaped or raw: never cut between its two halves, which would not parse
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_long_first_prompt_is_never_cut_between_the_halves_of_an_emoji(bool escaped)
+    {
+        var emoji = char.ConvertFromUtf32(0x1F600);
+        // Escaped, the emoji is two six-char escapes, the first ending at the cut; raw, two chars, the first the last kept.
+        var line = escaped
+            ? User("Fix it. " + new string('a', TranscriptDigest.LongestString - 8 - 6) + emoji + " and the rest.")
+            : "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"Fix it. "
+                + new string('a', TranscriptDigest.LongestString - 8 - 1) + emoji + " and the rest.\"}}";
+        File.WriteAllLines(_path, [line, BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix it. aaa");
+    }
+
     private static string Timed(string line, string at) => line.Insert(1, $"\"timestamp\":\"{at}\",");
 
     [Fact]
