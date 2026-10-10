@@ -159,16 +159,17 @@ public sealed partial class RavenPanelViewModelTests
         await TurnAsync(vm);
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         await WithinAsync(vm.PendingFollowUp); // the answer was heard to its end
-        vm.TakesTurnsWithoutName.ShouldBeTrue();
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
         said = "And in chat seven?";
         _time.Advance(TimeSpan.FromSeconds(6));
         await TurnAsync(vm);
         // The second answer heard: until then the first one's follow-up held the window open (#231).
         await WithinAsync(vm.PendingFollowUp);
-        _time.Advance(TimeSpan.FromSeconds(5)); // past the first answer's follow-up: the second's holds it open
-        vm.TakesTurnsWithoutName.ShouldBeTrue();
+        // Past the first answer's follow-up (it ran from 3 s at the latest), not the second's (from 9 s).
+        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds - 5));
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
         said = "Wohnzimmer 100%.";
-        _time.Advance(TimeSpan.FromSeconds(6));
+        _time.Advance(TimeSpan.FromSeconds(6)); // past the second's too
         await TurnAsync(vm);
 
         _brain.Asked.Count.ShouldBe(2);
@@ -516,7 +517,7 @@ public sealed partial class RavenPanelViewModelTests
         await TurnAsync(vm);
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         await WithinAsync(vm.PendingFollowUp);
-        vm.TakesTurnsWithoutName.ShouldBeTrue();
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
     }
 
     /// <summary>One Open mic turn, transcribed and, unless told not to wait for it, answered.</summary>

@@ -585,7 +585,30 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// The waits for an Open mic answer, or an allow's read-back, to be heard before the follow-up runs from then (#217):
     /// completes once every follow-up they open runs.
     /// </summary>
-    internal Task PendingFollowUp { get; private set; } = Task.CompletedTask;
+    internal Task PendingFollowUp
+    {
+        get
+        {
+            lock (_followUpWaits)
+            {
+                return _pendingFollowUp;
+            }
+        }
+    }
+
+    private Task _pendingFollowUp = Task.CompletedTask;
+
+    /// <summary>Guards <see cref="_pendingFollowUp"/>: an answer's end and a read-back may add to it from different threads in tests.</summary>
+    private readonly object _followUpWaits = new();
+
+    /// <summary>Adds a wait to <see cref="PendingFollowUp"/>; once all before it are over, it starts the chain again.</summary>
+    private void AwaitFollowUp(Task wait)
+    {
+        lock (_followUpWaits)
+        {
+            _pendingFollowUp = _pendingFollowUp.IsCompleted ? wait : Task.WhenAll(_pendingFollowUp, wait);
+        }
+    }
 
     /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178; UI thread).</summary>
     private Task _pendingCounts = Task.CompletedTask;
@@ -2323,7 +2346,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
             {
-                PendingFollowUp = Task.WhenAll(PendingFollowUp, OpenFollowUpOnceHeardAsync(spoken)); // one cut off by the next question leaves the follow-up to that one's
+                AwaitFollowUp(OpenFollowUpOnceHeardAsync(spoken)); // one cut off by the next question leaves the follow-up to that one's
             }
             UpdateState();
         }
@@ -2791,7 +2814,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
-        PendingFollowUp = Task.WhenAll(PendingFollowUp, HeardAsync(proposal, spoken.Played));
+        AwaitFollowUp(HeardAsync(proposal, spoken.Played));
     }
 
     /// <summary>

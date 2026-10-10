@@ -237,7 +237,7 @@ public sealed partial class RavenPanelViewModelTests
         var proposal = asks.Propose("p1");
         await Until(() => asks.IsHeard(proposal));
         await WithinAsync(vm.PendingFollowUp); // the read-back heard opens the follow-up a moment after
-        vm.TakesTurnsWithoutName.ShouldBeTrue();
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
         _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + past));
 
         _openMic.Speak();
