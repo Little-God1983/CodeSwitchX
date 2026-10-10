@@ -731,7 +731,7 @@ public sealed class RavenActionsTests
             return Next;
         }
 
-        public string WhatsNew(Guid? askedFrom, int? number) => $"News for {askedFrom?.ToString() ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
+        public string WhatsNew(string? askedIn, int? number) => $"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
 
         public void SetChatDefaults(ChatDefaults defaults)
         {

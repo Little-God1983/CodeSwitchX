@@ -235,7 +235,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
                     ?? throw new McpException("Activity only lists every chat's lines: leave the chat out for every window's news.");
         }
 
-        return await Act(() => actions.WhatsNewAsync(scope?.WorkspaceId, number, cancellationToken)).ConfigureAwait(false);
+        return await Act(() => actions.WhatsNewAsync(scope?.Key, number, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>"all", "all chats", "every window", "everything", "everywhere": no one chat (#243).</summary>

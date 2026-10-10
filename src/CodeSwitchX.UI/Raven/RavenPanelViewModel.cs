@@ -2348,7 +2348,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
             // And only while the user is still in that chat: one who moved on is not answering it.
             // Not once the user was moved to a chat of another brain with it (#180): that brain did not ask, and would not hear.
-            _brainAsked = !floor.IsCancellationRequested && BrainOf(question.Chat) == BrainOf(question.AskedIn) && CurrentChat == question.Chat
+            _brainAsked = !floor.IsCancellationRequested && question.Brain == BrainOf(question.Chat) && CurrentChat == question.Chat
                 && Log.Skip(before is null ? 0 : Log.IndexOf(before) + 1).LastOrDefault(e => e.Kind == RavenLogKind.Raven && e.Chat == question.Chat) is { } said
                 && said.Text.TrimEnd().EndsWith('?');
         }
@@ -2852,8 +2852,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        // A window gone from the list took its brain along: no turn of the user's is answering there (#254).
-        var aloud = AloudInFlightBy(Proposer(proposal));
+        // Judged by the chat that proposes: a window's, as chat 0 proposes nothing. No window, it is a caller that is no Raven
+        // chat, and no turn of the user's answers there (#254).
+        var aloud = AloudInFlightIn(proposal.Window is { } window ? YardMcp.ChatKey(window, overview: false) : null);
         if (!MaySpeak(aloud) || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
@@ -4113,12 +4114,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool MaySpeak(bool aloud) => !IsMuted || aloud;
 
     /// <summary>
-    /// The question <paramref name="brain"/> is answering now was said aloud (#242): what its turn brings (an allow's
+    /// The question asked in the chat <paramref name="key"/> names (<see cref="YardMcp.ChatKey"/>), whose brain answers it now,
+    /// was said aloud (#242): what its turn brings (an allow's
     /// read-back, the card next_question goes to) is said while muted too. Another brain's turn is not it. With no answer on
     /// its way, a turn the brain began itself: muted, it is Raven's own, and quiet.
     /// </summary>
-    private bool AloudInFlightBy(IConductorBrain? brain) =>
-        brain is not null && (_questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && q.Brain == brain)?.Aloud ?? false);
+    private bool AloudInFlightIn(string? key) =>
+        key is not null && (_questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && KeyOf(q.AskedIn) == key)?.Aloud ?? false);
+
+    /// <summary>
+    /// What <paramref name="chat"/>'s brain sends with its tool calls (<see cref="YardMcp.ChatKey"/>): a question keeps the chat
+    /// it was asked in, so its key stays the same when the answer moved with the user (#180) or the window left the list.
+    /// </summary>
+    private string? KeyOf(RavenChat chat) => YardMcp.ChatKey(chat.WorkspaceId, overview: chat == YardChat);
 
     /// <summary>
     /// Collapsed, what was said aloud of an entry counted unread and heard to the end no longer counts: the news lines
@@ -4765,7 +4773,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// the list shows; null for a caller that is no Raven chat, or a window gone (its brain went with it).
     /// </summary>
     private RavenChat? ChatOfBrain(string? key) =>
-        key == YardMcp.OverviewChat ? YardChat : Guid.TryParse(key, out var window) ? Chats.FirstOrDefault(c => c.WorkspaceId == window) : null;
+        key == YardMcp.OverviewChat ? YardChat
+            : Guid.TryParse(key, out var window) ? Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == window) : null;
 
     /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
     private RavenChat ChatOf(Guid? workspaceId) =>
@@ -5032,7 +5041,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return null;
         }
 
-        var aloud = ChatOfBrain(askedIn) is { } asking && AloudInFlightBy(BrainOf(asking));
+        var aloud = AloudInFlightIn(askedIn);
         if (!MaySpeak(aloud))
         {
             return $"{SwitchLine(card.ShownIn!)} Its card is shown there.";
@@ -5063,9 +5072,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// the user. Facts only, never what a chat said: the brain acts. The lines count as read once the answer that tells them
     /// is heard to its end, or at once when it is only written. UI thread.
     /// </summary>
-    public string WhatsNewForBrain(Guid? askedFrom, int? number)
+    public string WhatsNewForBrain(string? askedIn, int? number)
     {
-        var from = ChatOf(askedFrom);
+        var from = ChatOfBrain(askedIn) ?? YardChat;
         var chats = Chats.Where(c => !c.IsActivity && (number is null || c.Number == number))
             .OrderBy(c => c == from ? 0 : 1).ThenBy(c => c.Number).ToList();
         if (number is { } asked && chats.Count == 0)
@@ -5114,7 +5123,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         // Counted read with the answer of the brain that asked: told in another brain's turn, it would be read unheard.
         // The brain that answers a question is the one of the chat it was asked in, also once it moved with the user (#180).
-        if (told.Count > 0 && _questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && q.Brain == BrainOf(from)) is { } question)
+        if (told.Count > 0 && askedIn is not null
+            && _questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && KeyOf(q.AskedIn) == askedIn) is { } question)
         {
             question.ToRead.AddRange(told);
         }

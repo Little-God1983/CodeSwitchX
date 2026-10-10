@@ -651,7 +651,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     string? IRavenShell.NextQuestion(string? askedIn) => Raven.NextQuestionForBrain(askedIn);
 
-    string IRavenShell.WhatsNew(Guid? askedFrom, int? number) => Raven.WhatsNewForBrain(askedFrom, number);
+    string IRavenShell.WhatsNew(string? askedIn, int? number) => Raven.WhatsNewForBrain(askedIn, number);
 
     void IRavenShell.WriteSummary(string? askedIn, string text) => Raven.WriteSummary(askedIn, text);
 

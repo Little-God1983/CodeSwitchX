@@ -795,4 +795,56 @@ public sealed partial class RavenPanelViewModelTests
         three.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
     }
+
+    /// <summary>The user asks in chat 1 with a press of the mic, while muted; its brain is held at the answer.</summary>
+    private async Task AskAloudInChatOneHeldAsync(RavenPanelViewModel vm, FakeBrain brain)
+    {
+        vm.IsMuted = true;
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        brain.Gate = new TaskCompletionSource();
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => brain.Sent.Count == 1);
+    }
+
+    // Round 3 of #254: with one brain for every chat, the chat that asks still decides, by its key
+    [Fact]
+    public async Task With_one_brain_muted_the_card_is_read_out_only_for_the_chat_whose_words_were_said_aloud()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3
+        await AskAloudInChatOneHeldAsync(vm, _brain);
+
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX").ToString()).ShouldBe("Chat 3, RawCutX. Its card is shown there.");
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX").ToString()).ShouldBe("Chat 3, RawCutX. Its question is read out next.");
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    // Round 3 of #254: chat 0 proposes nothing, so an allow with no window comes from a caller that is no Raven chat
+    [Fact]
+    public async Task Muted_an_allow_proposed_with_no_window_is_only_written_while_a_chat_answers_words_said_aloud()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        var ask = new ChatAsk("p_a",
+            new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "Bash", ToolInputHash = "npm test" },
+            [], new ChatPermission("Bash", "run a command", "npm test", null));
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        await AskAloudInChatOneHeldAsync(vm, _brain);
+        var before = _speech.Spoken.Count;
+
+        asks.Propose("p_a"); // no chat header: no window
+
+        await WithinAsync(_voice.WhenQuietAsync());
+        SpokenSince(before).ShouldNotContain("Say yes.");
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.EndsWith("Say yes.", StringComparison.Ordinal));
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
 }

@@ -55,7 +55,7 @@ public interface IRavenShell
     /// The news not read yet in every window's Raven chat, the chat of <paramref name="askedFrom"/> first, or only chat
     /// <paramref name="number"/>'s, and what waits for the user (#243); counted read once the answer telling it is heard.
     /// </summary>
-    string WhatsNew(Guid? askedFrom, int? number);
+    string WhatsNew(string? askedIn, int? number);
 
     /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
     void WriteSummary(string? askedIn, string text);
@@ -554,8 +554,8 @@ public sealed class RavenActions : IYardActions
         }
     }
 
-    public Task<string> WhatsNewAsync(Guid? askedFrom, int? number, CancellationToken ct) =>
-        _ui.InvokeAsync(() => _shell().WhatsNew(askedFrom, number), UiTimeout, ct);
+    public Task<string> WhatsNewAsync(string? askedIn, int? number, CancellationToken ct) =>
+        _ui.InvokeAsync(() => _shell().WhatsNew(askedIn, number), UiTimeout, ct);
 
     public Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().NextQuestion(askedIn) ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);

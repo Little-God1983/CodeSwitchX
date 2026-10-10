@@ -213,7 +213,7 @@ public sealed class YardActionToolsTests
     {
         (await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).WhatsNew(chat, Ct)).ShouldBe("New in chat 2: a chat finished.");
 
-        _actions.WhatsNewFor.ShouldBe(((Guid?)FakeYard.DiffusionId, number));
+        _actions.WhatsNewFor.ShouldBe((new ChatScope(FakeYard.DiffusionId).Key, number));
     }
 
     /// <summary>#254: the brain that asks for the next question is known, so muted only its own turn's spoken words read the card.</summary>
