@@ -850,8 +850,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
-        // "Stop." goes to the brain after the name (#250): it answers nothing here, so only the hush is checked (#245).
-        _brain.Answer = q => q.TrimEnd().EndsWith("stop.", StringComparison.OrdinalIgnoreCase) ? [] : [new BrainText("You have one chat waiting.")];
+        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
         var transcript = new TaskCompletionSource<DictationResult>();
         Transcribes(transcript.Task);
         var vm = await InOpenMicAsync(voice);
@@ -869,8 +868,68 @@ public sealed partial class RavenPanelViewModelTests
         voice.IsSpeaking.ShouldBeFalse();
         await Until(() => player.Stops > stops);
         await WithinAsync(vm.PendingAnswers);
-        _brain.Sent.ShouldContain(q => q.TrimEnd().EndsWith("stop.", StringComparison.OrdinalIgnoreCase)); // what the empty answer stands for (#250)
+        _brain.Sent.ShouldNotContain(q => q.Contains("stop", StringComparison.OrdinalIgnoreCase), "a stop is the app's: it goes to no brain (#250)");
         await WithinAsync(vm.PendingFollowUp);
+    }
+
+    // #250: "Raven, stop." silences Raven, and that is all: no brain is asked, nothing is written, nothing said back
+    [Fact]
+    public async Task Raven_stop_in_Open_mic_ends_an_answer_on_its_way_and_says_nothing_back()
+    {
+        _brain.Answer = q => q.Contains("waiting") ? [new BrainText("You have one chat waiting.")] : [new BrainText("Okay, I stopped.")];
+        Transcribes(Task.FromResult(new DictationResult("Raven, stop.", TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        _brain.Gate = new TaskCompletionSource(); // the answer is on its way
+        Type(vm, "What's waiting on me?");
+        await Until(() => _brain.Sent.Count == 1);
+        var lines = vm.Log.Count;
+        var said = _speech.Spoken.Count;
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _brain.Sent.ShouldHaveSingleItem("the stop went to no brain");
+        _speech.Spoken.Count.ShouldBe(said, "nothing is said after a stop");
+        vm.Log.Skip(lines).ShouldNotContain(e => e.Kind == RavenLogKind.You, "nothing is written for it");
+        vm.Log.ShouldNotContain(e => e.Text.Contains("one chat waiting"), "the answer on its way stopped");
+    }
+
+    // Round 2 of #250: a lone "Stop." in Open mic's follow-up is let through as a lone "Yes." is, and only silences
+    [Fact]
+    public async Task A_lone_stop_in_the_follow_up_is_taken_and_goes_to_no_brain()
+    {
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), Task.FromResult(new DictationResult("Stop.", TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        await AnsweredAMomentAgoAsync(vm);
+
+        _openMic.SayShort();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem("the stop went to no brain");
+        vm.TakesTurnsWithoutName.ShouldBeFalse("after a stop the room's next words need the name");
+    }
+
+    // #250: a request that names what to stop is a question for the brain
+    [Fact]
+    public async Task Raven_stop_chat_two_still_goes_to_the_brain()
+    {
+        _brain.Answer = _ => [new BrainText("Stopping chat 2.")];
+        Transcribes(Task.FromResult(new DictationResult("Raven, stop chat 2.", TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldEndWith("stop chat 2.");
     }
 
     // #217: the TV talking over Raven cut it off, and then got in as a follow-up

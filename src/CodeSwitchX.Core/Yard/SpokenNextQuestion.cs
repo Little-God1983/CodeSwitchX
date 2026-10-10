@@ -20,8 +20,7 @@ public static class SpokenNextQuestion
 
     public static bool Is(string? said)
     {
-        var words = (said ?? "").ToLowerInvariant()
-            .Split([' ', '\t', '\r', '\n', '.', ',', '!', '?', ':', ';', '"', '\''], StringSplitOptions.RemoveEmptyEntries);
+        var words = SpokenWords.Of(said);
         var at = 0;
         while (at < words.Length && Lead.Contains(words[at]))
         {
