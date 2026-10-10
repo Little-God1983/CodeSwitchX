@@ -200,11 +200,25 @@ public class WorkspaceStoreTests : IAsyncLifetime
 
         var ended = await Task.WhenAll(adds);
         // With its SQLite codes and the whole stack: which statement (the transaction's start, the read, the insert, the commit) failed.
-        var errors = ended.Select(e => e.Error).OfType<Exception>().Select(e => e.GetBaseException() is SqliteException sqlite
+        var errors = ended.Select(e => e.Error).OfType<Exception>().Select(e => SqliteIn(e) is { } sqlite
             ? $"SQLite {sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}: {e}" : e.ToString()).ToList();
         errors.ShouldBeEmpty("a racing add waits for the one before it, and then sees its row");
         ended.Count(e => e.Added).ShouldBe(1);
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+    }
+
+    /// <summary>The first SQLite error in the chain of <paramref name="error"/>, however deep EF wrapped it.</summary>
+    private static SqliteException? SqliteIn(Exception? error)
+    {
+        for (; error is not null; error = error.InnerException)
+        {
+            if (error is SqliteException sqlite)
+            {
+                return sqlite;
+            }
+        }
+
+        return null;
     }
 
     [Fact]
