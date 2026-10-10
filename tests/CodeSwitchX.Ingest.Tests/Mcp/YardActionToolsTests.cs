@@ -218,11 +218,16 @@ public sealed class YardActionToolsTests
 
     /// <summary>#254: the brain that asks for the next question is known, so muted only its own turn's spoken words read the card.</summary>
     [Fact]
-    public async Task Next_question_names_the_window_of_the_chat_it_is_asked_in()
+    public async Task Next_question_names_the_chat_it_is_asked_in_and_none_for_a_caller_that_is_no_Raven_chat()
     {
         await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).NextQuestion(Ct);
+        _actions.NextQuestionFrom.ShouldBe(new ChatScope(FakeYard.DiffusionId).Key);
 
-        _actions.NextQuestionFrom.ShouldBe(FakeYard.DiffusionId);
+        await new YardActionTools(_yard, _actions, scope: ChatScope.Yard).NextQuestion(Ct);
+        _actions.NextQuestionFrom.ShouldBe(YardMcp.OverviewChat);
+
+        await new YardActionTools(_yard, _actions, scope: ChatScope.None).NextQuestion(Ct);
+        _actions.NextQuestionFrom.ShouldBeNull("not chat 0: no brain of the user's");
     }
 
     [Fact]

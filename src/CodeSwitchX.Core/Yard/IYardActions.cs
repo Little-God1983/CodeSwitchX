@@ -76,9 +76,9 @@ public interface IYardActions
     /// Takes the user to the oldest question or permission prompt waiting in any window (#230): its window's Raven chat is
     /// shown, and its card is read out once Raven's answer is over. Returns what Raven says of it.
     /// </summary>
-    /// <param name="askedFrom">The workspace of the Raven chat whose brain asks; null for chat 0: muted, the card is read out
-    /// only when that brain answers words said aloud (#254).</param>
-    Task<string> NextQuestionAsync(Guid? askedFrom, CancellationToken ct);
+    /// <param name="askedIn">The key of the Raven chat whose brain asks, as its chat header names it; null for a caller that is
+    /// no Raven chat. Muted, the card is read out only when that brain answers words said aloud (#254).</param>
+    Task<string> NextQuestionAsync(string? askedIn, CancellationToken ct);
 
     /// <summary>
     /// What is new for the user (#243): the news not read yet in every window's Raven chat, muted ones too, the chat of the

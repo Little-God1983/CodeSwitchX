@@ -222,7 +222,7 @@ public sealed partial class RavenPanelViewModelTests
         _ = await AsksFruitAsync(vm, asks, "c");
         var before = _speech.Spoken.Count;
 
-        vm.NextQuestionForBrain().ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
         await GraceAsync(vm);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
     }
@@ -251,7 +251,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         var before = _speech.Spoken.Count;
 
-        vm.NextQuestionForBrain().ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 2, DiffusionNexus. Its question is read out next.");
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         await GraceAsync(vm);
@@ -280,7 +280,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         var (vm, _) = await NextQuestionVmAsync();
 
-        vm.NextQuestionForBrain().ShouldBeNull();
+        vm.NextQuestionForBrain(null).ShouldBeNull();
     }
 
     /// <summary>
@@ -758,10 +758,13 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingTranscriptions);
         await Until(() => one.Sent.Count == 1);
 
-        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX"))
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX").ToString())
             .ShouldBe("Chat 3, RawCutX. Its card is shown there.", "chat 3's brain began its turn itself");
-        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"))
+        vm.NextQuestionForBrain(null).ShouldBe("Chat 3, RawCutX. Its card is shown there.", "a caller that is no Raven chat");
+        vm.NextQuestionForBrain(Guid.NewGuid().ToString()).ShouldBe("Chat 3, RawCutX. Its card is shown there.", "a window gone, its brain with it");
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX").ToString())
             .ShouldBe("Chat 3, RawCutX. Its question is read out next.", "chat 1's brain answers what the user said");
         one.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
     }
 }
