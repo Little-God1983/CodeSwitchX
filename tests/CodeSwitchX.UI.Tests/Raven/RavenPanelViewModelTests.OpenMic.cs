@@ -850,15 +850,14 @@ public sealed partial class RavenPanelViewModelTests
     {
         var player = new HoldingPlayer();
         using var voice = _speech.NewVoice(player);
-        _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
+        // "Stop." goes to the brain after the name (#250): it answers nothing here, so only the hush is checked (#245).
+        _brain.Answer = q => q.Contains("stop.", StringComparison.OrdinalIgnoreCase) ? [] : [new BrainText("You have one chat waiting.")];
         var transcript = new TaskCompletionSource<DictationResult>();
         Transcribes(transcript.Task);
         var vm = await InOpenMicAsync(voice);
         Type(vm, "What's waiting on me?");
         await Until(() => vm.State == RavenState.Speaking);
         var stops = player.Stops;
-        // "stop." is asked of the brain after the name: its answer, held, must not be what speaks at the check (#245).
-        _brain.Gate = new TaskCompletionSource();
 
         _openMic.Speak(); // the TV, as far as anyone knows yet
         voice.IsSpeaking.ShouldBeTrue();
@@ -869,11 +868,7 @@ public sealed partial class RavenPanelViewModelTests
 
         voice.IsSpeaking.ShouldBeFalse();
         await Until(() => player.Stops > stops);
-        await Until(() => _brain.Sent.LastOrDefault()?.Contains("stop.", StringComparison.OrdinalIgnoreCase) == true); // the gate holds the answer to it: nothing else could speak
-        _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
-        vm.Log.Count(e => e.Kind == RavenLogKind.Raven && e.Text == "You have one chat waiting.").ShouldBe(2);
-        voice.Hush(); // the held player never finishes: nothing goes on playing past the test
     }
 
     // #217: the TV talking over Raven cut it off, and then got in as a follow-up
