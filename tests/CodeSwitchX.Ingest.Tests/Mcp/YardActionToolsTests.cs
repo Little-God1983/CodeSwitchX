@@ -216,6 +216,15 @@ public sealed class YardActionToolsTests
         _actions.WhatsNewFor.ShouldBe(((Guid?)FakeYard.DiffusionId, number));
     }
 
+    /// <summary>#254: the brain that asks for the next question is known, so muted only its own turn's spoken words read the card.</summary>
+    [Fact]
+    public async Task Next_question_names_the_window_of_the_chat_it_is_asked_in()
+    {
+        await new YardActionTools(_yard, _actions, scope: new ChatScope(FakeYard.DiffusionId)).NextQuestion(Ct);
+
+        _actions.NextQuestionFrom.ShouldBe(FakeYard.DiffusionId);
+    }
+
     [Fact]
     public async Task Switch_chat_opens_the_window_only_when_asked_and_activity_never()
     {

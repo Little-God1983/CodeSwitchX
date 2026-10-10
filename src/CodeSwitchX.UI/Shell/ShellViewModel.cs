@@ -649,7 +649,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         }
     }
 
-    string? IRavenShell.NextQuestion() => Raven.NextQuestionForBrain();
+    string? IRavenShell.NextQuestion(Guid? askedFrom) => Raven.NextQuestionForBrain(askedFrom);
 
     string IRavenShell.WhatsNew(Guid? askedFrom, int? number) => Raven.WhatsNewForBrain(askedFrom, number);
 

@@ -48,7 +48,8 @@ public interface IRavenShell
     /// Shows the chat of the oldest question or permission prompt waiting in any window, whose card is read out once Raven's
     /// answer is over (#230); what Raven says of it, or null when none waits.
     /// </summary>
-    string? NextQuestion();
+    /// <param name="askedFrom">The workspace of the Raven chat whose brain asks; null for chat 0.</param>
+    string? NextQuestion(Guid? askedFrom);
 
     /// <summary>
     /// The news not read yet in every window's Raven chat, the chat of <paramref name="askedFrom"/> first, or only chat
@@ -556,8 +557,8 @@ public sealed class RavenActions : IYardActions
     public Task<string> WhatsNewAsync(Guid? askedFrom, int? number, CancellationToken ct) =>
         _ui.InvokeAsync(() => _shell().WhatsNew(askedFrom, number), UiTimeout, ct);
 
-    public Task<string> NextQuestionAsync(CancellationToken ct) =>
-        _ui.InvokeAsync(() => _shell().NextQuestion() ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);
+    public Task<string> NextQuestionAsync(Guid? askedFrom, CancellationToken ct) =>
+        _ui.InvokeAsync(() => _shell().NextQuestion(askedFrom) ?? RavenPanelViewModel.NoQuestionsLine, UiTimeout, ct);
 
     public Task<string> MuteChatAsync(int number, bool muted, CancellationToken ct) => _ui.InvokeAsync(() => _shell().MuteChat(number, muted)
         ?? throw new YardActionException(number == 0

@@ -47,7 +47,7 @@ public class DatabaseInitializerTests : IAsyncLifetime
         await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
 
         (await ExecuteAsync("""SELECT COUNT(*) FROM "__EFMigrationsLock";""")).ShouldBe(1L, "the other instance keeps its lock");
-        initializing.IsCompleted.ShouldBeFalse();
+        initializing.IsCompleted.ShouldBeFalse(initializing.Exception?.ToString());
 
         await ExecuteAsync("""DELETE FROM "__EFMigrationsLock";""");
         await initializing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);

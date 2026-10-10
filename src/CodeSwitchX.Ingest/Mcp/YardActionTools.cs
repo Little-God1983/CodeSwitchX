@@ -211,7 +211,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "questions\", \"what's next\", \"the next one\"): its window's Raven chat is shown, and its card is read out there once you "
         + "are done. Returns what you say: say only that.")]
     public Task<string> NextQuestion(CancellationToken cancellationToken = default) =>
-        Act(() => actions.NextQuestionAsync(cancellationToken));
+        Act(() => actions.NextQuestionAsync(scope?.WorkspaceId, cancellationToken));
 
     // Not read-only: what it gives counts as read once the answer that tells it is heard (#243).
     [McpServerTool(Name = "whats_new", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]

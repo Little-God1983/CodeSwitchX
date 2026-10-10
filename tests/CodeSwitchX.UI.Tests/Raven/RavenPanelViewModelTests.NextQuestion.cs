@@ -13,7 +13,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>Three windows: ContentAutomatorX (1, chat "a"), DiffusionNexus (2, chat "c"), RawCutX (3, chat "d"); the user is in chat 1.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false)
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false, IChatBrains? brains = null)
     {
         string[] workspaces = ["ContentAutomatorX", "DiffusionNexus", "RawCutX"];
         string[] ids = ["a", "c", "d"];
@@ -24,7 +24,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard, brains: brains);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -737,5 +737,31 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         _time.Advance(TrafficWatcher.NewsGrace); // said in Open mic: the user may go on after a breath
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+    }
+
+    // #254: muted, next_question from a brain's own turn read the card when another brain answered words said aloud
+    [Fact]
+    public async Task Muted_the_card_next_question_finds_is_read_out_only_for_the_brain_answering_words_said_aloud()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var (vm, asks) = await NextQuestionVmAsync(brains: brains);
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3
+        vm.IsMuted = true;
+        var one = (FakeBrain)brains.For(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"));
+        one.Gate = new TaskCompletionSource(); // chat 1's brain answers words said aloud, and is still at it
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => one.Sent.Count == 1);
+
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("RawCutX"))
+            .ShouldBe("Chat 3, RawCutX. Its card is shown there.", "chat 3's brain began its turn itself");
+        vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"))
+            .ShouldBe("Chat 3, RawCutX. Its question is read out next.", "chat 1's brain answers what the user said");
+        one.Gate.SetResult();
     }
 }
