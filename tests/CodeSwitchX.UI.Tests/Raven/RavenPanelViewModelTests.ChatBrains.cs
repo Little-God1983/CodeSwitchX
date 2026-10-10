@@ -393,6 +393,28 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task What_became_of_an_allow_proposed_from_no_Raven_chat_is_told_to_no_brain()
+    {
+        // #265: a caller that is no Raven chat proposed it; chat 0's brain did not, and is not told it.
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
+        var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
+        var brains = new FakeChatBrains(_brain);
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard, brains: brains);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Ask is not null));
+        vm.SelectedChat = vm.YardChat;
+
+        asks.Propose("p1", window: null, fromRavenChat: false);
+        Type(vm, "what now");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+    }
+
+    [Fact]
     public async Task Muted_an_allow_proposed_from_a_window_gone_is_only_written_though_chat_0_answers_words_said_aloud()
     {
         // Round 1 of #254: a window gone took its brain along; the Yard's turn answering spoken words is not its turn.

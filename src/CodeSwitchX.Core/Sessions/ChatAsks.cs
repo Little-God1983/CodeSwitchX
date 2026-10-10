@@ -116,7 +116,9 @@ public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnl
 /// prompt is allowed only when the app finds a yes in the user's next words (<see cref="ChatAsks.Confirm"/>).
 /// </summary>
 /// <param name="Window">The workspace of the Raven chat whose brain proposed it, which is told what came of it; null for chat 0, the Yard.</param>
-public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At, Guid? Window = null);
+/// <param name="FromRavenChat">False for a caller that is no Raven chat (#265): no brain of the user's is told what came of
+/// it, and no turn of the user's answers there.</param>
+public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At, Guid? Window = null, bool FromRavenChat = true);
 
 /// <summary>How a proposed allow ended.</summary>
 public enum ChatProposalEnd
@@ -451,8 +453,9 @@ public sealed class ChatAsks : IDisposable
     /// the yes (on <see cref="ProposedAllow"/>), so the yes answers what the app said.
     /// </summary>
     /// <param name="window">The workspace of the Raven chat whose brain proposes it; null for chat 0, the Yard.</param>
+    /// <param name="fromRavenChat">False for a caller that is no Raven chat: see <see cref="ChatAllowProposal.FromRavenChat"/>.</param>
     /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
-    public ChatAllowProposal Propose(string askId, Guid? window = null)
+    public ChatAllowProposal Propose(string askId, Guid? window = null, bool fromRavenChat = true)
     {
         ChatAllowProposal proposal;
         ChatAllowProposal? replaced;
@@ -468,7 +471,7 @@ public sealed class ChatAsks : IDisposable
             replaced = _proposed;
             _lapsed = null;
             (_proposedHeard, _lapsedHeard) = (null, null);
-            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow(), window);
+            proposal = _proposed = new ChatAllowProposal(ask, _time.GetUtcNow(), window, fromRavenChat);
             _proposalExpiry.Change(ReadBackLifetime, Timeout.InfiniteTimeSpan); // the user's 30 s start once it is heard
         }
 
