@@ -266,9 +266,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         else
         {
             // Closed, VS Code wrote the tabs it comes back with: read before the tile changes, or a tab closed earlier,
-            // still in the list read before, would show again for a moment. A window that ran writes it as it goes, so
-            // that one is read again a moment later (#248).
-            _owner.RefreshTabsSoon(closed: oldValue == HostState.Running);
+            // still in the list read before, would show again for a moment. A window that ran and stopped writes it as it
+            // goes, so that one is read again a moment later (#248); not one that starts again.
+            _owner.RefreshTabsSoon(closed: oldValue == HostState.Running && newValue == HostState.Stopped);
         }
     }
 

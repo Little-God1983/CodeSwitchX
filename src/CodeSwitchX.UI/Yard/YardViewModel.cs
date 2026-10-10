@@ -363,7 +363,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// run back to back.</param>
     internal Task RefreshTabsAsync(bool again = true)
     {
-        if (_openTabs is not { } openTabs)
+        if (_openTabs is not { } openTabs || _disposed)
         {
             return Task.CompletedTask;
         }
@@ -387,32 +387,48 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
     {
         await Task.Yield(); // out of the lock it was started in: none of the read runs under it
-        while (true)
+        try
         {
+            while (true)
+            {
+                lock (_tabsGate)
+                {
+                    _tabsReadBegun = true;
+                }
+
+                await ReadTabsAsync(openTabs); // never throws: a failure is logged
+
+                TaskCompletionSource read;
+                bool more;
+                lock (_tabsGate)
+                {
+                    // Decided in one critical section with the asking, so no look is lost.
+                    read = _tabsRead!;
+                    _tabsRead = _tabsReadNext;
+                    _tabsReadNext = null;
+                    _tabsReadBegun = false;
+                    more = _tabsRead is not null;
+                }
+
+                read.SetResult();
+                if (!more)
+                {
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Not foreseen: the looks waiting fail rather than wait for good, and the next look reads afresh.
+            TaskCompletionSource? read, next;
             lock (_tabsGate)
             {
-                _tabsReadBegun = true;
+                (read, next) = (_tabsRead, _tabsReadNext);
+                (_tabsRead, _tabsReadNext, _tabsReadBegun) = (null, null, false);
             }
 
-            await ReadTabsAsync(openTabs); // never throws: a failure is logged
-
-            TaskCompletionSource read;
-            bool more;
-            lock (_tabsGate)
-            {
-                // Decided in one critical section with the asking, so no look is lost.
-                read = _tabsRead!;
-                _tabsRead = _tabsReadNext;
-                _tabsReadNext = null;
-                _tabsReadBegun = false;
-                more = _tabsRead is not null;
-            }
-
-            read.SetResult();
-            if (!more)
-            {
-                return;
-            }
+            read?.TrySetException(ex);
+            next?.TrySetException(ex);
         }
     }
 
@@ -786,13 +802,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     internal void RefreshTabsSoon(bool closed = false)
     {
-        if (_disposed)
-        {
-            return; // a state posted before the app closed
-        }
-
         CurrentTabsRefresh = RefreshTabsAsync();
-        if (closed)
+        if (closed && !_disposed) // not for a state posted before the app closed
         {
             // One for each close: a window closed soon after another does not put off the first one's look.
             ITimer? timer = null;

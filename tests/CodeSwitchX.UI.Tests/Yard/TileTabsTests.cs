@@ -684,6 +684,37 @@ public sealed class TileTabsTests
         _tabs.Reads.ShouldBe(reads);
     }
 
+    [Fact]
+    public async Task A_window_that_starts_again_is_not_read_again_a_moment_later()
+    {
+        // Round 2 of #248: Running to Starting is a reload, not a close.
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        App.HostState = HostState.Starting;
+        await _yard.CurrentTabsRefresh;
+        var reads = _tabs.Reads;
+
+        await Pass(YardViewModel.ClosedListWait);
+
+        _tabs.Reads.ShouldBe(reads);
+    }
+
+    [Fact]
+    public async Task Disposed_it_reads_no_more()
+    {
+        // Round 2 of #248: a close or a timer's look posted before the app closed.
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        var reads = _tabs.Reads;
+        _yard.Dispose();
+
+        App.HostState = HostState.Stopped;
+        await _yard.RefreshTabsAsync();
+        await Pass(YardViewModel.ClosedListWait);
+
+        _tabs.Reads.ShouldBe(reads);
+    }
+
     private async Task UntilReads(int reads)
     {
         for (var i = 0; i < 500 && _tabs.Reads < reads; i++)
