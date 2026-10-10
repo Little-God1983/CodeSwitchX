@@ -581,6 +581,35 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
     internal Task PendingHeardCheck => Task.WhenAll(_pendingCounts, _pendingReads);
 
+    /// <summary>
+    /// The waits for an Open mic answer, or an allow's read-back, to be heard before the follow-up runs from then (#217):
+    /// completes once every follow-up they open runs.
+    /// </summary>
+    internal Task PendingFollowUp
+    {
+        get
+        {
+            lock (_followUpWaits)
+            {
+                return _pendingFollowUp;
+            }
+        }
+    }
+
+    private Task _pendingFollowUp = Task.CompletedTask;
+
+    /// <summary>Guards <see cref="_pendingFollowUp"/>: an answer's end and a read-back may add to it from different threads in tests.</summary>
+    private readonly object _followUpWaits = new();
+
+    /// <summary>Adds a wait to <see cref="PendingFollowUp"/>; once all before it ran, it starts the chain again (a fault stays to be seen).</summary>
+    private void AwaitFollowUp(Task wait)
+    {
+        lock (_followUpWaits)
+        {
+            _pendingFollowUp = _pendingFollowUp.IsCompletedSuccessfully ? wait : Task.WhenAll(_pendingFollowUp, wait);
+        }
+    }
+
     /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178; UI thread).</summary>
     private Task _pendingCounts = Task.CompletedTask;
 
@@ -2317,7 +2346,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
             {
-                _ = OpenFollowUpOnceHeardAsync(spoken); // one cut off by the next question leaves the follow-up to that one's
+                AwaitFollowUp(OpenFollowUpOnceHeardAsync(spoken)); // one cut off by the next question leaves the follow-up to that one's
             }
             UpdateState();
         }
@@ -2330,7 +2359,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task OpenFollowUpOnceHeardAsync(ReplyVoice.SpokenReply spoken)
     {
         await spoken.Played.ConfigureAwait(false);
-        _dispatcher.Post(() => _followUpFrom = _time.GetUtcNow());
+        await FollowUpFromNowAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>The follow-up runs from now, on the UI thread; completes once it does, so <see cref="PendingFollowUp"/> can wait for it.</summary>
+    private Task FollowUpFromNowAsync()
+    {
+        var set = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _dispatcher.Post(() =>
+        {
+            _followUpFrom = _time.GetUtcNow();
+            set.SetResult();
+        });
+        return set.Task;
     }
 
     /// <summary>
@@ -2773,7 +2814,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
-        _ = HeardAsync(proposal, spoken.Played);
+        AwaitFollowUp(HeardAsync(proposal, spoken.Played));
     }
 
     /// <summary>
@@ -2786,7 +2827,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (await played.ConfigureAwait(false))
         {
             _asks?.MarkHeard(proposal, _time.GetUtcNow());
-            _dispatcher.Post(() => _followUpFrom = _time.GetUtcNow()); // a bare yes may answer it (#217)
+            await FollowUpFromNowAsync().ConfigureAwait(false); // a bare yes may answer it (#217)
             return;
         }
 

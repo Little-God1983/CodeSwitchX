@@ -158,13 +158,18 @@ public sealed partial class RavenPanelViewModelTests
 
         await TurnAsync(vm);
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
-        await Until(() => vm.TakesTurnsWithoutName); // the answer was heard to its end
+        await WithinAsync(vm.PendingFollowUp); // the answer was heard to its end
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
         said = "And in chat seven?";
         _time.Advance(TimeSpan.FromSeconds(6));
         await TurnAsync(vm);
-        await Until(() => vm.TakesTurnsWithoutName);
+        // The second answer heard: until then the first one's follow-up held the window open (#231).
+        await WithinAsync(vm.PendingFollowUp);
+        // Past the first answer's follow-up (it ran from 3 s at the latest), not the second's (from 9 s).
+        _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds - 5));
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
         said = "Wohnzimmer 100%.";
-        _time.Advance(TimeSpan.FromSeconds(11));
+        _time.Advance(TimeSpan.FromSeconds(6)); // past the second's too
         await TurnAsync(vm);
 
         _brain.Asked.Count.ShouldBe(2);
@@ -490,7 +495,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.FollowUpSeconds = 0;
 
         await TurnAsync(vm);
-        await Task.Delay(100, TestContext.Current.CancellationToken); // the answer heard
+        await WithinAsync(vm.PendingFollowUp); // the answer heard
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
         said = "Yes.";
         await TurnAsync(vm);
@@ -511,7 +516,8 @@ public sealed partial class RavenPanelViewModelTests
     {
         await TurnAsync(vm);
         _time.Advance(RavenPanelViewModel.ContinueWindow + TimeSpan.FromSeconds(1)); // past the rest of the turn with the name (#219)
-        await Until(() => vm.TakesTurnsWithoutName);
+        await WithinAsync(vm.PendingFollowUp);
+        await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
     }
 
     /// <summary>One Open mic turn, transcribed and, unless told not to wait for it, answered.</summary>
