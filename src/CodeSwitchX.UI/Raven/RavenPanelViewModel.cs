@@ -2855,7 +2855,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
         // Judged by the window's chat that proposes, as chat 0 proposes nothing. No window, it is a caller that is no Raven
         // chat, and no turn of the user's answers there (#254, #265).
-        var aloud = proposal.Window is { } window && AloudInFlightIn(YardMcp.ChatKey(window, overview: false));
+        var aloud = AloudInFlightIn(ProposerKey(proposal));
         if (!MaySpeak(aloud) || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
@@ -2987,13 +2987,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         spoken.Complete();
     }
 
-    /// <summary>The brain that proposed the allow: the one of the chat its tool call came from; null for a window gone, whose brain went with it.</summary>
-    /// <remarks>
-    /// No window: chat 0 proposes nothing (answer_permission refuses it), so it came from a caller that is no Raven chat,
-    /// and no brain of the user's proposed it (#265).
-    /// </remarks>
-    private IConductorBrain? Proposer(ChatAllowProposal proposal) =>
-        proposal.Window is { } window && ChatOfBrain(YardMcp.ChatKey(window, overview: false)) is { } chat ? BrainOf(chat) : null;
+    /// <summary>
+    /// The brain that proposed the allow: the one of the window's chat its tool call came from; null for a window gone,
+    /// whose brain went with it, and for no window: a caller that is no Raven chat (#265).
+    /// </summary>
+    private IConductorBrain? Proposer(ChatAllowProposal proposal) => ChatOfBrain(ProposerKey(proposal)) is { } chat ? BrainOf(chat) : null;
+
+    /// <summary>
+    /// The key (<see cref="YardMcp.ChatKey"/>) of the chat that proposed the allow: its window's, as chat 0 proposes nothing
+    /// (answer_permission refuses it); null for no window, a caller that is no Raven chat (#265).
+    /// </summary>
+    private static string? ProposerKey(ChatAllowProposal proposal) =>
+        proposal.Window is { } window ? YardMcp.ChatKey(window, overview: false) : null;
 
     /// <summary>What became of a proposed allow, for the brain that proposed it, and no other.</summary>
     private void TellProposer(ChatAllowProposal proposal, string fact)

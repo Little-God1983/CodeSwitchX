@@ -405,6 +405,9 @@ public sealed partial class RavenPanelViewModelTests
         vm.SetWorkspaces([(CodeSwitchX, 1, "CodeSwitchX"), (ContentAutomatorX, 3, "ContentAutomatorX")]);
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Ask is not null));
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        Type(vm, "hello"); // the window's brain is there, to be told if it were taken for the proposer
+        await WithinAsync(vm.PendingAnswers);
         vm.SelectedChat = vm.YardChat;
 
         asks.Propose("p1", window: null); // no chat header
@@ -412,6 +415,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldHaveSingleItem().ShouldNotContain("allow you proposed");
+        brains.Windows[ContentAutomatorX].Sent.ShouldNotBeEmpty();
         brains.Windows.Values.ShouldAllBe(b => b.Sent.All(q => !q.Contains("allow you proposed")), "nor a window's brain");
     }
 
