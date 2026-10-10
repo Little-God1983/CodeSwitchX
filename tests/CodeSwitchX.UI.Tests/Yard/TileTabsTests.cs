@@ -57,15 +57,11 @@ public sealed class TileTabsTests
 
     private void Says(SessionSnapshot chat) => _bus.Publish(new SessionChanged(null, chat));
 
-    /// <summary>
-    /// VS Code writes the tabs of the App window down, now, and the tiles look. A look already running (one a stop set off)
-    /// is over first: asked for while it runs, the look gives that one, which may have read the list before this (#238).
-    /// </summary>
-    private async Task VsCodeWrites(params OpenChatTab[] tabs)
+    /// <summary>VS Code writes the tabs of the App window down, now, and the tiles look.</summary>
+    private Task VsCodeWrites(params OpenChatTab[] tabs)
     {
-        await _yard.CurrentTabsRefresh;
         _tabs.Of[_app.Id] = new OpenChatTabs(Now, tabs);
-        await _yard.RefreshTabsAsync();
+        return _yard.RefreshTabsAsync();
     }
 
     private static OpenChatTab Tab(string id, string? title = null) => new(id, title);
@@ -568,11 +564,51 @@ public sealed class TileTabsTests
         Rows.ShouldBe(["a"]);
     }
 
+    /// <summary>
+    /// A stop sets off a look; VS Code writes its list as it closes, after the look took the list, and the tile looks again
+    /// (#238). That look is not the one running, which has the list from before: it reads again after it.
+    /// </summary>
+    [Fact]
+    public async Task A_look_asked_for_while_one_runs_reads_the_list_again_after_it()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var before = _tabs.Reads; // the start's own look
+        _tabs.Hold = new ManualResetEventSlim();
+        var running = _yard.RefreshTabsAsync();
+        for (var i = 0; i < 500 && _tabs.Reads == before; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _tabs.Reads.ShouldBe(before + 1, "the running look took the list before VS Code wrote it");
+        var look = VsCodeWrites(Tab("a"));
+        _tabs.Hold.Set();
+        await running;
+        await look;
+
+        Rows.ShouldBe(["a"]);
+        _tabs.Reads.ShouldBe(before + 2);
+    }
+
     private sealed class FakeTabs : IVsCodeOpenTabs
     {
-        public Dictionary<Guid, OpenChatTabs> Of { get; } = [];
+        // Written by the test while a look reads it on the thread pool.
+        public System.Collections.Concurrent.ConcurrentDictionary<Guid, OpenChatTabs> Of { get; } = new();
 
-        public IReadOnlyDictionary<Guid, OpenChatTabs> Read(IReadOnlyList<Workspace> workspaces) =>
-            new Dictionary<Guid, OpenChatTabs>(Of.Where(t => workspaces.Any(w => w.Id == t.Key)));
+        /// <summary>Holds each read once it took the list, until set.</summary>
+        public ManualResetEventSlim? Hold { get; set; }
+
+        private int _reads;
+
+        /// <summary>How many reads took the list.</summary>
+        public int Reads => Volatile.Read(ref _reads);
+
+        public IReadOnlyDictionary<Guid, OpenChatTabs> Read(IReadOnlyList<Workspace> workspaces)
+        {
+            var read = new Dictionary<Guid, OpenChatTabs>(Of.Where(t => workspaces.Any(w => w.Id == t.Key)));
+            Interlocked.Increment(ref _reads);
+            Hold?.Wait(TimeSpan.FromSeconds(10));
+            return read;
+        }
     }
 }

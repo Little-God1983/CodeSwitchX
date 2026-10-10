@@ -39,8 +39,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _tabsTimer;
 
-    /// <summary>The read of the tabs that runs, or the last one (UI thread).</summary>
-    private Task? _tabsRead;
+    /// <summary>The reads of the tabs that run, or the last ones; under <see cref="_tabsLock"/>.</summary>
+    private Task _tabsRead = Task.CompletedTask;
+
+    /// <summary>Whether <see cref="_tabsRead"/> still reads, and so takes a look asked for now; under <see cref="_tabsLock"/>.</summary>
+    private bool _tabsReading;
+
+    /// <summary>How many looks were asked for; under <see cref="_tabsLock"/>.</summary>
+    private long _tabsAsked;
+
+    /// <summary>
+    /// Guards the reads' bookkeeping: in the app it all runs on the UI thread, but in tests a read goes on on the thread
+    /// pool while the next look is asked for.
+    /// </summary>
+    private readonly object _tabsLock = new();
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
     private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
@@ -332,12 +344,52 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Reads the chat tabs open in the workspaces' VS Code windows, off the UI thread, and shows them on the tiles (#164).
-    /// Called on the UI thread; asked for while a read runs, it gives that read, not a second one.
+    /// Called on the UI thread. Asked for while a read runs, it gives that read, which reads once more after: VS Code may
+    /// have written its list since the read took it (as it closes, #238). However often it is asked meanwhile, one more read
+    /// covers it.
     /// </summary>
-    internal Task RefreshTabsAsync() =>
-        _openTabs is not { } openTabs ? Task.CompletedTask
-            : _tabsRead is { IsCompleted: false } running ? running
-            : _tabsRead = ReadTabsAsync(openTabs);
+    internal Task RefreshTabsAsync()
+    {
+        if (_openTabs is not { } openTabs)
+        {
+            return Task.CompletedTask;
+        }
+
+        lock (_tabsLock)
+        {
+            _tabsAsked++;
+            if (!_tabsReading)
+            {
+                _tabsReading = true;
+                _tabsRead = ReadTabsUntilAskedAsync(openTabs);
+            }
+
+            return _tabsRead;
+        }
+    }
+
+    /// <summary>Reads the tabs, and again for as long as a look was asked for while it read.</summary>
+    private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
+    {
+        while (true)
+        {
+            long asked;
+            lock (_tabsLock)
+            {
+                asked = _tabsAsked;
+            }
+
+            await ReadTabsAsync(openTabs);
+            lock (_tabsLock)
+            {
+                if (_tabsAsked == asked)
+                {
+                    _tabsReading = false;
+                    return;
+                }
+            }
+        }
+    }
 
     private async Task ReadTabsAsync(IVsCodeOpenTabs openTabs)
     {
@@ -698,18 +750,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
-        CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
+        CurrentTabsRefresh = RefreshTabsAsync(); // a read that runs now was not asked about the tile: another follows it
     }
 
-    /// <summary>Reads the tabs again now, after the read that runs (UI thread): a tile's VS Code closed, and wrote its tabs.</summary>
-    internal void RefreshTabsSoon() => CurrentTabsRefresh = RefreshTabsAfterAsync(CurrentTabsRefresh);
-
-    /// <summary>Reads the tabs once the read that runs is over: a tile added meanwhile was not in it.</summary>
-    private async Task RefreshTabsAfterAsync(Task running)
-    {
-        await running;
-        await RefreshTabsAsync();
-    }
+    /// <summary>Reads the tabs again now, or after the read that runs (UI thread): a tile's VS Code closed, and wrote its tabs.</summary>
+    internal void RefreshTabsSoon() => CurrentTabsRefresh = RefreshTabsAsync();
 
     /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
     private async Task ReloadTrackNamesAsync()
