@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 using NSubstitute;
@@ -9,7 +10,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>The user says <paramref name="words"/> with a press of the mic, and the turn is transcribed and answered.</summary>
-    private async Task SayAloudAsync(RavenPanelViewModel vm, string words)
+    private async Task SayAloudAsync(RavenPanelViewModel vm, string words, bool waitForAnswer = true)
     {
         Transcribes(Task.FromResult(new DictationResult(words, TimeSpan.FromSeconds(1))));
         vm.PressMic(TalkInput.MicButton);
@@ -18,7 +19,10 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(Hold);
         await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
         await WithinAsync(vm.PendingTranscriptions);
-        await WithinAsync(vm.PendingAnswers);
+        if (waitForAnswer)
+        {
+            await WithinAsync(vm.PendingAnswers);
+        }
     }
 
     [Fact]
@@ -179,6 +183,35 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
 
         SpokenSince(before).ShouldBeEmpty("muted before it was read: only shown");
+    }
+
+    /// <summary>The brain's turn calls next_question as chat 1's brain, then holds its answer until the test lets it go.</summary>
+    private static IEnumerable<BrainEvent> AsksForTheNextCard(RavenPanelViewModel vm)
+    {
+        vm.NextQuestionForBrain(YardMcp.ChatKey(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"), overview: false));
+        yield return new BrainText("Here is the next one.");
+        yield return new BrainText("It is read after this.");
+    }
+
+    // Round 2 of #261: a card the brain asked for aloud waits behind its answer: muted meanwhile, it is only shown
+    [Fact]
+    public async Task A_card_the_brain_asked_for_aloud_is_not_read_once_Raven_is_muted_before_its_answer_ends()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "c");
+        await GraceAsync(vm);
+        _brain.Answer = _ => AsksForTheNextCard(vm);
+        _brain.Pause = new TaskCompletionSource(); // the answer's second part waits
+        await SayAloudAsync(vm, "next one", waitForAnswer: false);
+        await Until(() => vm.SelectedChat == ChatNumbered(vm, 2));
+        var before = _speech.Spoken.Count;
+
+        vm.IsMuted = true;
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+
+        SpokenSince(before).ShouldNotContain("Banana", Case.Sensitive, "muted before it was read: only shown");
     }
 
     // Review of #242: muted midway through an answer to words said aloud, the rest is only written and new to the user

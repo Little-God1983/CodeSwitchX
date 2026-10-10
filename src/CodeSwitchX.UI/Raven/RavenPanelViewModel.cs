@@ -5052,7 +5052,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         // It takes the floor as a new question does (#261): an answer on its way stops with "(interrupted)", and so does a
-        // telling, news or a card being worded (#252); the card is read at once.
+        // telling, news or a card being worded (#252); the card is read at once, in Open mic after the grace.
         TakeFloor();
         Request(card, aloud); // read once the floor is free, with no pause first: the user waits for it
     }
