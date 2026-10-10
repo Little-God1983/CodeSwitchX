@@ -207,6 +207,16 @@ public class WorkspaceStoreTests : IAsyncLifetime
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
     }
 
+    [Fact]
+    public async Task Tracks_added_at_once_each_get_an_order_of_their_own()
+    {
+        // #273: the order is read and the track inserted in one transaction, as a read no longer waits for a write in progress.
+        var ct = TestContext.Current.CancellationToken;
+        var added = await Task.WhenAll(Enumerable.Range(0, 12).Select(i => Task.Run(() => _store.AddTrackAsync($"T{i}", ct), ct)));
+
+        added.Select(t => t.SortOrder).Distinct().Count().ShouldBe(12);
+    }
+
     /// <summary>The first SQLite error in the chain of <paramref name="error"/>, however deep EF wrapped it.</summary>
     private static SqliteException? SqliteIn(Exception? error)
     {

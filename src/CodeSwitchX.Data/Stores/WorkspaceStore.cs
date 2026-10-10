@@ -55,6 +55,8 @@ public sealed class WorkspaceStore : IWorkspaceStore
     public async Task UpdateAsync(Workspace workspace, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // Read and written in one transaction: an edit and a worktree refresh at once do not work on each other's stale rows (#273).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var existing = await db.Workspaces.FirstOrDefaultAsync(w => w.Id == workspace.Id, ct)
             ?? throw new KeyNotFoundException($"Workspace {workspace.Id} not found.");
 
@@ -80,11 +82,13 @@ public sealed class WorkspaceStore : IWorkspaceStore
         }
 
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task ReplaceWorktreesAsync(Guid workspaceId, IReadOnlyList<Worktree> worktrees, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var transaction = await db.Database.BeginTransactionAsync(ct); // as UpdateAsync (#273)
         var existing = await db.Worktrees.Where(t => t.WorkspaceId == workspaceId).ToListAsync(ct);
         db.Worktrees.RemoveRange(existing.Where(t => worktrees.All(n => n.Id != t.Id)));
         foreach (var worktree in worktrees)
@@ -102,6 +106,7 @@ public sealed class WorkspaceStore : IWorkspaceStore
         }
 
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     /// <summary>The lowest number from 1 not in <paramref name="taken"/> (see <see cref="Workspace.Number"/>).</summary>
@@ -132,10 +137,14 @@ public sealed class WorkspaceStore : IWorkspaceStore
     public async Task<Track> AddTrackAsync(string name, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        // The read and the insert in one transaction, begun IMMEDIATE: a track added at the same time waits, and then sees
+        // this one's order (#273: a read no longer waits for a write in progress).
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
         var maxOrder = await db.Tracks.Select(t => (int?)t.SortOrder).MaxAsync(ct) ?? -1;
         var track = new Track { Name = name, SortOrder = maxOrder + 1 };
         db.Tracks.Add(track);
         await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
         return track;
     }
 

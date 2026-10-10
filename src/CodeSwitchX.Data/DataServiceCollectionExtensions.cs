@@ -14,7 +14,9 @@ public static class DataServiceCollectionExtensions
         {
             DataSource = databaseFile,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            // A cache of its own per connection (#273): a shared one made a read of a table wait for a write to it in
+            // progress, up to the command timeout; with write-ahead logging, a read now sees what was committed, at once.
+            Cache = SqliteCacheMode.Private,
             Pooling = true,
         }.ToString();
 
