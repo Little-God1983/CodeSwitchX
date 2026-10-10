@@ -505,7 +505,6 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         };
     }
 
-    /// <summary>Chat 0 knows the windows' chats by their summaries only: a card is answered in its window's chat, which reads it out.</summary>
     /// <summary>
     /// The number of the chat <paramref name="said"/> names: the one the user is in for nothing or "this chat", or a chat
     /// by its number or its window's name, as the user said it.
@@ -522,6 +521,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return (await NamedChatAsync(said, open: false, ct).ConfigureAwait(false)).Number ?? throw new McpException(activity);
     }
 
+    /// <summary>Chat 0 knows the windows' chats by their summaries only: a card is answered in its window's chat, which reads it out.</summary>
     private void NotFromTheOverview()
     {
         if (scope?.Overview == true)

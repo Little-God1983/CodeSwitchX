@@ -33,21 +33,72 @@ public sealed partial class RavenPanelViewModelTests
         said.ShouldNotContain("Done.", Case.Sensitive, "what a chat said never goes to the brain that acts");
     }
 
+    /// <summary>The key the brain of the chat the user is in sends.</summary>
+    private static string? KeyOfSelected(RavenPanelViewModel vm) => YardMcp.ChatKey(vm.SelectedChat.WorkspaceId, vm.SelectedChat == vm.YardChat);
+
+    /// <summary>The user types <paramref name="question"/>; its answer is held until the test lets it go.</summary>
+    private async Task AskedAndAnsweringAsync(RavenPanelViewModel vm, string question)
+    {
+        _brain.Answer = _ => [new BrainText("Chat 2 finished.")]; // one sentence: heard whole
+        _brain.Gate = new TaskCompletionSource();
+        Type(vm, question);
+        await Until(() => _brain.Sent.Count == 1);
+    }
+
     // #256: news still held back (for the pause, or a busy floor) was missed: "nothing new", and a moment later the digest told it
     [Fact]
-    public async Task Whats_new_tells_the_news_still_held_back_and_writes_its_card_unsaid()
+    public async Task Whats_new_tells_the_news_still_held_back_with_the_answer_of_the_chat_that_asks()
     {
         var (vm, _) = await TrafficVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's, held for the grace
-        var before = _speech.Spoken.Count;
+        await AskedAndAnsweringAsync(vm, "what's new?");
 
-        await WithinAsync(vm.WriteHeldNewsAsync());
-        var said = vm.WhatsNewForBrain(YardMcp.OverviewChat, null);
+        var said = await vm.WhatsNewWithHeldAsync(KeyOfSelected(vm), null);
 
         said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
-        ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0, "its card is written in its chat, read once the answer telling it is heard");
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+        ChatNumbered(vm, 2).Unread.ShouldBe(0, "its card was written, and read with the answer that told it");
+        var before = _speech.Spoken.Count;
         await GraceAsync(vm);
-        _speech.Spoken.Count.ShouldBe(before, "the brain tells it: Raven's own digest has nothing left to say");
+        _speech.Spoken.Count.ShouldBe(before, "Raven's own digest has nothing left to say");
+    }
+
+    // Round 1 of #256: asked of one chat, only its held news is taken; the rest waits for Raven's own digest
+    [Fact]
+    public async Task Whats_new_of_one_chat_takes_only_that_chat_s_news_held_back()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+        Changes("c", SessionState.Working, SessionState.Idle); // chat 3's
+        await AskedAndAnsweringAsync(vm, "what's new in chat three?");
+
+        var said = await vm.WhatsNewWithHeldAsync(KeyOfSelected(vm), 3);
+
+        said.ShouldContain("Task c");
+        said.ShouldNotContain("Task a");
+        vm.Log.Where(e => e.Kind == RavenLogKind.News).Select(e => e.Chat.Number).ShouldBe([3]);
+        _brain.Gate!.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News && e.Chat.Number == 2)); // the digest's
+    }
+
+    // Round 1 of #256: with no answer on its way to tell it, held news is not taken: Raven's own digest tells it
+    [Fact]
+    public async Task Whats_new_with_no_answer_on_its_way_leaves_the_news_held_back_to_the_digest()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+
+        (await vm.WhatsNewWithHeldAsync(KeyOfSelected(vm), null)).ShouldBe(RavenPanelViewModel.NothingNewLine);
+        (await vm.WhatsNewWithHeldAsync(null, null)).ShouldBe(RavenPanelViewModel.NothingNewLine, "a caller that is no Raven chat");
+
+        vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.News);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News && e.Chat.Number == 2));
     }
 
     [Fact]

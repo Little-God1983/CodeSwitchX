@@ -731,15 +731,8 @@ public sealed class RavenActionsTests
             return Next;
         }
 
-        public string WhatsNew(string? askedIn, int? number) => $"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}{(HeldNewsWritten ? "" : ", held news left out")}.";
-
-        public bool HeldNewsWritten { get; private set; }
-
-        public Task WriteHeldNewsAsync()
-        {
-            HeldNewsWritten = true;
-            return Task.CompletedTask;
-        }
+        public Task<string> WhatsNewAsync(string? askedIn, int? number) =>
+            Task.FromResult($"News for {askedIn ?? "chat 0"}, {number?.ToString() ?? "every chat"}.");
 
         public void SetChatDefaults(ChatDefaults defaults)
         {
@@ -1006,9 +999,9 @@ public sealed class RavenActionsTests
     }
 
     [Fact]
-    public async Task Whats_new_passes_where_it_was_asked_and_the_chat_named_once_the_news_held_back_is_written()
+    public async Task Whats_new_passes_where_it_was_asked_and_the_chat_named()
     {
-        (await _actions.WhatsNewAsync(null, 2, Ct)).ShouldBe("News for chat 0, 2.", "#256: news held back for the pause is news too");
+        (await _actions.WhatsNewAsync(null, 2, Ct)).ShouldBe("News for chat 0, 2.");
     }
 
     [Fact]
