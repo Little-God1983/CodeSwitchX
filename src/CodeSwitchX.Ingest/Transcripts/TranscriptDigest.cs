@@ -67,8 +67,9 @@ public static class TranscriptDigest
                 first = FirstPromptIn(stream, out var firstAt);
                 // The end read has the first prompt only when it began at or before it (#236): a later prompt of the same
                 // words, the same task sent twice, is not it.
-                // No prompt in the head: where the first one is is not known, so the end read does not stand for it.
-                reachesFirst = first is not null && tailAt <= firstAt;
+                // No prompt in the head: firstAt is where the head stopped, and the first prompt comes after it; an end read
+                // that begins before that has it, one that begins later does not stand for it.
+                reachesFirst = tailAt <= firstAt;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -217,7 +218,7 @@ public static class TranscriptDigest
 
     /// <summary>
     /// The first prompt in the file's first <see cref="HeadChars"/>, line by line; null for none. <paramref name="at"/> is
-    /// where its line begins, in bytes (UTF-8, as the file is written).
+    /// where its line begins, in bytes (UTF-8, as the file is written); with none, where the head stopped.
     /// </summary>
     private static string? FirstPromptIn(FileStream stream, out long at)
     {
@@ -236,7 +237,7 @@ public static class TranscriptDigest
             }
         }
 
-        at = long.MaxValue;
+        at = bytes; // none found: the first prompt is past where the head stopped
         return null;
     }
 
@@ -408,7 +409,7 @@ public static class TranscriptDigest
         }
 
         if (text.StartsWith("<command-", StringComparison.Ordinal) || text.StartsWith("<local-command", StringComparison.Ordinal)
-            || text.StartsWith("Caveat:", StringComparison.Ordinal) || Aside(text))
+            || text.StartsWith("Caveat:", StringComparison.Ordinal))
         {
             return null; // a slash command and its output, or what goes along with a prompt: no request
         }
@@ -477,9 +478,10 @@ public static class TranscriptDigest
                 return "";
             }
 
-            if (rest[end] == '/' && end + 1 < rest.Length && rest[end + 1] == '>')
+            var tagEnd = rest.IndexOf('>');
+            if (tagEnd > end - 1 && tagEnd > 0 && rest[tagEnd - 1] == '/')
             {
-                rest = rest[(end + 2)..].TrimStart();
+                rest = rest[(tagEnd + 1)..].TrimStart(); // "<system-reminder/>", "<ide_opened_file />": closes itself
                 continue;
             }
 
@@ -500,8 +502,10 @@ public static class TranscriptDigest
     private static bool Aside(string text)
     {
         var start = text.TrimStart();
-        return start.StartsWith("<system-reminder", StringComparison.Ordinal) || start.StartsWith("<ide_", StringComparison.Ordinal)
-            || start.StartsWith("<bash-", StringComparison.Ordinal);
+        const string Reminder = "<system-reminder";
+        return (start.StartsWith(Reminder, StringComparison.Ordinal) && start.Length > Reminder.Length
+                && start[Reminder.Length] is '>' or '/' or ' ' or '\t' or '\r' or '\n')
+            || start.StartsWith("<ide_", StringComparison.Ordinal) || start.StartsWith("<bash-", StringComparison.Ordinal);
     }
 
     /// <summary>"Changed a file: src/App.cs", "Ran: npm test", "Used Grep: upload".</summary>

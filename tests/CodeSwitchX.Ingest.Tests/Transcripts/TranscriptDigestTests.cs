@@ -159,6 +159,8 @@ public sealed class TranscriptDigestTests : IDisposable
     [InlineData("<system-reminder>Never closed. Rename it.", null)]
     [InlineData("<ide_opened_file\npath=\"a.cs\">The user opened a.cs</ide_opened_file> Explain it.", "User: Explain it.")]
     [InlineData("<system-reminder/>Do it.", "User: Do it.")]
+    [InlineData("<ide_opened_file /> Explain it.", "User: Explain it.")]
+    [InlineData("<system-reminders> are noisy, remove them.", "User: <system-reminders> are noisy, remove them.")]
     public void A_prompt_with_a_reminder_or_a_selection_before_its_words_keeps_its_words(string prompt, string? step)
     {
         File.WriteAllLines(_path, [User(prompt)]);
@@ -211,6 +213,15 @@ public sealed class TranscriptDigestTests : IDisposable
             User("A later one."), Assistant("Done.")]);
 
         TranscriptDigest.Read(_path)!.ShouldStartWith("[earlier steps left out]\nUser: A later one.");
+    }
+
+    // Review of #236: no prompt in the head, but the end read begins before the head stopped: it has the real first prompt
+    [Fact]
+    public void A_big_file_whose_end_read_begins_inside_its_head_has_the_first_prompt()
+    {
+        File.WriteAllLines(_path, [BigResult(TranscriptDigest.HeadChars + 1000), User("The real first task."), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path).ShouldBe("User: The real first task.\nClaude: Done.");
     }
 
     private static string Timed(string line, string at) => line.Insert(1, $"\"timestamp\":\"{at}\",");
