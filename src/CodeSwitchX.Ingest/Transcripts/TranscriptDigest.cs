@@ -35,6 +35,12 @@ public static class TranscriptDigest
     /// </summary>
     internal const int LongestLine = 1024 * 1024;
 
+    /// <summary>
+    /// How far the end read may begin past where the head counted the first prompt's line, and its id still count (#258):
+    /// more than a byte order mark and a few bad bytes shift the count by, less than a resumed chat's copy of the line is away.
+    /// </summary>
+    internal const int IdSlack = 4 * 1024;
+
     /// <summary>A file this long or shorter is read whole: its start and end would overlap.</summary>
     internal const int WholeBytes = TailBytes + 512 * 1024;
 
@@ -58,6 +64,7 @@ public static class TranscriptDigest
         string tail;
         string? first = null;
         string? firstId = null;
+        var idCounts = true;
         bool whole;
         var reachesFirst = true;
         try
@@ -73,7 +80,10 @@ public static class TranscriptDigest
                 // words, the same task sent twice, is not it. Its line's id says which it is (#258). With no prompt in the
                 // head, firstAt is where the head stopped, and the first prompt comes after it: an end read that begins
                 // before that has it, one that begins later does not stand for it.
-                reachesFirst = firstId is null && tailAt <= firstAt;
+                reachesFirst = tailAt <= firstAt;
+                // A resumed chat writes its lines again, under the same ids: only the line where the count put it, give or take
+                // what a byte order mark or bad bytes shift the count by, is the first prompt's (#258).
+                idCounts = tailAt <= firstAt + IdSlack;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -92,7 +102,7 @@ public static class TranscriptDigest
                 continue;
             }
 
-            if (firstIndex is null && IsPrompt(step) && (firstId is null ? reachesFirst : IdOf(line) == firstId))
+            if (firstIndex is null && IsPrompt(step) && (firstId is null ? reachesFirst : idCounts && IdOf(line) == firstId))
             {
                 firstIndex = steps.Count;
             }
@@ -234,24 +244,31 @@ public static class TranscriptDigest
     }
 
     /// <summary>
-    /// The first prompt in the file's first <see cref="HeadChars"/>, line by line; null for none. <paramref name="id"/> is
-    /// its line's own id, which finds it in the end read (#258); null for a line without one, or none found. With none,
-    /// <paramref name="at"/> is where the head stopped, in bytes (UTF-8, as the file is written, about: a byte order mark
-    /// or a bad byte shifts it a little).
+    /// The first prompt in the file's first <see cref="HeadChars"/>, line by line; null for none, or when a user line
+    /// before it was too long to read (<see cref="LongestLine"/>): what was asked first is then not known. <paramref name="id"/>
+    /// is its line's own id, which finds it in the end read (#258); null for a line without one, or none found.
+    /// <paramref name="at"/> is where its line begins, or with none where the head stopped, in bytes (UTF-8, as the file is
+    /// written, about: a byte order mark or a bad byte shifts it a little).
     /// </summary>
     private static string? FirstPromptIn(FileStream stream, out long at, out string? id)
     {
         stream.Seek(0, SeekOrigin.Begin);
         using var reader = new StreamReader(stream, Encoding.UTF8, false, 64 * 1024, leaveOpen: true);
+        var end = new StringEnd(); // one for the whole head: its buffers are big
         long read = 0;
         long bytes = 0;
         id = null;
-        while (read < HeadChars && ReadSlimLine(reader, out var length, out var lineBytes) is { } line)
+        while (read < HeadChars && ReadSlimLine(reader, end, out var length, out var lineBytes, out var tooLong) is { } line)
         {
             at = bytes;
             read += length + 1;
             bytes += lineBytes + 1;
-            if (line.Length > 0 && PromptOf(line) is { } prompt)
+            if (tooLong && line.Contains("\"user\"", StringComparison.Ordinal))
+            {
+                return null; // it may be the first prompt: a later one does not stand for it
+            }
+
+            if (line.Length > 0 && !tooLong && PromptOf(line) is { } prompt)
             {
                 id = IdOf(line);
                 return prompt;
@@ -262,19 +279,24 @@ public static class TranscriptDigest
         return null;
     }
 
+    /// <summary>Where the start and the end kept of a long string meet: the middle is left out (#258).</summary>
+    internal const string LeftOutOfString = " … ";
+
     /// <summary>
     /// The next line, without its newline, each JSON string in it cut to its first and its last <see cref="LongestString"/>
-    /// chars (#236, #258), never inside an escape nor between the halves of a pair, so it still parses: what is held stays
-    /// small however long the line. A prompt's words lose nothing a step keeps, also after a long reminder before them. A
-    /// line still longer than <see cref="LongestLine"/> is given as "". <paramref name="length"/> and <paramref name="bytes"/>
-    /// are what the line was, in chars and in UTF-8 bytes. Null at the end of the file.
+    /// chars (#236, #258), with <see cref="LeftOutOfString"/> where chars between are left out, never inside an escape nor between the halves of a
+    /// pair, so it still parses: what is held stays small however long the line. A prompt's words lose nothing a step keeps,
+    /// also after a long reminder before them. Past <see cref="LongestLine"/> nothing more is kept (<paramref name="tooLong"/>):
+    /// what was is given, for its kind, but does not parse. <paramref name="length"/> and <paramref name="bytes"/> are what the
+    /// line was, in chars and in UTF-8 bytes. Null at the end of the file.
     /// </summary>
-    private static string? ReadSlimLine(StreamReader reader, out long length, out long bytes)
+    /// <param name="end">Holds the end of a long string; the caller's, reused line after line.</param>
+    private static string? ReadSlimLine(StreamReader reader, StringEnd end, out long length, out long bytes, out bool tooLong)
     {
         var line = new StringBuilder();
-        var tooLong = false;
         var text = new StringBuilder(); // the start of the string being read, up to the longest kept
-        var end = new StringEnd(); // and its end, once it is longer
+        end.Clear();
+        tooLong = false;
         var inString = false;
         var escaped = false; // the char before was a backslash that begins an escape
         var hexLeft = 0; // the hex digits of a "\u" escape still to come
@@ -289,32 +311,37 @@ public static class TranscriptDigest
             ended = true;
             if (c == '\n')
             {
-                break;
+                break; // a line break inside a string is written "\n": a raw one always ends the line
             }
 
             length++;
             bytes += c < 0x80 ? 1 : c < 0x800 || char.IsSurrogate((char)c) ? 2 : 3; // a surrogate pair is 4 bytes, 2 each
-            tooLong |= line.Length > LongestLine;
+            if (tooLong || (tooLong = line.Length > LongestLine))
+            {
+                continue; // nothing more is kept: only its end is looked for
+            }
+
             if (!inString)
             {
-                if (!tooLong)
-                {
-                    line.Append((char)c);
-                }
-
+                line.Append((char)c);
                 inString = c == '"';
                 continue;
             }
 
             if (c == '"' && !escaped && hexLeft == 0)
             {
-                if (!tooLong)
+                if (!end.LeftOut)
                 {
-                    line.Append(text.ToString(0, text.Length > LongestString ? safe : text.Length));
+                    line.Append(text); // the start and the end meet: nothing between them is left out
                     end.AppendTo(line);
-                    line.Append('"');
+                }
+                else
+                {
+                    line.Append(text.ToString(0, safe)).Append(LeftOutOfString);
+                    end.AppendTo(line);
                 }
 
+                line.Append('"');
                 text.Clear();
                 end.Clear();
                 inString = false;
@@ -349,10 +376,11 @@ public static class TranscriptDigest
                 halfPair = !escaped && char.IsHighSurrogate((char)c);
             }
 
-            if (text.Length <= LongestString)
+            // The start fills first, then the end; none is lost between them.
+            if (text.Length < LongestString)
             {
                 text.Append((char)c);
-                if (!escaped && hexLeft == 0 && !halfPair && text.Length <= LongestString)
+                if (!escaped && hexLeft == 0 && !halfPair)
                 {
                     safe = text.Length;
                 }
@@ -368,11 +396,6 @@ public static class TranscriptDigest
             return null;
         }
 
-        if (tooLong)
-        {
-            return "";
-        }
-
         if (line.Length > 0 && line[^1] == '\r')
         {
             line.Length--;
@@ -383,16 +406,21 @@ public static class TranscriptDigest
 
     /// <summary>
     /// The last <see cref="LongestString"/> chars of a long string (#258), each marked whether it may begin what is kept:
-    /// what is kept begins at the first that may, so it parses.
+    /// what is kept begins at the first that may, so it parses. Its buffers are made when a string first needs them.
     /// </summary>
     private sealed class StringEnd
     {
-        private readonly char[] _chars = new char[LongestString];
-        private readonly bool[] _begins = new bool[LongestString];
+        private char[]? _chars;
+        private bool[]? _begins;
         private long _count;
+
+        /// <summary>More came than is kept: what is kept begins after a gap, at the first char that may begin it.</summary>
+        public bool LeftOut => _count > LongestString;
 
         public void Add(char c, bool mayBegin)
         {
+            _chars ??= new char[LongestString];
+            _begins ??= new bool[LongestString];
             var at = (int)(_count++ % LongestString);
             _chars[at] = c;
             _begins[at] = mayBegin;
@@ -401,7 +429,7 @@ public static class TranscriptDigest
         /// <summary>The char <paramref name="back"/> before the next one may not begin what is kept, if it is still here.</summary>
         public void NotABeginning(int back)
         {
-            if (back <= _count && back <= LongestString)
+            if (_begins is not null && back <= _count && back <= LongestString)
             {
                 _begins[(int)((_count - back) % LongestString)] = false;
             }
@@ -410,15 +438,14 @@ public static class TranscriptDigest
         public void AppendTo(StringBuilder line)
         {
             var kept = (int)Math.Min(_count, LongestString);
-            var first = _count - kept;
-            var begun = false;
-            for (var i = first; i < _count; i++)
+            var begun = !LeftOut; // all of it follows the start: it begins where the start ends
+            for (var i = _count - kept; i < _count; i++)
             {
                 var at = (int)(i % LongestString);
-                begun |= _begins[at];
+                begun |= _begins![at];
                 if (begun)
                 {
-                    line.Append(_chars[at]);
+                    line.Append(_chars![at]);
                 }
             }
         }
@@ -595,12 +622,19 @@ public static class TranscriptDigest
 
     /// <summary>
     /// Where the block <paramref name="text"/> begins with ends: past its closing tag, the one at its own depth when blocks
-    /// of the same name are nested in it (#258); -1 when it is not closed.
+    /// of the same name are nested in it (#258); -1 when it is not closed. A block that only names its own tag in its text
+    /// ("wrapped in &lt;system-reminder&gt; tags") never comes back to its depth: then its first closing tag ends it.
     /// </summary>
     private static int ClosingOf(string text, string name)
     {
-        var open = "<" + name;
         var close = "</" + name + ">";
+        return ClosingAtDepth(text, name, close) is var nested and >= 0 ? nested
+            : text.IndexOf(close, StringComparison.Ordinal) is var first and >= 0 ? first + close.Length : -1;
+    }
+
+    private static int ClosingAtDepth(string text, string name, string close)
+    {
+        var open = "<" + name;
         var depth = 0;
         for (var at = 0; at < text.Length;)
         {
