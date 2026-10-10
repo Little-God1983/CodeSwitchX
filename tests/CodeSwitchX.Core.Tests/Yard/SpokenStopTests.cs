@@ -18,6 +18,11 @@ public class SpokenStopTests
     [InlineData("Hör auf!")]
     [InlineData("Ruhe bitte.")]
     [InlineData("Das reicht jetzt.")]
+    [InlineData("Stop, stop!")] // round 1
+    [InlineData("No, stop.")]
+    [InlineData("Raven, stop. Thanks.")]
+    [InlineData("Stop…")]
+    [InlineData("Stop —")]
     public void A_stop_said_alone_is_the_command(string said) => SpokenStop.Is(said).ShouldBeTrue();
 
     [Theory]
@@ -28,6 +33,7 @@ public class SpokenStopTests
     [InlineData("why did it stop")]
     [InlineData("is that enough")]
     [InlineData("quiet hours start at ten")]
+    [InlineData("stop, then go on with the tests")]
     [InlineData("Raven")]
     [InlineData("please")]
     [InlineData("")]

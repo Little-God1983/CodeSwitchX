@@ -1869,11 +1869,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (text.Length > 0 && StopBySaying(text))
+            // The rest of a request split by a pause (#219) is that request's, "stop" too.
+            if (text.Length > 0 && !continues && StopBySaying(text))
             {
                 if (named)
                 {
                     _namedQuestion = null; // asked nothing: its rest goes on from no question
+                    _namedEndedAt = null; // and no rest follows a stop: the TV's next words need the name
                 }
             }
             // Said: answered aloud, muted too (#242).
@@ -4885,17 +4887,25 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// "Raven, stop", "be quiet", "enough" (#250): Raven goes quiet, and that is all. What it says stops, and so does an answer
     /// on its way, a catch-up, the offer of the next question and an allow waiting for its yes (its brain is told with the
     /// next question, as for any words). Nothing goes to a brain, nothing is written, nothing is said back. Cards and news
-    /// still waiting are told later, after the pause, as Raven's own. Returns whether the words were that.
+    /// still waiting, a card asked for too, are told later, after the pause, as Raven's own. After Raven asked something, a
+    /// stop may be the answer, and goes to the brain. Returns whether the words were that.
     /// </summary>
     private bool StopBySaying(string text)
     {
-        if (!SpokenStop.Is(text))
+        // After Raven asked something ("keep the build running, or stop it?"), "stop" may be the answer: the brain hears it.
+        if (_brainAsked || !SpokenStop.Is(text))
         {
             return false;
         }
 
         DropOffer();
         DropNoQuestions();
+        if (_requested is not null)
+        {
+            // A card asked for and not read yet waits as any other now: after the pause, not at once (#250).
+            (_requested, _requestGrace) = (null, false);
+        }
+
         if (_asks?.Proposed is { } standing)
         {
             _asks.Cancel(standing);

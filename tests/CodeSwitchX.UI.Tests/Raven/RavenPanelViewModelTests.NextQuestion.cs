@@ -847,4 +847,51 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Gate!.SetResult();
         await WithinAsync(vm.PendingAnswers);
     }
+
+    // Round 1 of #250: a card asked for and not read yet is not read straight after "stop": it waits the pause, as any card
+    [Fact]
+    public async Task A_stop_after_next_question_leaves_the_card_for_after_the_pause()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak(); // the user talks
+        vm.GoToNextQuestionByKey(); // the card waits for the turn
+        var before = _speech.Spoken.Count;
+
+        Type(vm, "stop");
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        SpokenSince(before).ShouldBeEmpty("told to stop: not read at once");
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // later, as Raven's own
+    }
+
+    // Round 1 of #250: after Raven asked something, "stop" may be the answer: the brain hears it
+    [Fact]
+    public async Task A_stop_that_answers_what_Raven_asked_goes_to_the_brain()
+    {
+        _brain.Answer = q => q.EndsWith("stop", StringComparison.Ordinal) ? [new BrainText("Stopped the build.")]
+            : [new BrainText("The build is running. Should I keep it running or stop it?")];
+        var (vm, _) = await NextQuestionVmAsync();
+
+        Type(vm, "how is the build?");
+        await WithinAsync(vm.PendingAnswers);
+        Type(vm, "stop");
+        await WithinAsync(vm.PendingAnswers);
+
+        _brain.Sent.Count.ShouldBe(2);
+        _brain.Sent[^1].ShouldEndWith("stop");
+    }
 }
