@@ -600,6 +600,67 @@ public sealed class TileTabsTests
         _tabs.Reads.ShouldBe(before + 2);
     }
 
+    [Fact]
+    public async Task A_wait_on_a_look_ends_with_the_read_that_covers_it_not_with_looks_asked_later()
+    {
+        // #248: the startup read (awaited before the window shows) also waited for every look a stop or a tile asked meanwhile.
+        await _yard.InitializeAsync(CancellationToken.None);
+        var before = _tabs.Reads;
+        var first = new ManualResetEventSlim(); // not disposed: a late read may still wait on them
+        var second = new ManualResetEventSlim();
+        _tabs.Hold = first;
+        try
+        {
+            var running = _yard.RefreshTabsAsync();
+            await UntilReads(before + 1);
+            var asked = _yard.RefreshTabsAsync(); // needs a read of its own, after this one
+            _tabs.Hold = second;
+            first.Set();
+            await UntilReads(before + 2); // the read for it runs, and is held
+
+            await running.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            asked.IsCompleted.ShouldBeFalse("its read still runs");
+            var later = _yard.RefreshTabsAsync();
+            second.Set();
+            await asked.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await later.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            _tabs.Reads.ShouldBe(before + 3);
+        }
+        finally
+        {
+            first.Set(); // a failure must not leave a pool thread held
+            second.Set();
+        }
+    }
+
+    [Fact]
+    public async Task A_stop_looks_again_a_moment_after_for_the_list_VS_Code_writes_as_its_window_goes()
+    {
+        // #248: VS Code writes its list a moment after its window is gone; the look the stop set off took the list before.
+        await _yard.InitializeAsync(CancellationToken.None);
+        App.HostState = HostState.Running;
+        await VsCodeWrites(Tab("a"), Tab("b"));
+        await Pass(TimeSpan.FromMinutes(1));
+        App.HostState = HostState.Stopped;
+        await _yard.CurrentTabsRefresh;
+        Rows.ShouldBe(["a", "b"]);
+
+        _tabs.Of[_app.Id] = new OpenChatTabs(Now, [Tab("b")]); // written as it closed: "a" was closed just before
+        await Pass(YardViewModel.ClosedListWait);
+
+        Rows.ShouldBe(["b"], "well before the next 5 s look");
+    }
+
+    private async Task UntilReads(int reads)
+    {
+        for (var i = 0; i < 500 && _tabs.Reads < reads; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _tabs.Reads.ShouldBe(reads);
+    }
+
     private sealed class FakeTabs : IVsCodeOpenTabs
     {
         // Written by the test while a look reads it on the thread pool.
