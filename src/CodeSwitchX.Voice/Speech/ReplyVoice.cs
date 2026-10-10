@@ -96,7 +96,10 @@ public sealed class ReplyVoice : IDisposable
     /// <summary>A reply is not spoken (or not to its end), and why, for the user; on any thread.</summary>
     public event EventHandler<string>? Unspoken;
 
-    /// <summary>Muting hushes what is being said; replies begun while muted are never spoken.</summary>
+    /// <summary>
+    /// Muting hushes what is being said; replies begun while muted are never spoken, unless begun <c>evenMuted</c>: an
+    /// answer to words the user said aloud (#242).
+    /// </summary>
     public bool Muted
     {
         get => _muted;
@@ -128,9 +131,10 @@ public sealed class ReplyVoice : IDisposable
     /// press, and there no synchronisation context catches its events. Only for a voice that is ready or loading: one
     /// not installed, or failed, would keep a stream of silence open (Bluetooth busy, Windows awake) for nothing.
     /// </summary>
-    public void Expect()
+    /// <param name="evenMuted">A reply that is spoken while muted is on its way: the user talks to Raven (#242).</param>
+    public void Expect(bool evenMuted = false)
     {
-        if (_muted || _tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Loading))
+        if ((_muted && !evenMuted) || _tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Loading))
         {
             return;
         }
@@ -154,10 +158,14 @@ public sealed class ReplyVoice : IDisposable
     /// <param name="onFirstAudio">Called once, when the reply's first audio is queued to play; on any thread.</param>
     /// <param name="silent">The reply is only written: nothing of it is spoken, as while muted, and nothing else is hushed.</param>
     /// <param name="whole">Every sentence of it is spoken, past <see cref="MaximumSentences"/>: what the user must hear in full.</param>
-    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null, bool silent = false, bool whole = false)
+    /// <param name="evenMuted">Spoken while muted too: an answer to words the user said aloud (#242).</param>
+    public SpokenReply Begin(Action<DateTimeOffset>? onFirstAudio = null, bool silent = false, bool whole = false, bool evenMuted = false)
     {
         Interlocked.Increment(ref _open);
-        var reply = new SpokenReply(this, Interlocked.Increment(ref _replies), _muted || silent, onFirstAudio, whole);
+        var reply = new SpokenReply(this, Interlocked.Increment(ref _replies), (_muted && !evenMuted) || silent, onFirstAudio, whole)
+        {
+            EvenMuted = evenMuted && !silent,
+        };
         lock (_lock)
         {
             _playing.Add(reply);
@@ -579,6 +587,9 @@ public sealed class ReplyVoice : IDisposable
 
         /// <summary>Only written: begun muted or silent (the user talking in Open mic), so nothing of it is spoken.</summary>
         public bool IsSilent => _muted;
+
+        /// <summary>Begun to be spoken while muted too: an answer to words said aloud (#242).</summary>
+        public bool EvenMuted { get; init; }
 
         /// <summary>Text of it was left unspoken past <see cref="MaximumSentences"/>: only written, even when it <see cref="Played"/>.</summary>
         public bool IsCut => Volatile.Read(ref _cut) == 1;

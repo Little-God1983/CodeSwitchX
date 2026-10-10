@@ -135,4 +135,25 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.CurrentChat.Unread.ShouldBe(0);
     }
+
+    // Review of #242: muted midway through an answer, what it writes after a tool is only written, and new to the user
+    [Fact]
+    public async Task Muted_midway_the_rest_of_an_answer_after_a_tool_is_unread()
+    {
+        _brain.Answer = _ => [new BrainText("Let me look."), new BrainToolCall("t1", "list_chats", "{}"), new BrainToolResult("t1", false),
+            new BrainText("There are two chats.")];
+        _brain.Pause = new TaskCompletionSource();
+        var vm = await NewVmAsync();
+        vm.IsOpen = false;
+        Type(vm, "How many chats run?");
+        await Until(() => vm.Log.Any(e => e.Text.StartsWith("Let me look.", StringComparison.Ordinal)));
+
+        vm.IsMuted = true;
+        _brain.Pause.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        var rest = vm.Log.Single(e => e.Text.StartsWith("There are two chats.", StringComparison.Ordinal));
+        rest.Said.ShouldBeFalse("the voice was muted: it only wrote it");
+        rest.IsUnread.ShouldBeTrue();
+    }
 }

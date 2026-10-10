@@ -345,7 +345,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.Traffic.Announced(); // Raven spoke a moment ago: news would wait half a minute
         var before = _speech.Spoken.Count;
 
-        vm.GoToNextQuestion();
+        vm.GoToNextQuestionByKey();
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
@@ -367,7 +367,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         var before = _speech.Spoken.Count;
 
-        vm.GoToNextQuestion();
+        vm.GoToNextQuestionByKey();
 
         await Until(() => SpokenSince(before).EndsWith("It's on the card.", StringComparison.Ordinal));
         SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" wants to run a script that builds the installer. It deletes files. It's on the card.");
@@ -390,7 +390,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.State.ShouldBe(RavenState.Listening);
         var before = _speech.Spoken.Count;
 
-        vm.GoToNextQuestion(); // its hotkey
+        vm.GoToNextQuestionByKey(); // its hotkey
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Task.Delay(100, TestContext.Current.CancellationToken);
@@ -502,7 +502,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => asks.IsHeard(proposal));
         var before = _speech.Spoken.Count;
 
-        vm.GoToNextQuestion();
+        vm.GoToNextQuestionByKey();
 
         asks.Proposed.ShouldBeNull("the user moved on");
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
@@ -524,7 +524,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => _teller.Asked.Count > 0);
         var before = _speech.Spoken.Count;
 
-        vm.GoToNextQuestion();
+        vm.GoToNextQuestionByKey();
         _teller.Gate.SetResult();
 
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
