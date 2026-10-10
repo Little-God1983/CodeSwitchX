@@ -512,6 +512,20 @@ public sealed class YardActionToolsTests
         held.IsCompleted.ShouldBeFalse("nor does asking twice");
     }
 
+    // #265: an allow proposed by a caller that is no Raven chat (no chat header) names no window, so no brain is told of it
+    [Fact]
+    public async Task An_allow_proposed_from_no_Raven_chat_names_no_window_and_one_from_a_window_s_chat_names_it()
+    {
+        var (asks, _) = Permitting();
+        await new YardActionTools(_yard, _actions, asks).AnswerPermission("allow", "bbbbbbbb", cancellationToken: Ct);
+        asks.Proposed.ShouldNotBeNull().Window.ShouldBeNull();
+
+        var (inWindow, _) = Permitting(id: "p2");
+        await new YardActionTools(_yard, _actions, inWindow, scope: new ChatScope(FakeYard.DiffusionId)).AnswerPermission("allow", "bbbbbbbb",
+            cancellationToken: Ct);
+        inWindow.Proposed.ShouldNotBeNull().Window.ShouldBe(FakeYard.DiffusionId);
+    }
+
     [Fact]
     public async Task Two_prompts_open_at_once_are_answered_by_their_ask_id_or_not_at_all()
     {

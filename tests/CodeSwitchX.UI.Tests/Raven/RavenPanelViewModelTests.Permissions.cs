@@ -197,7 +197,7 @@ public sealed partial class RavenPanelViewModelTests
         var card = PermissionCards(vm).ShouldHaveSingleItem();
         await card.Naming;
 
-        var proposal = asks.Propose("p1"); // as answer_permission does on "allow it"
+        var proposal = asks.Propose("p1", ContentAutomatorX); // as answer_permission does on "allow it"
         card.AwaitsYes.ShouldBeTrue();
         held.IsCompleted.ShouldBeFalse();
         // The app, not the brain, reads it back and asks for the yes (review of #112).
@@ -235,7 +235,7 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
         await card.Naming;
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
         await WithinAsync(vm.PendingFollowUp); // the read-back heard opens the follow-up a moment after
         await Until(() => vm.TakesTurnsWithoutName); // and Raven quiet: the follow-up does not run while it speaks
@@ -264,7 +264,7 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
         await card.Naming;
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
 
         Type(vm, "what time is it");
@@ -292,7 +292,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal)); // the user's 30 s start here (round 3)
 
         _time.Advance(ChatAsks.ProposalLifetime);
@@ -310,7 +310,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         _ = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
         _time.Advance(ChatAsks.ProposalLifetime);
         _time.Advance(ChatAsks.ProposalLifetime); // words said after the lapse answer nothing
@@ -340,7 +340,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(Hold);
         var released = vm.ReleaseMicAsync(TalkInput.MicButton);
         _time.Advance(TimeSpan.FromSeconds(1));
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
         transcribed.SetResult(new DictationResult("Okay.", TimeSpan.FromSeconds(2)));
         await WithinAsync(released);
@@ -361,10 +361,10 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
         Type(vm, "how many chats work?");
         await Until(() => _brain.Asked.Count == 1);
-        var again = asks.Propose("p1"); // proposed again: the question cancelled the first one
+        var again = asks.Propose("p1", ContentAutomatorX); // proposed again: the question cancelled the first one
         await Until(() => asks.IsHeard(again));
 
         Type(vm, "yes");
@@ -387,7 +387,7 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
         _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => _speech.Spoken.Count > 0);
 
         Type(vm, "yes");
@@ -405,7 +405,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         yield return new BrainText("Asking you now.");
         yield return new BrainToolCall("t1", "answer_permission", "{}");
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
         yield return new BrainToolResult("t1", false);
         yield return new BrainText("Shall I read you the summary? Say yes.");
     }
@@ -460,7 +460,7 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
         _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => _speech.Spoken.Count > 0);
 
         vm.IsMuted = true;
@@ -483,7 +483,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await GraceAsync(vm);
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(proposal));
         var said = _speech.Spoken.Count;
 
@@ -508,7 +508,7 @@ public sealed partial class RavenPanelViewModelTests
         await card.Naming;
         _speech.Fails = new InvalidOperationException("the sidecar broke");
 
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
 
         await Until(() => asks.Proposed is null);
         await Until(() => Lines(vm).Contains((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine)));
@@ -532,7 +532,7 @@ public sealed partial class RavenPanelViewModelTests
         var card = PermissionCards(vm).ShouldHaveSingleItem();
         await card.Naming;
         _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         await Until(() => _speech.Spoken.Count > 0);
 
         vm.AllowCommand.Execute(card);
@@ -557,7 +557,7 @@ public sealed partial class RavenPanelViewModelTests
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
         _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
         await Until(() => _speech.Spoken.Count > 0);
 
         vm.IsMuted = true;
@@ -584,7 +584,7 @@ public sealed partial class RavenPanelViewModelTests
         _speech.Fails = new InvalidOperationException("the sidecar broke");
 
         ui.Holding = true; // the UI thread is busy from here
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
         ui.RunHeld(); // the read-back begins, and fails
         (await Task.WhenAny(vm.PendingFollowUp, Task.Delay(500, TestContext.Current.CancellationToken))).ShouldNotBe(vm.PendingFollowUp, "the note has not run yet");
         await RunHeldUntil(ui, () => vm.PendingFollowUp.IsCompleted);
@@ -603,7 +603,7 @@ public sealed partial class RavenPanelViewModelTests
         await PermissionCards(vm).Single().Naming;
         _speech.Fails = new InvalidOperationException("the sidecar broke");
         ui.Holding = true;
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
         ui.RunHeld(); // the read-back begins, and fails
 
         // The clock moves on a second at a time until the wait gives up: the read-back fails on another thread.
@@ -628,14 +628,14 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingOpenMic);
         _ = asks.HoldAsync(Permitting(), CancellationToken.None);
         await PermissionCards(vm).Single().Naming;
-        var first = asks.Propose("p1");
+        var first = asks.Propose("p1", ContentAutomatorX);
         await Until(() => asks.IsHeard(first));
         await WithinAsync(vm.PendingFollowUp);
         await Until(() => vm.TakesTurnsWithoutName);
         _openMic.Speak(); // the user talks, in the follow-up: surely theirs
 
         ui.Holding = true;
-        var proposal = asks.Propose("p1"); // proposed again while they talk: only written
+        var proposal = asks.Propose("p1", ContentAutomatorX); // proposed again while they talk: only written
         ui.RunHeld();
         vm.IsMuted = true; // before the UI thread ends the proposal it was not heard for
 
@@ -654,7 +654,7 @@ public sealed partial class RavenPanelViewModelTests
         await PermissionCards(vm).Single().Naming;
         _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
         ui.Holding = true;
-        var proposal = asks.Propose("p1");
+        var proposal = asks.Propose("p1", ContentAutomatorX);
         ui.RunHeld(); // the read-back begins
         await Until(() => _speech.Spoken.Count > 0);
         _voice.Hush(); // cut off: its end is settled at once, and its note waits for the UI thread
@@ -724,7 +724,7 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, asks) = await QuestionsVmAsync();
         var held = asks.HoldAsync(Permitting(), CancellationToken.None);
         var card = PermissionCards(vm).ShouldHaveSingleItem();
-        asks.Propose("p1");
+        asks.Propose("p1", ContentAutomatorX);
 
         vm.DenyCommand.Execute(card);
         await WithinAsync(held);

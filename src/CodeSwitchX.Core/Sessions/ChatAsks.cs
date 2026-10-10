@@ -115,7 +115,8 @@ public sealed record ChatAskClosed(ChatAsk Ask, ChatAskOutcome Outcome, IReadOnl
 /// An allow Raven's brain proposed for a held permission prompt (<see cref="ChatAsks.Propose"/>). Nothing runs on it: the
 /// prompt is allowed only when the app finds a yes in the user's next words (<see cref="ChatAsks.Confirm"/>).
 /// </summary>
-/// <param name="Window">The workspace of the Raven chat whose brain proposed it, which is told what came of it; null for chat 0, the Yard.</param>
+/// <param name="Window">The workspace of the Raven chat whose brain proposed it, which is told what came of it; null for a caller
+/// that is no Raven chat, as chat 0 proposes nothing (#265).</param>
 public sealed record ChatAllowProposal(ChatAsk Ask, DateTimeOffset At, Guid? Window = null);
 
 /// <summary>How a proposed allow ended.</summary>
@@ -450,7 +451,7 @@ public sealed class ChatAsks : IDisposable
     /// proposal end it, and the card stays open for a click. The app, not the brain, reads the prompt back and asks for
     /// the yes (on <see cref="ProposedAllow"/>), so the yes answers what the app said.
     /// </summary>
-    /// <param name="window">The workspace of the Raven chat whose brain proposes it; null for chat 0, the Yard.</param>
+    /// <param name="window">The workspace of the Raven chat whose brain proposes it; null for a caller that is no Raven chat.</param>
     /// <exception cref="ArgumentException">The ask is not held, or is a question.</exception>
     public ChatAllowProposal Propose(string askId, Guid? window = null)
     {
