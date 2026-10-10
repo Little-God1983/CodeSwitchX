@@ -1,3 +1,4 @@
+using System.Text;
 using CodeSwitchX.Ingest.Transcripts;
 
 namespace CodeSwitchX.Ingest.Tests.Transcripts;
@@ -161,6 +162,12 @@ public sealed class TranscriptDigestTests : IDisposable
     [InlineData("<system-reminder/>Do it.", "User: Do it.")]
     [InlineData("<ide_opened_file /> Explain it.", "User: Explain it.")]
     [InlineData("<system-reminders> are noisy, remove them.", "User: <system-reminders> are noisy, remove them.")]
+    [InlineData("<system-reminder>outer <system-reminder>inner</system-reminder> still outer</system-reminder> Do it.", "User: Do it.")] // #258
+    [InlineData("<system-reminder>a <system-reminders> b</system-reminder> Do it.", "User: Do it.")]
+    [InlineData("<system-reminder>Wrapped in <system-reminder> tags.</system-reminder> Rename it.", "User: Rename it.")] // round 1 of #258
+    [InlineData("<system-reminder>a <system-reminder /> b</system-reminder> Do it.", "User: Do it.")]
+    [InlineData("<system-reminder>o <system-reminder>i</system-reminder> <system-reminder /> o</system-reminder> Do it.", "User: Do it.")] // round 2
+    [InlineData("<system-reminder>see <system-reminder and <br/> then</system-reminder> Do it.", "User: Do it.")] // round 3
     public void A_prompt_with_a_reminder_or_a_selection_before_its_words_keeps_its_words(string prompt, string? step)
     {
         File.WriteAllLines(_path, [User(prompt)]);
@@ -192,6 +199,149 @@ public sealed class TranscriptDigestTests : IDisposable
         File.WriteAllLines(_path, [line, BigResult(3_000_000), Assistant("Done.")]);
 
         TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix it. aaa");
+    }
+
+    // #258: a reminder or selection longer than the longest string kept, before the words: the end of the string is kept too
+    [Theory]
+    [InlineData("r")]
+    [InlineData("é")]
+    public void A_big_file_s_first_prompt_after_a_long_reminder_keeps_its_words(string filler)
+    {
+        var reminder = "<system-reminder>" + string.Concat(Enumerable.Repeat(filler, 100_000)) + "</system-reminder>\nRename it.";
+        File.WriteAllLines(_path, [User(reminder), BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Rename it.\n");
+    }
+
+    // #258: the end kept begins where it still parses: never between the halves of an emoji, escaped or raw
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(true, 1)]
+    [InlineData(true, 5)]
+    [InlineData(true, 6)]
+    [InlineData(true, 7)]
+    [InlineData(true, 11)]
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    public void The_end_kept_of_a_long_reminder_full_of_emoji_still_parses(bool escaped, int pad)
+    {
+        var emoji = char.ConvertFromUtf32(0x1F600);
+        // Past the longest string kept: escaped, an emoji is 12 chars; raw, 2.
+        // The pad after them moves where the end kept begins: on each char of an escaped pair, or either half of a raw one.
+        var inner = string.Concat(Enumerable.Repeat(emoji, escaped ? 20_000 : 60_000)) + new string('p', pad);
+        var line = escaped
+            ? User("<system-reminder>" + inner + "</system-reminder> Rename it.")
+            : "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"<system-reminder>" + inner
+                + "</system-reminder> Rename it.\"}}";
+        File.WriteAllLines(_path, [line, BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Rename it.\n");
+    }
+
+    // #258: the first prompt in the end read is found by its line's id, not by counting bytes: a byte order mark shifted the count
+    [Fact]
+    public void The_end_read_finds_the_first_prompt_by_its_line_s_id()
+    {
+        var first = BigResult(600_000);
+        // The end read begins two bytes before the prompt's line: in the last char of the line before and its newline. Counted
+        // without the byte order mark, its line began three bytes earlier, before the end read.
+        WriteWithEndReadAt(first.Length + 2, Assistant("Done."), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
+            first, User("Fix the icons.", extra: ",\"uuid\":\"u-first\""));
+
+        TranscriptDigest.Read(_path).ShouldBe("User: Fix the icons.\nClaude: Done.", "the end read has the first prompt: told once, nothing left out");
+    }
+
+    // Round 2 of #258: the end read begins inside the first prompt's line, and a resumed chat's copy of it comes later
+    [Fact]
+    public void A_copy_of_the_first_prompt_s_line_after_the_cut_original_does_not_stand_for_it()
+    {
+        // Its id after its message, where Claude Code writes it: the end read, cut into the line, still has it.
+        var prompt = User("Fix the icons. " + new string('w', 3000))[..^1] + ",\"uuid\":\"u-first\"}";
+        var before = BigResult(600_000);
+        WriteWithEndReadAt(before.Length + 1 + 1000, User("A later one."), new UTF8Encoding(false), before, prompt, Assistant("Resumed."), prompt);
+
+        var digest = TranscriptDigest.Read(_path)!;
+
+        digest.ShouldStartWith("First asked: Fix the icons. www");
+        digest.ShouldContain("[earlier steps left out]\nClaude: Resumed.\nUser: A later one.");
+    }
+
+    // Round 1 of #258: a string a little longer than the start kept loses no char between its start and its end
+    [Fact]
+    public void A_reminder_whose_closing_tag_straddles_the_start_kept_is_still_closed()
+    {
+        const string open = "<system-reminder>";
+        // Written as it is, not escaped as User() writes "<": "</syst" is the last of the start, "em-reminder>" begins the end.
+        var reminder = open + new string('r', TranscriptDigest.LongestString - 6 - open.Length) + "</system-reminder> Rename it.";
+        var line = "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":\"" + reminder + "\"}}";
+        File.WriteAllLines(_path, [line, BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Rename it.\n");
+    }
+
+    /// <summary>A big file: <paramref name="lines"/>, then a filler, then <paramref name="last"/>, its end read beginning at <paramref name="tailAt"/>.</summary>
+    private void WriteWithEndReadAt(long tailAt, string last, Encoding encoding, params string[] lines)
+    {
+        var bom = encoding.GetPreamble().Length;
+        var before = lines.Sum(l => (long)l.Length + 1);
+        var fillerChars = (int)(tailAt + TranscriptDigest.TailBytes - bom - before - last.Length - 1 - BigResult(0).Length);
+        File.WriteAllText(_path, string.Join("\n", [.. lines, BigResult(fillerChars), last]), encoding);
+        new FileInfo(_path).Length.ShouldBe(tailAt + TranscriptDigest.TailBytes);
+    }
+
+    // Round 1 of #258: a first prompt whose line has no id is still found in the end read by where it is
+    [Fact]
+    public void A_first_prompt_without_an_id_is_told_once_when_the_end_read_has_it()
+    {
+        var first = BigResult(600_000);
+        WriteWithEndReadAt(first.Length - 100, Assistant("Done."), new UTF8Encoding(false), first, User("Fix the icons."));
+
+        TranscriptDigest.Read(_path).ShouldBe("User: Fix the icons.\nClaude: Done.");
+    }
+
+    // Round 1 of #258: a resumed chat writes its first prompt again, under the same id: that copy is not the first prompt
+    [Fact]
+    public void A_copy_of_the_first_prompt_s_line_written_on_a_resume_does_not_stand_for_it()
+    {
+        var prompt = User("Fix the icons.", extra: ",\"uuid\":\"u-first\"");
+        File.WriteAllLines(_path, [prompt, BigResult(3_000_000), Assistant("Resumed."), prompt, Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path).ShouldBe("First asked: Fix the icons.\n[earlier steps left out]\nClaude: Resumed.\nUser: Fix the icons.\nClaude: Done.");
+    }
+
+    // Round 3 of #258: the end read begins after the first prompt's line ended, and a resumed chat's copy of it comes later
+    [Fact]
+    public void A_copy_of_the_first_prompt_s_line_after_the_end_read_began_past_the_original_does_not_stand_for_it()
+    {
+        var prompt = User("Fix the icons.")[..^1] + ",\"uuid\":\"u-first\"}";
+        var before = BigResult(600_000);
+        var reply = Assistant("On it.");
+        // The end read begins in the reply after the prompt's line: well within a few kilobytes of it, but past it.
+        WriteWithEndReadAt(before.Length + 1 + prompt.Length + 1 + 3, User("A later one."), new UTF8Encoding(false),
+            before, prompt, reply, Assistant("Resumed."), prompt);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix the icons.\n[earlier steps left out]\n");
+    }
+
+    // Round 3 of #258: a prompt of many pasted images, each kept as its start and its end, is still read in the head
+    [Fact]
+    public void A_first_prompt_of_many_pasted_images_keeps_its_words()
+    {
+        File.WriteAllLines(_path, [UserWithImages("Make them alike.", images: 12, chars: 200_000), BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Make them alike.\n");
+    }
+
+    // Round 1 of #258: a user line too long to read may be the first prompt: a later one does not stand for it
+    [Fact]
+    public void A_user_line_too_long_to_read_in_the_head_leaves_the_first_prompt_unknown()
+    {
+        var blocks = string.Join(",", Enumerable.Repeat("""{"type":"text","text":"ab"}""", TranscriptDigest.LongestLine / 27 + 1000));
+        var huge = "{\"type\":\"user\",\"isSidechain\":false,\"message\":{\"role\":\"user\",\"content\":[" + blocks + "]}}";
+        huge.Length.ShouldBeGreaterThan(TranscriptDigest.LongestLine);
+        File.WriteAllLines(_path, [huge, User("A later one."), BigResult(3_000_000), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path).ShouldBe("[earlier steps left out]\nClaude: Done.");
     }
 
     // Review of #236: a text block of a prompt with a reminder before its words keeps them, as a prompt of one string does
