@@ -67,7 +67,8 @@ public static class TranscriptDigest
                 first = FirstPromptIn(stream, out var firstAt);
                 // The end read has the first prompt only when it began at or before it (#236): a later prompt of the same
                 // words, the same task sent twice, is not it.
-                reachesFirst = tailAt <= firstAt;
+                // No prompt in the head: where the first one is is not known, so the end read does not stand for it.
+                reachesFirst = first is not null && tailAt <= firstAt;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -392,8 +393,8 @@ public static class TranscriptDigest
                 ? string.Join(" ", content.EnumerateArray()
                     .Where(b => b.ValueKind == JsonValueKind.Object && b.TryGetProperty("type", out var t) && t.GetString() == "text"
                         && b.TryGetProperty("text", out var v) && v.ValueKind == JsonValueKind.String)
-                    .Select(b => b.GetProperty("text").GetString()!)
-                    .Where(t => !Aside(t))) // VS Code's open file and selection go along as blocks of their own
+                    .Select(b => WithoutAsidesBefore(b.GetProperty("text").GetString()!))
+                    .Where(t => t.Length > 0)) // VS Code's open file and selection go along as blocks of their own, or before the words
                 : null; // a tool's result is in the chat's own words after it
         text = text?.Trim();
         if (string.IsNullOrEmpty(text))
@@ -469,10 +470,17 @@ public static class TranscriptDigest
         var rest = text.TrimStart();
         while (Aside(rest))
         {
-            var end = rest.IndexOfAny(['>', ' ']);
+            // The tag's name ends at its '>', a space or a line break, or its "/>" when it closes itself.
+            var end = rest.IndexOfAny(['>', ' ', '\t', '\r', '\n', '/']);
             if (end < 2)
             {
                 return "";
+            }
+
+            if (rest[end] == '/' && end + 1 < rest.Length && rest[end + 1] == '>')
+            {
+                rest = rest[(end + 2)..].TrimStart();
+                continue;
             }
 
             var close = "</" + rest[1..end] + ">";
@@ -492,7 +500,7 @@ public static class TranscriptDigest
     private static bool Aside(string text)
     {
         var start = text.TrimStart();
-        return start.StartsWith("<system-reminder>", StringComparison.Ordinal) || start.StartsWith("<ide_", StringComparison.Ordinal)
+        return start.StartsWith("<system-reminder", StringComparison.Ordinal) || start.StartsWith("<ide_", StringComparison.Ordinal)
             || start.StartsWith("<bash-", StringComparison.Ordinal);
     }
 

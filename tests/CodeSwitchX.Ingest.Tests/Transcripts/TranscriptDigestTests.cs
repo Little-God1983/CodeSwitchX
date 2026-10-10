@@ -157,6 +157,8 @@ public sealed class TranscriptDigestTests : IDisposable
     [InlineData("<ide_selection>The user selected Upload.cs:3</ide_selection> Explain this.", "User: Explain this.")]
     [InlineData("<system-reminder>a</system-reminder><ide_opened_file>b</ide_opened_file>Two before.", "User: Two before.")]
     [InlineData("<system-reminder>Never closed. Rename it.", null)]
+    [InlineData("<ide_opened_file\npath=\"a.cs\">The user opened a.cs</ide_opened_file> Explain it.", "User: Explain it.")]
+    [InlineData("<system-reminder/>Do it.", "User: Do it.")]
     public void A_prompt_with_a_reminder_or_a_selection_before_its_words_keeps_its_words(string prompt, string? step)
     {
         File.WriteAllLines(_path, [User(prompt)]);
@@ -188,6 +190,27 @@ public sealed class TranscriptDigestTests : IDisposable
         File.WriteAllLines(_path, [line, BigResult(3_000_000), Assistant("Done.")]);
 
         TranscriptDigest.Read(_path)!.ShouldStartWith("First asked: Fix it. aaa");
+    }
+
+    // Review of #236: a text block of a prompt with a reminder before its words keeps them, as a prompt of one string does
+    [Fact]
+    public void A_text_block_with_a_reminder_before_its_words_keeps_them()
+    {
+        File.WriteAllLines(_path, [
+            """{"type":"user","isSidechain":false,"message":{"role":"user","content":[{"type":"text","text":"<system-reminder>Be brief.</system-reminder>\nRename it."}]}}""",
+        ]);
+
+        TranscriptDigest.Read(_path).ShouldBe("User: Rename it.");
+    }
+
+    // Review of #236: no prompt in the head of a big file: the end read does not stand for the first prompt
+    [Fact]
+    public void A_big_file_with_no_prompt_in_its_head_still_says_steps_were_left_out()
+    {
+        File.WriteAllLines(_path, [BigResult(TranscriptDigest.HeadChars + 1000), User("The real first task."), BigResult(3_000_000),
+            User("A later one."), Assistant("Done.")]);
+
+        TranscriptDigest.Read(_path)!.ShouldStartWith("[earlier steps left out]\nUser: A later one.");
     }
 
     private static string Timed(string line, string at) => line.Insert(1, $"\"timestamp\":\"{at}\",");
