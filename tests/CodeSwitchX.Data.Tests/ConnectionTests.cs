@@ -20,11 +20,15 @@ public sealed class ConnectionTests : IAsyncLifetime
         // command timeout; with a cache of its own and write-ahead logging, it reads what was committed, at once.
         var ct = TestContext.Current.CancellationToken;
         await using var writer = await _db.Get<IDbContextFactory<CodeSwitchXDbContext>>().CreateDbContextAsync(ct);
+        (await writer.Database.SqlQueryRaw<string>("PRAGMA journal_mode").ToListAsync(ct)).ShouldBe(["wal"], "what lets the read go on");
         await using var transaction = await writer.Database.BeginTransactionAsync(ct);
         writer.Tracks.Add(new Track { Name = "Not committed yet", SortOrder = 9 });
         await writer.SaveChangesAsync(ct);
 
-        var tracks = await _db.Get<IWorkspaceStore>().GetTracksAsync(ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+        // Stopped after 5 s if it waits: the read itself ends, rather than going on past the test.
+        using var waitedTooLong = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        waitedTooLong.CancelAfter(TimeSpan.FromSeconds(5));
+        var tracks = await _db.Get<IWorkspaceStore>().GetTracksAsync(waitedTooLong.Token);
 
         tracks.ShouldNotContain(t => t.Name == "Not committed yet");
         await transaction.RollbackAsync(ct);
