@@ -632,6 +632,28 @@ public sealed partial class RavenPanelViewModelTests
         SpokenSince(before).ShouldBe("Noon.");
     }
 
+    // Round 3 of #252: said in Open mic with none open, "No questions are waiting." waits the grace, as a card would
+    [Fact]
+    public async Task Next_question_said_in_Open_mic_with_none_open_says_so_after_the_grace()
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, next question.", TimeSpan.FromSeconds(1))));
+        var (vm, _) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var before = _speech.Spoken.Count;
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.Log[^1].Text.ShouldBe(RavenPanelViewModel.NoQuestionsLine);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("the user may go on after a breath");
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await Until(() => SpokenSince(before) == RavenPanelViewModel.NoQuestionsLine);
+    }
+
     // #252: the Open mic grace is for a user who may go on talking, not for a key pressed in silence
     [Fact]
     public async Task Next_question_by_its_hotkey_in_Open_mic_with_the_user_quiet_reads_the_card_at_once()
