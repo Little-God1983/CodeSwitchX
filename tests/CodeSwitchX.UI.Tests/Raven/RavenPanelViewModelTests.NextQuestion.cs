@@ -550,4 +550,192 @@ public sealed partial class RavenPanelViewModelTests
 
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // not 30 s later
     }
+
+    // #252: "No questions are waiting." while the user talked in Open mic was only written, never said after the turn
+    [Fact]
+    public async Task Next_question_with_none_open_while_the_user_talks_in_Open_mic_says_so_once_the_turn_is_over()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        var (vm, _) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak(); // in the follow-up: the user's, and it takes the floor
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestionByKey();
+
+        vm.Log[^1].Text.ShouldBe(RavenPanelViewModel.NoQuestionsLine);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("Raven does not talk over the user");
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        _time.Advance(TrafficWatcher.NewsGrace); // asked while the user talked: they may go on after a breath
+        await Until(() => SpokenSince(before) == RavenPanelViewModel.NoQuestionsLine);
+    }
+
+    // Round 1 of #252: a card that came while "No questions are waiting." waited for the turn is gone to instead
+    [Fact]
+    public async Task Next_question_with_none_open_goes_to_a_card_that_came_while_the_user_talked()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak();
+        var before = _speech.Spoken.Count;
+        vm.GoToNextQuestionByKey(); // none open yet
+
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3, while the user talks
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        _time.Advance(TrafficWatcher.NewsGrace);
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        SpokenSince(before).ShouldNotContain(RavenPanelViewModel.NoQuestionsLine);
+    }
+
+    // Round 2 of #252: a question asked in the same turn drops "No questions are waiting.": after its answer it answers nothing
+    [Fact]
+    public async Task A_question_after_next_question_with_none_open_drops_the_no_questions_line()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = q => q.Contains("time") ? [new BrainText("Noon.")] : [new BrainText("Hi.")];
+        var (vm, _) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak();
+        var before = _speech.Spoken.Count;
+        vm.GoToNextQuestionByKey(); // none open: the line waits for the turn
+
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("What time is it?", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        SpokenSince(before).ShouldBe("Noon.");
+    }
+
+    // Round 3 of #252: said in Open mic with none open, "No questions are waiting." waits the grace, as a card would
+    [Fact]
+    public async Task Next_question_said_in_Open_mic_with_none_open_says_so_after_the_grace()
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, next question.", TimeSpan.FromSeconds(1))));
+        var (vm, _) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var before = _speech.Spoken.Count;
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.Log[^1].Text.ShouldBe(RavenPanelViewModel.NoQuestionsLine);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("the user may go on after a breath");
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await Until(() => SpokenSince(before) == RavenPanelViewModel.NoQuestionsLine);
+    }
+
+    // #252: the Open mic grace is for a user who may go on talking, not for a key pressed in silence
+    [Fact]
+    public async Task Next_question_by_its_hotkey_in_Open_mic_with_the_user_quiet_reads_the_card_at_once()
+    {
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3: not read here
+        await GraceAsync(vm);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestionByKey();
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // no grace waited
+    }
+
+    // #252: "next question" stops a telling on its way, so the card asked for is read at once
+    [Fact]
+    public async Task Next_question_during_a_news_telling_stops_it_and_reads_the_card_at_once()
+    {
+        _teller.Answer = _ => [new BrainText("Task a is done.")];
+        var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."));
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user asks, and stays so
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _teller.Asked.Count > 0);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestionByKey();
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
+    }
+
+    // #252: a card taken by a telling that the floor was taken from before it was read is read later, not lost
+    [Fact]
+    public async Task A_long_command_s_card_cut_off_while_its_words_are_found_is_read_after_the_answer()
+    {
+        const string command = "$out = Join-Path $PSScriptRoot 'dist'\nRemove-Item $out -Recurse -Force\ndotnet publish -c Release -o $out";
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX, chat \"Task a\" wants to run a script that builds the installer")];
+        _brain.Answer = _ => [new BrainText("Noon.")];
+        var (vm, asks) = await NextQuestionVmAsync();
+        _teller.Gate = new TaskCompletionSource(); // its words are being found when the user asks
+        var ask = new ChatAsk("p_a",
+            new HookEvent { SessionId = "a", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "PowerShell", ToolInputHash = command },
+            [], new ChatPermission("PowerShell", "run a command", command, null, Risks: [PermissionRisk.DeletesFiles]));
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _teller.Asked.Count > 0);
+
+        Type(vm, "what time is it"); // takes the floor
+        _teller.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+
+        await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
+        string.Join(" ", _speech.Spoken).ShouldContain("Noon.");
+    }
+
+    // #252 (item 6): muted in Open mic, a written offer takes no bare yes, but "Raven, yes" reads the card aloud (#242)
+    [Fact]
+    public async Task Muted_in_Open_mic_a_yes_with_the_name_to_a_written_offer_reads_the_card_aloud()
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, yes.", TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        vm.IsMuted = true;
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: true);
+        var before = _speech.Spoken.Count;
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        _time.Advance(TrafficWatcher.NewsGrace); // said in Open mic: the user may go on after a breath
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+    }
 }
