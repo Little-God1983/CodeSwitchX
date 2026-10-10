@@ -236,7 +236,8 @@ public sealed partial class RavenPanelViewModelTests
         await card.Naming;
         var proposal = asks.Propose("p1");
         await Until(() => asks.IsHeard(proposal));
-        await Until(() => vm.TakesTurnsWithoutName); // the read-back heard opens the follow-up a moment after
+        await WithinAsync(vm.PendingFollowUp); // the read-back heard opens the follow-up a moment after
+        vm.TakesTurnsWithoutName.ShouldBeTrue();
         _time.Advance(TimeSpan.FromSeconds(vm.FollowUpSeconds + past));
 
         _openMic.Speak();
