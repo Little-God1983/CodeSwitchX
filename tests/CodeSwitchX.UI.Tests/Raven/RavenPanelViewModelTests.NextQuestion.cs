@@ -1,5 +1,6 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -765,6 +766,33 @@ public sealed partial class RavenPanelViewModelTests
         vm.NextQuestionForBrain(FakeYardDirectory.WorkspaceOf("ContentAutomatorX").ToString())
             .ShouldBe("Chat 3, RawCutX. Its question is read out next.", "chat 1's brain answers what the user said");
         one.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    // Round 2 of #254: a window removed while its brain answers spoken words does not make that chat 0's turn
+    [Fact]
+    public async Task Muted_a_window_s_spoken_question_does_not_count_for_chat_0_once_the_window_is_gone()
+    {
+        var brains = new FakeChatBrains(_brain);
+        var (vm, asks) = await NextQuestionVmAsync(brains: brains);
+        _ = await AsksFruitAsync(vm, asks, "c"); // in window 2
+        vm.IsMuted = true;
+        vm.SelectedChat = ChatNumbered(vm, 3);
+        var three = (FakeBrain)brains.For(FakeYardDirectory.WorkspaceOf("RawCutX"));
+        three.Gate = new TaskCompletionSource(); // chat 3's brain answers words said aloud, and is still at it
+        Transcribes(Task.FromResult(new DictationResult("What's waiting?", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Until(() => three.Sent.Count == 1);
+
+        vm.SetWorkspaces([.. new[] { "ContentAutomatorX", "DiffusionNexus" }.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
+
+        vm.NextQuestionForBrain(YardMcp.OverviewChat).ShouldBe("Chat 2, DiffusionNexus. Its card is shown there.", "chat 0 began its turn itself");
+        three.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
     }
 }
