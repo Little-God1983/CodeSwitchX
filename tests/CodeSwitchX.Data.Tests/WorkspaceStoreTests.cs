@@ -192,15 +192,16 @@ public class WorkspaceStoreTests : IAsyncLifetime
             {
                 return (Added: false, Error: null);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!TestContext.Current.CancellationToken.IsCancellationRequested) // only the test's own cancel ends it
             {
                 return (Added: false, Error: ex);
             }
         }));
 
         var ended = await Task.WhenAll(adds);
+        // With its SQLite codes and the whole stack: which statement (the transaction's start, the read, the insert, the commit) failed.
         var errors = ended.Select(e => e.Error).OfType<Exception>().Select(e => e.GetBaseException() is SqliteException sqlite
-            ? $"{e.GetType().Name} ({sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}): {sqlite.Message}" : e.ToString()).ToList();
+            ? $"SQLite {sqlite.SqliteErrorCode}/{sqlite.SqliteExtendedErrorCode}: {e}" : e.ToString()).ToList();
         errors.ShouldBeEmpty("a racing add waits for the one before it, and then sees its row");
         ended.Count(e => e.Added).ShouldBe(1);
         (await _store.GetAllAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
