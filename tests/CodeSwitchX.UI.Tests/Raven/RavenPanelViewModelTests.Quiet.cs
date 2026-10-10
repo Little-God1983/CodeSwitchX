@@ -45,14 +45,44 @@ public sealed partial class RavenPanelViewModelTests
     {
         _brain.Answer = _ => [new BrainText("You have one chat waiting.")];
         var vm = await NewVmAsync();
+        _speech.Gate = new TaskCompletionSource(); // the audio waits: the answer is being heard
 
         await SayAloudAsync(vm, "What's waiting on me?");
-        await Until(() => _speech.Spoken.Contains("You have one chat waiting."));
+        await Until(() => _speech.Spoken.Count > 0);
         vm.IsMuted = true;
+        await WithinAsync(_voice.WhenQuietAsync()); // muting stops it
+        _speech.Gate.TrySetResult();
         var before = _speech.Spoken.Count;
 
         await SayAloudAsync(vm, "And now?");
         await Until(() => _speech.Spoken.Count > before);
+    }
+
+    // #242: muted, a question typed right behind words said aloud is one question, answered in writing: quiet wins
+    [Fact]
+    public async Task Muted_words_said_and_typed_as_one_question_are_answered_in_writing()
+    {
+        _brain.Gate = new TaskCompletionSource(); // the first is still on its way when the typed words come
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await NewVmAsync();
+        vm.IsMuted = true;
+        _brain.BeforeSent = new TaskCompletionSource(); // neither has gone to the brain yet: they go as one
+
+        Transcribes(Task.FromResult(new DictationResult("What's waiting", TimeSpan.FromSeconds(1))));
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
+        await WithinAsync(vm.PendingTranscriptions);
+        Type(vm, "on me?");
+        _brain.BeforeSent.SetResult();
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _speech.Spoken.ShouldBeEmpty();
+        Lines(vm).ShouldContain((RavenLogKind.Raven, "One chat waits."));
     }
 
     // #242: "next question" said aloud reads its card while muted; by its hotkey (a key) the card is only shown
@@ -87,5 +117,22 @@ public sealed partial class RavenPanelViewModelTests
             await GraceAsync(vm);
             SpokenSince(before).ShouldBeEmpty("a key, muted: the card is only shown");
         }
+    }
+
+    // #242: muted, with the panel collapsed, an answer to words said aloud was heard: it counts as read, not as news
+    [Fact]
+    public async Task Muted_and_collapsed_an_answer_to_words_said_aloud_is_not_unread()
+    {
+        _brain.Answer = _ => [new BrainText("One chat waits.")];
+        var vm = await NewVmAsync();
+        vm.IsMuted = true;
+        vm.IsOpen = false;
+
+        await SayAloudAsync(vm, "What's waiting on me?");
+        await Until(() => _speech.Spoken.Contains("One chat waits."));
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingHeardCheck);
+
+        vm.CurrentChat.Unread.ShouldBe(0);
     }
 }

@@ -343,7 +343,7 @@ public sealed class AppSettings : IAppSettings
                 + "sentence or two what happened there while the user was away, a pause after Raven last spoke or a chat made its sound. "
                 + "Its own switch: it is said with chat news only written too.", () => S.RavenCatchUp, v => S.RavenCatchUp = v,
                 "catch-up", "catch up", "catchup"),
-            Toggle("muted", SettingsPage.Voice, "Raven writes its answers without speaking them (the speaker button on Raven's panel).",
+            Toggle("muted", SettingsPage.Voice, "Raven says nothing on its own: no chat news, questions read out or sounds. What you ask aloud it still answers aloud; what you type it answers in writing (the speaker button on Raven's panel).",
                 () => R.IsMuted, v => R.IsMuted = v, "mute", "silent"),
 
             // Listening
