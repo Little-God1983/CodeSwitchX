@@ -725,6 +725,8 @@ public sealed class RavenActionsTests
 
         public string? NextQuestion() => Next;
 
+        public string WhatsNew(Guid? askedFrom, int? number) => $"News for {askedFrom?.ToString() ?? "chat 0"}, {number?.ToString() ?? "every chat"}.";
+
         public void SetChatDefaults(ChatDefaults defaults)
         {
             Defaults.Add(defaults);
@@ -986,6 +988,12 @@ public sealed class RavenActionsTests
 
         _shell.Next = null;
         (await _actions.NextQuestionAsync(Ct)).ShouldBe("No questions are waiting.");
+    }
+
+    [Fact]
+    public async Task Whats_new_passes_where_it_was_asked_and_the_chat_named()
+    {
+        (await _actions.WhatsNewAsync(null, 2, Ct)).ShouldBe("News for chat 0, 2.");
     }
 
     [Fact]

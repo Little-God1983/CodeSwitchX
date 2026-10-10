@@ -2290,6 +2290,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         /// <summary>Said, not typed: answered aloud while muted (#242).</summary>
         public bool Aloud { get; init; }
 
+        /// <summary>The news whats_new gave in its turn (#243): read once the answer is heard to its end, or written.</summary>
+        public List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> ToRead { get; } = [];
+
+
+
         /// <summary>The news facts that went with it; given once it is sent.</summary>
         public IReadOnlyList<ToldFact> Told { get; set; } = [];
     }
@@ -2317,6 +2322,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task AnswerInTurnAsync(Task previous, Question question, ReplyVoice.SpokenReply spoken, StrongBox<DateTimeOffset> asked,
         CancellationToken floor)
     {
+        var whole = new StrongBox<bool>();
         try
         {
             await previous;
@@ -2347,7 +2353,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             asked.Value = _time.GetUtcNow();
             var before = Log.Count == 0 ? null : Log[^1];
-            await StreamAnswerAsync(brain, WithToldNews(question, brain, busy), spoken, floor, question.Chat, question);
+            await StreamAnswerAsync(brain, WithToldNews(question, brain, busy), spoken, floor, question.Chat, question, whole: whole);
+            whole.Value &= !floor.IsCancellationRequested;
 
             // Its answer ended on a question ("chat 3 or chat 5?"): the user's next words may answer it, even "chat three".
             // This turn's words only, the entries after the last one before it: a turn that only looked something up asked nothing.
@@ -2371,6 +2378,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             question.Ended = true;
             _questions.Remove(question);
             spoken.Complete();
+            if (question.ToRead.Count > 0 && whole.Value)
+            {
+                // What whats_new told counts as read once the answer is heard to its end, or once it is written (#243).
+                _pendingReads = Task.WhenAll(_pendingReads, ReadOnceToldAsync(spoken, question, question.ToRead));
+            }
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
             {
@@ -2522,6 +2534,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         break;
                     case BrainFailed { Reason: var reason }:
                         Track(AddEntry(RavenLogKind.Warning, reason, Where()));
+                        failedMidway = true; // what it was to tell may not have come (#243)
                         break;
                 }
             }
@@ -3841,23 +3854,43 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (await spoken.HeardWholeAsync().ConfigureAwait(false))
         {
-            _dispatcher.Post(() =>
-            {
-                // Only a chat where a failure was heard: one shown while it came (in Activity) was never counted, nor said.
-                var failedHeard = new HashSet<RavenChat>();
-                foreach (var (entry, lines) in said)
-                {
-                    if (Read(entry, lines))
-                    {
-                        failedHeard.Add(entry.Chat);
-                    }
-                }
+            _dispatcher.Post(() => MarkRead(said));
+        }
+    }
 
-                foreach (var chat in failedHeard)
-                {
-                    MarkFailures(chat);
-                }
-            });
+    /// <summary>
+    /// The news an answer told (#243) is read as its answer is: heard to its end, or seen, written in the open panel (muted
+    /// and typed, say). Neither heard nor seen (cut off, the panel collapsed), it stays unread, as the answer does.
+    /// </summary>
+    private async Task ReadOnceToldAsync(ReplyVoice.SpokenReply spoken, Question question,
+        IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> told)
+    {
+        var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
+        _dispatcher.Post(() =>
+        {
+            if (heard || (IsOpen && question.Entries.Any(e => e.Kind == RavenLogKind.Raven && Log.Contains(e) && IsShown(e))))
+            {
+                MarkRead(told);
+            }
+        });
+    }
+
+    /// <summary>The lines given are read: heard, or told in an answer only written (UI thread).</summary>
+    private void MarkRead(IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
+    {
+        // Only a chat where a failure was heard: one shown while it came (in Activity) was never counted, nor said.
+        var failedHeard = new HashSet<RavenChat>();
+        foreach (var (entry, lines) in said)
+        {
+            if (Read(entry, lines))
+            {
+                failedHeard.Add(entry.Chat);
+            }
+        }
+
+        foreach (var chat in failedHeard)
+        {
+            MarkFailures(chat);
         }
     }
 
@@ -4830,6 +4863,86 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         Request(card, AloudInFlight);
         return $"{SwitchLine(card.ShownIn!)} Its question is read out next.";
+    }
+
+    /// <summary>
+    /// The news whats_new gives of a chat's entries (#243): a news card's lines not heard yet, stale ones too (shown, and
+    /// unread, though never said on its own), and a warning not heard.
+    /// </summary>
+    private static List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> UnreadNews(IReadOnlyList<RavenLogEntry> entries) =>
+    [
+        .. entries.Where(e => e.Kind == RavenLogKind.News)
+            .Select(e => (e, (IReadOnlyList<ChatNewsLine>?)(e.Lines ?? []).Where(l => !e.WasHeard(l)).ToList()))
+            .Where(c => c.Item2!.Count > 0),
+        .. entries.Where(e => e.Kind == RavenLogKind.Warning && !e.IsHeard).Select(e => (e, (IReadOnlyList<ChatNewsLine>?)null)),
+    ];
+
+    /// <summary>What whats_new says when nothing is new and nothing waits (#243).</summary>
+    internal const string NothingNewLine = "Nothing new: no news the user has not read, and nothing waits for them.";
+
+    /// <summary>
+    /// "What's new?" asked of the brain (whats_new, #243): the news lines not read yet in every window's chat, muted ones too,
+    /// the chat of the window it was asked from first; only chat <paramref name="number"/>'s when given. Then what waits for
+    /// the user. Facts only, never what a chat said: the brain acts. The lines count as read once the answer that tells them
+    /// is heard to its end, or at once when it is only written. UI thread.
+    /// </summary>
+    public string WhatsNewForBrain(Guid? askedFrom, int? number)
+    {
+        var from = ChatOf(askedFrom);
+        var chats = Chats.Where(c => !c.IsActivity && (number is null || c.Number == number))
+            .OrderBy(c => c == from ? 0 : 1).ThenBy(c => c.Number).ToList();
+        if (number is { } asked && chats.Count == 0)
+        {
+            return $"There is no chat {asked}.";
+        }
+
+        var unread = Log.Where(e => e.IsUnread).ToLookup(e => e.Chat);
+        var told = new List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)>();
+        var text = new System.Text.StringBuilder();
+        foreach (var chat in chats)
+        {
+            var news = UnreadNews([.. unread[chat]]);
+            if (news.Count == 0)
+            {
+                continue;
+            }
+
+            told.AddRange(news);
+            text.Append($"New in chat {chat.Number}, {NameOf(chat)}{(chat == CurrentChat ? " (the chat the user is in)" : "")}:\n");
+            foreach (var (entry, lines) in news)
+            {
+                // A warning's text may carry another session's words: only that there is one (#243).
+                foreach (var line in lines?.Select(Fact) ?? ["a warning, in the panel"])
+                {
+                    text.Append("- ").Append(line).Append('\n');
+                }
+            }
+        }
+
+        var waiting = OpenCards().Where(c => number is null || c.ShownIn!.Number == number).ToList();
+        if (waiting.Count > 0)
+        {
+            text.Append("Waiting for the user (\"next question\" goes through them, oldest first):\n");
+            foreach (var card in waiting)
+            {
+                // Its question and options are the chat's own words: only what kind of card it is (#243).
+                text.Append($"- chat {card.ShownIn!.Number}: {card.Said} {(card.Permission is not null ? "asks for a permission" : "asks a question")}\n");
+            }
+        }
+
+        if (text.Length == 0)
+        {
+            return number is { } only ? $"Nothing new in chat {only}: no news there the user has not read, and nothing waits there." : NothingNewLine;
+        }
+
+        // Counted read with the answer of the brain that asked: told in another brain's turn, it would be read unheard.
+        // The brain that answers a question is the one of the chat it was asked in, also once it moved with the user (#180).
+        if (told.Count > 0 && _questions.LastOrDefault(q => q.Sent && !q.Ended && !q.Merged && BrainOf(q.AskedIn) == BrainOf(from)) is { } question)
+        {
+            question.ToRead.AddRange(told);
+        }
+
+        return text.ToString().TrimEnd();
     }
 
     /// <summary>

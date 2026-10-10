@@ -181,7 +181,8 @@ public sealed class BrainSettings
         + Hearing
         + "For what needs the user or is waiting on them, use list_chats with the filter needs_me, and the workspace \"all\" unless "
         + "they ask about one window only. To go through the questions and prompts waiting (\"next question\", \"go through my "
-        + "questions\"), call next_question and say only what it returns. To sum a chat up (\"summarize the upload chat\", \"what did it do?\"), "
+        + "questions\"), call next_question and say only what it returns. For what is new (\"what's new?\", \"anything new?\", \"what "
+        + "happened?\"), call whats_new and tell what it returns briefly, naming every chat it lists. To sum a chat up (\"summarize the upload chat\", \"what did it do?\"), "
         + "call summarize_chat with its id from list_chats and say only the summary it returns. For the last working session (\"what did "
         + "I do yesterday?\", \"where did I leave off?\"), call summarize_last_session and say only the summary it returns. "
         + "The user has a Raven chat per window, each with a conversation of its own, and chat 0, the Yard, for no window in "
@@ -229,6 +230,8 @@ public sealed class BrainSettings
         + Hearing
         + "\"What's going on?\": name each window chat with something going on by its number and name (\"chat 3, ContentAutomatorX\"), "
         + "in a sentence or two, from the summaries and from list_chats with the workspace \"all\" for what runs right now. "
+        + "\"What's new?\", \"anything new?\", \"what happened?\": call whats_new and tell what it returns briefly, the most pressing "
+        + "first, naming every chat it lists. "
         + "\"Which chat needs me?\": name the window chats with cards waiting, by number and name, from the summaries and list_chats "
         + "with the filter needs_me and the workspace \"all\", and add that \"next question\" goes through them, oldest first. "
         + "You do not answer cards: a chat's question or permission prompt is answered in its window's Raven chat, where it is read "

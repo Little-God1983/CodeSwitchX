@@ -213,6 +213,36 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     public Task<string> NextQuestion(CancellationToken cancellationToken = default) =>
         Act(() => actions.NextQuestionAsync(cancellationToken));
 
+    // Not read-only: what it gives counts as read once the answer that tells it is heard (#243).
+    [McpServerTool(Name = "whats_new", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false)]
+    [Description("What is new for the user (\"what's new?\", \"anything new?\", \"what happened?\", \"catch me up\", \"any news?\"): "
+        + "the news they have not read yet in every window's Raven chat (a chat finished, failed or needs them), muted chats too, "
+        + "the chat you are in first; and the questions and prompts waiting for them. Name a chat or window for its news only. "
+        + "Tell it briefly in your own voice, the most pressing first, and name every chat it lists: what it gives counts as read "
+        + "once your answer is heard.")]
+    public async Task<string> WhatsNew(
+        [Description("Only this chat's news: its number (\"2\", \"two\") or a window's name as the user said it. Left out: every window's.")]
+        string? chat = null,
+        CancellationToken cancellationToken = default)
+    {
+        int? number = null;
+        var said = chat?.Trim() ?? "";
+        if (said.Length > 0 && !EveryChat(said))
+        {
+            number = ThisChat(said)
+                ? (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number ?? 0
+                : (await NamedChatAsync(said, open: false, cancellationToken).ConfigureAwait(false)).Number
+                    ?? throw new McpException("Activity only lists every chat's lines: leave the chat out for every window's news.");
+        }
+
+        return await Act(() => actions.WhatsNewAsync(scope?.WorkspaceId, number, cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>"all", "all chats", "every window", "everything", "everywhere": no one chat (#243).</summary>
+    private static bool EveryChat(string said) =>
+        string.Join(" ", new string([.. said.ToLowerInvariant().Select(c => char.IsLetter(c) ? c : ' ')]).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            is "all" or "all chats" or "all windows" or "every chat" or "every window" or "everything" or "everywhere" or "any" or "anywhere";
+
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
     public async Task<string> BackToYard(CancellationToken cancellationToken = default)
