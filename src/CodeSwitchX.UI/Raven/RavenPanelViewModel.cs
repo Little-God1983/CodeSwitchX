@@ -586,39 +586,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     internal Task PendingAnswers => _conversation;
 
     /// <summary>The last check of whether a reply written as said was heard to its end (#178).</summary>
-    internal Task PendingHeardCheck => Task.WhenAll(_pendingCounts, _pendingReads);
+    internal Task PendingHeardCheck => Task.WhenAll(_pendingCounts.All, _pendingReads.All);
 
     /// <summary>
     /// The waits for an Open mic answer, or an allow's read-back, to be heard before the follow-up runs from then (#217):
-    /// completes once every follow-up they open runs.
+    /// completes once every follow-up they open, or note they post, has run, or has waited <see cref="RavenActions.UiTimeout"/>
+    /// for a busy UI thread (it runs later).
     /// </summary>
-    internal Task PendingFollowUp
-    {
-        get
-        {
-            lock (_followUpWaits)
-            {
-                return _pendingFollowUp;
-            }
-        }
-    }
+    internal Task PendingFollowUp => _followUpWaits.All;
 
-    private Task _pendingFollowUp = Task.CompletedTask;
+    /// <summary>An answer's end and a read-back add to it, from different threads in tests.</summary>
+    private readonly PendingTasks _followUpWaits = new();
 
-    /// <summary>Guards <see cref="_pendingFollowUp"/>: an answer's end and a read-back may add to it from different threads in tests.</summary>
-    private readonly object _followUpWaits = new();
-
-    /// <summary>Adds a wait to <see cref="PendingFollowUp"/>; once all before it ran, it starts the chain again (a fault stays to be seen).</summary>
-    private void AwaitFollowUp(Task wait)
-    {
-        lock (_followUpWaits)
-        {
-            _pendingFollowUp = _pendingFollowUp.IsCompletedSuccessfully ? wait : Task.WhenAll(_pendingFollowUp, wait);
-        }
-    }
-
-    /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178; UI thread).</summary>
-    private Task _pendingCounts = Task.CompletedTask;
+    /// <summary>The checks of replies written as said, to count a line that turned out not heard (#178).</summary>
+    private readonly PendingTasks _pendingCounts = new();
 
     /// <summary>The window chats being summed up for chat 0.</summary>
     internal Task PendingSummaries => _summaries;
@@ -871,9 +852,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     partial void OnIsMutedChanged(bool value)
     {
-        if (value && _asks?.Proposed is { } proposal)
+        // Before the hush, which would settle it as not heard; and, as for one written while muted, a bare yes may answer it
+        // (#217, #246).
+        if (value && _mutable is { Played.IsCompleted: false } readBack && _asks!.MarkHeard(readBack.Proposal, _time.GetUtcNow(), out var first)
+            && first)
         {
-            _asks.MarkHeard(proposal, _time.GetUtcNow()); // before the hush, which would settle it as not heard
+            _followUpFrom = _time.GetUtcNow();
         }
 
         // Muted, the voice says nothing: what it says now stops, and only a reply begun evenMuted is said, an answer to
@@ -2381,12 +2365,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (question.ToRead.Count > 0 && whole.Value)
             {
                 // What whats_new told counts as read once the answer is heard to its end, or once it is written (#243).
-                _pendingReads = Task.WhenAll(_pendingReads, ReadOnceToldAsync(spoken, question, question.ToRead));
+                _pendingReads.Add(ReadOnceToldAsync(spoken, question, question.ToRead));
             }
             _asking--;
             if (question.OpenMic && !floor.IsCancellationRequested)
             {
-                AwaitFollowUp(OpenFollowUpOnceHeardAsync(spoken)); // one cut off by the next question leaves the follow-up to that one's
+                _followUpWaits.Add(OpenFollowUpOnceHeardAsync(spoken)); // one cut off by the next question leaves the follow-up to that one's
             }
             UpdateState();
         }
@@ -2403,16 +2387,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>The follow-up runs from now, on the UI thread; completes once it does, so <see cref="PendingFollowUp"/> can wait for it.</summary>
-    private Task FollowUpFromNowAsync()
-    {
-        var set = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _dispatcher.Post(() =>
-        {
-            _followUpFrom = _time.GetUtcNow();
-            set.SetResult();
-        });
-        return set.Task;
-    }
+    private Task FollowUpFromNowAsync() => OnUiAsync(() => _followUpFrom = _time.GetUtcNow());
+
+    /// <summary>
+    /// <paramref name="action"/> on the UI thread; the wait gives up after <see cref="RavenActions.UiTimeout"/>, but it
+    /// still runs when the thread gets to it (#246).
+    /// </summary>
+    private Task OnUiAsync(Action action) => _dispatcher.RunAsync(action, RavenActions.UiTimeout, _time);
 
     /// <summary>
     /// The brain's answer to <paramref name="text"/> into the log and the voice. Never faults: a failure is a warning,
@@ -2847,6 +2828,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if ((IsMuted && !aloud) || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
+            _mutable = null;
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
             _followUpFrom = _time.GetUtcNow(); // a bare yes may answer it (#217)
             return;
@@ -2855,11 +2837,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // Spoken whole, risks and all: only a yes said after it answers it. While the user talks in Open mic it is only
         // written, and is not heard.
         var spoken = _voice.Begin(silent: _openSpeech, whole: true, evenMuted: aloud);
+        _mutable = _openSpeech ? null : (proposal, spoken.Played);
         AddSaid(line, ChatOfAsk(proposal.Ask), spoken);
         spoken.Add(line);
         spoken.Complete();
-        AwaitFollowUp(HeardAsync(proposal, spoken.Played));
+        _followUpWaits.Add(HeardAsync(proposal, spoken.Played));
     }
+
+    /// <summary>
+    /// The proposal whose read-back a mute cuts off, while it is still being said (<c>Played</c> not settled); not one only
+    /// written while the user talked, which was never heard, so a mute settles nothing of it (#246).
+    /// </summary>
+    private (ChatAllowProposal Proposal, Task<bool> Played)? _mutable;
 
     /// <summary>
     /// Marks the proposal's read-back heard once it has played to its end. One not heard (hushed midway, dropped, or only
@@ -2870,18 +2859,29 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var chat = ChatOfAsk(proposal.Ask);
         if (await played.ConfigureAwait(false))
         {
-            _asks?.MarkHeard(proposal, _time.GetUtcNow());
-            await FollowUpFromNowAsync().ConfigureAwait(false); // a bare yes may answer it (#217)
+            // Heard now, which a yes after it needs. A bare yes may answer it (#217), but not once it is over (replaced,
+            // lapsed, answered by a click): that is judged on the UI thread, where a click ends it (#246).
+            if (_asks?.MarkHeard(proposal, _time.GetUtcNow()) == true)
+            {
+                await OnUiAsync(() =>
+                {
+                    if (ReferenceEquals(_asks.Proposed, proposal))
+                    {
+                        _followUpFrom = _time.GetUtcNow();
+                    }
+                }).ConfigureAwait(false);
+            }
+
             return;
         }
 
-        _dispatcher.Post(() =>
+        await OnUiAsync(() =>
         {
             if (_asks?.IsHeard(proposal) == false && _asks.Cancel(proposal))
             {
                 AddEntry(RavenLogKind.Note, NotHeardLine, chat);
             }
-        });
+        }).ConfigureAwait(false);
     }
 
     /// <summary>The note when a read-back was not heard to its end.</summary>
@@ -2894,6 +2894,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void OnProposalEnded(ChatAllowProposal proposal, ChatProposalEnd end)
     {
+        if (ReferenceEquals(_mutable?.Proposal, proposal))
+        {
+            _mutable = null; // nothing of it for a mute to settle
+        }
+
         _askCards.TryGetValue(proposal.Ask.Id, out var card);
         if (card is not null)
         {
@@ -3843,12 +3848,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (said.Count > 0)
         {
-            _pendingReads = Task.WhenAll(_pendingReads, ReadOnceHeardAsync(spoken, said));
+            _pendingReads.Add(ReadOnceHeardAsync(spoken, said));
         }
     }
 
-    /// <summary>The reads waiting for their reply to be heard: a catch-up is worded once they are done (UI thread).</summary>
-    private Task _pendingReads = Task.CompletedTask;
+    /// <summary>The reads waiting for their reply to be heard: a catch-up is worded once they are done.</summary>
+    private readonly PendingTasks _pendingReads = new();
 
     private async Task ReadOnceHeardAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> said)
     {
@@ -3921,7 +3926,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _saidUnseen[spoken] = entry; // before the check: a reply hushed already settles it at once, on this thread
             if (first)
             {
-                _pendingCounts = Task.WhenAll(_pendingCounts, CountUnlessHeardAsync(spoken));
+                _pendingCounts.Add(CountUnlessHeardAsync(spoken));
             }
         }
 
@@ -4409,7 +4414,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             await previous;
             // Worded now, once what was heard before (a digest, a catch-up hushed at its last sentence) is noted: none of it
             // is told again.
-            await _pendingReads;
+            await _pendingReads.Done;
             if (stop.IsCancellationRequested || CatchUpLeft(away) is not var (lines, covered))
             {
                 return;

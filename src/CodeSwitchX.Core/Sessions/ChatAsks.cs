@@ -487,10 +487,15 @@ public sealed class ChatAsks : IDisposable
     /// to a read-back cut off midway, allows nothing. The user has <see cref="ProposalLifetime"/> from then. False when it
     /// no longer stands.
     /// </summary>
-    public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at)
+    public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at) => MarkHeard(proposal, at, out _);
+
+    /// <inheritdoc cref="MarkHeard(ChatAllowProposal, DateTimeOffset)"/>
+    /// <param name="first">Whether this call marked it: it was not heard before.</param>
+    public bool MarkHeard(ChatAllowProposal proposal, DateTimeOffset at, out bool first)
     {
         lock (_lock)
         {
+            first = false;
             if (!ReferenceEquals(_proposed, proposal))
             {
                 return false;
@@ -498,6 +503,7 @@ public sealed class ChatAsks : IDisposable
 
             if (_proposedHeard is null)
             {
+                first = true;
                 _proposedHeard = at;
                 _proposalExpiry.Change(Remaining(at + ProposalLifetime), Timeout.InfiniteTimeSpan);
             }

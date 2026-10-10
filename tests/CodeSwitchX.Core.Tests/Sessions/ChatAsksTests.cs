@@ -253,8 +253,11 @@ public sealed class ChatAsksTests : IDisposable
 
         _asks.ProposalFor(_time.GetUtcNow()).ShouldBeNull("nothing answers it before its read-back was heard");
         _asks.IsHeard(proposal).ShouldBeFalse();
-        _asks.MarkHeard(proposal, _time.GetUtcNow()).ShouldBeTrue();
+        _asks.MarkHeard(proposal, _time.GetUtcNow(), out var first).ShouldBeTrue();
+        first.ShouldBeTrue();
         _asks.IsHeard(proposal).ShouldBeTrue();
+        _asks.MarkHeard(proposal, _time.GetUtcNow(), out first).ShouldBeTrue("it still stands");
+        first.ShouldBeFalse("heard before (#246)");
         _asks.ProposalFor(_time.GetUtcNow()).ShouldBe(proposal);
         _asks.Confirm(proposal).ShouldBeTrue();
 

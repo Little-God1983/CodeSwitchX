@@ -49,4 +49,37 @@ public static class UiDispatcherExtensions
             return await result.Task.ConfigureAwait(false);
         }
     }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the UI thread, and completes once it has run, or once <paramref name="timeout"/>
+    /// on <paramref name="time"/> has passed with the UI thread still busy. Unlike <see cref="InvokeAsync{T}"/>, nothing is
+    /// withdrawn: work that must happen still runs when the thread gets to it, and only the wait gives up, so none hangs on
+    /// a dispatcher that shut down with the app. An exception from <paramref name="action"/> is the UI thread's, as any
+    /// post's.
+    /// </summary>
+    public static async Task RunAsync(this IUiDispatcher ui, Action action, TimeSpan timeout, TimeProvider time)
+    {
+        var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var wait = ran.Task.WaitAsync(timeout, time); // armed before the post: the timeout runs from it
+        ui.Post(() =>
+        {
+            try
+            {
+                action();
+            }
+            finally
+            {
+                ran.TrySetResult();
+            }
+        });
+
+        try
+        {
+            await wait.ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            // Left to run when it can.
+        }
+    }
 }
