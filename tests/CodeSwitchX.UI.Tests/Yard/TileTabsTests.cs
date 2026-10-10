@@ -575,7 +575,7 @@ public sealed class TileTabsTests
     {
         await _yard.InitializeAsync(CancellationToken.None);
         var before = _tabs.Reads; // the start's own look
-        using var hold = _tabs.Hold = new ManualResetEventSlim();
+        _tabs.Hold = new ManualResetEventSlim(); // not disposed: a late read may still wait on it
         var running = _yard.RefreshTabsAsync();
         for (var i = 0; i < 500 && _tabs.Reads == before; i++)
         {

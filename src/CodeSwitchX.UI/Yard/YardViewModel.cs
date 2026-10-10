@@ -39,20 +39,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _tabsTimer;
 
-    /// <summary>The reads of the tabs that run, or the last ones; under <see cref="_tabsLock"/>.</summary>
+    /// <summary>The reads of the tabs that run, or the last ones; under <see cref="_tabsGate"/>.</summary>
     private Task _tabsRead = Task.CompletedTask;
 
-    /// <summary>Whether <see cref="_tabsRead"/> still reads, and so takes a look asked for now; under <see cref="_tabsLock"/>.</summary>
+    /// <summary>Whether <see cref="_tabsRead"/> still reads, and so takes a look asked for now; under <see cref="_tabsGate"/>.</summary>
     private bool _tabsReading;
 
-    /// <summary>How many looks were asked for; under <see cref="_tabsLock"/>.</summary>
-    private long _tabsAsked;
+    /// <summary>A look was asked for while a read ran: it reads once more; under <see cref="_tabsGate"/>.</summary>
+    private bool _tabsReadAgain;
 
     /// <summary>
-    /// Guards the reads' bookkeeping: in the app it all runs on the UI thread, but in tests a read goes on on the thread
-    /// pool while the next look is asked for.
+    /// Whether a read runs and whether another was asked for are decided under one lock, as for git: in the app it all
+    /// runs on the UI thread, but in tests a read goes on on the thread pool while the next look is asked for.
     /// </summary>
-    private readonly object _tabsLock = new();
+    private readonly Lock _tabsGate = new();
 
     /// <summary>When the chats of tabs the app knows no chat of were last written in; looked up once a chat (UI thread).</summary>
     private readonly Dictionary<string, TabConversation> _tabActivity = new(StringComparer.OrdinalIgnoreCase);
@@ -357,53 +357,58 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return Task.CompletedTask;
         }
 
-        lock (_tabsLock)
+        lock (_tabsGate)
         {
             if (_tabsReading)
             {
-                _tabsAsked += again ? 1 : 0;
-            }
-            else
-            {
-                _tabsReading = true;
-                _tabsRead = ReadTabsUntilAskedAsync(openTabs);
+                _tabsReadAgain |= again;
+                return _tabsRead;
             }
 
+            _tabsReading = true;
+            _tabsReadAgain = false;
+            _tabsRead = ReadTabsUntilAskedAsync(openTabs);
             return _tabsRead;
         }
     }
 
-    /// <summary>Reads the tabs, and again for as long as a look was asked for while it read.</summary>
+    /// <summary>Reads the tabs, and once more for as long as a look was asked for while it read.</summary>
     private async Task ReadTabsUntilAskedAsync(IVsCodeOpenTabs openTabs)
     {
-        var done = false;
         try
         {
-            while (!done)
+            await Task.Yield(); // out of the lock it was started in: none of the read runs under it
+            do
             {
-                long asked;
-                lock (_tabsLock)
-                {
-                    asked = _tabsAsked;
-                }
-
                 await ReadTabsAsync(openTabs);
-                lock (_tabsLock)
-                {
-                    done = _tabsAsked == asked;
-                    _tabsReading = !done;
-                }
             }
+            while (AnotherTabsReadWasAskedFor());
         }
-        finally
+        catch
         {
-            if (!done)
+            lock (_tabsGate)
             {
-                lock (_tabsLock)
-                {
-                    _tabsReading = false; // a fault must not leave every later look given this read
-                }
+                _tabsReading = false; // a fault must not leave every later look given this read
+                _tabsReadAgain = false;
             }
+
+            throw;
+        }
+    }
+
+    /// <summary>True to read once more; otherwise the reads are over, decided in the same critical section, so no look is lost.</summary>
+    private bool AnotherTabsReadWasAskedFor()
+    {
+        lock (_tabsGate)
+        {
+            if (_tabsReadAgain)
+            {
+                _tabsReadAgain = false;
+                return true;
+            }
+
+            _tabsReading = false;
+            return false;
         }
     }
 
