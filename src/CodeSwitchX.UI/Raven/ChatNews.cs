@@ -165,16 +165,23 @@ public sealed class ChatNews : IDisposable
         lock (_lock)
         {
             taken = [.. _slots];
+            if (which is null)
+            {
+                _slots.Clear();
+            }
         }
 
-        // The caller's choice is made out of the lock the bus threads take; news that came for a chat meanwhile is newer, and waits.
-        taken = which is null ? taken : [.. taken.Where(s => which(s.Value.WorkspaceId))];
-        lock (_lock)
+        if (which is not null)
         {
-            taken = [.. taken.Where(s => _slots.TryGetValue(s.Key, out var now) && ReferenceEquals(now, s.Value))];
-            foreach (var (id, _) in taken)
+            // The caller's choice is made out of the lock the bus threads take; news that came for a chat meanwhile is newer, and waits.
+            taken = [.. taken.Where(s => which(s.Value.WorkspaceId))];
+            lock (_lock)
             {
-                _slots.Remove(id);
+                taken = [.. taken.Where(s => _slots.TryGetValue(s.Key, out var now) && ReferenceEquals(now, s.Value))];
+                foreach (var (id, _) in taken)
+                {
+                    _slots.Remove(id);
+                }
             }
         }
 
