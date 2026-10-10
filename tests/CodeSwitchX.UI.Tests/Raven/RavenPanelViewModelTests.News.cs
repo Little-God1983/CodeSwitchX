@@ -42,9 +42,9 @@ public sealed partial class RavenPanelViewModelTests
     private async Task GraceAsync(RavenPanelViewModel vm)
     {
         // Idle shows for a moment between a telling and its speech starting: the grace begins once the voice is quiet.
-        await Until(() => vm.State == RavenState.Idle);
+        await Until(() => vm.State is RavenState.Idle or RavenState.Attending); // Attending: quiet in Open mic
         await WithinAsync(_voice.WhenQuietAsync());
-        await Until(() => vm.State == RavenState.Idle);
+        await Until(() => vm.State is RavenState.Idle or RavenState.Attending); // Attending: quiet in Open mic
         _time.Advance(vm.Traffic.WaitBeforeTelling);
         await WithinAsync(vm.PendingAnswers);
     }

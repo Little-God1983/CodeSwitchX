@@ -1,7 +1,9 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
+using CodeSwitchX.Voice.Dictation;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Raven;
 
@@ -11,7 +13,7 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>Three windows: ContentAutomatorX (1, chat "a"), DiffusionNexus (2, chat "c"), RawCutX (3, chat "d"); the user is in chat 1.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null)
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false)
     {
         string[] workspaces = ["ContentAutomatorX", "DiffusionNexus", "RawCutX"];
         string[] ids = ["a", "c", "d"];
@@ -22,7 +24,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -279,5 +281,273 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await NextQuestionVmAsync();
 
         vm.NextQuestionForBrain().ShouldBeNull();
+    }
+
+    /// <summary>
+    /// Chat "a" asks, then "d"; the card of "a" is answered by a click: the next one is offered, heard, or only written
+    /// when Raven keeps quiet (<paramref name="quiet"/>), which then holds no floor.
+    /// </summary>
+    private async Task OfferedAfterAnAnswerAsync(RavenPanelViewModel vm, ChatAsks asks, bool quiet = false)
+    {
+        var first = await AsksFruitAsync(vm, asks, "a");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        if (quiet)
+        {
+            await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven && e.Text.EndsWith("Next?", StringComparison.Ordinal)));
+            vm.OffersNext.ShouldBeFalse("only written: it holds no floor");
+        }
+        else
+        {
+            await Until(() => vm.OffersNext);
+        }
+    }
+
+    // #233: the offer is Raven speaking up on its own; the card a yes asks for is read out all the same
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task With_chat_news_only_written_or_the_chat_muted_the_offer_is_only_written_and_a_yes_still_takes_it(bool muted)
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        if (muted)
+        {
+            ChatNumbered(vm, 1).IsMuted = true;
+        }
+        else
+        {
+            vm.SpeakNews = false;
+        }
+
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: true);
+
+        vm.Log.Last(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("One more question is waiting. Next?");
+        _speech.Spoken.ShouldNotContain(s => s.Contains("Next?"));
+        var before = _speech.Spoken.Count;
+
+        Type(vm, "yes");
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+    }
+
+    // #233: "next question" by its hotkey is asked for: the pause after Raven last spoke does not hold it
+    [Fact]
+    public async Task Next_question_by_its_hotkey_reads_the_card_without_waiting_for_the_pause()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "c");
+        await GraceAsync(vm);
+        vm.Traffic.Pause = TimeSpan.FromSeconds(30);
+        vm.Traffic.Announced(); // Raven spoke a moment ago: news would wait half a minute
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        SpokenSince(before).ShouldBe("DiffusionNexus, chat \"Task c\" asks: Which fruit? Apple or Banana.");
+    }
+
+    // #233: a long command is read in the teller's words, as when its card came
+    [Fact]
+    public async Task Next_question_reads_a_long_command_in_the_teller_s_words()
+    {
+        const string command = "$out = Join-Path $PSScriptRoot 'dist'\nRemove-Item $out -Recurse -Force\ndotnet publish -c Release -o $out";
+        _teller.Answer = _ => [new BrainText("RawCutX, chat \"Task d\" wants to run a script that builds the installer")];
+        var (vm, asks) = await NextQuestionVmAsync();
+        var ask = new ChatAsk("p_d",
+            new HookEvent { SessionId = "d", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "PowerShell", ToolInputHash = command },
+            [], new ChatPermission("PowerShell", "run a command", command, null, Risks: [PermissionRisk.DeletesFiles]));
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        await GraceAsync(vm);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+
+        await Until(() => SpokenSince(before).EndsWith("It's on the card.", StringComparison.Ordinal));
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" wants to run a script that builds the installer. It deletes files. It's on the card.");
+    }
+
+    // #233: "next question" while the user talks in Open mic switched to the card but neither said nor wrote it
+    [Fact]
+    public async Task Next_question_while_the_user_talks_in_Open_mic_reads_the_card_once_the_turn_is_over()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = _ => [new BrainText("Hi.")];
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        _ = await AsksFruitAsync(vm, asks, "d"); // in window 3: not read here
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak(); // in the follow-up: the user's, and it takes the floor
+        vm.State.ShouldBe(RavenState.Listening);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion(); // its hotkey
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("Raven does not talk over the user");
+        vm.State.ShouldBe(RavenState.Listening, "the user still has the floor");
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        SpokenSince(before).ShouldBeEmpty("the grace first: the user may go on after a breath");
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
+    }
+
+    // #233: in Open mic, "Next?" takes a bare yes; other talk around the room stays out
+    [Theory]
+    [InlineData("Yes.", true, true)]
+    [InlineData("Sounds good to me.", true, false)]
+    [InlineData("Yes.", false, false)] // only written: talk around the room must not read a card aloud
+    [InlineData("Raven, yes.", false, true)]
+    public async Task In_Open_mic_the_offer_heard_takes_a_yes_without_the_name_and_nothing_else(string said, bool speakNews, bool taken)
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult(said, TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await NextQuestionVmAsync(openMic: true);
+        vm.SpeakNews = speakNews;
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: !speakNews);
+        vm.TakesTurnsWithoutName.ShouldBeFalse("the offer followed a click: only a yes gets through");
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, taken ? 3 : 1));
+        _brain.Asked.ShouldBeEmpty();
+        vm.OffersNext.ShouldBe(!taken && speakNews);
+    }
+
+    // #233: a new offer stands for its own lifetime, not what was left of the one before it
+    [Fact]
+    public async Task A_new_offer_stands_for_its_own_lifetime()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        var first = await AsksFruitAsync(vm, asks, "a");
+        var second = await AsksFruitAsync(vm, asks, "c");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext);
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime / 2);
+
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "c").Questions[0].Options[0]);
+        await WithinAsync(second);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext);
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime / 2 + TimeSpan.FromSeconds(1)); // past the first one's end
+
+        vm.OffersNext.ShouldBeTrue();
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime / 2);
+        await Until(() => !vm.OffersNext);
+    }
+
+    // #233: a yes to "Next?" goes to the next card's chat, and so does what was said right after it, as after "chat three"
+    [Fact]
+    public async Task A_question_said_right_after_a_yes_to_the_offer_goes_to_the_chat_it_switched_to()
+    {
+        var yes = new TaskCompletionSource<DictationResult>();
+        var (vm, asks) = await NextQuestionVmAsync();
+        await OfferedAfterAnAnswerAsync(vm, asks);
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(yes.Task, Task.FromResult(new DictationResult("what is it doing", TimeSpan.FromSeconds(2))));
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        var yesRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStop);
+        vm.PressMic(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStart);
+        Speak();
+        _time.Advance(Hold);
+        var questionRelease = vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingStop);
+
+        yes.SetResult(new DictationResult("yes", TimeSpan.FromSeconds(1)));
+        await WithinAsync(yesRelease);
+        await WithinAsync(questionRelease);
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        vm.Log.Single(e => e.Kind == RavenLogKind.You && e.Text == "what is it doing").Chat.ShouldBe(ChatNumbered(vm, 3));
+        _brain.Asked.ShouldHaveSingleItem().ShouldContain("[The user is in chat 3, RawCutX");
+    }
+
+    // #233: "next question" ends an allow waiting for its yes: a yes then must not allow it, nor the card wait behind it
+    [Fact]
+    public async Task Next_question_ends_an_allow_waiting_for_its_yes()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "a"); // the oldest card, in the chat the user is in: no switch ends the allow
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None); // chat "a" too
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        await GraceAsync(vm);
+        var proposal = asks.Propose("p1");
+        await Until(() => asks.IsHeard(proposal));
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+
+        asks.Proposed.ShouldBeNull("the user moved on");
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        card.IsOpen.ShouldBeTrue("only the proposal ended: the card waits for a click or a new allow");
+    }
+
+    // #233: "next question" while news is being worded: the telling ends, unsaid in the chat switched to, and the card follows
+    [Fact]
+    public async Task Next_question_during_a_news_telling_reads_the_card_once_it_ends_and_not_the_news()
+    {
+        _teller.Answer = _ => [new BrainText("Task a is done.")];
+        var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."));
+        _ = await AsksFruitAsync(vm, asks, "d");
+        await GraceAsync(vm);
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at it when the user asks
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _teller.Asked.Count > 0);
+        var before = _speech.Spoken.Count;
+
+        vm.GoToNextQuestion();
+        _teller.Gate.SetResult();
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
+        await WithinAsync(_voice.WhenQuietAsync());
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
+    }
+
+    // #233: an offer Raven kept quiet holds no floor: a card that comes meanwhile in the muted chat is read at once
+    [Fact]
+    public async Task An_offer_kept_quiet_holds_no_floor()
+    {
+        var (vm, asks) = await NextQuestionVmAsync();
+        ChatNumbered(vm, 1).IsMuted = true; // its cards are still read; its news and the offer are not
+        await OfferedAfterAnAnswerAsync(vm, asks, quiet: true);
+        var before = _speech.Spoken.Count;
+
+        var ask = new ChatAsk("toolu_a2",
+            new HookEvent { SessionId = "a", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = "toolu_a2" },
+            [Fruit]);
+        _ = asks.HoldAsync(ask, CancellationToken.None);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.Question) == 3);
+        await GraceAsync(vm);
+
+        await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal)); // not 30 s later
     }
 }
