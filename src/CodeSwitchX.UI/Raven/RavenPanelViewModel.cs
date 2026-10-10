@@ -1367,6 +1367,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         TypedText = "";
+        if (StopBySaying(text))
+        {
+            return;
+        }
+
         // Typed: answered in writing while muted (#242).
         if (SwitchBySaying(text, openMic: false, aloud: false))
         {
@@ -1864,8 +1869,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
+            if (text.Length > 0 && StopBySaying(text))
+            {
+                if (named)
+                {
+                    _namedQuestion = null; // asked nothing: its rest goes on from no question
+                }
+            }
             // Said: answered aloud, muted too (#242).
-            if (text.Length > 0 && SwitchBySaying(text, openMic: open is not null, aloud: true))
+            else if (text.Length > 0 && SwitchBySaying(text, openMic: open is not null, aloud: true))
             {
                 _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
                 if (named)
@@ -4866,6 +4878,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         _voice.Hush(); // the user moved on, as a press of the mic stops Raven
         SayNow(line, aloud);
+        return true;
+    }
+
+    /// <summary>
+    /// "Raven, stop", "be quiet", "enough" (#250): Raven goes quiet, and that is all. What it says stops, and so does an answer
+    /// on its way, a catch-up, the offer of the next question and an allow waiting for its yes (its brain is told with the
+    /// next question, as for any words). Nothing goes to a brain, nothing is written, nothing is said back. Cards and news
+    /// still waiting are told later, after the pause, as Raven's own. Returns whether the words were that.
+    /// </summary>
+    private bool StopBySaying(string text)
+    {
+        if (!SpokenStop.Is(text))
+        {
+            return false;
+        }
+
+        DropOffer();
+        DropNoQuestions();
+        if (_asks?.Proposed is { } standing)
+        {
+            _asks.Cancel(standing);
+        }
+
+        TakeFloor();
+        _brainAsked = false; // what it asked is not answered by a stop
+        _logger.LogInformation("Raven was told to stop: quiet, and nothing asked");
+        UpdateState();
         return true;
     }
 
