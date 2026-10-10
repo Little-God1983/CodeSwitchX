@@ -26,7 +26,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = vm.WhatsNewForBrain(FakeYardDirectory.WorkspaceOf("DiffusionNexus"), null);
 
-        said.ShouldStartWith("New in chat 3, DiffusionNexus (the chat the user is in):\n- DiffusionNexus, chat \"Task c\": finished");
+        said.ShouldStartWith("New in chat 3, DiffusionNexus:\n- DiffusionNexus, chat \"Task c\": finished"); // asked from there; the user is in chat 1
         said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
         said.ShouldNotContain("Done.", Case.Sensitive, "what a chat said never goes to the brain that acts");
     }
@@ -137,6 +137,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
         await GraceAsync(vm);
         vm.IsMuted = true;
+        vm.IsOpen = false; // not seen either
         _speech.Gate = new TaskCompletionSource(); // the answer is being heard
         _brain.Answer = q => q.Contains("new") ? TellsWhatsNew(vm) : [];
 
@@ -156,6 +157,24 @@ public sealed partial class RavenPanelViewModelTests
 
         ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);
         await vm.ReleaseMicAsync(TalkInput.MicButton);
+    }
+
+    // Review of #243: neither heard nor seen (collapsed, no voice to speak it), the news stays unread, as the answer does
+    [Fact]
+    public async Task Whats_new_told_in_an_answer_neither_heard_nor_seen_stays_unread()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+        await GraceAsync(vm);
+        vm.IsMuted = true;
+        vm.IsOpen = false;
+        _brain.Answer = _ => TellsWhatsNew(vm);
+
+        Type(vm, "what's new?"); // typed, muted: only written, in a panel nobody looks at
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(vm.PendingHeardCheck);
+
+        ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);
     }
 
     [Fact]

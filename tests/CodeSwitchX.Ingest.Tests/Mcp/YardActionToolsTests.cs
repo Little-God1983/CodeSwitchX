@@ -203,6 +203,8 @@ public sealed class YardActionToolsTests
     [Theory]
     [InlineData(null, null)]
     [InlineData("all", null)]
+    [InlineData("all chats", null)]
+    [InlineData("everywhere", null)]
     [InlineData("four", 4)]
     [InlineData("code switch ex", 1)]
     [InlineData("this chat", 4)]

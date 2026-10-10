@@ -227,7 +227,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
     {
         int? number = null;
         var said = chat?.Trim() ?? "";
-        if (said.Length > 0 && !said.Equals("all", StringComparison.OrdinalIgnoreCase))
+        if (said.Length > 0 && !EveryChat(said))
         {
             number = ThisChat(said)
                 ? (await WindowAsync(cancellationToken).ConfigureAwait(false))?.Number ?? 0
@@ -237,6 +237,11 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
         return await Act(() => actions.WhatsNewAsync(scope?.WorkspaceId, number, cancellationToken)).ConfigureAwait(false);
     }
+
+    /// <summary>"all", "all chats", "every window", "everything", "everywhere": no one chat (#243).</summary>
+    private static bool EveryChat(string said) =>
+        string.Join(" ", new string([.. said.ToLowerInvariant().Select(c => char.IsLetter(c) ? c : ' ')]).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            is "all" or "all chats" or "all windows" or "every chat" or "every window" or "everything" or "everywhere" or "any" or "anywhere";
 
     [McpServerTool(Name = "back_to_yard", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Shows the Yard again, the board of all workspaces (\"back to the Yard\", \"show me everything\").")]
