@@ -1886,8 +1886,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 // gives way to this one, so the brain is told what this goes on from. One not sent yet goes along anyway.
                 var earlier = continues && _namedQuestion is { Sent: true, Merged: false } first && first.Chat == chat
                     ? $"[After a pause the user goes on from what they asked just before: \"{first.Text}\"]\n" : "";
+                var before = CurrentChat;
                 var question = Ask(text, ended, chat, out var tookOffer, asked, openMic: open is not null, earlier: earlier);
-                if (tookOffer)
+                if (tookOffer && CurrentChat != before)
                 {
                     // A yes to "Next?" went to the next card's chat (#233): what was said behind it goes there, as after "chat three".
                     _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
@@ -2034,6 +2035,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // "Next?" after an answer (#230): these words answer it or let it go, and one not said yet is not said any more.
         var offered = _nextOffered;
         DropOffer();
+        _noQuestionsAloud = null; // the user moved on: said after this answer, it would answer nothing
         // An allow the brain proposed waits on these words, checked here and not by the brain (#108): a yes allows, and
         // goes no further; anything else drops the proposal and is the next question. Words are judged by when they were
         // said, not when they were transcribed: said before the read-back was heard to its end, they answer something
@@ -3166,12 +3168,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Reading out a chat's question failed");
+            card = null; // a failure drops it, as before: put back, it would fail again at once
         }
         finally
         {
             if (card is not null && floor.IsCancellationRequested)
             {
-                PutBack(card, wasRequested, askedAloud); // a failure drops it, as before: put back, it would fail again at once
+                PutBack(card, wasRequested, askedAloud);
             }
 
             // Warmed up for a long command that was not read out, here or by a card that came meanwhile and is gone.
@@ -3199,6 +3202,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Insert(RequestedFirst ? 1 : 0, card);
+        _tellerWarm |= PermissionLine.NeedsTeller(card); // still warm from its first try, for the next
         if (requested && _requested is null)
         {
             (_requested, _requestedAloud) = (card, aloud);
@@ -4312,6 +4316,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _requested = null; // the card "next question" asked for is not read out here
         }
 
+        _noQuestionsAloud = null; // the user went elsewhere: "no questions" answers nothing there
+
         ShowSelected();
         CatchUpOn(value, away);
         WarmTellerForCurrentNews(); // its news, waiting, is told here now
@@ -4929,6 +4935,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 if (asked == _nextQuestions)
                 {
                     _noQuestionsAloud = aloud; // told once the floor is free again
+                    _requestGrace = _openSpeech; // cut off by the user talking: they may go on after a breath
                 }
             }
             else if (OpenCards().Count > 0)
@@ -4982,6 +4989,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     public string? NextQuestionForBrain()
     {
         _requestGrace = false; // read after the brain's answer: the user is not talking
+        _nextQuestions++;
+        _noQuestionsAloud = null;
         if (ShowNextQuestion() is not { } card)
         {
             return null;

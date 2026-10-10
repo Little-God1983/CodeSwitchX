@@ -605,6 +605,33 @@ public sealed partial class RavenPanelViewModelTests
         SpokenSince(before).ShouldNotContain(RavenPanelViewModel.NoQuestionsLine);
     }
 
+    // Round 2 of #252: a question asked in the same turn drops "No questions are waiting.": after its answer it answers nothing
+    [Fact]
+    public async Task A_question_after_next_question_with_none_open_drops_the_no_questions_line()
+    {
+        var rest = new TaskCompletionSource<DictationResult>();
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new DictationResult("Raven, hello.", TimeSpan.FromSeconds(1))), rest.Task);
+        _brain.Answer = q => q.Contains("time") ? [new BrainText("Noon.")] : [new BrainText("Hi.")];
+        var (vm, _) = await NextQuestionVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        await AnsweredAMomentAgoAsync(vm);
+        _openMic.Speak();
+        var before = _speech.Spoken.Count;
+        vm.GoToNextQuestionByKey(); // none open: the line waits for the turn
+
+        _openMic.EndTurn();
+        rest.SetResult(new DictationResult("What time is it?", TimeSpan.FromSeconds(1)));
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(vm.PendingAnswers);
+        await GraceAsync(vm);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        SpokenSince(before).ShouldBe("Noon.");
+    }
+
     // #252: the Open mic grace is for a user who may go on talking, not for a key pressed in silence
     [Fact]
     public async Task Next_question_by_its_hotkey_in_Open_mic_with_the_user_quiet_reads_the_card_at_once()
