@@ -876,10 +876,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _asks.MarkHeard(proposal, _time.GetUtcNow()); // before the hush, which would settle it as not heard
         }
 
-        _voice.Muted = value;
         if (value)
         {
-            StopCatchUp(); // nothing is said muted
+            // Muted, Raven says nothing on its own; what the user asks aloud is still answered aloud (#242). What it says
+            // now stops, as before.
+            _voice.Hush();
+            StopCatchUp();
         }
         else
         {
@@ -1248,11 +1250,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 WarmUpInBackground();
             }
 
-            // Only a voice installed before: the install itself waits for the first answer to speak.
-            if (!_voice.Muted)
-            {
-                _tts.Prepare(install: false);
-            }
+            // Only a voice installed before: the install itself waits for the first answer to speak. Muted too: what the
+            // user asks aloud is still answered aloud (#242).
+            _tts.Prepare(install: false);
         }, null, StartupWarmUpDelay, Timeout.InfiniteTimeSpan);
     }
 
@@ -1386,6 +1386,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         TypedText = "";
+        _lastWordsAloud = false; // typed: answered in writing while muted (#242)
         if (SwitchBySaying(text))
         {
             return;
@@ -1880,6 +1881,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
+            if (text.Length > 0)
+            {
+                _lastWordsAloud = true; // said: answered aloud, muted too (#242)
+            }
+
             if (text.Length > 0 && SwitchBySaying(text))
             {
                 _spokenSwitch = (number, _clipsQueued, saidIn, chat, CurrentChat);
@@ -2078,9 +2084,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <param name="earlier">Words of another chat that go along before these, each part saying where it was asked.</param>
     /// <param name="asked">The words as written to the log; null when they were written before (asked again).</param>
     /// <param name="entries">The log entries of a question asked again, which stay its own.</param>
+    /// <param name="aloud">The words were said, not typed: answered aloud while muted (#242). Left out: the user's last words.</param>
     private Question AskBrain(string text, DateTimeOffset ended, RavenChat chat, string earlier = "", RavenLogEntry? asked = null,
-        IReadOnlyList<RavenLogEntry>? entries = null, bool openMic = false)
+        IReadOnlyList<RavenLogEntry>? entries = null, bool openMic = false, bool? aloud = null)
     {
+        var said = aloud ?? _lastWordsAloud;
         var takenEarlier = "";
         var takenText = "";
         List<RavenLogEntry> takenEntries = [.. entries ?? []];
@@ -2092,7 +2100,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             {
                 // Its own chat's brain answers it, in its chat, before these words: another chat's brain would act on its
                 // own window, so "stop it" said in chat 3 would stop a chat in the window the user is in now.
-                var again = new Question(waiting.Text, waiting.Chat, waiting.Earlier) { OpenMic = waiting.OpenMic };
+                var again = new Question(waiting.Text, waiting.Chat, waiting.Earlier) { OpenMic = waiting.OpenMic, Aloud = waiting.Aloud };
                 again.Entries.AddRange(waiting.Entries);
                 own.Add(again);
             }
@@ -2102,6 +2110,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 takenText += waiting.Text + "\n";
                 takenEntries.AddRange(waiting.Entries);
                 openMic |= waiting.OpenMic; // said in Open mic, its answer opens the follow-up as this one's (#219)
+                said |= waiting.Aloud; // a half said aloud is answered aloud
             }
             else
             {
@@ -2117,7 +2126,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Enqueue(other, ended, floor);
         }
 
-        var question = new Question(takenText + text, chat, Carried(chat) + takenEarlier + earlier) { OpenMic = openMic };
+        var question = new Question(takenText + text, chat, Carried(chat) + takenEarlier + earlier) { OpenMic = openMic, Aloud = said };
         question.Entries.AddRange(takenEntries);
         if (asked is not null)
         {
@@ -2234,7 +2243,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // through speakers, end up in it, and the question being spoken replaces the answer anyway. TakeFloor hushed already.
         var spoken = _voice.Begin(heard => _logger.LogInformation(
             "Raven's first word {Total:0} ms after the end of the turn, {Answer:0} ms after the question went to the brain",
-            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds), silent: _openSpeech);
+            (heard - ended).TotalMilliseconds, (heard - asked.Value).TotalMilliseconds), silent: _openSpeech || (IsMuted && !question.Aloud));
 
         _conversation = AnswerInTurnAsync(_conversation, question, spoken, asked, floor);
     }
@@ -2275,6 +2284,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         public bool Merged { get; set; }
 
         public bool Ended { get; set; }
+
+        /// <summary>Said, not typed: answered aloud while muted (#242).</summary>
+        public bool Aloud { get; init; }
 
         /// <summary>The news facts that went with it; given once it is sent.</summary>
         public IReadOnlyList<ToldFact> Told { get; set; } = [];
@@ -2816,7 +2828,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var line = PermissionReadBack.Of(proposal.Ask, card?.Workspace);
-        if (!VoiceSpeaks)
+        if (!AnswersAloud || !TtsReady)
         {
             AddSaid(line, ChatOfAsk(proposal.Ask), said: false);
             _asks?.MarkHeard(proposal, _time.GetUtcNow()); // Raven only writes: the line shown is what the user reads
@@ -2909,14 +2921,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             // Their own turns end at once; their words go again, with the news of the yes.
             waiting.Merged = true;
-            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries, openMic: waiting.OpenMic);
+            AskBrain(waiting.Text, ended, waiting.Chat, waiting.Earlier, entries: waiting.Entries, openMic: waiting.OpenMic, aloud: waiting.Aloud);
         }
         else
         {
             TakeFloor();
         }
 
-        var spoken = _voice.Begin(silent: _openSpeech);
+        var spoken = _voice.Begin(silent: _openSpeech || !AnswersAloud);
         AddSaid(said, chat, spoken);
         spoken.Add(said);
         spoken.Complete();
@@ -3054,8 +3066,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            // The card "next question" asked for (#230) is read out with chat news only written too; muted, none is.
-            if (IsMuted || (!SpeakNews && (_requested is null || !_untold.Contains(_requested))))
+            // The card "next question" asked for (#230) is read out with chat news only written too; muted, only when it was
+            // asked for aloud (#242).
+            var requested = _requested is not null && _untold.Contains(_requested);
+            if (requested ? IsMuted && !_requestedAloud : IsMuted || !SpeakNews)
             {
                 _untold.Clear(); // none is read out: they need not wait for a telling each
                 _requested = null;
@@ -3063,7 +3077,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 return;
             }
 
-            if (!SpeakNews)
+            if (!SpeakNews || IsMuted)
             {
                 _untold.RemoveAll(c => c != _requested);
             }
@@ -3858,7 +3872,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private RavenLogEntry AddSaid(string text, RavenChat chat, ReplyVoice.SpokenReply spoken)
     {
-        var entry = AddSaid(text, chat, !spoken.IsSilent && VoiceSpeaks);
+        var entry = AddSaid(text, chat, !spoken.IsSilent && TtsReady);
         if (!entry.Said)
         {
             _saidUnseen.Remove(spoken); // the voice stopped between its lines: this one counts for the reply, once
@@ -3966,7 +3980,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What Raven says is heard: not muted, and a voice ready. Otherwise it is only written: one that is off (asleep) starts
     /// loading on the first sentence it is given, and that reply is dropped as "still loading" (#178).
     /// </summary>
-    private bool VoiceSpeaks => !IsMuted && _tts.Status.State is TextToSpeechState.Ready;
+    private bool VoiceSpeaks => !IsMuted && TtsReady;
+
+    /// <summary>The voice can speak, muted or not.</summary>
+    private bool TtsReady => _tts.Status.State is TextToSpeechState.Ready;
+
+    /// <summary>
+    /// The user's last words were said, through a press or Open mic, not typed nor a key (#242): while muted, Raven answers
+    /// aloud only what was asked aloud, and stays quiet on its own (UI thread).
+    /// </summary>
+    private bool _lastWordsAloud;
+
+    /// <summary>Raven may say its answer to the user's last words: not muted, or they were said aloud (#242).</summary>
+    private bool AnswersAloud => !IsMuted || _lastWordsAloud;
 
     /// <summary>
     /// Collapsed, what was said aloud of an entry counted unread and heard to the end no longer counts: the news lines
@@ -4645,10 +4671,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return true;
     }
 
-    /// <summary>Says a line of navigation at once: not muted, nor while the user talks in Open mic (then it is only written).</summary>
+    /// <summary>
+    /// Says a line of navigation at once, as it answers the user's words: muted, only words said aloud (#242); never while the
+    /// user talks in Open mic (then it is only written).
+    /// </summary>
     private void SayNow(string line)
     {
-        if (!IsMuted && !_openSpeech)
+        if (AnswersAloud && !_openSpeech)
         {
             var spoken = _voice.Begin();
             spoken.Add(line);
@@ -4746,8 +4775,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void Request(ChatAskCard card)
     {
         _requested = card;
+        _requestedAloud = _lastWordsAloud;
         _untold.Insert(0, card);
-        if (PermissionLine.NeedsTeller(card) && !IsMuted && _teller is not null)
+        if (PermissionLine.NeedsTeller(card) && AnswersAloud && _teller is not null)
         {
             _tellerWarm = true;
             _teller.WarmUp();
@@ -4756,8 +4786,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         ScheduleNews();
     }
 
+    /// <summary>The card <see cref="_requested"/> was asked for aloud: read out while muted too (#242).</summary>
+    private bool _requestedAloud;
+
     /// <summary>The card the user asked for is the next to be read out: what Raven says on its own waits, it does not (#233).</summary>
     private bool RequestedFirst => _requested is { } card && _untold.Count > 0 && _untold[0] == card;
+
+    /// <summary>"Next question" by its hotkey: a key, not words said aloud, so while muted the card is only shown (#242).</summary>
+    public void GoToNextQuestionByKey()
+    {
+        _lastWordsAloud = false;
+        GoToNextQuestion();
+    }
 
     /// <summary>
     /// "Next question" asked of the brain (next_question, #230): as <see cref="GoToNextQuestion"/>, but the card is read out
@@ -4770,7 +4810,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return null;
         }
 
-        if (IsMuted)
+        if (!AnswersAloud)
         {
             return $"{SwitchLine(card.ShownIn!)} Its card is shown there.";
         }

@@ -179,15 +179,15 @@
       </Style.Triggers>
     </Style>
 
-    <!-- Speaker on: Raven says its answers. Crossed out: it only writes them. -->
+    <!-- Speaker on: Raven speaks. Crossed out: it says nothing on its own, but still answers aloud what is asked aloud (#242). -->
     <Style x:Key="MuteButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
       <Setter Property="Content" Value="&#xE767;" />
-      <Setter Property="ToolTip" Value="Raven speaks its answers. Click to mute." />
+      <Setter Property="ToolTip" Value="Raven speaks its answers, chat news and questions. Click to mute: it then says nothing on its own." />
       <Setter Property="AutomationProperties.Name" Value="Mute Raven" />
       <Style.Triggers>
         <DataTrigger Binding="{Binding IsMuted}" Value="True">
           <Setter Property="Content" Value="&#xE74F;" />
-          <Setter Property="ToolTip" Value="Raven is muted: it only writes its answers. Click to hear them." />
+          <Setter Property="ToolTip" Value="Raven is muted: no news, questions read out or sounds of its own. What you ask aloud it still answers aloud; what you type it answers in writing. Click to unmute." />
           <Setter Property="AutomationProperties.Name" Value="Unmute Raven" />
         </DataTrigger>
       </Style.Triggers>
