@@ -1,5 +1,6 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -11,11 +12,11 @@ namespace CodeSwitchX.UI.Tests.Raven;
 /// </summary>
 public sealed partial class RavenPanelViewModelTests
 {
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> QuestionsVmAsync(ChatNews? news = null, bool openMic = false)
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> QuestionsVmAsync(ChatNews? news = null, bool openMic = false, IUiDispatcher? dispatcher = null)
     {
         _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
-        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, dispatcher ?? new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         InContentAutomatorX(vm);

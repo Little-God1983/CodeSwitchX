@@ -1,6 +1,7 @@
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Dictation;
 
@@ -518,6 +519,141 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         held.IsCompleted.ShouldBeFalse("a yes after it is only words to the brain");
         _brain.Asked.Last().ShouldEndWith("not confirmed by a yes, so nothing ran, and its card stays open.]\n" + InChatOne + "yes");
+    }
+
+    [Fact]
+    public async Task A_read_back_heard_after_its_prompt_was_answered_by_a_click_opens_no_follow_up()
+    {
+        // #246: its proposal was over, so a bare yes in the seconds after it would have nothing to answer.
+        var (vm, asks) = await QuestionsVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        var card = PermissionCards(vm).ShouldHaveSingleItem();
+        await card.Naming;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        var proposal = asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.AllowCommand.Execute(card);
+        await WithinAsync(held);
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingFollowUp);
+        await Until(() => vm.State == RavenState.Attending); // quiet: a follow-up opened would show now
+
+        asks.IsHeard(proposal).ShouldBeFalse();
+        vm.TakesTurnsWithoutName.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Muting_during_the_read_back_opens_the_follow_up_as_one_written_muted_does()
+    {
+        // #246: a bare yes right after the read-back worked when it was written muted, not when the mute cut it off.
+        Transcribes(Task.FromResult(new DictationResult("Yes.", TimeSpan.FromSeconds(1))));
+        var (vm, asks) = await QuestionsVmAsync(openMic: true);
+        vm.MicMode = MicMode.OpenMic;
+        await WithinAsync(vm.PendingOpenMic);
+        var held = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Gate = new TaskCompletionSource(); // the read-back has not played yet
+        asks.Propose("p1");
+        await Until(() => _speech.Spoken.Count > 0);
+
+        vm.IsMuted = true;
+        _speech.Gate.SetResult();
+        await WithinAsync(_voice.WhenQuietAsync());
+        await WithinAsync(vm.PendingFollowUp);
+        await Until(() => vm.TakesTurnsWithoutName);
+
+        _openMic.Speak();
+        _openMic.EndTurn();
+        await WithinAsync(vm.PendingTranscriptions);
+        await WithinAsync(held);
+        (await held).ShouldNotBeNull().Permit!.Allow.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_wait_for_a_read_back_covers_its_not_heard_note()
+    {
+        // #246: the note was posted with nothing waiting for it to run.
+        var ui = new HoldingDispatcher();
+        var (vm, asks) = await QuestionsVmAsync(dispatcher: ui);
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Fails = new InvalidOperationException("the sidecar broke");
+
+        ui.Holding = true; // the UI thread is busy from here
+        asks.Propose("p1");
+        ui.RunHeld(); // the read-back begins, and fails
+        (await Task.WhenAny(vm.PendingFollowUp, Task.Delay(500, TestContext.Current.CancellationToken))).ShouldNotBe(vm.PendingFollowUp, "the note has not run yet");
+        ui.Holding = false;
+        ui.RunHeld();
+
+        await WithinAsync(vm.PendingFollowUp);
+        Lines(vm).ShouldContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine));
+    }
+
+    [Fact]
+    public async Task A_read_back_note_the_UI_thread_never_takes_is_dropped_and_holds_no_wait()
+    {
+        // #246: a dispatcher that never runs the post (the app closing) left the wait pending for good.
+        var ui = new HoldingDispatcher();
+        var (vm, asks) = await QuestionsVmAsync(dispatcher: ui);
+        _ = asks.HoldAsync(Permitting(), CancellationToken.None);
+        await PermissionCards(vm).Single().Naming;
+        _speech.Fails = new InvalidOperationException("the sidecar broke");
+        ui.Holding = true;
+        asks.Propose("p1");
+        ui.RunHeld();
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the read-back fails and posts its note, which waits
+
+        _time.Advance(RavenActions.UiTimeout);
+
+        await WithinAsync(vm.PendingFollowUp);
+        ui.Holding = false;
+        ui.RunHeld();
+        Lines(vm).ShouldNotContain((RavenLogKind.Note, RavenPanelViewModel.NotHeardLine), "given up on, it never runs");
+    }
+
+    /// <summary>Runs posts inline, like <see cref="ImmediateDispatcher"/>, except while <see cref="Holding"/>: then they wait for <see cref="RunHeld"/>.</summary>
+    private sealed class HoldingDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _held = new();
+
+        public volatile bool Holding;
+
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
+
+        public void Post(Action action)
+        {
+            lock (_held)
+            {
+                if (Holding)
+                {
+                    _held.Enqueue(action);
+                    return;
+                }
+            }
+
+            action();
+        }
+
+        /// <summary>Runs the posts held so far; those they post while still holding wait for the next call.</summary>
+        public void RunHeld()
+        {
+            Action[] now;
+            lock (_held)
+            {
+                now = [.. _held];
+                _held.Clear();
+            }
+
+            foreach (var action in now)
+            {
+                action();
+            }
+        }
     }
 
     [Fact]

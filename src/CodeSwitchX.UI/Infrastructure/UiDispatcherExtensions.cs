@@ -13,7 +13,9 @@ public static class UiDispatcherExtensions
     /// has not begun by then, or by <paramref name="ct"/>, is withdrawn, so a caller told it failed can say it was not done;
     /// one that has begun is waited for. An exception from <paramref name="read"/> comes back to the caller.
     /// </summary>
-    public static async Task<T> InvokeAsync<T>(this IUiDispatcher ui, Func<T> read, TimeSpan timeout, CancellationToken ct = default)
+    /// <param name="time">The clock <paramref name="timeout"/> runs on; the system's when null.</param>
+    public static async Task<T> InvokeAsync<T>(this IUiDispatcher ui, Func<T> read, TimeSpan timeout, CancellationToken ct = default,
+        TimeProvider? time = null)
     {
         var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         var state = new StrongBox<int>(Waiting);
@@ -36,7 +38,7 @@ public static class UiDispatcherExtensions
 
         try
         {
-            return await result.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+            return await result.Task.WaitAsync(timeout, time ?? TimeProvider.System, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
