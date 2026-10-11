@@ -9,7 +9,8 @@ namespace CodeSwitchX.UI.Infrastructure;
 /// Laid over the border, the same size, it draws the streak along the border's centre line: one dash of a pen whose
 /// pattern is exactly as long as the border, so one streak shows, its tail fainter than its head. The pens' dash offset is
 /// animated, not the drawing: WPF moves the streak without a redraw or a layout pass each frame. With animations turned
-/// off in Windows the border is lit still instead; hidden, it draws nothing, so no clock runs for a tile out of sight.
+/// off in Windows the border is lit still instead. Collapsed or unloaded, it draws nothing and stops its clocks; a tile
+/// merely scrolled out of view keeps them, as WPF still counts it visible.
 /// </summary>
 public sealed class RunningLight : FrameworkElement
 {
@@ -45,7 +46,12 @@ public sealed class RunningLight : FrameworkElement
         IsHitTestVisible = false;
         SizeChanged += (_, _) => Rebuild();
         IsVisibleChanged += (_, _) => Rebuild();
-        Loaded += (_, _) => SystemParameters.StaticPropertyChanged += OnSystemParameterChanged;
+        Loaded += (_, _) =>
+        {
+            // Loaded can come twice without an Unloaded between: one handler, or the static event keeps the tile alive.
+            SystemParameters.StaticPropertyChanged -= OnSystemParameterChanged;
+            SystemParameters.StaticPropertyChanged += OnSystemParameterChanged;
+        };
         Unloaded += (_, _) =>
         {
             SystemParameters.StaticPropertyChanged -= OnSystemParameterChanged;

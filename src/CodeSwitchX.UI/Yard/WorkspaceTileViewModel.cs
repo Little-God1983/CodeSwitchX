@@ -127,8 +127,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             _sessions[snapshot.SessionId] = snapshot;
         }
 
-        // A session that is no chat (VS Code loading the window) is no use of it.
-        if (snapshot.ShowsAsChat)
+        // Only a chat that works or asks is in use: one that starts, goes idle or ends changes as its window opens, reloads
+        // or closes (a turn's end comes right after its work). The engine holds the last day's chats, and its first look
+        // at them is no use either: the stored use, read at startup, tells of those.
+        if (snapshot.State is SessionState.Working or SessionState.Waiting)
         {
             SawUse(snapshot.LastEventAt);
         }

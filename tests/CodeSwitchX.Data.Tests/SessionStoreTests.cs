@@ -109,6 +109,38 @@ public class SessionStoreTests : IAsyncLifetime
         (await _store.GetActiveSinceAsync(_now.AddDays(-1), TestContext.Current.CancellationToken)).Select(r => r.Id).ShouldBe(["new"]);
     }
 
+    /// <summary>#276: a chat's start and end are no use of its window; a chat whose events are gone goes by its last event.</summary>
+    [Fact]
+    public async Task Last_use_by_workspace_goes_by_the_events_of_use_and_leaves_out_starts_ends_and_sessions_without_a_conversation()
+    {
+        Guid app = Guid.NewGuid(), shop = Guid.NewGuid(), docs = Guid.NewGuid(), ghostly = Guid.NewGuid();
+        var ct = TestContext.Current.CancellationToken;
+        await _store.UpsertAsync([
+            // Used two days ago, its window closed (SessionEnd) just now.
+            SessionRecord.FromSnapshot(Snapshot("a1", SessionState.Ended, _now) with { WorkspaceId = app }),
+            SessionRecord.FromSnapshot(Snapshot("a2", SessionState.Idle, _now.AddDays(-5)) with { WorkspaceId = app }),
+            // Only started again (a window reload) since its events were pruned: no use.
+            SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now) with { WorkspaceId = shop }),
+            // No events kept: its last event.
+            SessionRecord.FromSnapshot(Snapshot("d1", SessionState.Ended, _now.AddDays(-30)) with { WorkspaceId = docs }),
+            // Never held a conversation.
+            SessionRecord.FromSnapshot(Snapshot("g1", SessionState.Ended, _now) with { WorkspaceId = ghostly, Title = null, LatestContext = TokenUsage.Zero }),
+        ], ct);
+        await _store.AppendEventsAsync([
+            new SessionEventRecord { SessionId = "a1", Kind = "UserPromptSubmit", At = _now.AddDays(-2).AddMinutes(-5) },
+            new SessionEventRecord { SessionId = "a1", Kind = "Stop", At = _now.AddDays(-2) },
+            new SessionEventRecord { SessionId = "a1", Kind = "SessionEnd", At = _now },
+            new SessionEventRecord { SessionId = "s1", Kind = "SessionStart", At = _now },
+            new SessionEventRecord { SessionId = "g1", Kind = "Stop", At = _now },
+        ], ct);
+
+        var lastUse = await _store.GetLastUseByWorkspaceAsync(ct);
+
+        lastUse.Count.ShouldBe(2);
+        lastUse[app].ShouldBe(_now.AddDays(-2), "the end is no use, and the other chat's last event, five days ago, is older");
+        lastUse[docs].ShouldBe(_now.AddDays(-30));
+    }
+
     [Fact]
     public async Task Events_append_query_newest_first_and_prune()
     {

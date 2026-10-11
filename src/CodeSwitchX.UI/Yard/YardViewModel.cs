@@ -33,7 +33,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly IVsCodeOpenTabs? _openTabs;
     private readonly Func<string, TabConversation?> _writtenInAt;
     private readonly Func<IReadOnlyDictionary<string, bool>> _runningTabs;
-    private readonly Func<DateTimeOffset, CancellationToken, Task<IReadOnlyList<SessionRecord>>> _storedSince;
+    private readonly Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>> _storedLastUse;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
@@ -179,9 +179,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
-        Func<DateTimeOffset, CancellationToken, Task<IReadOnlyList<SessionRecord>>>? storedSince = null)
+        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null)
     {
-        _storedSince = storedSince ?? ((_, _) => Task.FromResult<IReadOnlyList<SessionRecord>>([]));
+        _storedLastUse = storedLastUse ?? (_ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(new Dictionary<Guid, DateTimeOffset>()));
         _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
         _writtenInAt = writtenInAt ?? (_ => null);
@@ -281,18 +281,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
 
     /// <summary>
-    /// When the chats of each window were last used, as far back as the groups tell apart: the engine holds only the last
-    /// day's chats. A failed read leaves the tiles to what the engine knows.
+    /// When the chats of each window were last used, as stored (<see cref="ISessionStore.GetLastUseByWorkspaceAsync"/>): the
+    /// engine holds only the last day's chats, and counts their starts and ends as events. A failed read leaves the tiles
+    /// to what the engine knows.
     /// </summary>
     private async Task ReadStoredUseAsync(CancellationToken ct)
     {
         try
         {
-            foreach (var record in await _storedSince(Now - YardGroups.ThisWeek, ct))
+            var lastUse = await _storedLastUse(ct);
+            foreach (var tile in Tiles)
             {
-                if (record.WorkspaceId is { } id && FindTile(id) is { } tile && record.ToSnapshot().ShowsAsChat)
+                if (lastUse.TryGetValue(tile.Id, out var at))
                 {
-                    tile.SawUse(record.LastEventAt);
+                    tile.SawUse(at);
                 }
             }
         }
@@ -813,7 +815,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (!_trackNames.ContainsKey(workspace.TrackId))
+        // Named "Track" until the read lands: the tiles that come in on the same track meanwhile ask for no read of their own.
+        if (_trackNames.TryAdd(workspace.TrackId, TrackNameOf(workspace.TrackId)))
         {
             _ = ReloadTrackNamesAsync();
         }

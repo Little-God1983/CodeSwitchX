@@ -316,7 +316,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         var showing = chat is null ? null : _chatShow = new CancellationTokenSource();
         ActiveWorkspaceId = workspaceId;
         Raven.ShowChatOf(workspaceId); // the window opened is the one the user talks about
-        Cab.SetActive(tile, Yard.Tiles);
+        Cab.SetActive(tile, Yard.Tiles.OrderBy(t => t.Number)); // by number: the Yard's order changes with every chat (#276)
         Mode = ShellMode.Cab;
         StatusMessage = null;
         var attempt = ++_openAttempt;

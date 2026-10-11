@@ -73,20 +73,17 @@ public class YardViewModelTests : IDisposable
         return root;
     }
 
-    private static IPricingProvider Pricing()
+    /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger, and what the store says of the windows' last use.</summary>
+    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null,
+        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null)
     {
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
-        return pricing;
+        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, ui ?? new ImmediateDispatcher(), _time,
+            logger ?? NullLogger<YardViewModel>.Instance, storedLastUse: storedLastUse);
     }
 
-    /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger.</summary>
-    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null)
-    {
-        var pricing = Substitute.For<IPricingProvider>();
-        pricing.Pricing.Returns(PricingTable.Default);
-        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, ui ?? new ImmediateDispatcher(), _time, logger ?? NullLogger<YardViewModel>.Instance);
-    }
+    private static Task<string?> NoGit(string root, string args, CancellationToken ct) => Task.FromResult<string?>(null);
 
     /// <summary>A UI thread that never gets to what is posted: the dispatcher has shut down, say.</summary>
     private sealed class DroppingDispatcher : IUiDispatcher
@@ -124,39 +121,35 @@ public class YardViewModelTests : IDisposable
         _yard.Tiles.Select(t => t.Name).ShouldBe(["App", "Shop"]);
     }
 
-    /// <summary>#276: the engine holds only the last day's chats; the stored ones tell This week from Older.</summary>
+    /// <summary>A chat of the workspace did a turn <paramref name="at"/> (now by default): it worked, then went idle.</summary>
+    private void Used(string id, Guid workspaceId, DateTimeOffset? at = null)
+    {
+        var when = at ?? _time.GetUtcNow();
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Working) with { LastEventAt = when }));
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Idle) with { LastEventAt = when }));
+    }
+
+    /// <summary>#276: the engine holds only the last day's chats, and counts their starts and ends; the store tells of the use.</summary>
     [Fact]
-    public async Task Initialize_groups_the_tiles_by_the_stored_chats_of_the_last_week()
+    public async Task Initialize_groups_the_tiles_by_the_stored_last_use()
     {
         var now = _time.GetUtcNow();
-        IReadOnlyList<CodeSwitchX.Core.Persistence.SessionRecord> stored =
-        [
-            new() { Id = "a", WorkspaceId = _app.Id, Title = "fix it", State = SessionState.Ended, LastEventAt = now - TimeSpan.FromDays(3) },
-            new() { Id = "ghost", WorkspaceId = _shop.Id, State = SessionState.Ended, LastEventAt = now - TimeSpan.FromDays(1) },
-        ];
-        DateTimeOffset? since = null;
-        var yard = new YardViewModel(_store, _registry, _engine, Pricing(), new GitInspector((_, _, _) => Task.FromResult<string?>(null)), _bus,
-            new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance, storedSince: (at, _) =>
-            {
-                since = at;
-                return Task.FromResult(stored);
-            });
+        var yard = Yard(NoGit, storedLastUse: _ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(
+            new Dictionary<Guid, DateTimeOffset> { [_app.Id] = now - TimeSpan.FromDays(3), [_shop.Id] = now - TimeSpan.FromDays(30) }));
 
         await yard.InitializeAsync(CancellationToken.None);
 
-        since.ShouldBe(now - YardGroups.ThisWeek);
         yard.Groups[(int)LastUse.ThisWeek].Tiles.Select(t => t.Name).ShouldBe(["App"]);
-        yard.Groups[(int)LastUse.Older].Tiles.Select(t => t.Name).ShouldBe(["Shop"], "a session that never held a conversation is no use of the window");
+        yard.Groups[(int)LastUse.Older].Tiles.Select(t => t.Name).ShouldBe(["Shop"]);
+        yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBe(now - TimeSpan.FromDays(30), "Older goes newest first after a restart too");
     }
 
     [Fact]
-    public async Task Stored_chats_that_cannot_be_read_leave_the_tiles_to_the_engine_and_are_logged()
+    public async Task A_stored_last_use_that_cannot_be_read_leaves_the_tiles_to_the_engine_and_is_logged()
     {
         var log = new ListLogger<YardViewModel>();
-        var yard = new YardViewModel(_store, _registry, _engine, Pricing(), new GitInspector((_, _, _) => Task.FromResult<string?>(null)), _bus,
-            new ImmediateDispatcher(), _time, log,
-            storedSince: (_, _) => Task.FromException<IReadOnlyList<CodeSwitchX.Core.Persistence.SessionRecord>>(new IOException("database is locked")));
-        _engine.Restore([Snapshot("s1", _shop.Id, SessionState.Idle)]);
+        var yard = Yard(NoGit, log, storedLastUse: _ => Task.FromException<IReadOnlyDictionary<Guid, DateTimeOffset>>(new IOException("database is locked")));
+        _engine.Restore([Snapshot("s1", _shop.Id, SessionState.Waiting)]);
 
         await yard.InitializeAsync(CancellationToken.None);
 
@@ -164,12 +157,25 @@ public class YardViewModelTests : IDisposable
         log.Entries.ShouldContain(e => e.Level == LogLevel.Warning);
     }
 
+    /// <summary>#276 review: closing or reloading a VS Code window ends and starts its chats; that is no use of it.</summary>
+    [Fact]
+    public async Task A_chat_that_only_starts_goes_idle_or_ends_is_no_use_of_the_window()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle)));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Ended)));
+
+        Names(LastUse.Today).ShouldBeEmpty();
+        _yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBeNull();
+    }
+
     [Fact]
     public async Task A_chat_puts_its_tile_in_now_and_today_and_a_day_later_the_tick_moves_it_to_this_week()
     {
         await _yard.InitializeAsync(CancellationToken.None);
 
-        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle)));
+        Used("s1", _shop.Id);
         Names(LastUse.Today).ShouldBe(["Shop"]);
 
         _time.Advance(TimeSpan.FromHours(24));
@@ -187,6 +193,7 @@ public class YardViewModelTests : IDisposable
     {
         _yard.KeepClosed = TimeSpan.Zero;
         await _yard.InitializeAsync(CancellationToken.None);
+        Used("s1", _shop.Id);
         _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Ended)));
 
         _time.Advance(TimeSpan.FromHours(2)); // an ended chat is forgotten after an hour
@@ -205,8 +212,8 @@ public class YardViewModelTests : IDisposable
         await _yard.InitializeAsync(CancellationToken.None);
         var now = _time.GetUtcNow();
 
-        _bus.Publish(new SessionChanged(null, Snapshot("a", _app.Id, SessionState.Idle) with { LastEventAt = now - TimeSpan.FromHours(5) }));
-        _bus.Publish(new SessionChanged(null, Snapshot("s", _shop.Id, SessionState.Idle) with { LastEventAt = now - TimeSpan.FromHours(1) }));
+        Used("a", _app.Id, now - TimeSpan.FromHours(5));
+        Used("s", _shop.Id, now - TimeSpan.FromHours(1));
         Names(LastUse.Today).ShouldBe(["Shop", "App"]);
 
         _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working) with { LastEventAt = now - TimeSpan.FromHours(2) }));
@@ -255,7 +262,7 @@ public class YardViewModelTests : IDisposable
     public async Task Needs_me_first_lifts_a_tile_waiting_since_days_to_the_front_of_now_and_today()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Idle)));
+        Used("s1", _app.Id);
         _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) }));
         Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
 

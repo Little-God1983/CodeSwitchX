@@ -296,8 +296,8 @@ public partial class App : Application
                     .ToDictionary(id => id, id => live.ShowsPrompt(id) == true, StringComparer.OrdinalIgnoreCase);
             }),
             // When the chats of each window were last used, for the Yard's groups (#276): the engine holds only the last day's.
-            (Func<DateTimeOffset, CancellationToken, Task<IReadOnlyList<SessionRecord>>>)((since, ct) =>
-                sp.GetRequiredService<ISessionStore>().GetActiveSinceAsync(since, ct))));
+            (Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>)(ct =>
+                sp.GetRequiredService<ISessionStore>().GetLastUseByWorkspaceAsync(ct))));
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
