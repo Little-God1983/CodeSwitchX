@@ -21,6 +21,6 @@ public sealed class RunningLightTests
         dashes.ShouldBe([30, 420]);
         (dashes.Sum() * 2).ShouldBe(900, "dash and gap together, in pixels, are the outline");
         from.ShouldBe(30, "the streak's head starts at the outline's start");
-        ((from - to) * 2).ShouldBe(900, "one lap moves the head once round");
+        ((to - from) * 2).ShouldBe(900, "one lap moves the head once round, clockwise as the offset grows");
     }
 }

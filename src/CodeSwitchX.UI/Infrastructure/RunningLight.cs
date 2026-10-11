@@ -84,10 +84,11 @@ public sealed class RunningLight : FrameworkElement
     /// <summary>
     /// The dash pattern of a streak <paramref name="length"/> long on an outline <paramref name="perimeter"/> long, and the
     /// dash offsets that take its head once round from the outline's start; all in units of the pen's thickness, as WPF
-    /// counts them. A pattern exactly as long as the outline shows one streak.
+    /// counts them. A pattern exactly as long as the outline shows one streak. A growing offset moves it against the
+    /// outline's own direction: clockwise round the border, as seen on screen.
     /// </summary>
     internal static (double[] Dashes, double From, double To) Streak(double length, double perimeter, double thickness) =>
-        ([length / thickness, (perimeter - length) / thickness], length / thickness, (length - perimeter) / thickness);
+        ([length / thickness, (perimeter - length) / thickness], length / thickness, (length + perimeter) / thickness);
 
     protected override void OnRender(DrawingContext drawingContext) => drawingContext.DrawDrawing(_drawing);
 
