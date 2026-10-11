@@ -139,6 +139,8 @@
               </Style>
             </Border.Style>
           </Border>
+          <!-- A chat of the window works (#276): a streak of light runs round the tile's border, over the accent and the amber pulse. -->
+          <infra:RunningLight Margin="-14" CornerRadius="10" StrokeThickness="2" Stroke="#22C55E" IsRunning="{Binding IsWorking}" />
           <StackPanel>
           <DockPanel>
             <TextBlock DockPanel.Dock="Right" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
@@ -194,10 +196,20 @@
       </DockPanel>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-      <ItemsControl ItemsSource="{Binding Tracks}" Margin="8">
+      <!-- Now & today, This week, Older (#276); a group without tiles is not shown -->
+      <ItemsControl ItemsSource="{Binding Groups}" Margin="8">
         <ItemsControl.ItemTemplate>
-          <DataTemplate DataType="{x:Type yard:TrackGroupViewModel}">
+          <DataTemplate DataType="{x:Type yard:LastUseGroupViewModel}">
             <StackPanel Margin="0,0,0,16">
+              <StackPanel.Style>
+                <Style TargetType="StackPanel">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding Tiles.Count}" Value="0">
+                      <Setter Property="Visibility" Value="Collapsed" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </StackPanel.Style>
               <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" Opacity="0.7" Margin="8,0,0,0" />
               <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
                 <!-- the Tile size slider zooms the tiles, text and all; a layout transform, so the wrap panel makes room -->

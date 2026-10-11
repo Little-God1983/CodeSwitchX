@@ -39,8 +39,8 @@ public sealed class YardDirectory : IYardDirectory
 
     public async Task<IReadOnlyList<YardWorkspace>> WorkspacesAsync(CancellationToken ct)
     {
-        var tiles = await _ui.InvokeAsync(() => _yard.Tracks
-            .SelectMany(group => group.Tiles.Select(tile => (Track: group.Name, tile.Workspace, Git: tile.GitLines.ToList())))
+        var tiles = await _ui.InvokeAsync(() => _yard.Tiles
+            .Select(tile => (Track: _yard.TrackNameOf(tile.Workspace.TrackId), tile.Workspace, Git: tile.GitLines.ToList()))
             .ToList(), UiTimeout, ct).ConfigureAwait(false);
 
         // Off the UI thread from here: InvokeAsync resumes on the thread pool.

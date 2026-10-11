@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Yard;
 
-/// <summary>The tile board: Track groups of workspace tiles, each with live chat rows.</summary>
+/// <summary>The tile board: workspace tiles, each with live chat rows, in groups by when their chats were last used (#276).</summary>
 public sealed partial class YardViewModel : ObservableObject, IDisposable
 {
     public static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
@@ -33,6 +33,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly IVsCodeOpenTabs? _openTabs;
     private readonly Func<string, TabConversation?> _writtenInAt;
     private readonly Func<IReadOnlyDictionary<string, bool>> _runningTabs;
+    private readonly Func<DateTimeOffset, CancellationToken, Task<IReadOnlyList<SessionRecord>>> _storedSince;
     private readonly List<IDisposable> _subscriptions = [];
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
@@ -177,8 +178,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
-        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null)
+        Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
+        Func<DateTimeOffset, CancellationToken, Task<IReadOnlyList<SessionRecord>>>? storedSince = null)
     {
+        _storedSince = storedSince ?? ((_, _) => Task.FromResult<IReadOnlyList<SessionRecord>>([]));
         _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
         _writtenInAt = writtenInAt ?? (_ => null);
@@ -193,9 +196,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _logger = logger;
     }
 
-    public ObservableCollection<TrackGroupViewModel> Tracks { get; } = [];
+    /// <summary>Now &amp; today, This week and Older, in that order and always all three; the view hides one without tiles.</summary>
+    public IReadOnlyList<LastUseGroupViewModel> Groups { get; } = [new(LastUse.Today), new(LastUse.ThisWeek), new(LastUse.Older)];
 
-    public IEnumerable<WorkspaceTileViewModel> Tiles => Tracks.SelectMany(t => t.Tiles);
+    public IEnumerable<WorkspaceTileViewModel> Tiles => Groups.SelectMany(g => g.Tiles);
+
+    /// <summary>The name of each track, by its id (UI thread): the board no longer groups by track, the MCP answers still name it.</summary>
+    private readonly Dictionary<Guid, string> _trackNames = [];
+
+    /// <summary>The name of the track, or "Track" while a new one's name is being read.</summary>
+    public string TrackNameOf(Guid trackId) => _trackNames.GetValueOrDefault(trackId, "Track");
+
+    private LastUseGroupViewModel GroupOf(LastUse group) => Groups[(int)group];
 
     public event Action<Guid>? OpenRequested;
 
@@ -217,19 +229,24 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         var tracks = await _store.GetTracksAsync(ct);
         var workspaces = await _store.GetAllAsync(ct);
-        Tracks.Clear();
-        // Ordinal, ignoring case, like AddTile and Resort, so a tile keeps its place whichever adds it.
-        foreach (var track in tracks.OrderBy(t => t.SortOrder).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase))
+        _trackNames.Clear();
+        foreach (var track in tracks)
         {
-            var group = new TrackGroupViewModel(track);
-            foreach (var workspace in workspaces.Where(w => w.TrackId == track.Id).OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                group.Tiles.Add(new WorkspaceTileViewModel(workspace, this));
-            }
-
-            Tracks.Add(group);
+            _trackNames[track.Id] = track.Name;
         }
 
+        foreach (var group in Groups)
+        {
+            group.Tiles.Clear();
+        }
+
+        foreach (var workspace in workspaces)
+        {
+            GroupOf(LastUse.Older).Tiles.Add(new WorkspaceTileViewModel(workspace, this));
+        }
+
+        await ReadStoredUseAsync(ct);
+        Resort();
         TilesChanged?.Invoke();
 
         // Subscribe first, then read the current snapshots: a change published in between would otherwise be lost
@@ -262,6 +279,28 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
+
+    /// <summary>
+    /// When the chats of each window were last used, as far back as the groups tell apart: the engine holds only the last
+    /// day's chats. A failed read leaves the tiles to what the engine knows.
+    /// </summary>
+    private async Task ReadStoredUseAsync(CancellationToken ct)
+    {
+        try
+        {
+            foreach (var record in await _storedSince(Now - YardGroups.ThisWeek, ct))
+            {
+                if (record.WorkspaceId is { } id && FindTile(id) is { } tile && record.ToSnapshot().ShowsAsChat)
+                {
+                    tile.SawUse(record.LastEventAt);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Reading when the chats of the workspaces were last used failed; the Yard groups go by the chats of the last day");
+        }
+    }
 
     /// <summary>How long a tile stays lit after <see cref="Spotlight"/>.</summary>
     public static readonly TimeSpan SpotlightTime = TimeSpan.FromSeconds(2);
@@ -483,10 +522,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 tile.ShowTabs(tabs.GetValueOrDefault(tile.Id), _tabActivity, running);
             }
 
-            if (NeedsMeFirst)
-            {
-                Resort();
-            }
+            Resort();
         }
         catch (Exception ex)
         {
@@ -530,10 +566,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         // A hook-fed chat proves the hooks work wherever it is shown, including on no tile; so does the installer.
         HooksInferredOnly = !HooksInstalled && Tiles.Any(t => t.HasInferredChats) && !_engine.Snapshots.Any(s => !s.Inferred && SessionStateMachine.IsLive(s.State));
-        if (NeedsMeFirst)
-        {
-            Resort();
-        }
+        Resort(); // a tile leaves Now & today a day after its last use
     }
 
     /// <summary>
@@ -753,10 +786,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             row.VoiceLabel = _voiceLabels.GetValueOrDefault(snapshot.SessionId);
         }
-        if (NeedsMeFirst)
-        {
-            Resort();
-        }
+
+        Resort();
     }
 
     internal void Apply(HostStateChanged change)
@@ -782,22 +813,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var group = Tracks.FirstOrDefault(t => t.Id == workspace.TrackId);
-        if (group is null)
+        if (!_trackNames.ContainsKey(workspace.TrackId))
         {
-            group = new TrackGroupViewModel(new Track { Id = workspace.TrackId, Name = "Track", SortOrder = int.MaxValue });
-            Tracks.Add(group);
             _ = ReloadTrackNamesAsync();
         }
 
         var tile = new WorkspaceTileViewModel(workspace, this);
-        var index = group.Tiles.TakeWhile(t => string.Compare(t.Name, tile.Name, StringComparison.OrdinalIgnoreCase) < 0).Count();
-        group.Tiles.Insert(index, tile);
+        GroupOf(LastUse.Older).Tiles.Add(tile);
         foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id && !IsClosed(s)))
         {
             tile.Upsert(snapshot, _pricing.Pricing);
         }
 
+        Resort();
         TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
         CurrentTabsRefresh = RefreshTabsAsync(); // a read that runs now was not asked about the tile: another follows it
@@ -828,7 +856,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Names the groups of new tracks in place: the groups and their tiles stay, whenever this runs.</summary>
+    /// <summary>Reads the names of the tracks again: a tile came in on a track not known yet.</summary>
     private async Task ReloadTrackNamesAsync()
     {
         try
@@ -836,26 +864,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             var tracks = await _store.GetTracksAsync(CancellationToken.None);
             _ui.Post(() =>
             {
-                var byId = tracks.ToDictionary(t => t.Id);
-                foreach (var group in Tracks)
+                foreach (var track in tracks)
                 {
-                    if (byId.TryGetValue(group.Id, out var track))
-                    {
-                        group.Track = track;
-                    }
+                    _trackNames[track.Id] = track.Name;
                 }
             });
         }
         catch (Exception ex)
         {
-            // Fire-and-forget from AddTile: a failed read would otherwise leave no trace, and the group its placeholder name.
-            _logger.LogError(ex, "Reading the tracks for a new group failed; the group keeps its placeholder name");
+            // Fire-and-forget from AddTile: a failed read would otherwise leave no trace, and the track its placeholder name.
+            _logger.LogError(ex, "Reading the tracks for a new tile's track failed; the track keeps its placeholder name");
         }
     }
 
     private void RemoveTile(Guid workspaceId)
     {
-        foreach (var group in Tracks)
+        foreach (var group in Groups)
         {
             var tile = group.Tiles.FirstOrDefault(t => t.Id == workspaceId);
             if (tile is not null)
@@ -868,36 +892,50 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Puts each tile in its group (<see cref="YardGroups.Of"/>) and orders each group: under Needs me first a tile waiting on
+    /// the user leads, then one that works; then the newest last use first. Working tiles count as used now, so two of them
+    /// keep their places by name rather than swap with each event; one that stops goes by when it stopped.
+    /// </summary>
     private void Resort()
     {
-        var orderedGroups = NeedsMeFirst
-            ? Tracks.OrderBy(g => g.Tiles.Count == 0 ? 2 : g.Tiles.Min(t => t.AttentionRank)).ThenBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList()
-            : Tracks.OrderBy(g => g.SortOrder).ThenBy(g => g.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        for (var i = 0; i < orderedGroups.Count; i++)
+        var now = Now;
+        var changed = false;
+        foreach (var group in Groups)
         {
-            var currentIndex = Tracks.IndexOf(orderedGroups[i]);
-            if (currentIndex != i)
+            foreach (var tile in group.Tiles.ToList())
             {
-                Tracks.Move(currentIndex, i);
+                var belongs = YardGroups.Of(tile.LastUsedAt, tile.IsWorking, tile.NeedsAttention, NeedsMeFirst, now);
+                if (belongs != group.Group)
+                {
+                    group.Tiles.Remove(tile);
+                    GroupOf(belongs).Tiles.Add(tile);
+                    changed = true;
+                }
             }
         }
 
-        foreach (var group in Tracks)
+        foreach (var group in Groups)
         {
-            var ordered = NeedsMeFirst
-                ? group.Tiles.OrderBy(t => t.AttentionRank).ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList()
-                : group.Tiles.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            var ordered = group.Tiles.OrderBy(t => NeedsMeFirst ? t.AttentionRank : 0)
+                .ThenByDescending(t => t.IsWorking ? DateTimeOffset.MaxValue : t.LastUsedAt ?? DateTimeOffset.MinValue)
+                .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
             for (var i = 0; i < ordered.Count; i++)
             {
                 var current = group.Tiles.IndexOf(ordered[i]);
                 if (current != i)
                 {
                     group.Tiles.Move(current, i);
+                    changed = true;
                 }
             }
         }
 
-        OnPropertyChanged(nameof(Tiles));
+        if (changed)
+        {
+            OnPropertyChanged(nameof(Tiles));
+        }
     }
 
     public void Dispose()

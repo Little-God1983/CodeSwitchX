@@ -73,6 +73,13 @@ public class YardViewModelTests : IDisposable
         return root;
     }
 
+    private static IPricingProvider Pricing()
+    {
+        var pricing = Substitute.For<IPricingProvider>();
+        pricing.Pricing.Returns(PricingTable.Default);
+        return pricing;
+    }
+
     /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger.</summary>
     private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null)
     {
@@ -103,15 +110,112 @@ public class YardViewModelTests : IDisposable
         SessionId = sessionId, EventName = eventName, Signal = signal, At = _time.GetUtcNow(), Cwd = cwd,
     };
 
+    private IReadOnlyList<string> Names(LastUse group) => _yard.Groups[(int)group].Tiles.Select(t => t.Name).ToList();
+
     [Fact]
-    public async Task Initialize_builds_track_groups_with_their_tiles()
+    public async Task Initialize_puts_the_tiles_of_windows_without_chats_in_older_by_name()
     {
         await _yard.InitializeAsync(CancellationToken.None);
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients"]);
-        _yard.Tracks[0].Tiles.ShouldHaveSingleItem().Name.ShouldBe("App");
-        _yard.Tracks[1].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Shop");
+        _yard.Groups.Select(g => g.Name).ShouldBe(["Now & today", "This week", "Older"]);
+        Names(LastUse.Today).ShouldBeEmpty();
+        Names(LastUse.ThisWeek).ShouldBeEmpty();
+        Names(LastUse.Older).ShouldBe(["App", "Shop"]);
         _yard.Tiles.Select(t => t.Name).ShouldBe(["App", "Shop"]);
+    }
+
+    /// <summary>#276: the engine holds only the last day's chats; the stored ones tell This week from Older.</summary>
+    [Fact]
+    public async Task Initialize_groups_the_tiles_by_the_stored_chats_of_the_last_week()
+    {
+        var now = _time.GetUtcNow();
+        IReadOnlyList<CodeSwitchX.Core.Persistence.SessionRecord> stored =
+        [
+            new() { Id = "a", WorkspaceId = _app.Id, Title = "fix it", State = SessionState.Ended, LastEventAt = now - TimeSpan.FromDays(3) },
+            new() { Id = "ghost", WorkspaceId = _shop.Id, State = SessionState.Ended, LastEventAt = now - TimeSpan.FromDays(1) },
+        ];
+        DateTimeOffset? since = null;
+        var yard = new YardViewModel(_store, _registry, _engine, Pricing(), new GitInspector((_, _, _) => Task.FromResult<string?>(null)), _bus,
+            new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance, storedSince: (at, _) =>
+            {
+                since = at;
+                return Task.FromResult(stored);
+            });
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        since.ShouldBe(now - YardGroups.ThisWeek);
+        yard.Groups[(int)LastUse.ThisWeek].Tiles.Select(t => t.Name).ShouldBe(["App"]);
+        yard.Groups[(int)LastUse.Older].Tiles.Select(t => t.Name).ShouldBe(["Shop"], "a session that never held a conversation is no use of the window");
+    }
+
+    [Fact]
+    public async Task Stored_chats_that_cannot_be_read_leave_the_tiles_to_the_engine_and_are_logged()
+    {
+        var log = new ListLogger<YardViewModel>();
+        var yard = new YardViewModel(_store, _registry, _engine, Pricing(), new GitInspector((_, _, _) => Task.FromResult<string?>(null)), _bus,
+            new ImmediateDispatcher(), _time, log,
+            storedSince: (_, _) => Task.FromException<IReadOnlyList<CodeSwitchX.Core.Persistence.SessionRecord>>(new IOException("database is locked")));
+        _engine.Restore([Snapshot("s1", _shop.Id, SessionState.Idle)]);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        yard.Groups[(int)LastUse.Today].Tiles.Select(t => t.Name).ShouldBe(["Shop"]);
+        log.Entries.ShouldContain(e => e.Level == LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task A_chat_puts_its_tile_in_now_and_today_and_a_day_later_the_tick_moves_it_to_this_week()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle)));
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+
+        _time.Advance(TimeSpan.FromHours(24));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBeEmpty();
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
+
+        _time.Advance(TimeSpan.FromDays(6));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Older).ShouldBe(["Shop", "App"], "used a week ago is newer than never");
+    }
+
+    [Fact]
+    public async Task A_tile_keeps_its_last_use_after_it_forgets_the_chat()
+    {
+        _yard.KeepClosed = TimeSpan.Zero;
+        await _yard.InitializeAsync(CancellationToken.None);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Ended)));
+
+        _time.Advance(TimeSpan.FromHours(2)); // an ended chat is forgotten after an hour
+        _yard.Tick(_time.GetUtcNow());
+
+        _yard.FindTile(_shop.Id)!.Knows("s1").ShouldBeFalse();
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+    }
+
+    [Fact]
+    public async Task Inside_a_group_the_newest_last_use_comes_first_and_working_tiles_lead_by_name()
+    {
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _general.Id };
+        var zed = new Workspace { Name = "Zed", RootPath = @"c:\repo\zed", TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, cli, zed]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var now = _time.GetUtcNow();
+
+        _bus.Publish(new SessionChanged(null, Snapshot("a", _app.Id, SessionState.Idle) with { LastEventAt = now - TimeSpan.FromHours(5) }));
+        _bus.Publish(new SessionChanged(null, Snapshot("s", _shop.Id, SessionState.Idle) with { LastEventAt = now - TimeSpan.FromHours(1) }));
+        Names(LastUse.Today).ShouldBe(["Shop", "App"]);
+
+        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working) with { LastEventAt = now - TimeSpan.FromHours(2) }));
+        _bus.Publish(new SessionChanged(null, Snapshot("c", cli.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"]);
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"], "two working tiles do not swap with each event");
     }
 
     /// <summary>#115: a chat's row asks for its own chat; the tile's click still asks for the workspace alone.</summary>
@@ -148,16 +252,21 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Needs_me_first_puts_waiting_tiles_at_the_front()
+    public async Task Needs_me_first_lifts_a_tile_waiting_since_days_to_the_front_of_now_and_today()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting)));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _app.Id, SessionState.Idle)));
+        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) }));
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
 
         _yard.NeedsMeFirst = true;
 
-        _yard.Tiles.Select(t => t.Name).ShouldBe(["Shop", "App"]);
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["Clients", "General"], "the track with a waiting chat moves up");
-        _yard.Tracks.Single(t => t.Name == "General").Tiles.Select(t => t.Name).ShouldBe(["App"], "tiles stay inside their track group");
+        Names(LastUse.Today).ShouldBe(["Shop", "App"]);
+
+        _yard.NeedsMeFirst = false;
+
+        Names(LastUse.Today).ShouldBe(["App"]);
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
     }
 
     [Fact]
@@ -269,10 +378,10 @@ public class YardViewModelTests : IDisposable
         var extra = new Workspace { Name = "Extra", RootPath = @"c:\repo\extra", TrackId = _general.Id };
 
         _bus.Publish(new WorkspaceRegistered(extra));
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(["App", "Extra"]);
+        Names(LastUse.Older).ShouldBe(["App", "Extra", "Shop"]);
 
         _bus.Publish(new WorkspaceUnregistered(_app.Id));
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(["Extra"]);
+        Names(LastUse.Older).ShouldBe(["Extra", "Shop"]);
     }
 
     [Fact]
@@ -340,17 +449,18 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task With_needs_me_first_on_a_track_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
+    public async Task With_needs_me_first_on_a_tile_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting);
+        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) };
         _bus.Publish(new SessionChanged(null, waiting));
         _yard.NeedsMeFirst = true;
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["Clients", "General"]);
+        Names(LastUse.Today).ShouldBe(["Shop"]);
 
         _bus.Publish(new SessionChanged(waiting, waiting with { WorkspaceId = null }));
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients"], "the jump keys follow this order, so it must not wait for the next tick");
+        Names(LastUse.Today).ShouldBeEmpty("it must not wait for the next tick");
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"], "the chat's use stays the window's");
     }
 
     [Fact]
@@ -391,7 +501,7 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_workspace_registered_into_a_new_track_gets_a_group_under_that_tracks_name()
+    public async Task A_workspace_registered_into_a_new_track_has_that_tracks_name()
     {
         await _yard.InitializeAsync(CancellationToken.None);
         var tools = new Track { Name = "Tools", SortOrder = 2 };
@@ -400,8 +510,9 @@ public class YardViewModelTests : IDisposable
 
         _bus.Publish(new WorkspaceRegistered(cli));
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients", "Tools"]);
-        _yard.Tracks[2].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Cli");
+        _yard.FindTile(cli.Id).ShouldNotBeNull();
+        _yard.TrackNameOf(cli.TrackId).ShouldBe("Tools");
+        _yard.TrackNameOf(_shop.TrackId).ShouldBe("Clients");
     }
 
     [Fact]
@@ -412,13 +523,13 @@ public class YardViewModelTests : IDisposable
         var zeta = new Workspace { Name = "Zeta", RootPath = @"c:\repo\zeta", TrackId = _general.Id };
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, tools, zeta]));
         await _yard.InitializeAsync(CancellationToken.None);
-        var atStart = _yard.Tracks[0].Tiles.Select(t => t.Name).ToList();
+        var atStart = Names(LastUse.Older);
 
         _yard.NeedsMeFirst = true;
         _yard.NeedsMeFirst = false;
 
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(atStart, "the jump keys follow the order shown, so it must not change with the checkbox");
-        atStart.ShouldBe(["App", "Zeta", "_tools"], "one comparer everywhere: ordinal, ignoring case");
+        Names(LastUse.Older).ShouldBe(atStart, "the order shown must not change with the checkbox");
+        atStart.ShouldBe(["App", "Shop", "Zeta", "_tools"], "one comparer everywhere: ordinal, ignoring case");
     }
 
     [Fact]

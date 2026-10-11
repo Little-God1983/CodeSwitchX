@@ -82,6 +82,22 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private bool _isWorking;
 
     /// <summary>
+    /// When a chat of the window last did something (#276), null while none was seen: what puts the tile in its group of
+    /// the Yard. It only moves on: a chat the tile forgets (ended an hour ago) leaves it as it was.
+    /// </summary>
+    [ObservableProperty]
+    private DateTimeOffset? _lastUsedAt;
+
+    /// <summary>A chat of the window did something at <paramref name="at"/>; an earlier time than the one known changes nothing.</summary>
+    public void SawUse(DateTimeOffset at)
+    {
+        if (LastUsedAt is not { } known || at > known)
+        {
+            LastUsedAt = at;
+        }
+    }
+
+    /// <summary>
     /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
     /// round, and close the tooltip the user has open.
     /// </summary>
@@ -109,6 +125,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         if (!_sessions.TryGetValue(snapshot.SessionId, out var known) || snapshot.Version >= known.Version)
         {
             _sessions[snapshot.SessionId] = snapshot;
+        }
+
+        // A session that is no chat (VS Code loading the window) is no use of it.
+        if (snapshot.ShowsAsChat)
+        {
+            SawUse(snapshot.LastEventAt);
         }
 
         Chats.FirstOrDefault(c => Same(c.SessionId, snapshot.SessionId))?.Update(snapshot, pricing);
@@ -139,6 +161,14 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         _tabs = tabs;
         _tabActivity = lastActivity;
         _runningTabs = running ?? new Dictionary<string, bool>();
+        foreach (var tab in tabs?.Tabs ?? [])
+        {
+            if (lastActivity.TryGetValue(tab.SessionId, out var written))
+            {
+                SawUse(written.WrittenAt);
+            }
+        }
+
         Arrange(_owner.Now);
     }
 
