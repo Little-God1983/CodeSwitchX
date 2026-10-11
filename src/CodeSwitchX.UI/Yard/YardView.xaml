@@ -196,21 +196,26 @@
       </DockPanel>
     </Border>
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-      <!-- Now & today, This week, Older (#276); a group without tiles is not shown -->
-      <ItemsControl ItemsSource="{Binding Groups}" Margin="8">
+      <!-- Now & today, This week, Older (#276): each in a panel of its own, its header with how many tiles it holds; a group
+           without tiles is not shown -->
+      <ItemsControl ItemsSource="{Binding Groups}" Margin="12,12,12,4">
         <ItemsControl.ItemTemplate>
           <DataTemplate DataType="{x:Type yard:LastUseGroupViewModel}">
-            <StackPanel Margin="0,0,0,16">
-              <StackPanel.Style>
-                <Style TargetType="StackPanel">
+            <Border Margin="0,0,0,16" Padding="8,10,8,4" CornerRadius="14" BorderThickness="1" BorderBrush="#2EFFFFFF" Background="#0FFFFFFF">
+              <Border.Style>
+                <Style TargetType="Border">
                   <Style.Triggers>
                     <DataTrigger Binding="{Binding Tiles.Count}" Value="0">
                       <Setter Property="Visibility" Value="Collapsed" />
                     </DataTrigger>
                   </Style.Triggers>
                 </Style>
-              </StackPanel.Style>
-              <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold" Opacity="0.7" Margin="8,0,0,0" />
+              </Border.Style>
+              <StackPanel>
+              <StackPanel Orientation="Horizontal" Margin="10,0,0,2">
+                <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Tiles.Count, StringFormat='· {0}'}" FontSize="16" Opacity="0.5" Margin="8,0,0,0" VerticalAlignment="Center" />
+              </StackPanel>
               <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
                 <!-- the Tile size slider zooms the tiles, text and all; a layout transform, so the wrap panel makes room -->
                 <ItemsControl.LayoutTransform>
@@ -223,7 +228,8 @@
                   </ItemsPanelTemplate>
                 </ItemsControl.ItemsPanel>
               </ItemsControl>
-            </StackPanel>
+              </StackPanel>
+            </Border>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
