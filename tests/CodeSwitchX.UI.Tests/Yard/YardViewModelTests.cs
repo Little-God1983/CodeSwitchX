@@ -246,6 +246,37 @@ public class YardViewModelTests : IDisposable
         Names(LastUse.Today).ShouldBe(["App", "Shop"], "the pointer left the board");
     }
 
+    /// <summary>#276 review: the tiles keep their places while a tile's menu is open, however long.</summary>
+    [Fact]
+    public async Task The_tiles_keep_their_places_while_a_tiles_menu_is_open()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.MenuOpen(true);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBeEmpty();
+
+        _yard.MenuOpen(false);
+        _time.Advance(YardViewModel.HoldOrderFor);
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_registered_while_the_order_is_held_goes_straight_into_its_group()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _general.Id };
+        _engine.Restore([Snapshot("s1", cli.Id, SessionState.Waiting)]); // its chat asks already
+
+        _yard.HoldOrder();
+        _bus.Publish(new WorkspaceRegistered(cli));
+
+        Names(LastUse.Today).ShouldBe(["Cli"]);
+    }
+
     /// <summary>#115: a chat's row asks for its own chat; the tile's click still asks for the workspace alone.</summary>
     [Fact]
     public async Task A_chat_row_asks_to_open_its_chat_in_its_workspace()

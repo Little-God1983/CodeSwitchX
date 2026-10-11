@@ -19,7 +19,23 @@ public partial class YardView : UserControl
 
     private void OnBoardMouseMove(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.HoldOrder();
 
-    private void OnBoardMouseLeave(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.ReleaseOrder();
+    /// <summary>
+    /// The pointer left the board. A context menu that opens takes the mouse, which says it left too while it is still
+    /// over the board: only a pointer outside the board lets go of the order.
+    /// </summary>
+    private void OnBoardMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        var board = (FrameworkElement)sender;
+        var at = e.GetPosition(board);
+        if (at.X < 0 || at.Y < 0 || at.X >= board.ActualWidth || at.Y >= board.ActualHeight)
+        {
+            (DataContext as YardViewModel)?.ReleaseOrder();
+        }
+    }
+
+    private void OnTileMenuOpening(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(true);
+
+    private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
 
     private void OnDragOver(object sender, DragEventArgs e)
     {

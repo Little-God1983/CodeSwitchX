@@ -158,6 +158,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>Until when the tiles keep their places: the pointer moves over the board (UI thread).</summary>
     private DateTimeOffset _holdOrderUntil = DateTimeOffset.MinValue;
 
+    /// <summary>A tile's context menu is open: the tiles keep their places until it closes, however long the user reads it.</summary>
+    private bool _menuOpen;
+
+    /// <summary>A tile's context menu opened or closed; closed, what changed meanwhile is sorted in.</summary>
+    public void MenuOpen(bool open)
+    {
+        _menuOpen = open;
+        if (!open)
+        {
+            HoldOrder(); // the pointer is still over the board, on the item it clicked
+            Resort();
+        }
+    }
+
     /// <summary>
     /// The pointer moved over the board: the tiles keep their places for <see cref="HoldOrderFor"/>, or one would slide
     /// under the click aimed at another as a chat starts somewhere. The tick sorts in what changed meanwhile; a pointer
@@ -843,12 +857,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         var tile = new WorkspaceTileViewModel(workspace, this);
-        GroupOf(LastUse.Older).Tiles.Add(tile);
         foreach (var snapshot in _engine.Snapshots.Where(s => s.WorkspaceId == workspace.Id && !IsClosed(s)))
         {
             tile.Upsert(snapshot, _pricing.Pricing);
         }
 
+        // Straight into its group: the pointer may hold the order, and a tile should not land in Older to move later.
+        GroupOf(YardGroups.Of(tile.LastUsedAt, tile.IsWorking, tile.NeedsAttention, NeedsMeFirst, Now)).Tiles.Add(tile);
         Resort();
         TilesChanged?.Invoke();
         _ = RefreshGitAsync(CancellationToken.None);
@@ -925,7 +940,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private void Resort()
     {
         var now = Now;
-        if (now < _holdOrderUntil)
+        if (_menuOpen || now < _holdOrderUntil)
         {
             return;
         }

@@ -196,7 +196,8 @@
       </DockPanel>
     </Border>
     <!-- The tiles keep their places while the pointer is over the board (#276): none slides under a click. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" MouseMove="OnBoardMouseMove" MouseLeave="OnBoardMouseLeave">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" MouseMove="OnBoardMouseMove" MouseLeave="OnBoardMouseLeave"
+                  ContextMenuOpening="OnTileMenuOpening" ContextMenuClosing="OnTileMenuClosing">
       <!-- Now & today, This week, Older (#276): each in a panel of its own, its header with how many tiles it holds; a group
            without tiles is not shown -->
       <ItemsControl ItemsSource="{Binding Groups}" Margin="12,12,12,4">

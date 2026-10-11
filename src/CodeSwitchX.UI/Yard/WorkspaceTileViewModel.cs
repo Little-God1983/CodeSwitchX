@@ -163,14 +163,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         _tabs = tabs;
         _tabActivity = lastActivity;
         _runningTabs = running ?? new Dictionary<string, bool>();
-        foreach (var tab in tabs?.Tabs ?? [])
-        {
-            if (lastActivity.TryGetValue(tab.SessionId, out var written))
-            {
-                SawUse(written.WrittenAt);
-            }
-        }
-
         Arrange(_owner.Now);
     }
 
