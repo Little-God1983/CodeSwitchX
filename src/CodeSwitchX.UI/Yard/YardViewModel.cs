@@ -151,6 +151,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     internal Task CurrentGitRefresh => _gitRefresh;
 
     [ObservableProperty] private bool _needsMeFirst;
+
+    /// <summary>How long the tiles keep their places after the pointer last moved over the board (#276 review).</summary>
+    internal static readonly TimeSpan HoldOrderFor = TimeSpan.FromSeconds(2);
+
+    /// <summary>Until when the tiles keep their places: the pointer moves over the board (UI thread).</summary>
+    private DateTimeOffset _holdOrderUntil = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// The pointer moved over the board: the tiles keep their places for <see cref="HoldOrderFor"/>, or one would slide
+    /// under the click aimed at another as a chat starts somewhere. The tick sorts in what changed meanwhile; a pointer
+    /// resting on the board holds nothing.
+    /// </summary>
+    public void HoldOrder() => _holdOrderUntil = Now + HoldOrderFor;
+
+    /// <summary>The pointer left the board: what changed while it was there is sorted in now.</summary>
+    public void ReleaseOrder()
+    {
+        _holdOrderUntil = DateTimeOffset.MinValue;
+        Resort();
+    }
     [ObservableProperty] private bool _hooksInferredOnly;
 
     /// <summary>
@@ -802,6 +822,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         var wasRunning = tile.HostState == HostState.Running;
         tile.HostState = change.State;
+        Resort(); // the rows it shows changed with it
         if (wasRunning && change.State == HostState.Stopped)
         {
             HostStopped?.Invoke(change.WorkspaceId);
@@ -896,13 +917,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Puts each tile in its group (<see cref="YardGroups.Of"/>) and orders each group: under Needs me first a tile waiting on
+    /// Puts each tile in its group (<see cref="YardGroups.Of"/>), unless the pointer holds the order (<see cref="HoldOrder"/>),
+    /// and orders each group: under Needs me first a tile waiting on
     /// the user leads, then one that works; then the newest last use first. Working tiles count as used now, so two of them
     /// keep their places by name rather than swap with each event; one that stops goes by when it stopped.
     /// </summary>
     private void Resort()
     {
         var now = Now;
+        if (now < _holdOrderUntil)
+        {
+            return;
+        }
+
         var changed = false;
         foreach (var group in Groups)
         {

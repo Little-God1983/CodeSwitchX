@@ -137,7 +137,7 @@ public class SessionStoreTests : IAsyncLifetime
         var lastUse = await _store.GetLastUseByWorkspaceAsync(ct);
 
         lastUse.Count.ShouldBe(2);
-        lastUse[app].ShouldBe(_now.AddDays(-2), "the end is no use, and the other chat's last event, five days ago, is older");
+        lastUse[app].ShouldBe(_now.AddDays(-2).AddMinutes(-5), "the prompt; the turn's end and the chat's end are no use, and the other chat's last event, five days ago, is older");
         lastUse[docs].ShouldBe(_now.AddDays(-30));
     }
 

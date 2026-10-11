@@ -54,5 +54,13 @@ public class SessionRecordTests
         SessionRecord.FromSnapshot(bare with { Title = "fix the build" }).ToSnapshot().HeldConversation.ShouldBeTrue();
         SessionRecord.FromSnapshot(bare with { LatestContext = new TokenUsage(10, 20, 0, 0, 0) }).ToSnapshot().HeldConversation.ShouldBeTrue();
         SessionRecord.FromSnapshot(bare with { LastToolName = "Bash" }).ToSnapshot().HeldConversation.ShouldBeTrue();
+
+        // The query the store runs (#276) answers the same.
+        var held = SessionRecord.HeldConversation.Compile();
+        foreach (var snapshot in new[] { bare, bare with { Title = "t" }, bare with { LastToolName = "Bash" }, bare with { LatestContext = new TokenUsage(0, 0, 0, 0, 7) },
+                     bare with { LatestContext = new TokenUsage(0, 0, 0, 3, 0) } })
+        {
+            held(SessionRecord.FromSnapshot(snapshot)).ShouldBe(snapshot.HeldConversation);
+        }
     }
 }

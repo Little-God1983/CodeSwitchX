@@ -51,11 +51,13 @@ public sealed class RunningLight : FrameworkElement
             // Loaded can come twice without an Unloaded between: one handler, or the static event keeps the tile alive.
             SystemParameters.StaticPropertyChanged -= OnSystemParameterChanged;
             SystemParameters.StaticPropertyChanged += OnSystemParameterChanged;
+            Rebuild(); // an Unloaded that came after the last rebuild stopped the clocks: a still streak otherwise
         };
         Unloaded += (_, _) =>
         {
             SystemParameters.StaticPropertyChanged -= OnSystemParameterChanged;
             Stop();
+            _drawing.Open().Close(); // no still streak left behind
         };
     }
 

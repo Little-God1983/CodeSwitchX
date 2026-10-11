@@ -21,20 +21,23 @@ public sealed class SessionStore : ISessionStore
             .ToListAsync(ct);
     }
 
-    /// <summary>The hook events that are no use of a chat: Claude Code starts and ends one as its window opens, reloads or closes.</summary>
-    private static readonly string[] NoUse = ["SessionStart", "SessionEnd"];
+    /// <summary>
+    /// The hook events that use a chat: the ones that make it work or ask, as the Yard counts a live chat's use. Not its
+    /// start and end (its window opened, reloaded or closed), nor a turn's end or the idle notice a minute after it.
+    /// </summary>
+    private static readonly string[] Use = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest"];
 
     public async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastUseByWorkspaceAsync(CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var chats = await db.Sessions.AsNoTracking()
-            .Where(s => s.WorkspaceId != null && (s.Title != null || s.LastToolName != null || s.ContextInput != 0 || s.ContextOutput != 0
-                || s.ContextCacheWrite != 0 || s.ContextCacheRead != 0 || s.ContextCacheWrite1h != 0))
+            .Where(s => s.WorkspaceId != null)
+            .Where(SessionRecord.HeldConversation)
             .Select(s => new { s.Id, WorkspaceId = s.WorkspaceId!.Value, s.LastEventAt })
             .ToListAsync(ct);
 
         var used = (await db.SessionEvents.AsNoTracking()
-                .Where(e => !NoUse.Contains(e.Kind))
+                .Where(e => Use.Contains(e.Kind))
                 .GroupBy(e => e.SessionId)
                 .Select(g => new { SessionId = g.Key, At = g.Max(e => e.At) })
                 .ToListAsync(ct))

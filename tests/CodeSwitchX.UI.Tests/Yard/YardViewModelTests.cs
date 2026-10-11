@@ -225,6 +225,27 @@ public class YardViewModelTests : IDisposable
         Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"], "two working tiles do not swap with each event");
     }
 
+    /// <summary>#276 review: a tile does not slide under a click aimed at another; a pointer at rest holds nothing.</summary>
+    [Fact]
+    public async Task The_tiles_keep_their_places_for_two_seconds_after_the_pointer_moved_over_the_board()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.HoldOrder();
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBeEmpty("the pointer moved over the board just now");
+
+        _time.Advance(YardViewModel.HoldOrderFor);
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBe(["Shop"], "the pointer rests: the tick sorts it in");
+
+        _yard.HoldOrder();
+        _bus.Publish(new SessionChanged(null, Snapshot("a1", _app.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+        _yard.ReleaseOrder();
+        Names(LastUse.Today).ShouldBe(["App", "Shop"], "the pointer left the board");
+    }
+
     /// <summary>#115: a chat's row asks for its own chat; the tile's click still asks for the workspace alone.</summary>
     [Fact]
     public async Task A_chat_row_asks_to_open_its_chat_in_its_workspace()

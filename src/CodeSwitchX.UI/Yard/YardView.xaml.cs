@@ -17,6 +17,10 @@ public partial class YardView : UserControl
         InitializeComponent();
     }
 
+    private void OnBoardMouseMove(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.HoldOrder();
+
+    private void OnBoardMouseLeave(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.ReleaseOrder();
+
     private void OnDragOver(object sender, DragEventArgs e)
     {
         e.Effects = DroppedPath(e.Data) is null ? DragDropEffects.None : DragDropEffects.Copy;
