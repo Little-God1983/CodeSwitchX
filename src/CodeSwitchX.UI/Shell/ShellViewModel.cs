@@ -372,15 +372,16 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             ? (id, rect)
             : null);
         bool changed;
+        var cabShowing = !_shellMinimized && Mode == ShellMode.Cab ? ActiveWorkspaceId : null;
         lock (_askGate)
         {
-            var cabShowing = !_shellMinimized && Mode == ShellMode.Cab ? ActiveWorkspaceId : null;
             changed = cabShowing != _cabShowing;
             _cabShowing = cabShowing;
         }
 
         if (changed)
         {
+            Yard.CabShows(cabShowing); // what finished in the workspace shown is seen (#287)
             AskRulesChanged?.Invoke(this, EventArgs.Empty);
         }
     }

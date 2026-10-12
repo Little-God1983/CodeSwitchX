@@ -288,6 +288,46 @@ public class ShellViewModelTests
         _h.Shell.TakesAsks(other).ShouldBeFalse("with the panel collapsed every question goes to VS Code");
     }
 
+    /// <summary>A chat of the workspace works, then finishes its turn (#287).</summary>
+    private void ChatFinishes(Guid workspaceId, string sessionId)
+    {
+        var at = DateTimeOffset.UtcNow;
+        SessionSnapshot Turn(SessionState state, long version) => new()
+        {
+            SessionId = sessionId, WorkspaceId = workspaceId, State = state, StartedAt = at, LastEventAt = at, StateSince = at, Title = "T", Version = version,
+        };
+        _h.Bus.Publish(new SessionChanged(null, Turn(SessionState.Working, 1)));
+        _h.Bus.Publish(new SessionChanged(null, Turn(SessionState.Idle, 2)));
+    }
+
+    [Fact]
+    public async Task What_finishes_in_a_workspace_is_seen_once_the_Cab_shows_it_and_while_it_does()
+    {
+        await TwoTilesAsync();
+        var app = _h.Shell.Yard.FindTile(_h.App.Id)!;
+        ChatFinishes(_h.App.Id, "s1");
+        app.IsFinished.ShouldBeTrue();
+
+        _h.VsCodeWindowAppears();
+        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        app.IsFinished.ShouldBeFalse("opened");
+
+        ChatFinishes(_h.App.Id, "s2");
+        app.IsFinished.ShouldBeFalse("the user looks at it");
+
+        _h.Shell.SetShellMinimized(true);
+        ChatFinishes(_h.App.Id, "s3");
+        app.IsFinished.ShouldBeTrue("minimised, the Cab shows nothing");
+
+        _h.Shell.SetShellMinimized(false);
+        app.IsFinished.ShouldBeFalse("shown again");
+
+        _h.Shell.BackToYard();
+        ChatFinishes(_h.App.Id, "s4");
+        app.IsFinished.ShouldBeTrue("on the Yard");
+    }
+
     /// <summary>#115: a click on a tile's chat row shows the workspace's VS Code, then that chat's tab in it.</summary>
     [Fact]
     public async Task A_chat_row_s_click_opens_the_workspace_and_shows_that_chat()

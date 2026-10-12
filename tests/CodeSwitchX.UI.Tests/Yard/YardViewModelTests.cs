@@ -14,7 +14,7 @@ using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
-public class YardViewModelTests : IDisposable
+public partial class YardViewModelTests : IDisposable
 {
     private readonly string _tempRoot = Path.Combine(Path.GetTempPath(), "csx-yard-" + Guid.NewGuid().ToString("N"));
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
