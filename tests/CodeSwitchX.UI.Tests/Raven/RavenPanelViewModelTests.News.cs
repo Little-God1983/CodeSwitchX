@@ -352,6 +352,28 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines!.ShouldHaveSingleItem().Stale.ShouldBeTrue();
     }
 
+    /// <summary>#275: the chat's id is for the brain that acts; the window's summarizer, told to use no ids, reads none.</summary>
+    [Fact]
+    public async Task The_window_summarizer_reads_the_news_without_chat_ids()
+    {
+        _yard.Show("b", "CodeSwitchX", "Release notes");
+        var summarizer = new FakeBrain { Answer = _ => [new BrainText("Release notes done.")] };
+        var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
+            NullLogger<RavenPanelViewModel>.Instance, new ChatNews(_bus, _yard, _time, _ => null), _teller, yard: _yard,
+            brains: new FakeChatBrains(_brain), summarizer: summarizer);
+        await WithinAsync(vm.RefreshMicrophonesAsync());
+        vm.SetWorkspaces([(FakeYardDirectory.WorkspaceOf("CodeSwitchX"), 1, "CodeSwitchX")]);
+        vm.SpeakNews = false;
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await WithinAsync(vm.PendingSummaries);
+
+        summarizer.Asked.ShouldContain(q => q.Contains("News: CodeSwitchX, chat \"Release notes\": finished"));
+        summarizer.Asked.ShouldAllBe(q => !q.Contains("chat id"));
+    }
+
     /// <summary>#275: the line leads to the chat it tells of, not to its window's tile on the Yard.</summary>
     [Fact]
     public async Task Clicking_a_line_of_the_card_asks_for_its_chat()

@@ -3544,6 +3544,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\" (chat id {line.SessionId}): {line.What}";
 
+    /// <summary>One line of news as the window's summarizer reads it: no id, which it is told never to use (#275).</summary>
+    private static string SummaryFact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\": {line.What}";
+
     /// <summary>
     /// The question as it goes to the brain that acts: after the chat news the user was given since its last question,
     /// so "open the one that needs me" works. The news older than <see cref="ToldNewsLifetime"/> is dropped; what goes
@@ -3761,7 +3764,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         RavenLogKind.Raven => "Raven: " + entry.Text,
         // Not "Looked at": the summarizer must know a chat was stopped or closed, not only looked at.
         RavenLogKind.Action => $"Raven called {entry.Text}" + (entry.Detail is { } detail ? $" ({detail})" : "") + (entry.Failed ? ", which failed" : ""),
-        RavenLogKind.News => "News: " + string.Join("; ", entry.Lines?.Select(Fact) ?? []),
+        RavenLogKind.News => "News: " + string.Join("; ", entry.Lines?.Select(SummaryFact) ?? []),
         RavenLogKind.Question or RavenLogKind.Permission when entry.Ask is { } card =>
             entry.ActivityLine + (card.IsOpen ? " (waiting on the user)" : $" ({card.Outcome})"),
         _ => null,

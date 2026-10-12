@@ -1085,7 +1085,7 @@ public class ShellViewModelTests
         _h.Shell.StatusMessage.ShouldBeNull();
     }
 
-    /// <summary>A removed window's cards stay in Activity: its line opens nothing, and Raven says so rather than nothing.</summary>
+    /// <summary>A window removed while its card is still on screen: its line opens nothing, and Raven says so rather than nothing.</summary>
     [Fact]
     public async Task A_line_of_Ravens_digest_card_of_a_window_gone_from_the_Yard_says_so()
     {

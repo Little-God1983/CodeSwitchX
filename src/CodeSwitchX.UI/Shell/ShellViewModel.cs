@@ -623,8 +623,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     public void BringForward() => ForwardRequested?.Invoke();
 
     /// <summary>
-    /// A line of Raven's digest card was clicked (#275): its chat opens as a tile's chat row opens it (#115). A removed
-    /// window's card stays in Activity: its line says it cannot, rather than nothing.
+    /// A line of Raven's digest card was clicked (#275): its chat opens as a tile's chat row opens it (#115). A window
+    /// removed while its card is still on screen says it cannot, rather than nothing.
     /// </summary>
     private void OpenNewsChat(ChatNewsLine line)
     {
