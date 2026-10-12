@@ -499,11 +499,15 @@ public class ShellViewModelTests
         _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
     }
 
-    /// <summary>A 1080p screen leaves VS Code room beside the whole panel: the Cab keeps the list, and folds it as the window narrows.</summary>
+    /// <summary>
+    /// A 1080p screen leaves VS Code room beside the whole panel: the Cab keeps the list, folds it as the window narrows
+    /// and unfolds it as it widens; a panel opened again on a narrow window folds it.
+    /// </summary>
     [Fact]
     public async Task On_a_1080p_window_the_cab_keeps_Raven_s_list()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Raven.IsOpen.ShouldBeTrue();
         _h.Shell.SetWidth(1920);
         _h.VsCodeWindowAppears();
 
@@ -511,6 +515,16 @@ public class ShellViewModelTests
         _h.Shell.Raven.IsListFolded.ShouldBeFalse();
 
         _h.Shell.SetWidth(1366);
+        _h.Shell.Raven.IsListFolded.ShouldBeTrue();
+        _h.Shell.SetWidth(1920);
+        _h.Shell.Raven.IsListFolded.ShouldBeFalse();
+
+        _h.Shell.SetWidth(1366);
+        _h.Shell.Settings.RavenVoiceSetupShown = true; // opening the panel stays in the Cab
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.Raven.IsListFolded.ShouldBeFalse("a closed panel shows no list");
+        _h.Shell.Raven.TogglePanelCommand.Execute(null);
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
         _h.Shell.Raven.IsListFolded.ShouldBeTrue();
     }
 
