@@ -142,6 +142,16 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
+    public async Task The_haiku_before_the_default_is_set_back_by_its_id()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("Raven's model", "claude-haiku-4-5-20251001", Ct);
+
+        _h.Shell.Settings.RavenBrainModel.ShouldBe("claude-haiku-4-5-20251001", "the way back if Haiku 5.5 does not suit Raven");
+    }
+
+    [Fact]
     public async Task Raven_s_effort_is_set_by_voice_as_said()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
