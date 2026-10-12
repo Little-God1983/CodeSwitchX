@@ -113,12 +113,12 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// </summary>
     private readonly HashSet<string> _finished = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>A chat of the window finished a turn the user has not seen (#287).</summary>
+    /// <summary>
+    /// A chat of the window finished a turn the user has not seen (#287): the tile shimmers. With a chat that asks and one
+    /// that works, the window shows all three at once: each chat adds its own sign.
+    /// </summary>
     [ObservableProperty]
     private bool _isFinished;
-
-    /// <summary>The tile shimmers (#287): a chat finished unseen, and no chat works or asks, whose look comes first.</summary>
-    public bool ShowsFinished => IsFinished && !NeedsAttention && !IsWorking;
 
     /// <summary>The Cab shows the workspace (#287): what finished there is seen.</summary>
     public void Seen()
@@ -348,7 +348,6 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         IsWorking = Chats.Any(Works);
         IsFinished = _finished.Count > 0;
         OnPropertyChanged(nameof(AttentionRank));
-        OnPropertyChanged(nameof(ShowsFinished));
     }
 
     [RelayCommand]

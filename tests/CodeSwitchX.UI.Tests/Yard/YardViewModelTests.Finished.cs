@@ -25,12 +25,11 @@ public partial class YardViewModelTests
     {
         var app = await AppTile();
         Prompt("s1");
-        app.ShowsFinished.ShouldBeFalse("it works");
+        app.IsFinished.ShouldBeFalse("it works");
 
         Stop("s1");
 
         app.IsFinished.ShouldBeTrue();
-        app.ShowsFinished.ShouldBeTrue();
     }
 
     [Fact]
@@ -92,22 +91,19 @@ public partial class YardViewModelTests
         Prompt("s1");
 
         app.IsFinished.ShouldBeFalse();
-        app.ShowsFinished.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task Another_chat_working_hides_the_finished_mark_until_it_finishes_too()
+    public async Task Another_chat_working_shows_with_the_finished_mark()
     {
         var app = await AppTile();
         Prompt("s1");
         Stop("s1");
 
         Prompt("s2");
-        app.IsFinished.ShouldBeTrue("s1's turn is still unseen");
-        app.ShowsFinished.ShouldBeFalse("the running light shows");
 
-        Stop("s2");
-        app.ShowsFinished.ShouldBeTrue();
+        app.IsWorking.ShouldBeTrue();
+        app.IsFinished.ShouldBeTrue("s1's turn is still unseen");
     }
 
     [Fact]
@@ -134,23 +130,19 @@ public partial class YardViewModelTests
     }
 
     [Fact]
-    public async Task A_question_on_the_tile_shows_instead_of_the_finished_mark_and_it_comes_back_after()
+    public async Task Three_chats_of_one_window_show_a_question_work_and_a_finished_turn_at_once()
     {
         var app = await AppTile();
         Prompt("s1");
         Prompt("s2");
+        Prompt("s3");
         _engine.Apply(Hook("s2", "Notification", SessionSignal.Notification, @"c:\repo\app"));
 
         Stop("s1");
-        app.IsFinished.ShouldBeTrue();
-        app.NeedsAttention.ShouldBeTrue();
-        app.ShowsFinished.ShouldBeFalse("the question shows");
 
-        _engine.Apply(Hook("s2", "PreToolUse", SessionSignal.ToolUse, @"c:\repo\app")); // answered: s2 works on
-        app.ShowsFinished.ShouldBeFalse("the running light shows");
-
-        Stop("s2");
-        app.ShowsFinished.ShouldBeTrue();
+        app.IsFinished.ShouldBeTrue("s1 finished, unseen");
+        app.NeedsAttention.ShouldBeTrue("s2 asks");
+        app.IsWorking.ShouldBeTrue("s3 works");
     }
 
     [Fact]
