@@ -15,7 +15,7 @@ public static class ChatModels
         new("Fable", "claude-fable-5-1"),
         new("Opus", "claude-opus-5-5"),
         new("Sonnet", "claude-sonnet-5-5"),
-        new("Haiku", "claude-haiku-4-5-20251001"),
+        new("Haiku", "claude-haiku-5-5"),
     ];
 
     /// <summary>What <c>claude --effort</c> takes, lowest first.</summary>

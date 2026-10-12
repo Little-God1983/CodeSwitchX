@@ -6,10 +6,10 @@ namespace CodeSwitchX.Conductor;
 public sealed class BrainSettings
 {
     /// <summary>Fast enough to answer while the user still looks at the panel.</summary>
-    public const string DefaultModel = "claude-haiku-4-5-20251001";
+    public const string DefaultModel = "claude-haiku-5-5";
 
     /// <summary>Chat 0's: it answers from short summaries, so a small model does (#124).</summary>
-    public const string DefaultOverviewModel = "claude-haiku-4-5-20251001";
+    public const string DefaultOverviewModel = "claude-haiku-5-5";
 
     /// <summary>The models Settings offers; any other id can be typed in.</summary>
     public static readonly IReadOnlyList<string> KnownModels = [DefaultModel, "claude-sonnet-5-5", "claude-opus-5-5"];
