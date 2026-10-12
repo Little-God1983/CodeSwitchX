@@ -435,7 +435,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private int _openQuestions;
 
     /// <summary>Raised when the user clicks a chat's line on a digest card: the shell opens that chat (#275).</summary>
-    public event EventHandler<(Guid WorkspaceId, string SessionId)>? ChatRequested;
+    public event EventHandler<ChatNewsLine>? ChatRequested;
 
     /// <summary>"Open chat three": the shell shows the chat's window in the Cab (switching alone never does).</summary>
     public event EventHandler<Guid>? CabRequested;
@@ -3796,24 +3796,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// A line of a digest card was clicked: its chat is opened, its window in the Cab with the chat's tab in front, as a
-    /// tile's chat row opens it (#115). Its tile on the Yard named no chat, and one window has many (#275). A removed
-    /// window's card stays in Activity: its line says it cannot, rather than nothing.
+    /// tile's chat row opens it (#115). Its tile on the Yard named no chat, and one window has many (#275).
     /// </summary>
     [RelayCommand]
     private void OpenNewsChat(ChatNewsLine? line)
     {
-        if (line is null)
+        if (line is not null)
         {
-            return;
+            ChatRequested?.Invoke(this, line);
         }
-
-        if (Chats.All(c => c.WorkspaceId != line.WorkspaceId))
-        {
-            AddEntry(RavenLogKind.Note, $"{line.Workspace} is not on the Yard any more: its chat \"{line.Title}\" cannot be opened from here.");
-            return;
-        }
-
-        ChatRequested?.Invoke(this, (line.WorkspaceId, line.SessionId));
     }
 
     /// <summary>A tool call's arguments for its card: the values, in order ("needs_me, Diffusion-Full"); null for none.</summary>

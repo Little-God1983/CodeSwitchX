@@ -1070,7 +1070,6 @@ public class ShellViewModelTests
     [Fact]
     public async Task A_line_of_Ravens_digest_card_opens_its_workspace_and_shows_that_chat()
     {
-        _h.App.Number = 1; // it has a Raven chat
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
 
@@ -1084,6 +1083,19 @@ public class ShellViewModelTests
         _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
         _h.VsCode.Shown.ShouldBe([(_h.App.Name, "s1")]);
         _h.Shell.StatusMessage.ShouldBeNull();
+    }
+
+    /// <summary>A removed window's cards stay in Activity: its line opens nothing, and Raven says so rather than nothing.</summary>
+    [Fact]
+    public async Task A_line_of_Ravens_digest_card_of_a_window_gone_from_the_Yard_says_so()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.OpenNewsChatCommand.Execute(new ChatNewsLine("z", Guid.NewGuid(), "OldProject", "Tidy up", ChatNewsKind.Finished, null, null, false));
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.VsCode.Shown.ShouldBeEmpty();
+        _h.Shell.Raven.Log.Last().Text.ShouldBe("OldProject is not on the Yard any more: its chat \"Tidy up\" cannot be opened from here.");
     }
 
     [Fact]

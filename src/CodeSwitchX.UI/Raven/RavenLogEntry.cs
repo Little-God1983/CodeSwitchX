@@ -14,7 +14,7 @@ public enum RavenLogKind
     /// <summary>A card for a tool Raven's brain called: what it looked at.</summary>
     Action,
 
-    /// <summary>A digest card: what the chats did, a line per chat that shows its tile when clicked.</summary>
+    /// <summary>A digest card: what the chats did, a line per chat that opens that chat when clicked (#275).</summary>
     News,
 
     /// <summary>A chat's question, with its options to click, held until it is answered here or left to VS Code.</summary>

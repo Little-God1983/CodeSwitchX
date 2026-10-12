@@ -259,7 +259,7 @@
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
-    <!-- A digest card: what the chats did, one line per chat; a click shows its tile in the Yard. -->
+    <!-- A digest card: what the chats did, one line per chat; a click opens that chat (#275). -->
     <DataTemplate x:Key="NewsEntry" DataType="{x:Type raven:RavenLogEntry}">
       <Border Background="#0F172A" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="6" Padding="10,6,10,7">
         <StackPanel>
