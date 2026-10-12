@@ -743,7 +743,7 @@
 
   <Border Background="#111827" BorderBrush="#1F2937" BorderThickness="0,0,1,0">
     <Grid>
-      <!-- Open: Raven and the chat list on the left, the chosen chat on the right at 320 px. In the Cab the left side folds
+      <!-- Open: Raven and the chat list on the left, the chosen chat on the right at 320 px. In the Cab on a narrow window the left side folds
            to a rail of the orb, the mic and the chats' numbers, so VS Code keeps its width. -->
       <Grid Visibility="{Binding IsOpen, Converter={StaticResource BoolVisible}}">
         <Grid.ColumnDefinitions>

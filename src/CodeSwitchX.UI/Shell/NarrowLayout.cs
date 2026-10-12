@@ -3,10 +3,10 @@ using System.Windows;
 namespace CodeSwitchX.UI.Shell;
 
 /// <summary>
-/// What folds on a narrow window so the Settings page keeps room to read (#162): first Raven's chat list to its numbers,
-/// as in the Cab, then the Settings sidebar to its icons, each only when the page would be short of
-/// <see cref="PageNeeds"/> without it. A wide window folds nothing. The views take their widths from here: RavenPanelView's
-/// list and chat, MainWindow's closed panel, SettingsView's sidebar.
+/// What folds on a narrow window. In the Cab, Raven's chat list folds to its numbers when VS Code would be short of
+/// <see cref="CabNeeds"/> without it. In Settings (#162), first the list, then the Settings sidebar to its icons, each only
+/// when the page would be short of <see cref="PageNeeds"/> without it. A wide window folds nothing. The views take their
+/// widths from here: RavenPanelView's list and chat, MainWindow's closed panel, SettingsView's sidebar.
 /// </summary>
 public static class NarrowLayout
 {
@@ -25,6 +25,9 @@ public static class NarrowLayout
 
     /// <summary>The least a Settings page reads well in, its margins included.</summary>
     public const double PageNeeds = 480;
+
+    /// <summary>The least VS Code works well in, in the Cab: its sidebar and an editor of some 100 columns.</summary>
+    public const double CabNeeds = 960;
 
     /// <summary>The open panel's 1 px edge beside its chat; a closed panel's is inside its width.</summary>
     public const double PanelEdge = 1;
@@ -61,4 +64,12 @@ public static class NarrowLayout
         var ravenFolded = ravenOpen ? RavenChat + RavenListFolded : RavenListFolded;
         return page - ravenFolded - Sidebar >= PageNeeds ? (ravenOpen, false) : (ravenOpen, true);
     }
+
+    /// <summary>
+    /// Whether Raven's list folds in the Cab for a window this wide: only when VS Code beside the open panel would be short
+    /// of <see cref="CabNeeds"/>, which needs content 1517 wide. A maximized 1080p window up to 125 % keeps the list, unless a
+    /// taskbar at the side takes its width; a closed panel, or a width not known yet, folds nothing.
+    /// </summary>
+    public static bool FoldsInCab(double width, bool ravenOpen) =>
+        ravenOpen && double.IsFinite(width) && width > 0 && width - PanelEdge - RavenChat - RavenList < CabNeeds;
 }

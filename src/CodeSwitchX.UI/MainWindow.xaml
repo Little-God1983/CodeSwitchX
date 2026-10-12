@@ -26,7 +26,7 @@
     <raven:RavenPanelView x:Name="RavenPanel" Grid.Row="0" Grid.Column="0" DataContext="{Binding Raven}">
       <raven:RavenPanelView.Style>
         <Style TargetType="raven:RavenPanelView">
-          <!-- Open, it takes the width it needs: the chat list (folded in the Cab) and the chat. -->
+          <!-- Open, it takes the width it needs: the chat list (folded in the Cab on a narrow window) and the chat. -->
           <Style.Triggers>
             <DataTrigger Binding="{Binding IsOpen}" Value="False">
               <Setter Property="Width" Value="{x:Static shell:NarrowLayout.RavenListFolded}" />

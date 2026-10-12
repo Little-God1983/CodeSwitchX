@@ -488,13 +488,18 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     }
 
     /// <summary>
-    /// In the Cab Raven's list folds to its numbers: VS Code keeps its width. In Settings on a narrow window, the list and
-    /// then the sidebar fold so the page keeps room to read (<see cref="NarrowLayout"/>).
+    /// In the Cab on a narrow window Raven's list folds to its numbers so VS Code keeps its width. In Settings on a narrow
+    /// window, the list and then the sidebar fold so the page keeps room to read (<see cref="NarrowLayout"/>).
     /// </summary>
     private void Fold()
     {
-        var (list, sidebar) = Mode == ShellMode.Settings ? NarrowLayout.Folds(_width, Raven.IsOpen, ScrollBar) : (false, false);
-        Raven.IsListFolded = Mode == ShellMode.Cab || list;
+        var (list, sidebar) = Mode switch
+        {
+            ShellMode.Settings => NarrowLayout.Folds(_width, Raven.IsOpen, ScrollBar),
+            ShellMode.Cab => (NarrowLayout.FoldsInCab(_width, Raven.IsOpen), false),
+            _ => (false, false),
+        };
+        Raven.IsListFolded = list;
         Settings.IsSidebarFolded = sidebar;
     }
 

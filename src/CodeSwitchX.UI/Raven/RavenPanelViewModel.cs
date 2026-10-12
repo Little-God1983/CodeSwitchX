@@ -4358,8 +4358,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenChat _selectedChat;
 
     /// <summary>
-    /// The list folds to its numbers: the Cab shows a VS Code, which keeps its width, or Settings is open on a narrow
-    /// window and its page needs the room (#162).
+    /// The list folds to its numbers on a narrow window: the Cab shows a VS Code, which keeps its width, or Settings is
+    /// open and its page needs the room (#162). A wide window keeps it.
     /// </summary>
     [ObservableProperty]
     private bool _isListFolded;
