@@ -80,6 +80,16 @@ public static class ChatModels
         return id.StartsWith("claude-", StringComparison.Ordinal) && !id.Any(char.IsWhiteSpace) ? id : null;
     }
 
+    /// <summary>
+    /// The one of <paramref name="ids"/> that reads on screen as what was said, or as the id said does: "Haiku 4.5" and
+    /// <c>claude-haiku-4-5</c> are <c>claude-haiku-4-5-20251001</c>. Null when none does.
+    /// </summary>
+    public static string? ModelNamed(string? said, IEnumerable<string> ids)
+    {
+        var key = WorkspaceMatcher.Squash(DisplayName(said ?? ""));
+        return key.Length == 0 ? null : ids.FirstOrDefault(id => WorkspaceMatcher.Squash(DisplayName(id)) == key);
+    }
+
     /// <summary>The alias whose name it is, said by itself ("opus", "Opus."); null for a version or an id said.</summary>
     public static ModelAlias? AliasNamed(string? said, IReadOnlyList<ModelAlias> aliases)
     {
