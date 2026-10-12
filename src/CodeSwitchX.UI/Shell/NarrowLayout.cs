@@ -67,7 +67,7 @@ public static class NarrowLayout
 
     /// <summary>
     /// Whether Raven's list folds in the Cab for a window this wide: only when VS Code beside the open panel would be short
-    /// of <see cref="CabNeeds"/>. A 1080p screen keeps the list; a closed panel, or a width not known yet, folds nothing.
+    /// of <see cref="CabNeeds"/>. A maximized 1080p window up to 125 % keeps the list; a closed panel, or a width not known yet, folds nothing.
     /// </summary>
     public static bool FoldsInCab(double width, bool ravenOpen) =>
         ravenOpen && double.IsFinite(width) && width > 0 && width - PanelEdge - RavenChat - RavenList < CabNeeds;

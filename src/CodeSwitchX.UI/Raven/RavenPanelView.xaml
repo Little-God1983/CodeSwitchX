@@ -877,7 +877,7 @@
                         <MenuItem Header="{Binding MuteText}" Command="{Binding ToggleMuteCommand}" />
                       </ContextMenu>
                     </Grid.ContextMenu>
-                    <!-- The number's dot and its marks: they show on the folded list too, and on the collapsed strip. -->
+                    <!-- The number's dot and its marks: they show on the folded list in the Cab, and on the collapsed strip. -->
                     <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ChatNumber}" VerticalAlignment="Center" />
                     <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
