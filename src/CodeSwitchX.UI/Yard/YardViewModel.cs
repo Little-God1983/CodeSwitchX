@@ -534,6 +534,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public void RequestOpen(Guid workspaceId) => OpenRequested?.Invoke(workspaceId);
 
+    /// <summary>The workspace the Cab shows the user (#287), null while it shows none (the Yard, Settings, minimised). UI thread.</summary>
+    private Guid? _cabShowing;
+
+    /// <summary>The Cab shows the workspace now, or none: what finished there is seen (#287). UI thread.</summary>
+    public void CabShows(Guid? workspaceId)
+    {
+        _cabShowing = workspaceId;
+        if (workspaceId is { } id)
+        {
+            FindTile(id)?.Seen();
+        }
+    }
+
+    /// <summary>Whether the Cab shows the workspace to the user right now (#287).</summary>
+    internal bool InCab(Guid workspaceId) => _cabShowing == workspaceId;
+
     public void RequestOpenChat(Guid workspaceId, string sessionId) => OpenChatRequested?.Invoke(workspaceId, sessionId);
 
     /// <summary>

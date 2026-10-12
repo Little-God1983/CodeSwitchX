@@ -165,6 +165,53 @@
             </TextBlock.Style>
           </TextBlock>
           </StackPanel>
+          <!--
+            A chat finished a turn the user has not seen (#287): a faint sheen passes across the tile every 4 s, unlike the
+            question's amber blink, and with it: each chat of the window adds its own sign. The brush is the rectangle's own, not a style's: a style's value is frozen and cannot be
+            animated. With animations turned off in Windows the sheen stands still across the middle.
+          -->
+          <Rectangle Margin="-14" RadiusX="10" RadiusY="10" IsHitTestVisible="False">
+            <Rectangle.Fill>
+              <LinearGradientBrush StartPoint="0,0.2" EndPoint="1,0.8">
+                <LinearGradientBrush.RelativeTransform>
+                  <TranslateTransform X="0" />
+                </LinearGradientBrush.RelativeTransform>
+                <GradientStop Color="#00FFFFFF" Offset="0.38" />
+                <GradientStop Color="#38FFFFFF" Offset="0.5" />
+                <GradientStop Color="#00FFFFFF" Offset="0.62" />
+              </LinearGradientBrush>
+            </Rectangle.Fill>
+            <Rectangle.Style>
+              <Style TargetType="Rectangle">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsFinished}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                  <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                      <Condition Binding="{Binding IsFinished}" Value="True" />
+                      <Condition Binding="{Binding Path=(SystemParameters.ClientAreaAnimation)}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <MultiDataTrigger.EnterActions>
+                      <BeginStoryboard x:Name="Shimmer">
+                        <Storyboard RepeatBehavior="Forever" Duration="0:0:4">
+                          <DoubleAnimation Storyboard.TargetProperty="Fill.RelativeTransform.X" From="-1" To="1" Duration="0:0:1.2">
+                            <DoubleAnimation.EasingFunction>
+                              <SineEase EasingMode="EaseInOut" />
+                            </DoubleAnimation.EasingFunction>
+                          </DoubleAnimation>
+                        </Storyboard>
+                      </BeginStoryboard>
+                    </MultiDataTrigger.EnterActions>
+                    <MultiDataTrigger.ExitActions>
+                      <StopStoryboard BeginStoryboardName="Shimmer" />
+                    </MultiDataTrigger.ExitActions>
+                  </MultiDataTrigger>
+                </Style.Triggers>
+              </Style>
+            </Rectangle.Style>
+          </Rectangle>
         </Grid>
       </Border>
     </DataTemplate>
