@@ -140,6 +140,9 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<string>("LastToolName")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("LastUseAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Model")
                         .HasColumnType("TEXT");
 

@@ -9,6 +9,13 @@ public sealed record SessionSnapshot
     public required SessionState State { get; init; }
     public required DateTimeOffset StartedAt { get; init; }
     public required DateTimeOffset LastEventAt { get; init; }
+
+    /// <summary>
+    /// When the chat was last used (#278): its latest prompt, tool use, or ask that has it wait for the user, as told by its
+    /// own hook events. What groups its window in the Yard, live and after a restart alike. Null while no use was seen;
+    /// chats stored before #278 were given theirs by the hook events kept. Persisted.
+    /// </summary>
+    public DateTimeOffset? LastUseAt { get; init; }
     public required DateTimeOffset StateSince { get; init; }
     public string? Cwd { get; init; }
     public string? TranscriptPath { get; init; }

@@ -109,36 +109,40 @@ public class SessionStoreTests : IAsyncLifetime
         (await _store.GetActiveSinceAsync(_now.AddDays(-1), TestContext.Current.CancellationToken)).Select(r => r.Id).ShouldBe(["new"]);
     }
 
-    /// <summary>#276: a chat's start and end are no use of its window; a chat whose events are gone goes by its last event.</summary>
+    /// <summary>
+    /// #276/#278: a window's last use is the latest stored use of its chats, the one the Yard sees live. A chat without one
+    /// (only started, reloaded or ended) and a session that never held a conversation tell none.
+    /// </summary>
     [Fact]
-    public async Task Last_use_by_workspace_goes_by_the_events_of_use_and_leaves_out_starts_ends_and_sessions_without_a_conversation()
+    public async Task Last_use_by_workspace_is_the_latest_stored_use_of_its_chats()
     {
-        Guid app = Guid.NewGuid(), shop = Guid.NewGuid(), docs = Guid.NewGuid(), ghostly = Guid.NewGuid();
+        Guid app = Guid.NewGuid(), shop = Guid.NewGuid(), ghostly = Guid.NewGuid();
         var ct = TestContext.Current.CancellationToken;
         await _store.UpsertAsync([
-            // Used two days ago, its window closed (SessionEnd) just now.
-            SessionRecord.FromSnapshot(Snapshot("a1", SessionState.Ended, _now) with { WorkspaceId = app }),
-            SessionRecord.FromSnapshot(Snapshot("a2", SessionState.Idle, _now.AddDays(-5)) with { WorkspaceId = app }),
-            // Only started again (a window reload) since its events were pruned: no use.
+            // Used three hours ago, its window reloaded just now.
+            SessionRecord.FromSnapshot(Snapshot("a1", SessionState.Idle, _now) with { WorkspaceId = app, LastUseAt = _now.AddHours(-3) }),
+            SessionRecord.FromSnapshot(Snapshot("a2", SessionState.Idle, _now.AddDays(-5)) with { WorkspaceId = app, LastUseAt = _now.AddDays(-5) }),
+            // Only started.
             SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now) with { WorkspaceId = shop }),
-            // No events kept: its last event.
-            SessionRecord.FromSnapshot(Snapshot("d1", SessionState.Ended, _now.AddDays(-30)) with { WorkspaceId = docs }),
-            // Never held a conversation.
-            SessionRecord.FromSnapshot(Snapshot("g1", SessionState.Ended, _now) with { WorkspaceId = ghostly, Title = null, LatestContext = TokenUsage.Zero }),
-        ], ct);
-        await _store.AppendEventsAsync([
-            new SessionEventRecord { SessionId = "a1", Kind = "UserPromptSubmit", At = _now.AddDays(-2).AddMinutes(-5) },
-            new SessionEventRecord { SessionId = "a1", Kind = "Stop", At = _now.AddDays(-2) },
-            new SessionEventRecord { SessionId = "a1", Kind = "SessionEnd", At = _now },
-            new SessionEventRecord { SessionId = "s1", Kind = "SessionStart", At = _now },
-            new SessionEventRecord { SessionId = "g1", Kind = "Stop", At = _now },
+            SessionRecord.FromSnapshot(Snapshot("g1", SessionState.Ended, _now) with { WorkspaceId = ghostly, LastUseAt = _now, Title = null, LatestContext = TokenUsage.Zero }),
         ], ct);
 
         var lastUse = await _store.GetLastUseByWorkspaceAsync(ct);
 
-        lastUse.Count.ShouldBe(2);
-        lastUse[app].ShouldBe(_now.AddDays(-2).AddMinutes(-5), "the prompt; the turn's end and the chat's end are no use, and the other chat's last event, five days ago, is older");
-        lastUse[docs].ShouldBe(_now.AddDays(-30));
+        lastUse.ShouldBe(new Dictionary<Guid, DateTimeOffset> { [app] = _now.AddHours(-3) });
+    }
+
+    [Fact]
+    public async Task Upsert_keeps_the_later_last_use_when_the_chat_comes_back_as_a_fresh_snapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now.AddDays(-2)) with { LastUseAt = _now.AddDays(-2) })], ct);
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { State = SessionState.Idle })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastUseAt.ShouldBe(_now.AddDays(-2), "a reload is no use");
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { LastUseAt = _now })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastUseAt.ShouldBe(_now);
     }
 
     [Fact]

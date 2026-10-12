@@ -403,6 +403,97 @@ public class SessionEngineTests
         _engine.Get("n")!.State.ShouldBe(SessionState.Stale, "quiet for the whole stale window: Idle would only last one sweep");
     }
 
+    /// <summary>#278: one use of a chat, the one its window's group in the Yard goes by, live and after a restart alike.</summary>
+    [Fact]
+    public void A_prompt_a_tool_use_and_an_ask_are_use_of_a_chat_and_its_start_turn_end_and_notices_are_not()
+    {
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Get("s1")!.LastUseAt.ShouldBeNull("a window that opens or reloads starts its chats");
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit));
+        _engine.Get("s1")!.LastUseAt.ShouldBe(_time.GetUtcNow());
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash"));
+        _engine.Get("s1")!.LastUseAt.ShouldBe(_time.GetUtcNow());
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "permission_prompt" });
+        var asked = _engine.Get("s1")!;
+        asked.State.ShouldBe(SessionState.Waiting);
+        asked.LastUseAt.ShouldBe(_time.GetUtcNow(), "a permission prompt without a PermissionRequest asks all the same");
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, tool: "Bash"));
+        var lastUse = _time.GetUtcNow();
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse) with { At = lastUse.AddSeconds(-30) });
+        _engine.Get("s1")!.LastUseAt.ShouldBe(lastUse, "an event told late moves nothing back");
+
+        foreach (var (name, signal) in new (string, SessionSignal?)[]
+                 {
+                     ("PreCompact", null), ("SubagentStop", null), ("Stop", SessionSignal.Stop), ("Notification", null),
+                     ("Notification", SessionSignal.IdlePrompt), ("SessionEnd", SessionSignal.SessionEnd),
+                 })
+        {
+            _time.Advance(TimeSpan.FromMinutes(1));
+            _engine.Apply(Hook(name, signal) with { Informational = signal is null });
+        }
+
+        var ended = _engine.Get("s1")!;
+        ended.LastEventAt.ShouldBe(_time.GetUtcNow());
+        ended.LastUseAt.ShouldBe(lastUse);
+    }
+
+    /// <summary>#278 (user): a use goes to the chat whose events tell it, whichever window or tab is open.</summary>
+    [Fact]
+    public void A_use_is_the_chat_of_its_own_events_only()
+    {
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "s1"));
+        var first = _time.GetUtcNow();
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "s2"));
+
+        _engine.Get("s1")!.LastUseAt.ShouldBe(first);
+        _engine.Get("s2")!.LastUseAt.ShouldBe(_time.GetUtcNow());
+    }
+
+    /// <summary>
+    /// #278 review: only hooks tell a chat's use. Its transcript is written without them too: Raven compacts or names it
+    /// headless with hooks off, whether the engine holds it (restored, its hooks silent since the restart) or not (older
+    /// than a day, so it comes back as a chat only its transcript tells of). Neither is a use by the user.
+    /// </summary>
+    [Fact]
+    public void A_transcript_tells_no_use_of_a_chat_held_or_not()
+    {
+        var used = _time.GetUtcNow().AddDays(-3);
+        _engine.Restore([new SessionSnapshot { SessionId = "r", State = SessionState.Idle, StartedAt = used, LastEventAt = used, StateSince = used, LastUseAt = used }]);
+
+        _engine.Apply(Update("r", SessionSignal.ToolUse) with { PendingToolUse = true }); // the compaction's lines
+        _engine.Apply(Update("old", SessionSignal.ToolUse) with { PendingToolUse = true });
+        _time.Advance(TimeSpan.FromSeconds(11));
+        _engine.SweepStale();
+
+        _engine.Get("r")!.LastUseAt.ShouldBe(used);
+        var old = _engine.Get("old")!;
+        old.State.ShouldBe(SessionState.Waiting, "the transcript still tells the state");
+        old.LastUseAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_restored_chat_keeps_its_last_use_when_its_window_reloads()
+    {
+        var used = _time.GetUtcNow().AddDays(-3);
+        _engine.Restore([new SessionSnapshot { SessionId = "r", State = SessionState.Idle, StartedAt = used, LastEventAt = used, StateSince = used, LastUseAt = used }]);
+
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart, session: "r"));
+
+        var reloaded = _engine.Get("r")!;
+        reloaded.LastEventAt.ShouldBe(_time.GetUtcNow());
+        reloaded.LastUseAt.ShouldBe(used);
+    }
+
     [Fact]
     public void Restore_keeps_waiting_sessions_waiting_until_their_process_dies_or_a_hook_speaks()
     {

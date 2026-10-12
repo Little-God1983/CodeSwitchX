@@ -192,6 +192,8 @@ public sealed class SessionEngine : IDisposable
                 State = state,
                 StateSince = state == s.State && previous is not null ? s.StateSince : e.At,
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
+                // The event's own signal: a tool use the agents make no progress of is still the chat at work.
+                LastUseAt = UsedAt(s, e.Signal, state, e.At),
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
                     : cwd != s.Cwd || s.WorkspaceId is null || windowChanged ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
@@ -578,6 +580,21 @@ public sealed class SessionEngine : IDisposable
         }
 
         Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow() });
+    }
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.LastUseAt"/> once <paramref name="signal"/> of the chat <paramref name="s"/> is applied at
+    /// <paramref name="at"/>, leaving it in <paramref name="state"/>. Use is a prompt, a tool use, or an ask that has the
+    /// chat wait for the user; not its start or end (its window opened, reloaded or closed), a turn's end, or the idle
+    /// notice a minute after it. Only the chat's own hook events tell it, never which window or tab the user has open, nor
+    /// its transcript: that is written without hooks too, when Raven compacts or names the chat headless with hooks off. An
+    /// earlier time than the one known changes nothing.
+    /// </summary>
+    private static DateTimeOffset? UsedAt(SessionSnapshot s, SessionSignal? signal, SessionState state, DateTimeOffset at)
+    {
+        var use = signal is SessionSignal.PromptSubmit or SessionSignal.ToolUse
+            || (signal == SessionSignal.Notification && state == SessionState.Waiting);
+        return use && (s.LastUseAt is not { } known || at > known) ? at : s.LastUseAt;
     }
 
     /// <summary>Stores and publishes a changed snapshot. Must be called under <see cref="_gate"/> so versions and publish order agree.</summary>

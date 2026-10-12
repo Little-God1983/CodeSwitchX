@@ -124,12 +124,11 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             _sessions[snapshot.SessionId] = snapshot;
         }
 
-        // Only a chat that works or asks is in use: one that starts, goes idle or ends changes as its window opens, reloads
-        // or closes (a turn's end comes right after its work). The engine holds the last day's chats, and its first look
-        // at them is no use either: the stored use, read at startup, tells of those.
-        if (snapshot.State is SessionState.Working or SessionState.Waiting)
+        // The engine stamps a chat's use (a prompt, a tool, an ask) from its own events and stores it, so a restored chat
+        // tells the same use as the stored read at startup (#278).
+        if (snapshot.LastUseAt is { } used)
         {
-            SawUse(snapshot.LastEventAt);
+            SawUse(used);
         }
 
         Chats.FirstOrDefault(c => Same(c.SessionId, snapshot.SessionId))?.Update(snapshot, pricing);

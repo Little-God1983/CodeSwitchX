@@ -131,6 +131,39 @@ public class DatabaseInitializerTests : IAsyncLifetime
             .ShouldBe(new Dictionary<string, int> { ["one"] = 1, ["old build"] = 2, ["three"] = 3 }, ignoreOrder: true);
     }
 
+    /// <summary>
+    /// #278: chats stored before their last use was are given it once, by the events kept, as the Yard read them at startup
+    /// (#276): a prompt, a tool, a question; not a start, a turn's end or a chat's end. One none of whose events are kept
+    /// goes by its last event.
+    /// </summary>
+    [Fact]
+    public async Task An_upgrade_gives_the_stored_chats_their_last_use_by_the_events_kept()
+    {
+        await MigrateToAsync("20261004145717_WorkspaceNumbers");
+        var now = new DateTimeOffset(2026, 10, 12, 12, 0, 0, TimeSpan.Zero);
+        long T(DateTimeOffset at) => at.UtcTicks;
+        await ExecuteAsync($"""
+            INSERT INTO "Sessions" ("Id", "Title", "TitleLocked", "State", "StartedAt", "LastEventAt", "StateSince", "Inferred",
+                                    "ContextInput", "ContextOutput", "ContextCacheWrite", "ContextCacheRead", "ContextCacheWrite1h") VALUES
+              ('used', 't', 0, 'Ended', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0),
+              ('reloaded', 't', 0, 'Idle', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0),
+              ('pruned', 't', 0, 'Ended', 0, {T(now.AddDays(-30))}, 0, 0, 0, 0, 0, 0, 0);
+            INSERT INTO "SessionEvents" ("SessionId", "Kind", "At") VALUES
+              ('used', 'UserPromptSubmit', {T(now.AddDays(-2).AddMinutes(-5))}),
+              ('used', 'Stop', {T(now.AddDays(-2))}),
+              ('used', 'SessionEnd', {T(now)}),
+              ('reloaded', 'SessionStart', {T(now)});
+            """);
+
+        await InitializeWithinTenSecondsAsync();
+
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(DateTimeOffset.MinValue, TestContext.Current.CancellationToken)).ToDictionary(s => s.Id, s => s.LastUseAt)
+            .ShouldBe(new Dictionary<string, DateTimeOffset?>
+            {
+                ["used"] = now.AddDays(-2).AddMinutes(-5), ["reloaded"] = null, ["pruned"] = now.AddDays(-30),
+            }, ignoreOrder: true);
+    }
+
     [Fact]
     public async Task An_upgrade_marks_the_cursors_stored_before_titles_were_as_having_found_a_prompt_title()
     {
