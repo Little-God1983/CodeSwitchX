@@ -295,6 +295,7 @@ public class ShellViewModelTests
         SessionSnapshot Turn(SessionState state, long version) => new()
         {
             SessionId = sessionId, WorkspaceId = workspaceId, State = state, StartedAt = at, LastEventAt = at, StateSince = at, Title = "T", Version = version,
+            HookSeen = true,
         };
         _h.Bus.Publish(new SessionChanged(null, Turn(SessionState.Working, 1)));
         _h.Bus.Publish(new SessionChanged(null, Turn(SessionState.Idle, 2)));

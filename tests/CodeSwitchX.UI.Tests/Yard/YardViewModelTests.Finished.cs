@@ -146,6 +146,42 @@ public partial class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_turn_that_ends_while_it_waits_is_finished()
+    {
+        var app = await AppTile();
+        Prompt("s1");
+        _engine.Apply(Hook("s1", "Notification", SessionSignal.Notification, @"c:\repo\app"));
+
+        Stop("s1"); // the permission was denied, and Claude ended the turn without another tool
+
+        app.IsFinished.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_wait_without_a_turn_that_ends_is_no_finished_turn()
+    {
+        var app = await AppTile();
+        _engine.Apply(Hook("s1", "SessionStart", SessionSignal.SessionStart, @"c:\repo\app"));
+        _engine.Apply(Hook("s1", "Notification", SessionSignal.Notification, @"c:\repo\app"));
+
+        Stop("s1");
+
+        app.IsFinished.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_working_chat_restored_at_startup_that_inference_turns_idle_is_not_finished()
+    {
+        var app = await AppTile();
+        var restored = Snapshot("s1", _app.Id, SessionState.Working) with { Version = 1 };
+        _bus.Publish(new SessionChanged(null, restored));
+
+        _bus.Publish(new SessionChanged(restored, restored with { State = SessionState.Idle, Version = 2 })); // no hook said Stop
+
+        app.IsFinished.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_stop_without_a_turn_is_no_finished_turn()
     {
         var app = await AppTile();

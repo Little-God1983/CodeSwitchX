@@ -113,6 +113,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// </summary>
     private readonly HashSet<string> _finished = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>The chats in a turn (#287): from working, through any wait for the user, until the turn ends.</summary>
+    private readonly HashSet<string> _inTurn = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// A chat of the window finished a turn the user has not seen (#287): the tile shimmers. With a chat that asks and one
     /// that works, the window shows all three at once: each chat adds its own sign.
@@ -142,7 +145,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         _pricing = pricing;
         if (!_sessions.TryGetValue(snapshot.SessionId, out var known) || snapshot.Version >= known.Version)
         {
-            Finished(known, snapshot);
+            Finished(snapshot);
             _sessions[snapshot.SessionId] = snapshot;
         }
 
@@ -158,27 +161,43 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     }
 
     /// <summary>
-    /// A chat that goes from working to idle finished a turn (#287), unseen unless the Cab shows the workspace. One that
+    /// A chat whose turn ends finished it (#287), unseen unless the Cab shows the workspace. A turn runs from the chat's
+    /// working through any wait for the user (a permission denied, then Stop, ends it waiting) to idle. Only a hook tells
+    /// that end: inference turns a quiet working chat idle while it may still work (a chat restored at startup). One that
     /// works, asks, ends or crashed has no finished turn to see; one that only goes stale keeps it.
     /// </summary>
-    private void Finished(SessionSnapshot? known, SessionSnapshot now)
+    private void Finished(SessionSnapshot now)
     {
-        if (known?.State == SessionState.Working && now.State == SessionState.Idle)
+        var id = now.SessionId;
+        switch (now.State)
         {
-            if (!_owner.InCab(Id))
-            {
-                _finished.Add(now.SessionId);
-            }
-        }
-        else if (now.State is not (SessionState.Idle or SessionState.Stale))
-        {
-            _finished.Remove(now.SessionId);
+            case SessionState.Working:
+                _inTurn.Add(id);
+                _finished.Remove(id);
+                break;
+            case SessionState.Waiting:
+                _finished.Remove(id);
+                break;
+            case SessionState.Idle:
+                if (_inTurn.Remove(id) && now.HookSeen && !_owner.InCab(Id))
+                {
+                    _finished.Add(id);
+                }
+
+                break;
+            case SessionState.Stale:
+                break;
+            default:
+                _inTurn.Remove(id);
+                _finished.Remove(id);
+                break;
         }
     }
 
     /// <summary>The chat is another tile's now, or no tile's: this one knows it no more.</summary>
     public void Remove(string sessionId)
     {
+        _inTurn.Remove(sessionId);
         _finished.Remove(sessionId);
         // Its row goes with it: one kept for a tab of it here would show the chat's last state for good.
         var row = Chats.FirstOrDefault(c => Same(c.SessionId, sessionId));
