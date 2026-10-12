@@ -685,6 +685,29 @@
           <TextBlock Text="{Binding UnreadText}" FontSize="9.5" FontWeight="Bold" Foreground="White"
                      HorizontalAlignment="Center" VerticalAlignment="Center" />
         </Border>
+        <!--
+          The chat is muted (#281): its crossed-out speaker at the upper left, amber as its mute button. Only where that
+          button is not shown: the folded list and the collapsed strip; the full list's row says "MuteShown".
+        -->
+        <Border Width="14" Height="14" CornerRadius="7" Background="#0B1220" IsHitTestVisible="False"
+                HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-6,-6,0,0">
+          <Border.Style>
+            <Style TargetType="Border">
+              <Setter Property="Visibility" Value="Collapsed" />
+              <Style.Triggers>
+                <MultiDataTrigger>
+                  <MultiDataTrigger.Conditions>
+                    <Condition Binding="{Binding IsMuted}" Value="True" />
+                    <Condition Binding="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Value="{x:Null}" />
+                  </MultiDataTrigger.Conditions>
+                  <Setter Property="Visibility" Value="Visible" />
+                </MultiDataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+          <TextBlock Text="&#xE74F;" FontFamily="{StaticResource Icons}" FontSize="9" Foreground="#F59E0B"
+                     HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </Border>
       </Grid>
       <DataTemplate.Triggers>
         <!-- A window's chat wears its tile's colour. -->
@@ -878,7 +901,8 @@
                       </ContextMenu>
                     </Grid.ContextMenu>
                     <!-- The number's dot and its marks: they show on the folded list in the Cab, and on the collapsed strip. -->
-                    <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ChatNumber}" VerticalAlignment="Center" />
+                    <ContentPresenter x:Name="Number" Content="{Binding}" ContentTemplate="{StaticResource ChatNumber}" VerticalAlignment="Center"
+                                      Tag="MuteShown" />
                     <TextBlock x:Name="ChatName" Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#E5E7EB" Margin="10,0,0,0"
                                VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                     <Button x:Name="ChatMute" Grid.Column="2" Style="{StaticResource ChatMuteButton}" Margin="4,0,0,0" VerticalAlignment="Center" />
@@ -887,6 +911,7 @@
                     <DataTrigger Binding="{Binding DataContext.IsListFolded, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True">
                       <Setter TargetName="ChatName" Property="Visibility" Value="Collapsed" />
                       <Setter TargetName="ChatMute" Property="Visibility" Value="Collapsed" />
+                      <Setter TargetName="Number" Property="Tag" Value="{x:Null}" />
                     </DataTrigger>
                     <!-- Chat 0 and Activity have no mute of their own: no menu. -->
                     <DataTrigger Binding="{Binding CanMute}" Value="False">
