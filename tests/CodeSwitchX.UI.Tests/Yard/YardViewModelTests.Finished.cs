@@ -182,6 +182,32 @@ public partial class YardViewModelTests
     }
 
     [Fact]
+    public async Task A_restored_turn_that_inference_turned_idle_is_finished_by_its_real_stop()
+    {
+        var app = await AppTile();
+        var restored = Snapshot("s1", _app.Id, SessionState.Working) with { Version = 1 };
+        var inferred = restored with { State = SessionState.Idle, Version = 2 };
+        _bus.Publish(new SessionChanged(null, restored));
+        _bus.Publish(new SessionChanged(restored, inferred));
+
+        _bus.Publish(new SessionChanged(inferred, inferred with { HookSeen = true, Version = 3 })); // the hook's Stop
+
+        app.IsFinished.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_chat_restored_waiting_whose_turn_then_ends_is_finished()
+    {
+        var app = await AppTile();
+        var restored = Snapshot("s1", _app.Id, SessionState.Waiting) with { Version = 1 };
+        _bus.Publish(new SessionChanged(null, restored));
+
+        _bus.Publish(new SessionChanged(restored, restored with { State = SessionState.Idle, HookSeen = true, Version = 2 })); // denied, then Stop
+
+        app.IsFinished.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task A_stop_without_a_turn_is_no_finished_turn()
     {
         var app = await AppTile();

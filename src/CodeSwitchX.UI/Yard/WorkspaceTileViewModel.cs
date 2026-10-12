@@ -106,15 +106,21 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// The chats that finished a turn the user has not seen (#287): one that went from working to idle while the Cab did not
-    /// show its workspace. Its next turn, its end or its leaving the tile takes it off; opening the workspace takes them all.
-    /// Not stored: after a restart no tile is finished.
-    /// </summary>
-    private readonly HashSet<string> _finished = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Where a chat is in its turn (#287); a chat with neither has no turn running and none unseen.</summary>
+    private enum Turn
+    {
+        /// <summary>From working, through any wait for the user, until a hook tells the turn's end.</summary>
+        Running,
 
-    /// <summary>The chats in a turn (#287): from working, through any wait for the user, until the turn ends.</summary>
-    private readonly HashSet<string> _inTurn = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>The turn ended while the Cab did not show the workspace: the user has not seen it.</summary>
+        Finished,
+    }
+
+    /// <summary>
+    /// Each chat's turn (#287). A finished one is taken off by the chat's next turn, its end or its leaving the tile;
+    /// opening the workspace takes every finished one. Not stored: after a restart no tile is finished.
+    /// </summary>
+    private readonly Dictionary<string, Turn> _turns = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// A chat of the window finished a turn the user has not seen (#287): the tile shimmers. With a chat that asks and one
@@ -126,7 +132,11 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The Cab shows the workspace (#287): what finished there is seen.</summary>
     public void Seen()
     {
-        _finished.Clear();
+        foreach (var id in _turns.Where(t => t.Value == Turn.Finished).Select(t => t.Key).ToList())
+        {
+            _turns.Remove(id);
+        }
+
         Recompute();
     }
 
@@ -162,9 +172,10 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     /// <summary>
     /// A chat whose turn ends finished it (#287), unseen unless the Cab shows the workspace. A turn runs from the chat's
-    /// working through any wait for the user (a permission denied, then Stop, ends it waiting) to idle. Only a hook tells
-    /// that end: inference turns a quiet working chat idle while it may still work (a chat restored at startup). One that
-    /// works, asks, ends or crashed has no finished turn to see; one that only goes stale keeps it.
+    /// working through any wait for the user to idle: a permission denied, then Stop, ends it waiting. A chat that waits
+    /// having held a conversation is in a turn too (one restored waiting); one that waits without (a window loading) is
+    /// not. Only a hook tells the end: inference turns a quiet working chat idle while it may still work (one restored at
+    /// startup), so the turn runs on until a hook's Stop. One that ends or crashed has no turn to see; going stale keeps it.
     /// </summary>
     private void Finished(SessionSnapshot now)
     {
@@ -172,24 +183,28 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         switch (now.State)
         {
             case SessionState.Working:
-                _inTurn.Add(id);
-                _finished.Remove(id);
+            case SessionState.Waiting when now.HeldConversation:
+                _turns[id] = Turn.Running;
                 break;
             case SessionState.Waiting:
-                _finished.Remove(id);
+                _turns.Remove(id);
                 break;
-            case SessionState.Idle:
-                if (_inTurn.Remove(id) && now.HookSeen && !_owner.InCab(Id))
+            case SessionState.Idle when now.HookSeen && _turns.GetValueOrDefault(id, Turn.Finished) == Turn.Running:
+                if (_owner.InCab(Id))
                 {
-                    _finished.Add(id);
+                    _turns.Remove(id);
+                }
+                else
+                {
+                    _turns[id] = Turn.Finished;
                 }
 
                 break;
+            case SessionState.Idle:
             case SessionState.Stale:
                 break;
             default:
-                _inTurn.Remove(id);
-                _finished.Remove(id);
+                _turns.Remove(id);
                 break;
         }
     }
@@ -197,8 +212,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// <summary>The chat is another tile's now, or no tile's: this one knows it no more.</summary>
     public void Remove(string sessionId)
     {
-        _inTurn.Remove(sessionId);
-        _finished.Remove(sessionId);
+        _turns.Remove(sessionId);
         // Its row goes with it: one kept for a tab of it here would show the chat's last state for good.
         var row = Chats.FirstOrDefault(c => Same(c.SessionId, sessionId));
         if (_sessions.Remove(sessionId) | (row is not null && Chats.Remove(row)))
@@ -365,7 +379,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         NeedsAttention = Chats.Any(c => c.NeedsUser);
         HasInferredChats = Chats.Any(c => c.Inferred && c.IsLive);
         IsWorking = Chats.Any(Works);
-        IsFinished = _finished.Count > 0;
+        IsFinished = _turns.ContainsValue(Turn.Finished);
         OnPropertyChanged(nameof(AttentionRank));
     }
 
