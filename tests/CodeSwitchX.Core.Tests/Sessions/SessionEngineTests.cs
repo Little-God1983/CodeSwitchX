@@ -454,52 +454,31 @@ public class SessionEngineTests
 
         _time.Advance(TimeSpan.FromMinutes(5));
         _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "s2"));
-        _engine.Apply(Update("s3", SessionSignal.ToolUse));
 
         _engine.Get("s1")!.LastUseAt.ShouldBe(first);
         _engine.Get("s2")!.LastUseAt.ShouldBe(_time.GetUtcNow());
-        _engine.Get("s3")!.LastUseAt.ShouldBe(_time.GetUtcNow());
-    }
-
-    [Fact]
-    public void A_chat_without_hooks_is_used_when_its_transcript_was_written_and_the_sweeps_inferred_ask_dates_from_that_write()
-    {
-        var written = _time.GetUtcNow().AddSeconds(-2);
-        _engine.Apply(Update("t", SessionSignal.ToolUse, activity: written) with { PendingToolUse = true });
-        _engine.Get("t")!.LastUseAt.ShouldBe(written, "the write, not when it was read");
-
-        _time.Advance(TimeSpan.FromSeconds(11));
-        _engine.SweepStale();
-        var asked = _engine.Get("t")!;
-        asked.State.ShouldBe(SessionState.Waiting);
-        asked.LastUseAt.ShouldBe(written, "nothing happened since its last write");
-
-        _time.Advance(TimeSpan.FromMinutes(5));
-        _engine.Apply(Update("t", SessionSignal.Stop));
-        _engine.Get("t")!.LastUseAt.ShouldBe(written);
-
-        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, session: "h"));
-        var prompted = _time.GetUtcNow();
-        _time.Advance(TimeSpan.FromMinutes(1));
-        _engine.Apply(Update("h", SessionSignal.ToolUse));
-        _engine.Get("h")!.LastUseAt.ShouldBe(prompted, "once hooks spoke, the transcript infers nothing");
     }
 
     /// <summary>
-    /// #278 review: once hooks told of a chat, only they tell its use. After a restart its transcript is still written
-    /// without them: Raven compacts or names it headless, with hooks off, which is no use of the chat by the user.
+    /// #278 review: only hooks tell a chat's use. Its transcript is written without them too: Raven compacts or names it
+    /// headless with hooks off, whether the engine holds it (restored, its hooks silent since the restart) or not (older
+    /// than a day, so it comes back as a chat only its transcript tells of). Neither is a use by the user.
     /// </summary>
     [Fact]
-    public void The_transcript_of_a_chat_hooks_told_of_is_no_use_after_a_restart()
+    public void A_transcript_tells_no_use_of_a_chat_held_or_not()
     {
         var used = _time.GetUtcNow().AddDays(-3);
         _engine.Restore([new SessionSnapshot { SessionId = "r", State = SessionState.Idle, StartedAt = used, LastEventAt = used, StateSince = used, LastUseAt = used }]);
 
         _engine.Apply(Update("r", SessionSignal.ToolUse) with { PendingToolUse = true }); // the compaction's lines
+        _engine.Apply(Update("old", SessionSignal.ToolUse) with { PendingToolUse = true });
         _time.Advance(TimeSpan.FromSeconds(11));
         _engine.SweepStale();
 
         _engine.Get("r")!.LastUseAt.ShouldBe(used);
+        var old = _engine.Get("old")!;
+        old.State.ShouldBe(SessionState.Waiting, "the transcript still tells the state");
+        old.LastUseAt.ShouldBeNull();
     }
 
     [Fact]

@@ -396,7 +396,6 @@ public sealed class SessionEngine : IDisposable
 
             var state = s.State;
             var stateSince = s.StateSince;
-            var lastUse = s.LastUseAt;
             var activityAt = u.LastActivityAt ?? u.ObservedAt;
             // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is, and the
             // newest: Interrupted means the file ends with it, so the same lines infer nothing newer (their recent writes
@@ -415,7 +414,6 @@ public sealed class SessionEngine : IDisposable
                 }
 
                 state = next;
-                lastUse = InferredUsedAt(s, signal, state, activityAt);
             }
 
             var cwd = s.Cwd ?? u.Cwd;
@@ -427,7 +425,6 @@ public sealed class SessionEngine : IDisposable
                 State = state,
                 StateSince = stateSince,
                 LastEventAt = lastEvent,
-                LastUseAt = lastUse,
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(s.SessionId, out var claimed) ? claimed : s.WorkspaceId ?? _resolver.Resolve(cwd, s.WindowFolders),
                 TranscriptPath = s.TranscriptPath ?? u.TranscriptPath,
@@ -582,23 +579,15 @@ public sealed class SessionEngine : IDisposable
             return;
         }
 
-        // A quiet chat found waiting (the sweep's inferred prompt) has asked since its last write.
-        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow(), LastUseAt = InferredUsedAt(previous, signal, next, previous.LastEventAt) });
+        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow() });
     }
-
-    /// <summary>
-    /// <see cref="UsedAt"/> for a signal inferred from the transcript, which counts only for a chat no hook ever told of
-    /// (<see cref="SessionSnapshot.Inferred"/>). One hooks told of is written to without them as well: after a restart,
-    /// until its hooks speak again, Raven compacts or names it headless with hooks off, which is no use of it.
-    /// </summary>
-    private static DateTimeOffset? InferredUsedAt(SessionSnapshot s, SessionSignal? signal, SessionState state, DateTimeOffset at) =>
-        s.Inferred ? UsedAt(s, signal, state, at) : s.LastUseAt;
 
     /// <summary>
     /// <see cref="SessionSnapshot.LastUseAt"/> once <paramref name="signal"/> of the chat <paramref name="s"/> is applied at
     /// <paramref name="at"/>, leaving it in <paramref name="state"/>. Use is a prompt, a tool use, or an ask that has the
     /// chat wait for the user; not its start or end (its window opened, reloaded or closed), a turn's end, or the idle
-    /// notice a minute after it. Only the chat's own events tell it, never which window or tab the user has open. An
+    /// notice a minute after it. Only the chat's own hook events tell it, never which window or tab the user has open, nor
+    /// its transcript: that is written without hooks too, when Raven compacts or names the chat headless with hooks off. An
     /// earlier time than the one known changes nothing.
     /// </summary>
     private static DateTimeOffset? UsedAt(SessionSnapshot s, SessionSignal? signal, SessionState state, DateTimeOffset at)
