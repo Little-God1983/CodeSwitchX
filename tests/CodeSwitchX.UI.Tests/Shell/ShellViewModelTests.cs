@@ -477,12 +477,16 @@ public class ShellViewModelTests
         _h.Shell.StatusMessage.ShouldBeNull();
     }
 
-    /// <summary>Raven's list has a chat per tile; the Cab opening a window selects its chat and folds the list, the Yard unfolds it.</summary>
+    /// <summary>
+    /// Raven's list has a chat per tile; the Cab opening a window selects its chat and, on a narrow window, folds the list;
+    /// the Yard unfolds it.
+    /// </summary>
     [Fact]
-    public async Task Opening_a_window_in_the_cab_selects_its_raven_chat_and_folds_the_list()
+    public async Task Opening_a_window_in_the_cab_selects_its_raven_chat_and_folds_the_list_on_a_narrow_window()
     {
         _h.App.Number = 2;
         await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.SetWidth(1366);
         _h.Shell.Raven.Chats.Select(c => c.Label).ShouldBe(["0 Yard", "2 App", "Activity"]);
         _h.VsCodeWindowAppears();
 
@@ -493,6 +497,21 @@ public class ShellViewModelTests
         _h.Shell.BackToYardCommand.Execute(null);
         _h.Shell.Raven.IsListFolded.ShouldBeFalse();
         _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
+    }
+
+    /// <summary>A 1080p screen leaves VS Code room beside the whole panel: the Cab keeps the list, and folds it as the window narrows.</summary>
+    [Fact]
+    public async Task On_a_1080p_window_the_cab_keeps_Raven_s_list()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.SetWidth(1920);
+        _h.VsCodeWindowAppears();
+
+        await _h.Shell.EnterCabAsync(_h.App.Id);
+        _h.Shell.Raven.IsListFolded.ShouldBeFalse();
+
+        _h.Shell.SetWidth(1366);
+        _h.Shell.Raven.IsListFolded.ShouldBeTrue();
     }
 
     /// <summary>
