@@ -182,15 +182,28 @@ public partial class YardViewModelTests
     }
 
     [Fact]
-    public async Task A_restored_turn_that_inference_turned_idle_is_finished_by_its_real_stop()
+    public async Task A_restored_turn_that_inference_turned_idle_is_not_finished_by_a_later_hook()
     {
         var app = await AppTile();
-        var restored = Snapshot("s1", _app.Id, SessionState.Working) with { Version = 1 };
+        var restored = Snapshot("s1", _app.Id, SessionState.Waiting) with { Version = 1 };
         var inferred = restored with { State = SessionState.Idle, Version = 2 };
         _bus.Publish(new SessionChanged(null, restored));
         _bus.Publish(new SessionChanged(restored, inferred));
 
-        _bus.Publish(new SessionChanged(inferred, inferred with { HookSeen = true, Version = 3 })); // the hook's Stop
+        // Idle by a hook: a Stop, or the SessionStart of a window reloaded later, which the tile cannot tell apart.
+        _bus.Publish(new SessionChanged(inferred, inferred with { HookSeen = true, Version = 3 }));
+
+        app.IsFinished.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_finished_turn_stays_unseen_when_its_chat_ends()
+    {
+        var app = await AppTile();
+        Prompt("s1");
+        Stop("s1");
+
+        _engine.Apply(Hook("s1", "SessionEnd", SessionSignal.SessionEnd, @"c:\repo\app")); // a Reload Window, say
 
         app.IsFinished.ShouldBeTrue();
     }

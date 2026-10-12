@@ -155,7 +155,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         _pricing = pricing;
         if (!_sessions.TryGetValue(snapshot.SessionId, out var known) || snapshot.Version >= known.Version)
         {
-            Finished(snapshot);
+            TrackTurn(snapshot);
             _sessions[snapshot.SessionId] = snapshot;
         }
 
@@ -174,33 +174,25 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     /// A chat whose turn ends finished it (#287), unseen unless the Cab shows the workspace. A turn runs from the chat's
     /// working through any wait for the user to idle: a permission denied, then Stop, ends it waiting. A chat that waits
     /// having held a conversation is in a turn too (one restored waiting); one that waits without (a window loading) is
-    /// not. Only a hook tells the end: inference turns a quiet working chat idle while it may still work (one restored at
-    /// startup), so the turn runs on until a hook's Stop. One that ends or crashed has no turn to see; going stale keeps it.
+    /// not. Only a hook tells the end: an idle that inference told (a quiet chat restored at startup) ends the turn
+    /// unfinished, for a later hook that finds it idle may be a window's SessionStart as well as a Stop. A finished turn
+    /// stays unseen through going stale and through the chat's end (a Reload Window brings its tab back); a turn still
+    /// running when the chat ends or crashes has nothing finished to see.
     /// </summary>
-    private void Finished(SessionSnapshot now)
+    private void TrackTurn(SessionSnapshot now)
     {
         var id = now.SessionId;
+        var running = _turns.TryGetValue(id, out var turn) && turn == Turn.Running;
         switch (now.State)
         {
             case SessionState.Working:
             case SessionState.Waiting when now.HeldConversation:
                 _turns[id] = Turn.Running;
                 break;
-            case SessionState.Waiting:
-                _turns.Remove(id);
+            case SessionState.Idle when running && now.HookSeen && !_owner.InCab(Id):
+                _turns[id] = Turn.Finished;
                 break;
-            case SessionState.Idle when now.HookSeen && _turns.GetValueOrDefault(id, Turn.Finished) == Turn.Running:
-                if (_owner.InCab(Id))
-                {
-                    _turns.Remove(id);
-                }
-                else
-                {
-                    _turns[id] = Turn.Finished;
-                }
-
-                break;
-            case SessionState.Idle:
+            case SessionState.Idle or SessionState.Ended or SessionState.Errored when !running:
             case SessionState.Stale:
                 break;
             default:
