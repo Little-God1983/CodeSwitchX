@@ -415,7 +415,7 @@ public sealed class SessionEngine : IDisposable
                 }
 
                 state = next;
-                lastUse = UsedAt(s, signal, state, activityAt);
+                lastUse = InferredUsedAt(s, signal, state, activityAt);
             }
 
             var cwd = s.Cwd ?? u.Cwd;
@@ -583,8 +583,16 @@ public sealed class SessionEngine : IDisposable
         }
 
         // A quiet chat found waiting (the sweep's inferred prompt) has asked since its last write.
-        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow(), LastUseAt = UsedAt(previous, signal, next, previous.LastEventAt) });
+        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow(), LastUseAt = InferredUsedAt(previous, signal, next, previous.LastEventAt) });
     }
+
+    /// <summary>
+    /// <see cref="UsedAt"/> for a signal inferred from the transcript, which counts only for a chat no hook ever told of
+    /// (<see cref="SessionSnapshot.Inferred"/>). One hooks told of is written to without them as well: after a restart,
+    /// until its hooks speak again, Raven compacts or names it headless with hooks off, which is no use of it.
+    /// </summary>
+    private static DateTimeOffset? InferredUsedAt(SessionSnapshot s, SessionSignal? signal, SessionState state, DateTimeOffset at) =>
+        s.Inferred ? UsedAt(s, signal, state, at) : s.LastUseAt;
 
     /// <summary>
     /// <see cref="SessionSnapshot.LastUseAt"/> once <paramref name="signal"/> of the chat <paramref name="s"/> is applied at

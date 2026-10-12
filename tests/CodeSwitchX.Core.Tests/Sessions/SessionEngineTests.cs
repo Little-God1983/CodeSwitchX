@@ -485,6 +485,23 @@ public class SessionEngineTests
         _engine.Get("h")!.LastUseAt.ShouldBe(prompted, "once hooks spoke, the transcript infers nothing");
     }
 
+    /// <summary>
+    /// #278 review: once hooks told of a chat, only they tell its use. After a restart its transcript is still written
+    /// without them: Raven compacts or names it headless, with hooks off, which is no use of the chat by the user.
+    /// </summary>
+    [Fact]
+    public void The_transcript_of_a_chat_hooks_told_of_is_no_use_after_a_restart()
+    {
+        var used = _time.GetUtcNow().AddDays(-3);
+        _engine.Restore([new SessionSnapshot { SessionId = "r", State = SessionState.Idle, StartedAt = used, LastEventAt = used, StateSince = used, LastUseAt = used }]);
+
+        _engine.Apply(Update("r", SessionSignal.ToolUse) with { PendingToolUse = true }); // the compaction's lines
+        _time.Advance(TimeSpan.FromSeconds(11));
+        _engine.SweepStale();
+
+        _engine.Get("r")!.LastUseAt.ShouldBe(used);
+    }
+
     [Fact]
     public void A_restored_chat_keeps_its_last_use_when_its_window_reloads()
     {
