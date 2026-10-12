@@ -151,7 +151,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         ShowTraffic();
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
-        Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
+        Raven.ChatRequested += (_, line) => OpenNewsChat(line);
         // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised.
         Raven.CabRequested += (_, workspaceId) => _ = ((IRavenShell)this).OpenInCabAsync(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
@@ -622,6 +622,21 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Brings the window forward, from behind other apps or minimised: what Raven shows by voice is seen.</summary>
     public void BringForward() => ForwardRequested?.Invoke();
 
+    /// <summary>
+    /// A line of Raven's digest card was clicked (#275): its chat opens as a tile's chat row opens it (#115). A window
+    /// removed while its card is still on screen says it cannot, rather than nothing.
+    /// </summary>
+    private void OpenNewsChat(ChatNewsLine line)
+    {
+        if (Yard.FindTile(line.WorkspaceId) is null)
+        {
+            Raven.Note($"{line.Workspace} is not on the Yard any more: its chat \"{line.Title}\" cannot be opened from here.");
+            return;
+        }
+
+        _ = EnterCabAsync(line.WorkspaceId, line.SessionId);
+    }
+
     async Task<string?> IRavenShell.OpenInCabAsync(Guid workspaceId)
     {
         if (Yard.FindTile(workspaceId) is null)
@@ -637,13 +652,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         ForwardRequested?.Invoke(); // never throws (MainWindow), so the open is always awaited and said
         await entering;
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
-    }
-
-    /// <summary>A line of Raven's digest card was clicked: the Yard shows, with the chat's tile lit.</summary>
-    internal void ShowTile(Guid workspaceId)
-    {
-        ((IRavenShell)this).ShowYard();
-        Yard.Spotlight(workspaceId);
     }
 
     void IRavenShell.ShowYard()

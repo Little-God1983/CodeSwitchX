@@ -28,8 +28,8 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = vm.WhatsNewForBrain(FakeYardDirectory.WorkspaceOf("DiffusionNexus").ToString(), null);
 
-        said.ShouldStartWith("New in chat 3, DiffusionNexus:\n- DiffusionNexus, chat \"Task c\": finished"); // asked from there; the user is in chat 1
-        said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
+        said.ShouldStartWith("New in chat 3, DiffusionNexus:\n- DiffusionNexus, chat \"Task c\" (chat id c): finished"); // asked from there; the user is in chat 1
+        said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\" (chat id a): finished");
         said.ShouldNotContain("Done.", Case.Sensitive, "what a chat said never goes to the brain that acts");
     }
 
@@ -55,7 +55,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = await vm.WhatsNewWithHeldAsync(KeyOfSelected(vm), null);
 
-        said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\": finished");
+        said.ShouldContain("New in chat 2, ContentAutomatorX:\n- ContentAutomatorX, chat \"Task a\" (chat id a): finished");
         _brain.Gate!.SetResult();
         await WithinAsync(vm.PendingAnswers);
         await WithinAsync(_voice.WhenQuietAsync());

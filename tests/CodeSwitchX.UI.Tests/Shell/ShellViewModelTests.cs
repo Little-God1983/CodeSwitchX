@@ -1066,18 +1066,36 @@ public class ShellViewModelTests
         _h.Shell.Raven.ChatModelChip.ShouldBe("Default model");
     }
 
+    /// <summary>#275: a line of Raven's digest card opens the chat it tells of, as a tile's chat row does (#115).</summary>
     [Fact]
-    public async Task A_line_of_Ravens_digest_card_shows_the_Yard_with_its_tile_lit_for_a_moment()
+    public async Task A_line_of_Ravens_digest_card_opens_its_workspace_and_shows_that_chat()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
-        _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 0, 100, 100);
-        await _h.Shell.EnterCabAsync(_h.App.Id);
 
-        _h.Shell.ShowTile(_h.App.Id);
+        _h.Shell.Raven.OpenNewsChatCommand.Execute(new ChatNewsLine("s1", _h.App.Id, _h.App.Name, "Release notes", ChatNewsKind.Finished, null, null, false));
+        for (var i = 0; i < 200 && _h.VsCode.Shown.Count == 0; i++)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        _h.VsCode.Shown.ShouldBe([(_h.App.Name, "s1")]);
+        _h.Shell.StatusMessage.ShouldBeNull();
+    }
+
+    /// <summary>A window removed while its card is still on screen: its line opens nothing, and Raven says so rather than nothing.</summary>
+    [Fact]
+    public async Task A_line_of_Ravens_digest_card_of_a_window_gone_from_the_Yard_says_so()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Raven.OpenNewsChatCommand.Execute(new ChatNewsLine("z", Guid.NewGuid(), "OldProject", "Tidy up", ChatNewsKind.Finished, null, null, false));
 
         _h.Shell.Mode.ShouldBe(ShellMode.Yard);
-        _h.Shell.Yard.FindTile(_h.App.Id)!.IsSpotlit.ShouldBeTrue();
+        _h.VsCode.Shown.ShouldBeEmpty();
+        _h.Shell.Raven.Log.Last().Text.ShouldBe("OldProject is not on the Yard any more: its chat \"Tidy up\" cannot be opened from here.");
     }
 
     [Fact]
