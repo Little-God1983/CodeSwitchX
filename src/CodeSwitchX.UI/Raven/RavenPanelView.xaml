@@ -687,9 +687,10 @@
         </Border>
         <!--
           The chat is muted (#281): its crossed-out speaker at the upper left, amber as its mute button. Only where that
-          button is not shown: the folded list and the collapsed strip; the full list's row says "MuteShown".
+          button is not shown: the folded list and the collapsed strip; the full list's row says "MuteShown". No disc of its
+          own: a dark one showed as a blot on the selected row's and the hovered number's lighter fill.
         -->
-        <Border Width="14" Height="14" CornerRadius="7" Background="#0B1220" IsHitTestVisible="False"
+        <Border Width="14" Height="14" IsHitTestVisible="False"
                 HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-6,-6,0,0">
           <Border.Style>
             <Style TargetType="Border">
