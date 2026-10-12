@@ -3538,8 +3538,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>One line of news as the brain that acts is told it: the facts only, never what the chat said or asked.</summary>
-    /// <summary>A line as the brain that acts is told it: with the chat's id, so "which one?" and "open it" name that chat (#275).</summary>
+    /// <summary>
+    /// One line of news as the brain that acts is told it: the facts only, never what the chat said or asked; with the
+    /// chat's id, so "which one?" and "open it" name that chat (#275).
+    /// </summary>
     private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\" (chat id {line.SessionId}): {line.What}";
 
     /// <summary>
@@ -3794,15 +3796,24 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// A line of a digest card was clicked: its chat is opened, its window in the Cab with the chat's tab in front, as a
-    /// tile's chat row opens it (#115). Its tile on the Yard named no chat, and one window has many (#275).
+    /// tile's chat row opens it (#115). Its tile on the Yard named no chat, and one window has many (#275). A removed
+    /// window's card stays in Activity: its line says it cannot, rather than nothing.
     /// </summary>
     [RelayCommand]
     private void OpenNewsChat(ChatNewsLine? line)
     {
-        if (line is not null)
+        if (line is null)
         {
-            ChatRequested?.Invoke(this, (line.WorkspaceId, line.SessionId));
+            return;
         }
+
+        if (Chats.All(c => c.WorkspaceId != line.WorkspaceId))
+        {
+            AddEntry(RavenLogKind.Note, $"{line.Workspace} is not on the Yard any more: its chat \"{line.Title}\" cannot be opened from here.");
+            return;
+        }
+
+        ChatRequested?.Invoke(this, (line.WorkspaceId, line.SessionId));
     }
 
     /// <summary>A tool call's arguments for its card: the values, in order ("needs_me, Diffusion-Full"); null for none.</summary>

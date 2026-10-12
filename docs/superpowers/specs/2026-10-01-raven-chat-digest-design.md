@@ -106,9 +106,9 @@ Raven tells the user what their chats did as conversation, not as a queue of not
 ## 5. The log card and the tile
 
 - **The card:** a new `RavenLogKind.News` entry holding `ChatNewsLine`s (workspace, title, what happened).
-- **Clicking a line** shows the Yard and spotlights the tile: the panel raises `TileRequested`, and
-  `ShellViewModel.ShowTile` switches to the Yard and calls `YardViewModel.Spotlight`, which lights the tile's border for
-  2 s; `BringIntoViewWhen` scrolls it into view.
+- **Clicking a line** opens its chat (#275): the panel raises `ChatRequested` with the workspace and the session, and
+  the shell opens the workspace in the Cab with that chat's tab in front, as a tile's chat row does (#115). A line of a
+  window no longer on the Yard writes a note that it cannot be opened.
 
 ## 6. Setting
 

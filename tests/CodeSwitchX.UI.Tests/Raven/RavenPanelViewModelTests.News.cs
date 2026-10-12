@@ -357,6 +357,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Clicking_a_line_of_the_card_asks_for_its_chat()
     {
         var (vm, _) = await NewsVmAsync();
+        vm.SetWorkspaces([(FakeYardDirectory.WorkspaceOf("CodeSwitchX"), 1, "CodeSwitchX")]);
         vm.SpeakNews = false;
         Changes("b", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
@@ -366,5 +367,19 @@ public sealed partial class RavenPanelViewModelTests
         vm.OpenNewsChatCommand.Execute(vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines![0]);
 
         opened.ShouldBe((FakeYardDirectory.WorkspaceOf("CodeSwitchX"), "b"));
+    }
+
+    /// <summary>A removed window's cards stay in Activity: its line opens nothing, and says so rather than nothing.</summary>
+    [Fact]
+    public async Task Clicking_a_line_of_a_window_gone_from_the_Yard_says_so()
+    {
+        var (vm, _) = await NewsVmAsync();
+        var opened = false;
+        vm.ChatRequested += (_, _) => opened = true;
+
+        vm.OpenNewsChatCommand.Execute(new ChatNewsLine("z", Guid.NewGuid(), "OldProject", "Tidy up", ChatNewsKind.Finished, null, null, false));
+
+        opened.ShouldBeFalse();
+        vm.Log.Last().Text.ShouldBe("OldProject is not on the Yard any more: its chat \"Tidy up\" cannot be opened from here.");
     }
 }

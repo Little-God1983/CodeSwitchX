@@ -1070,6 +1070,7 @@ public class ShellViewModelTests
     [Fact]
     public async Task A_line_of_Ravens_digest_card_opens_its_workspace_and_shows_that_chat()
     {
+        _h.App.Number = 1; // it has a Raven chat
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
 
