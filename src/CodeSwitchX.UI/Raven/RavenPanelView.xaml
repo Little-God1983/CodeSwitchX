@@ -272,8 +272,8 @@
           <ItemsControl ItemsSource="{Binding Lines}" Margin="0,4,0,0" Focusable="False">
             <ItemsControl.ItemTemplate>
               <DataTemplate DataType="{x:Type raven:ChatNewsLine}">
-                <Button Command="{Binding DataContext.ShowNewsTileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                        CommandParameter="{Binding}" Cursor="Hand" ToolTip="Show its tile in the Yard" HorizontalContentAlignment="Left"
+                <Button Command="{Binding DataContext.OpenNewsChatCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                        CommandParameter="{Binding}" Cursor="Hand" ToolTip="Open this chat" HorizontalContentAlignment="Left"
                         AutomationProperties.Name="{Binding Text}">
                   <Button.Template>
                     <ControlTemplate TargetType="Button">

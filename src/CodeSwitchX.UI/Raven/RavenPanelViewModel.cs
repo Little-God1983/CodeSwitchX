@@ -434,8 +434,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [ObservableProperty]
     private int _openQuestions;
 
-    /// <summary>Raised when the user clicks a chat's line on a digest card: the shell shows its tile.</summary>
-    public event EventHandler<Guid>? TileRequested;
+    /// <summary>Raised when the user clicks a chat's line on a digest card: the shell opens that chat (#275).</summary>
+    public event EventHandler<(Guid WorkspaceId, string SessionId)>? ChatRequested;
 
     /// <summary>"Open chat three": the shell shows the chat's window in the Cab (switching alone never does).</summary>
     public event EventHandler<Guid>? CabRequested;
@@ -3539,7 +3539,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>One line of news as the brain that acts is told it: the facts only, never what the chat said or asked.</summary>
-    private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\": {line.What}";
+    /// <summary>A line as the brain that acts is told it: with the chat's id, so "which one?" and "open it" name that chat (#275).</summary>
+    private static string Fact(ChatNewsLine line) => $"{line.Workspace}, chat \"{line.Title}\" (chat id {line.SessionId}): {line.What}";
 
     /// <summary>
     /// The question as it goes to the brain that acts: after the chat news the user was given since its last question,
@@ -3791,13 +3792,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return (parts.Count == 1 ? parts[0] : string.Join(", ", parts[..^1]) + ", and " + parts[^1]) + ".";
     }
 
-    /// <summary>A line of a digest card was clicked: its chat's tile is shown.</summary>
+    /// <summary>
+    /// A line of a digest card was clicked: its chat is opened, its window in the Cab with the chat's tab in front, as a
+    /// tile's chat row opens it (#115). Its tile on the Yard named no chat, and one window has many (#275).
+    /// </summary>
     [RelayCommand]
-    private void ShowNewsTile(ChatNewsLine? line)
+    private void OpenNewsChat(ChatNewsLine? line)
     {
         if (line is not null)
         {
-            TileRequested?.Invoke(this, line.WorkspaceId);
+            ChatRequested?.Invoke(this, (line.WorkspaceId, line.SessionId));
         }
     }
 

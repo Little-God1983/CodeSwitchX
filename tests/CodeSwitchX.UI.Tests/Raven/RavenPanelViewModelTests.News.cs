@@ -98,7 +98,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Asked.ShouldBe([
-            Told + "ContentAutomatorX, chat \"Fix the upload retry\": finished.]\nOpen it",
+            Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): finished.]\nOpen it",
             "Thanks",
         ]);
         _brain.Asked.ShouldAllBe(q => !q.Contains("stop_chat"));
@@ -120,7 +120,7 @@ public sealed partial class RavenPanelViewModelTests
         await HoldAsync(vm);
         await WithinAsync(vm.PendingAnswers);
 
-        _brain.Sent.ShouldBe([Told + "CodeSwitchX, chat \"Release notes\": needs you.]\nopen it"]);
+        _brain.Sent.ShouldBe([Told + "CodeSwitchX, chat \"Release notes\" (chat id b): needs you.]\nopen it"]);
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldBe([
-            Told + "CodeSwitchX, chat \"Release notes\": needs you.]\nopen the one that needs me\nin the Cab",
+            Told + "CodeSwitchX, chat \"Release notes\" (chat id b): needs you.]\nopen the one that needs me\nin the Cab",
             "thanks",
         ]);
     }
@@ -165,7 +165,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
 
         _brain.Sent.ShouldBe([
-            Told + "CodeSwitchX, chat \"Release notes\": needs you; DiffusionNexus, chat \"Speed up the loader\": finished.]\nwhat now?",
+            Told + "CodeSwitchX, chat \"Release notes\" (chat id b): needs you; DiffusionNexus, chat \"Speed up the loader\" (chat id c): finished.]\nwhat now?",
         ]);
     }
 
@@ -352,18 +352,19 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines!.ShouldHaveSingleItem().Stale.ShouldBeTrue();
     }
 
+    /// <summary>#275: the line leads to the chat it tells of, not to its window's tile on the Yard.</summary>
     [Fact]
-    public async Task Clicking_a_line_of_the_card_asks_for_its_tile()
+    public async Task Clicking_a_line_of_the_card_asks_for_its_chat()
     {
         var (vm, _) = await NewsVmAsync();
         vm.SpeakNews = false;
         Changes("b", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        Guid? shown = null;
-        vm.TileRequested += (_, id) => shown = id;
+        (Guid WorkspaceId, string SessionId)? opened = null;
+        vm.ChatRequested += (_, chat) => opened = chat;
 
-        vm.ShowNewsTileCommand.Execute(vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines![0]);
+        vm.OpenNewsChatCommand.Execute(vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines![0]);
 
-        shown.ShouldBe(FakeYardDirectory.WorkspaceOf("CodeSwitchX"));
+        opened.ShouldBe((FakeYardDirectory.WorkspaceOf("CodeSwitchX"), "b"));
     }
 }

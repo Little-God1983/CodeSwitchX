@@ -151,7 +151,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         ShowTraffic();
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
-        Raven.TileRequested += (_, workspaceId) => ShowTile(workspaceId);
+        Raven.ChatRequested += (_, chat) => _ = EnterCabAsync(chat.WorkspaceId, chat.SessionId);
         // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised.
         Raven.CabRequested += (_, workspaceId) => _ = ((IRavenShell)this).OpenInCabAsync(workspaceId);
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
@@ -637,13 +637,6 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         ForwardRequested?.Invoke(); // never throws (MainWindow), so the open is always awaited and said
         await entering;
         return Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId && StatusMessage is null ? null : StatusMessage ?? "VS Code did not show it.";
-    }
-
-    /// <summary>A line of Raven's digest card was clicked: the Yard shows, with the chat's tile lit.</summary>
-    internal void ShowTile(Guid workspaceId)
-    {
-        ((IRavenShell)this).ShowYard();
-        Yard.Spotlight(workspaceId);
     }
 
     void IRavenShell.ShowYard()

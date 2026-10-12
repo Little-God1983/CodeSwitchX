@@ -83,8 +83,7 @@
 
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
       <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
-              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand"
-              infra:BringIntoViewWhen.Value="{Binding IsSpotlit}">
+              Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
         </Border.InputBindings>
@@ -104,10 +103,6 @@
             <Style.Triggers>
               <DataTrigger Binding="{Binding NeedsAttention}" Value="True">
                 <Setter Property="BorderBrush" Value="#F59E0B" />
-              </DataTrigger>
-              <!-- Raven's digest card asked for this tile: lit in Raven's colour for a moment. -->
-              <DataTrigger Binding="{Binding IsSpotlit}" Value="True">
-                <Setter Property="BorderBrush" Value="#62D0E8" />
               </DataTrigger>
             </Style.Triggers>
           </Style>
