@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using CodeSwitchX.Core.Sessions;
 
 namespace CodeSwitchX.Core.Persistence;
@@ -27,6 +28,13 @@ public sealed class SessionRecord
     public long ContextCacheWrite { get; set; }
     public long ContextCacheRead { get; set; }
     public long ContextCacheWrite1h { get; set; }
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.HeldConversation"/> as a query the database can run: the stored chat held a conversation.
+    /// SessionRecordTests holds the two to the same answer.
+    /// </summary>
+    public static readonly Expression<Func<SessionRecord, bool>> HeldConversation = s => s.Title != null || s.LastToolName != null
+        || s.ContextInput != 0 || s.ContextOutput != 0 || s.ContextCacheWrite != 0 || s.ContextCacheRead != 0 || s.ContextCacheWrite1h != 0;
 
     public static SessionRecord FromSnapshot(SessionSnapshot s)
     {

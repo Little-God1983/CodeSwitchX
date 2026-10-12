@@ -73,13 +73,17 @@ public class YardViewModelTests : IDisposable
         return root;
     }
 
-    /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger.</summary>
-    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null)
+    /// <summary>A Yard over the same stores, engine and bus, with its own git runner and logger, and what the store says of the windows' last use.</summary>
+    private YardViewModel Yard(Func<string, string, CancellationToken, Task<string?>> runGit, ILogger<YardViewModel>? logger = null, IUiDispatcher? ui = null,
+        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null)
     {
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
-        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, ui ?? new ImmediateDispatcher(), _time, logger ?? NullLogger<YardViewModel>.Instance);
+        return new YardViewModel(_store, _registry, _engine, pricing, new GitInspector(runGit), _bus, ui ?? new ImmediateDispatcher(), _time,
+            logger ?? NullLogger<YardViewModel>.Instance, storedLastUse: storedLastUse);
     }
+
+    private static Task<string?> NoGit(string root, string args, CancellationToken ct) => Task.FromResult<string?>(null);
 
     /// <summary>A UI thread that never gets to what is posted: the dispatcher has shut down, say.</summary>
     private sealed class DroppingDispatcher : IUiDispatcher
@@ -103,15 +107,174 @@ public class YardViewModelTests : IDisposable
         SessionId = sessionId, EventName = eventName, Signal = signal, At = _time.GetUtcNow(), Cwd = cwd,
     };
 
+    private IReadOnlyList<string> Names(LastUse group) => _yard.Groups[(int)group].Tiles.Select(t => t.Name).ToList();
+
     [Fact]
-    public async Task Initialize_builds_track_groups_with_their_tiles()
+    public async Task Initialize_puts_the_tiles_of_windows_without_chats_in_older_by_name()
     {
         await _yard.InitializeAsync(CancellationToken.None);
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients"]);
-        _yard.Tracks[0].Tiles.ShouldHaveSingleItem().Name.ShouldBe("App");
-        _yard.Tracks[1].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Shop");
+        _yard.Groups.Select(g => g.Name).ShouldBe(["Now & today", "This week", "Older"]);
+        Names(LastUse.Today).ShouldBeEmpty();
+        Names(LastUse.ThisWeek).ShouldBeEmpty();
+        Names(LastUse.Older).ShouldBe(["App", "Shop"]);
         _yard.Tiles.Select(t => t.Name).ShouldBe(["App", "Shop"]);
+    }
+
+    /// <summary>A chat of the workspace did a turn <paramref name="at"/> (now by default): it worked, then went idle.</summary>
+    private void Used(string id, Guid workspaceId, DateTimeOffset? at = null)
+    {
+        var when = at ?? _time.GetUtcNow();
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Working) with { LastEventAt = when }));
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Idle) with { LastEventAt = when }));
+    }
+
+    /// <summary>#276: the engine holds only the last day's chats, and counts their starts and ends; the store tells of the use.</summary>
+    [Fact]
+    public async Task Initialize_groups_the_tiles_by_the_stored_last_use()
+    {
+        var now = _time.GetUtcNow();
+        var yard = Yard(NoGit, storedLastUse: _ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(
+            new Dictionary<Guid, DateTimeOffset> { [_app.Id] = now - TimeSpan.FromDays(3), [_shop.Id] = now - TimeSpan.FromDays(30) }));
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        yard.Groups[(int)LastUse.ThisWeek].Tiles.Select(t => t.Name).ShouldBe(["App"]);
+        yard.Groups[(int)LastUse.Older].Tiles.Select(t => t.Name).ShouldBe(["Shop"]);
+        yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBe(now - TimeSpan.FromDays(30), "Older goes newest first after a restart too");
+    }
+
+    [Fact]
+    public async Task A_stored_last_use_that_cannot_be_read_leaves_the_tiles_to_the_engine_and_is_logged()
+    {
+        var log = new ListLogger<YardViewModel>();
+        var yard = Yard(NoGit, log, storedLastUse: _ => Task.FromException<IReadOnlyDictionary<Guid, DateTimeOffset>>(new IOException("database is locked")));
+        _engine.Restore([Snapshot("s1", _shop.Id, SessionState.Waiting)]);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        yard.Groups[(int)LastUse.Today].Tiles.Select(t => t.Name).ShouldBe(["Shop"]);
+        log.Entries.ShouldContain(e => e.Level == LogLevel.Warning);
+    }
+
+    /// <summary>#276 review: closing or reloading a VS Code window ends and starts its chats; that is no use of it.</summary>
+    [Fact]
+    public async Task A_chat_that_only_starts_goes_idle_or_ends_is_no_use_of_the_window()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Idle)));
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Ended)));
+
+        Names(LastUse.Today).ShouldBeEmpty();
+        _yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_chat_puts_its_tile_in_now_and_today_and_a_day_later_the_tick_moves_it_to_this_week()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        Used("s1", _shop.Id);
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+
+        _time.Advance(TimeSpan.FromHours(24));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBeEmpty();
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
+
+        _time.Advance(TimeSpan.FromDays(6));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Older).ShouldBe(["Shop", "App"], "used a week ago is newer than never");
+    }
+
+    [Fact]
+    public async Task A_tile_keeps_its_last_use_after_it_forgets_the_chat()
+    {
+        _yard.KeepClosed = TimeSpan.Zero;
+        await _yard.InitializeAsync(CancellationToken.None);
+        Used("s1", _shop.Id);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Ended)));
+
+        _time.Advance(TimeSpan.FromHours(2)); // an ended chat is forgotten after an hour
+        _yard.Tick(_time.GetUtcNow());
+
+        _yard.FindTile(_shop.Id)!.Knows("s1").ShouldBeFalse();
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+    }
+
+    [Fact]
+    public async Task Inside_a_group_the_newest_last_use_comes_first_and_working_tiles_lead_by_name()
+    {
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _general.Id };
+        var zed = new Workspace { Name = "Zed", RootPath = @"c:\repo\zed", TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, cli, zed]));
+        await _yard.InitializeAsync(CancellationToken.None);
+        var now = _time.GetUtcNow();
+
+        Used("a", _app.Id, now - TimeSpan.FromHours(5));
+        Used("s", _shop.Id, now - TimeSpan.FromHours(1));
+        Names(LastUse.Today).ShouldBe(["Shop", "App"]);
+
+        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working) with { LastEventAt = now - TimeSpan.FromHours(2) }));
+        _bus.Publish(new SessionChanged(null, Snapshot("c", cli.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"]);
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"], "two working tiles do not swap with each event");
+    }
+
+    /// <summary>#276 review: a tile does not slide under a click aimed at another; a pointer at rest holds nothing.</summary>
+    [Fact]
+    public async Task The_tiles_keep_their_places_for_two_seconds_after_the_pointer_moved_over_the_board()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.HoldOrder();
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBeEmpty("the pointer moved over the board just now");
+
+        _time.Advance(YardViewModel.HoldOrderFor);
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBe(["Shop"], "the pointer rests: the tick sorts it in");
+
+        _yard.HoldOrder();
+        _bus.Publish(new SessionChanged(null, Snapshot("a1", _app.Id, SessionState.Working)));
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+        _yard.ReleaseOrder();
+        Names(LastUse.Today).ShouldBe(["App", "Shop"], "the pointer left the board");
+    }
+
+    /// <summary>#276 review: the tiles keep their places while a tile's menu is open, however long.</summary>
+    [Fact]
+    public async Task The_tiles_keep_their_places_while_a_tiles_menu_is_open()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        _yard.MenuOpen(true);
+        _bus.Publish(new SessionChanged(null, Snapshot("s1", _shop.Id, SessionState.Working)));
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBeEmpty();
+
+        _yard.MenuOpen(false);
+        _time.Advance(YardViewModel.HoldOrderFor);
+        _yard.Tick(_time.GetUtcNow());
+        Names(LastUse.Today).ShouldBe(["Shop"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_registered_while_the_order_is_held_goes_straight_into_its_group()
+    {
+        await _yard.InitializeAsync(CancellationToken.None);
+        var cli = new Workspace { Name = "Cli", RootPath = @"c:\repo\cli", TrackId = _general.Id };
+        _engine.Restore([Snapshot("s1", cli.Id, SessionState.Waiting)]); // its chat asks already
+
+        _yard.HoldOrder();
+        _bus.Publish(new WorkspaceRegistered(cli));
+
+        Names(LastUse.Today).ShouldBe(["Cli"]);
     }
 
     /// <summary>#115: a chat's row asks for its own chat; the tile's click still asks for the workspace alone.</summary>
@@ -148,16 +311,21 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task Needs_me_first_puts_waiting_tiles_at_the_front()
+    public async Task Needs_me_first_lifts_a_tile_waiting_since_days_to_the_front_of_now_and_today()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting)));
+        Used("s1", _app.Id);
+        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) }));
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
 
         _yard.NeedsMeFirst = true;
 
-        _yard.Tiles.Select(t => t.Name).ShouldBe(["Shop", "App"]);
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["Clients", "General"], "the track with a waiting chat moves up");
-        _yard.Tracks.Single(t => t.Name == "General").Tiles.Select(t => t.Name).ShouldBe(["App"], "tiles stay inside their track group");
+        Names(LastUse.Today).ShouldBe(["Shop", "App"]);
+
+        _yard.NeedsMeFirst = false;
+
+        Names(LastUse.Today).ShouldBe(["App"]);
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
     }
 
     [Fact]
@@ -269,10 +437,10 @@ public class YardViewModelTests : IDisposable
         var extra = new Workspace { Name = "Extra", RootPath = @"c:\repo\extra", TrackId = _general.Id };
 
         _bus.Publish(new WorkspaceRegistered(extra));
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(["App", "Extra"]);
+        Names(LastUse.Older).ShouldBe(["App", "Extra", "Shop"]);
 
         _bus.Publish(new WorkspaceUnregistered(_app.Id));
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(["Extra"]);
+        Names(LastUse.Older).ShouldBe(["Extra", "Shop"]);
     }
 
     [Fact]
@@ -340,17 +508,18 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task With_needs_me_first_on_a_track_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
+    public async Task With_needs_me_first_on_a_tile_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting);
+        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) };
         _bus.Publish(new SessionChanged(null, waiting));
         _yard.NeedsMeFirst = true;
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["Clients", "General"]);
+        Names(LastUse.Today).ShouldBe(["Shop"]);
 
         _bus.Publish(new SessionChanged(waiting, waiting with { WorkspaceId = null }));
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients"], "the jump keys follow this order, so it must not wait for the next tick");
+        Names(LastUse.Today).ShouldBeEmpty("it must not wait for the next tick");
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"], "the chat's use stays the window's");
     }
 
     [Fact]
@@ -391,7 +560,7 @@ public class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_workspace_registered_into_a_new_track_gets_a_group_under_that_tracks_name()
+    public async Task A_workspace_registered_into_a_new_track_has_that_tracks_name()
     {
         await _yard.InitializeAsync(CancellationToken.None);
         var tools = new Track { Name = "Tools", SortOrder = 2 };
@@ -400,8 +569,9 @@ public class YardViewModelTests : IDisposable
 
         _bus.Publish(new WorkspaceRegistered(cli));
 
-        _yard.Tracks.Select(t => t.Name).ShouldBe(["General", "Clients", "Tools"]);
-        _yard.Tracks[2].Tiles.ShouldHaveSingleItem().Name.ShouldBe("Cli");
+        _yard.FindTile(cli.Id).ShouldNotBeNull();
+        _yard.TrackNameOf(cli.TrackId).ShouldBe("Tools");
+        _yard.TrackNameOf(_shop.TrackId).ShouldBe("Clients");
     }
 
     [Fact]
@@ -412,13 +582,13 @@ public class YardViewModelTests : IDisposable
         var zeta = new Workspace { Name = "Zeta", RootPath = @"c:\repo\zeta", TrackId = _general.Id };
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([_app, _shop, tools, zeta]));
         await _yard.InitializeAsync(CancellationToken.None);
-        var atStart = _yard.Tracks[0].Tiles.Select(t => t.Name).ToList();
+        var atStart = Names(LastUse.Older);
 
         _yard.NeedsMeFirst = true;
         _yard.NeedsMeFirst = false;
 
-        _yard.Tracks[0].Tiles.Select(t => t.Name).ShouldBe(atStart, "the jump keys follow the order shown, so it must not change with the checkbox");
-        atStart.ShouldBe(["App", "Zeta", "_tools"], "one comparer everywhere: ordinal, ignoring case");
+        Names(LastUse.Older).ShouldBe(atStart, "the order shown must not change with the checkbox");
+        atStart.ShouldBe(["App", "Shop", "Zeta", "_tools"], "one comparer everywhere: ordinal, ignoring case");
     }
 
     [Fact]

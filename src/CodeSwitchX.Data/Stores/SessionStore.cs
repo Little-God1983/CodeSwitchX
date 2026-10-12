@@ -22,6 +22,44 @@ public sealed class SessionStore : ISessionStore
     }
 
     /// <summary>
+    /// The hook events that use a chat: the ones that make it work or ask, as the Yard counts a live chat's use. Not its
+    /// start and end (its window opened, reloaded or closed), nor a turn's end or the idle notice a minute after it.
+    /// </summary>
+    private static readonly string[] Use = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest"];
+
+    public async Task<IReadOnlyDictionary<Guid, DateTimeOffset>> GetLastUseByWorkspaceAsync(CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var chats = await db.Sessions.AsNoTracking()
+            .Where(s => s.WorkspaceId != null)
+            .Where(SessionRecord.HeldConversation)
+            .Select(s => new { s.Id, WorkspaceId = s.WorkspaceId!.Value, s.LastEventAt })
+            .ToListAsync(ct);
+
+        var used = (await db.SessionEvents.AsNoTracking()
+                .Where(e => Use.Contains(e.Kind))
+                .GroupBy(e => e.SessionId)
+                .Select(g => new { SessionId = g.Key, At = g.Max(e => e.At) })
+                .ToListAsync(ct))
+            .ToDictionary(e => e.SessionId, e => e.At, StringComparer.Ordinal);
+        var told = (await db.SessionEvents.AsNoTracking().Select(e => e.SessionId).Distinct().ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+
+        var lastUse = new Dictionary<Guid, DateTimeOffset>();
+        foreach (var chat in chats)
+        {
+            // Its events tell when it was used; with none kept (older than their retention, or a chat only its transcript
+            // told of) its last event does.
+            DateTimeOffset? at = used.TryGetValue(chat.Id, out var u) ? u : told.Contains(chat.Id) ? null : chat.LastEventAt;
+            if (at is { } use && (!lastUse.TryGetValue(chat.WorkspaceId, out var known) || use > known))
+            {
+                lastUse[chat.WorkspaceId] = use;
+            }
+        }
+
+        return lastUse;
+    }
+
+    /// <summary>
     /// Inserts new chats and updates known ones. A chat that was not restored at startup comes back as a fresh snapshot
     /// with a new start and no title, so an update keeps the earlier start, a stored rename the record does not carry, and
     /// the stored title when the record has none.

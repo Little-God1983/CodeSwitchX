@@ -82,6 +82,22 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     private bool _isWorking;
 
     /// <summary>
+    /// When a chat of the window last did something (#276), null while none was seen: what puts the tile in its group of
+    /// the Yard. It only moves on: a chat the tile forgets (ended an hour ago) leaves it as it was.
+    /// </summary>
+    [ObservableProperty]
+    private DateTimeOffset? _lastUsedAt;
+
+    /// <summary>A chat of the window did something at <paramref name="at"/>; an earlier time than the one known changes nothing.</summary>
+    public void SawUse(DateTimeOffset at)
+    {
+        if (LastUsedAt is not { } known || at > known)
+        {
+            LastUsedAt = at;
+        }
+    }
+
+    /// <summary>
     /// Shows a git round's lines. The same lines again change nothing: a new list would rebuild every line on the tile each
     /// round, and close the tooltip the user has open.
     /// </summary>
@@ -109,6 +125,14 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         if (!_sessions.TryGetValue(snapshot.SessionId, out var known) || snapshot.Version >= known.Version)
         {
             _sessions[snapshot.SessionId] = snapshot;
+        }
+
+        // Only a chat that works or asks is in use: one that starts, goes idle or ends changes as its window opens, reloads
+        // or closes (a turn's end comes right after its work). The engine holds the last day's chats, and its first look
+        // at them is no use either: the stored use, read at startup, tells of those.
+        if (snapshot.State is SessionState.Working or SessionState.Waiting)
+        {
+            SawUse(snapshot.LastEventAt);
         }
 
         Chats.FirstOrDefault(c => Same(c.SessionId, snapshot.SessionId))?.Update(snapshot, pricing);
