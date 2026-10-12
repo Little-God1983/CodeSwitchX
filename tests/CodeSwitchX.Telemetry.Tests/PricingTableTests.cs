@@ -12,6 +12,7 @@ public class PricingTableTests
     [InlineData("claude-opus-5", "claude-opus-5")]
     [InlineData("claude-opus-5-20260401", "claude-opus-5")]
     [InlineData("claude-sonnet-4-5-20250929", "claude-sonnet-4-5")]
+    [InlineData("claude-haiku-5-5", "claude-haiku-5-5")]
     [InlineData("CLAUDE-HAIKU-4-5-20251001", "claude-haiku-4-5")]
     [InlineData("claude-opus-4-5@20251101", "claude-opus-4-5")]
     [InlineData("claude-opus-4-6[1m]", "claude-opus-4-6")]
@@ -61,6 +62,9 @@ public class PricingTableTests
         rules["claude-opus-5"].InputPerM.ShouldBe(5m);
         rules["claude-opus-5"].OutputPerM.ShouldBe(25m);
         rules["claude-sonnet-5"].InputPerM.ShouldBe(2m);
+        rules["claude-haiku-5-5"].ContextWindow.ShouldBe(1_000_000);
+        rules["claude-haiku-5-5"].InputPerM.ShouldBe(0.10m);
+        rules["claude-haiku-5-5"].OutputPerM.ShouldBe(0.50m);
         rules["claude-haiku-4-5"].ContextWindow.ShouldBe(200_000);
         rules.Values.ShouldAllBe(r => r.CacheWritePerM >= r.InputPerM && r.CacheReadPerM < r.InputPerM);
     }
@@ -84,6 +88,7 @@ public class PricingTableTests
         rules["claude-opus-5"].CacheWrite1hPerM.ShouldBe(10m);
         rules["claude-opus-4-1"].CacheWrite1hPerM.ShouldBe(30m);
         rules["claude-sonnet-5"].CacheWrite1hPerM.ShouldBe(4m);
+        rules["claude-haiku-5-5"].CacheWrite1hPerM.ShouldBe(0.20m);
         rules["claude-haiku-4-5"].CacheWrite1hPerM.ShouldBe(2m);
         rules["claude-3-5-haiku"].CacheWrite1hPerM.ShouldBe(1.6m);
         rules.Values.ShouldAllBe(r => r.CacheWrite1hPerM > r.CacheWritePerM, "a 1-hour write costs more than a 5-minute one for every model");

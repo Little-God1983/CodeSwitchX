@@ -504,13 +504,17 @@ public sealed class AppSettings : IAppSettings
 
     /// <summary>
     /// The model id a name means for Raven's own brain: an alias, an alias with its version, or the id of one of them or of a
-    /// model the Brain page offers. Another id is refused: one Claude does not know would leave Raven unable to answer, and so
-    /// unable to set it back by voice; it is typed on the page.
+    /// model the Brain page offers, which no alias may stand for ("Haiku 4.5"). Another id is refused: one Claude does not
+    /// know would leave Raven unable to answer, and so unable to set it back by voice; it is typed on the page.
     /// </summary>
     private string? SetModel(string value, Action<string> set)
     {
-        var id = _chats.ModelIdOf(value);
-        if (!_chats.Aliases.Any(a => a.Id == id) && !SettingsViewModel.KnownBrainModels.Contains(id))
+        bool Known(string id) => _chats.Aliases.Any(a => a.Id == id) || SettingsViewModel.KnownBrainModels.Contains(id);
+
+        var id = ChatModels.ResolveModel(value, _chats.Aliases) is { } resolved && Known(resolved)
+            ? resolved
+            : ChatModels.ModelNamed(value, SettingsViewModel.KnownBrainModels) ?? _chats.ModelIdOf(value);
+        if (!Known(id))
         {
             throw new YardActionException($"{id} is not a model Raven knows, and Raven could not answer at all with a wrong one: type it on "
                 + $"the {Title(SettingsPage.Brain)} page if it is right. Nothing was changed.");

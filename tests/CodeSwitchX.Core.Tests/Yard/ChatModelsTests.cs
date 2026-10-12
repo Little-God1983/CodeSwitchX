@@ -12,9 +12,9 @@ public sealed class ChatModelsTests
     [InlineData("Opus", "claude-opus-5-5")]
     [InlineData("Opus 5.5", "claude-opus-5-5")]
     [InlineData("fable 5.1", "claude-fable-5-1")]
-    [InlineData("Haiku 4.5", "claude-haiku-4-5-20251001")]
+    [InlineData("Haiku 5.5", "claude-haiku-5-5")]
     [InlineData("sonnet.", "claude-sonnet-5-5")]
-    [InlineData("Haiku", "claude-haiku-4-5-20251001")]
+    [InlineData("Haiku", "claude-haiku-5-5")]
     [InlineData("claude-opus-5-5", "claude-opus-5-5")]
     [InlineData("Claude-Sonnet-5", "claude-sonnet-5")]
     public void A_spoken_name_or_a_full_id_is_a_model(string said, string id)
@@ -29,7 +29,8 @@ public sealed class ChatModelsTests
     [InlineData("claude opus")]
     [InlineData("Opus 4.1")] // an older Opus, not the one the alias stands for
     [InlineData("Sonnet 4.5")]
-    [InlineData("Haiku 4.5.1")]
+    [InlineData("Haiku 4.5")] // the Haiku before the one the alias stands for
+    [InlineData("Haiku 5.5.1")]
     public void Anything_else_is_no_model(string said)
     {
         ChatModels.ResolveModel(said, Aliases).ShouldBeNull();

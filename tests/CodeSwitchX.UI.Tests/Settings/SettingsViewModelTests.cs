@@ -362,7 +362,7 @@ public class SettingsViewModelTests : IDisposable
         await _vm.LoadAsync(CancellationToken.None);
 
         _vm.RavenOverviewModel.ShouldBe(BrainSettings.DefaultOverviewModel);
-        _brain.OverviewModel.ShouldBe("claude-haiku-4-5-20251001");
+        _brain.OverviewModel.ShouldBe("claude-haiku-5-5");
     }
 
     [Theory]

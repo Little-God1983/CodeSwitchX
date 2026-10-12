@@ -141,6 +141,30 @@ public sealed class AppSettingsTests
         _h.Shell.Settings.RavenBrainModel.ShouldContain("haiku");
     }
 
+    [Theory]
+    [InlineData("claude-haiku-4-5-20251001")]
+    [InlineData("Haiku 4.5")] // no alias stands for it any more: the Brain page's model by its name
+    [InlineData("claude-haiku-4-5")]
+    public async Task The_haiku_before_the_default_is_set_back_by_its_name_or_id(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("Raven's model", said, Ct);
+
+        _h.Shell.Settings.RavenBrainModel.ShouldBe("claude-haiku-4-5-20251001", "the way back if Haiku 5.5 does not suit Raven");
+    }
+
+    [Fact]
+    public async Task An_alias_with_its_version_keeps_the_alias_s_id_for_raven_s_model()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Settings.RavenModelAliases = "Opus = claude-opus-5-5[1m]";
+
+        await _settings.SetAsync("Raven's model", "Opus 5.5", Ct);
+
+        _h.Shell.Settings.RavenBrainModel.ShouldBe("claude-opus-5-5[1m]", "the alias table comes before the Brain page's names");
+    }
+
     [Fact]
     public async Task Raven_s_effort_is_set_by_voice_as_said()
     {

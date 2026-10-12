@@ -25,6 +25,8 @@ public static class DefaultPricing
         Rule("claude-sonnet-4-6", "Claude Sonnet 4.6", 3m, 15m, 3.75m, 6m, 0.30m, 1_000_000),
         Rule("claude-sonnet-4-5", "Claude Sonnet 4.5", 3m, 15m, 3.75m, 6m, 0.30m, 200_000),
         Rule("claude-sonnet-4", "Claude Sonnet 4", 3m, 15m, 3.75m, 6m, 0.30m, 200_000),
+        // Prompts over 100K tokens cost $0.50 / $2.50; one rate a model fits here, so the estimate takes the common short one.
+        Rule("claude-haiku-5-5", "Claude Haiku 5.5", 0.10m, 0.50m, 0.125m, 0.20m, 0.01m, 1_000_000),
         Rule("claude-haiku-4-5", "Claude Haiku 4.5", 1m, 5m, 1.25m, 2m, 0.10m, 200_000),
         Rule("claude-3-5-haiku", "Claude Haiku 3.5", 0.8m, 4m, 1m, 1.6m, 0.08m, 200_000),
     ];
