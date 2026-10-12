@@ -141,6 +141,43 @@ public class SessionStoreTests : IAsyncLifetime
         lastUse[docs].ShouldBe(_now.AddDays(-30));
     }
 
+    /// <summary>#278: the stored use is the one the Yard saw live; only a row from before it goes by its events.</summary>
+    [Fact]
+    public async Task Last_use_by_workspace_goes_by_the_stored_last_use_where_a_row_has_one()
+    {
+        Guid app = Guid.NewGuid(), shop = Guid.NewGuid();
+        var ct = TestContext.Current.CancellationToken;
+        await _store.UpsertAsync([
+            // Used three hours ago, reloaded just now; its use events were pruned.
+            SessionRecord.FromSnapshot(Snapshot("a1", SessionState.Idle, _now) with { WorkspaceId = app, LastUseAt = _now.AddHours(-3) }),
+            // Stored before #278 and not used since: its prompt.
+            SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now) with { WorkspaceId = shop }),
+        ], ct);
+        await _store.AppendEventsAsync([
+            new SessionEventRecord { SessionId = "a1", Kind = "SessionStart", At = _now },
+            new SessionEventRecord { SessionId = "s1", Kind = "UserPromptSubmit", At = _now.AddDays(-1) },
+            new SessionEventRecord { SessionId = "s1", Kind = "SessionStart", At = _now },
+        ], ct);
+
+        var lastUse = await _store.GetLastUseByWorkspaceAsync(ct);
+
+        lastUse[app].ShouldBe(_now.AddHours(-3));
+        lastUse[shop].ShouldBe(_now.AddDays(-1));
+    }
+
+    [Fact]
+    public async Task Upsert_keeps_the_later_last_use_when_the_chat_comes_back_as_a_fresh_snapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now.AddDays(-2)) with { LastUseAt = _now.AddDays(-2) })], ct);
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { State = SessionState.Idle })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastUseAt.ShouldBe(_now.AddDays(-2), "a reload is no use");
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { LastUseAt = _now })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastUseAt.ShouldBe(_now);
+    }
+
     [Fact]
     public async Task Events_append_query_newest_first_and_prune()
     {

@@ -12,6 +12,9 @@ public sealed class SessionRecord
     public SessionState State { get; set; }
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset LastEventAt { get; set; }
+
+    /// <summary><see cref="SessionSnapshot.LastUseAt"/>; null in a row stored before #278.</summary>
+    public DateTimeOffset? LastUseAt { get; set; }
     public DateTimeOffset StateSince { get; set; }
     public string? Cwd { get; set; }
     public string? TranscriptPath { get; set; }
@@ -51,6 +54,7 @@ public sealed class SessionRecord
         State = s.State;
         StartedAt = s.StartedAt;
         LastEventAt = s.LastEventAt;
+        LastUseAt = s.LastUseAt;
         StateSince = s.StateSince;
         Cwd = s.Cwd;
         TranscriptPath = s.TranscriptPath;
@@ -76,6 +80,7 @@ public sealed class SessionRecord
         State = State,
         StartedAt = StartedAt,
         LastEventAt = LastEventAt,
+        LastUseAt = LastUseAt,
         StateSince = StateSince,
         Cwd = Cwd,
         TranscriptPath = TranscriptPath,

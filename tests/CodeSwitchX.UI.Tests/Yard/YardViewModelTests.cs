@@ -97,9 +97,11 @@ public class YardViewModelTests : IDisposable
         }
     }
 
+    /// <summary>A chat that works or asks was used just now, as the engine would stamp it.</summary>
     private SessionSnapshot Snapshot(string id, Guid workspaceId, SessionState state) => new()
     {
         SessionId = id, WorkspaceId = workspaceId, State = state, StartedAt = _time.GetUtcNow(), LastEventAt = _time.GetUtcNow(), StateSince = _time.GetUtcNow(), Title = "T " + id,
+        LastUseAt = state is SessionState.Working or SessionState.Waiting ? _time.GetUtcNow() : null,
     };
 
     private HookEvent Hook(string sessionId, string eventName, SessionSignal signal, string cwd) => new()
@@ -125,8 +127,8 @@ public class YardViewModelTests : IDisposable
     private void Used(string id, Guid workspaceId, DateTimeOffset? at = null)
     {
         var when = at ?? _time.GetUtcNow();
-        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Working) with { LastEventAt = when }));
-        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Idle) with { LastEventAt = when }));
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Working) with { LastEventAt = when, LastUseAt = when }));
+        _bus.Publish(new SessionChanged(null, Snapshot(id, workspaceId, SessionState.Idle) with { LastEventAt = when, LastUseAt = when }));
     }
 
     /// <summary>#276: the engine holds only the last day's chats, and counts their starts and ends; the store tells of the use.</summary>
@@ -168,6 +170,28 @@ public class YardViewModelTests : IDisposable
 
         Names(LastUse.Today).ShouldBeEmpty();
         _yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// #278: the tile goes by the chat's stored use, as the stored read at startup does, not by its latest event: a chat
+    /// used three days ago and reloaded just now stays in this week, and a notice while it works moves nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_tile_goes_by_the_last_use_of_its_chats_not_by_their_latest_event()
+    {
+        var now = _time.GetUtcNow();
+        _engine.Restore([Snapshot("s1", _shop.Id, SessionState.Idle) with { LastUseAt = now - TimeSpan.FromDays(3) }]);
+        await _yard.InitializeAsync(CancellationToken.None);
+
+        Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
+
+        var working = Snapshot("a1", _app.Id, SessionState.Working) with { LastUseAt = now - TimeSpan.FromMinutes(10) };
+        _bus.Publish(new SessionChanged(null, working));
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _bus.Publish(new SessionChanged(working, working with { LastEventAt = _time.GetUtcNow() }));
+
+        _yard.FindTile(_app.Id)!.LastUsedAt.ShouldBe(now - TimeSpan.FromMinutes(10));
+        _yard.FindTile(_shop.Id)!.LastUsedAt.ShouldBe(now - TimeSpan.FromDays(3), "another window's chat moves this one not");
     }
 
     [Fact]
@@ -216,7 +240,7 @@ public class YardViewModelTests : IDisposable
         Used("s", _shop.Id, now - TimeSpan.FromHours(1));
         Names(LastUse.Today).ShouldBe(["Shop", "App"]);
 
-        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working) with { LastEventAt = now - TimeSpan.FromHours(2) }));
+        _bus.Publish(new SessionChanged(null, Snapshot("z", zed.Id, SessionState.Working) with { LastEventAt = now - TimeSpan.FromHours(2), LastUseAt = now - TimeSpan.FromHours(2) }));
         _bus.Publish(new SessionChanged(null, Snapshot("c", cli.Id, SessionState.Working)));
         Names(LastUse.Today).ShouldBe(["Cli", "Zed", "Shop", "App"]);
 
@@ -315,7 +339,7 @@ public class YardViewModelTests : IDisposable
     {
         await _yard.InitializeAsync(CancellationToken.None);
         Used("s1", _app.Id);
-        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) }));
+        _bus.Publish(new SessionChanged(null, Snapshot("s2", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3), LastUseAt = _time.GetUtcNow() - TimeSpan.FromDays(3) }));
         Names(LastUse.ThisWeek).ShouldBe(["Shop"]);
 
         _yard.NeedsMeFirst = true;
@@ -511,7 +535,7 @@ public class YardViewModelTests : IDisposable
     public async Task With_needs_me_first_on_a_tile_whose_waiting_chat_leaves_every_workspace_moves_back_at_once()
     {
         await _yard.InitializeAsync(CancellationToken.None);
-        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3) };
+        var waiting = Snapshot("s1", _shop.Id, SessionState.Waiting) with { LastEventAt = _time.GetUtcNow() - TimeSpan.FromDays(3), LastUseAt = _time.GetUtcNow() - TimeSpan.FromDays(3) };
         _bus.Publish(new SessionChanged(null, waiting));
         _yard.NeedsMeFirst = true;
         Names(LastUse.Today).ShouldBe(["Shop"]);

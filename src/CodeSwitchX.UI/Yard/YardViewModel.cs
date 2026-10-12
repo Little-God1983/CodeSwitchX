@@ -316,8 +316,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// When the chats of each window were last used, as stored (<see cref="ISessionStore.GetLastUseByWorkspaceAsync"/>): the
-    /// engine holds only the last day's chats, and counts their starts and ends as events. A failed read leaves the tiles
-    /// to what the engine knows.
+    /// engine holds only the last day's chats. The same use as the tiles see live (#278). A failed read leaves the tiles to
+    /// what the engine knows.
     /// </summary>
     private async Task ReadStoredUseAsync(CancellationToken ct)
     {
