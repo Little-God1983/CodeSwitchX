@@ -223,6 +223,38 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
+    public async Task An_ask_left_to_VS_Code_says_when_its_tool_use_ends_there()
+    {
+        var ended = new List<string>();
+        _asks.EndedInVsCode += ask => ended.Add(ask.Id);
+        var left = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var answered = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
+        _asks.ToVsCode("toolu_1");
+        _asks.Answer("toolu_2", ["Apple"]);
+        await left;
+        await answered;
+
+        Step("PostToolUse", "toolu_2", session: "s2", tool: "AskUserQuestion");
+        Step("PostToolUse", "toolu_9", tool: "AskUserQuestion");
+        ended.ShouldBeEmpty("answered here, or never held: nothing ended in VS Code");
+
+        Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
+        Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
+        ended.ShouldBe(["toolu_1"], "told once");
+    }
+
+    [Theory]
+    [InlineData(ChatAskOutcome.ToVsCode, true)]
+    [InlineData(ChatAskOutcome.TimedOut, true)]
+    [InlineData(ChatAskOutcome.OpenedInVsCode, true)]
+    [InlineData(ChatAskOutcome.Answered, false)]
+    [InlineData(ChatAskOutcome.AnsweredInVsCode, false)]
+    [InlineData(ChatAskOutcome.Gone, false)]
+    [InlineData(ChatAskOutcome.Stopped, false)]
+    public void Only_an_ask_let_go_is_asked_in_VS_Code_now(ChatAskOutcome outcome, bool inVsCode) =>
+        ChatAsks.AsksInVsCode(outcome).ShouldBe(inVsCode);
+
+    [Fact]
     public async Task A_window_that_cannot_say_whether_VS_Code_shows_the_chat_lets_it_go_as_left_to_VS_Code()
     {
         var held = _asks.HoldAsync(Ask(), CancellationToken.None);

@@ -92,6 +92,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(held);
         (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
         card.Outcome.ShouldBe("Left to VS Code: answer it in the chat's tab.");
+        card.AskedInVsCode.ShouldBeTrue("a permission card says it in its box too");
     }
 
     [Fact]

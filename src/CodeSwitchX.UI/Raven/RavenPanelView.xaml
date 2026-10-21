@@ -322,25 +322,28 @@
         </Setter.Value>
       </Setter>
     </Style>
-    <!-- On a card VS Code asks now (left there, opened there, or not answered in time): why, in a coloured box, so the card reads
-         as moved to VS Code and not as broken (#298). Its DataContext is the card. -->
-    <Style x:Key="InVsCodeBox" TargetType="ContentControl">
-      <Setter Property="Focusable" Value="False" />
-      <Setter Property="Margin" Value="0,6,0,0" />
-      <Setter Property="Visibility" Value="{Binding AskedInVsCode, Converter={StaticResource BoolVisible}}" />
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ContentControl">
-            <Border Background="#263B82F6" BorderBrush="#3B82F6" BorderThickness="1" CornerRadius="5" Padding="8,5,8,6">
-              <DockPanel>
-                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#93C5FD" Text="&#xE8A7;" Margin="0,2,7,0" />
-                <TextBlock FontSize="12" Foreground="#DBEAFE" TextWrapping="Wrap" Text="{Binding Outcome}" />
-              </DockPanel>
-            </Border>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
+    <!-- How a closed card ended. Asked in VS Code now (left there, opened there, or not answered in time), it says why in a
+         coloured box, so the card reads as moved to VS Code and not as broken (#298). Shown through a ContentPresenter, so
+         the text is read by screen readers as before. -->
+    <DataTemplate x:Key="CardOutcome" DataType="{x:Type raven:ChatAskCard}">
+      <Border x:Name="Box" Margin="0,4,0,0" CornerRadius="5" BorderThickness="1" BorderBrush="Transparent">
+        <DockPanel>
+          <TextBlock x:Name="Icon" DockPanel.Dock="Left" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#93C5FD" Text="&#xE8A7;"
+                     Margin="0,2,7,0" Visibility="Collapsed" />
+          <TextBlock x:Name="Text" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" />
+        </DockPanel>
+      </Border>
+      <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding AskedInVsCode}" Value="True">
+          <Setter TargetName="Box" Property="Background" Value="#263B82F6" />
+          <Setter TargetName="Box" Property="BorderBrush" Value="#3B82F6" />
+          <Setter TargetName="Box" Property="Padding" Value="8,5,8,6" />
+          <Setter TargetName="Box" Property="Margin" Value="0,6,0,0" />
+          <Setter TargetName="Icon" Property="Visibility" Value="Visible" />
+          <Setter TargetName="Text" Property="Foreground" Value="#DBEAFE" />
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
     <!-- A chat's question: each question with its options to click. A card of one question that takes one option is answered by
          the click; any other is sent with Send. Answer in VS Code leaves it to the chat's tab. Answered or let go, it says how. -->
     <DataTemplate x:Key="QuestionEntry" DataType="{x:Type raven:RavenLogEntry}">
@@ -407,8 +410,7 @@
                     Command="{Binding DataContext.AnswerInVsCodeCommand, RelativeSource={RelativeSource AncestorType=UserControl}}" CommandParameter="{Binding}"
                     ToolTip="Leave the question to the chat's VS Code tab, which asks it there" />
           </StackPanel>
-          <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
-          <ContentControl Style="{StaticResource InVsCodeBox}" />
+          <ContentPresenter x:Name="Outcome" Content="{Binding}" ContentTemplate="{StaticResource CardOutcome}" Visibility="Collapsed" />
         </StackPanel>
       </Border>
       <DataTemplate.Triggers>
@@ -419,7 +421,6 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Ask.AskedInVsCode}" Value="True">
           <Setter TargetName="Card" Property="BorderBrush" Value="#3B82F6" />
-          <Setter TargetName="Outcome" Property="Visibility" Value="Collapsed" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
@@ -505,8 +506,7 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-          <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
-          <ContentControl Style="{StaticResource InVsCodeBox}" />
+          <ContentPresenter x:Name="Outcome" Content="{Binding}" ContentTemplate="{StaticResource CardOutcome}" Visibility="Collapsed" />
         </StackPanel>
       </Border>
       <DataTemplate.Triggers>
@@ -518,7 +518,6 @@
         </DataTrigger>
         <DataTrigger Binding="{Binding Ask.AskedInVsCode}" Value="True">
           <Setter TargetName="Card" Property="BorderBrush" Value="#3B82F6" />
-          <Setter TargetName="Outcome" Property="Visibility" Value="Collapsed" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>

@@ -210,6 +210,15 @@ public sealed class ChatAsks : IDisposable
 
     internal const int EndedKept = 64;
 
+    /// <summary>
+    /// The asks let go to VS Code lately (<see cref="AsksInVsCode"/>), by their tool use, until it ends: then VS Code is done
+    /// with it (<see cref="EndedInVsCode"/>). The oldest go past <see cref="InVsCodeKept"/>.
+    /// </summary>
+    private readonly Dictionary<string, ChatAsk> _inVsCode = new(StringComparer.Ordinal);
+    private readonly Queue<string> _inVsCodeOrder = new();
+
+    internal const int InVsCodeKept = 64;
+
     /// <summary>The asks taken here lately, held or ended, for <see cref="Explains"/>.</summary>
     private readonly Queue<(string SessionId, DateTimeOffset At)> _taken = new();
 
@@ -263,6 +272,16 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>A held ask ended, however it did. Raised on the thread that ended it.</summary>
     public event Action<ChatAskClosed>? Closed;
+
+    /// <summary>
+    /// An ask let go to VS Code is done there: its tool use ended, answered (or allowed) in the chat's tab, or failed. Raised
+    /// on the hook's thread.
+    /// </summary>
+    public event Action<ChatAsk>? EndedInVsCode;
+
+    /// <summary>Whether an ask that ended so is asked in the chat's VS Code tab now: let go there, not answered or ended.</summary>
+    public static bool AsksInVsCode(ChatAskOutcome outcome) =>
+        outcome is ChatAskOutcome.ToVsCode or ChatAskOutcome.TimedOut or ChatAskOutcome.OpenedInVsCode;
 
     /// <summary>An allow was proposed (<see cref="Propose"/>): the user's next words decide. Raised on the proposer's thread.</summary>
     public event Action<ChatAllowProposal>? ProposedAllow;
@@ -846,8 +865,10 @@ public sealed class ChatAsks : IDisposable
                 break;
             case "PostToolUse" or "PostToolUseFailure" when step.ToolUseId is { } id:
                 Held? asked;
+                ChatAsk? inVsCode;
                 lock (_lock)
                 {
+                    _inVsCode.Remove(id, out inVsCode);
                     _begun.Remove(id, out var begun);
                     asked = _held.Values.FirstOrDefault(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.Step.ToolUseId == id);
                     if (asked is null && begun is not null)
@@ -863,6 +884,11 @@ public sealed class ChatAsks : IDisposable
                 if (asked is not null)
                 {
                     Close(asked.Ask.Id, ChatAskOutcome.AnsweredInVsCode, null);
+                }
+
+                if (inVsCode is not null)
+                {
+                    EndedInVsCode?.Invoke(inVsCode);
                 }
 
                 break;
@@ -963,6 +989,21 @@ public sealed class ChatAsks : IDisposable
     private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)
     {
         var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
+        if (AsksInVsCode(outcome) && held.Ask.Step.ToolUseId is { } toolUse)
+        {
+            lock (_lock)
+            {
+                if (_inVsCode.TryAdd(toolUse, held.Ask))
+                {
+                    _inVsCodeOrder.Enqueue(toolUse);
+                    while (_inVsCodeOrder.Count > InVsCodeKept)
+                    {
+                        _inVsCode.Remove(_inVsCodeOrder.Dequeue());
+                    }
+                }
+            }
+        }
+
         held.Done.TrySetResult(closed);
         Closed?.Invoke(closed);
         // An allow proposed for it waits for no yes any more (a Confirm took its proposal before it got here).

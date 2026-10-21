@@ -426,6 +426,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             asks.Opened += ask => _dispatcher.Post(() => OnAsked(ask));
             asks.Closed += closed => _dispatcher.Post(() => OnAskClosed(closed));
+            asks.EndedInVsCode += ask => _dispatcher.Post(() => OnEndedInVsCode(ask));
             asks.ProposedAllow += proposal => _dispatcher.Post(() => OnProposed(proposal));
             asks.ProposalEnded += (proposal, end) => _dispatcher.Post(() => OnProposalEnded(proposal, end));
         }
@@ -3001,6 +3002,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>A card let go to VS Code was answered there: it says so, and no longer that VS Code asks it.</summary>
+    private void OnEndedInVsCode(ChatAsk ask)
+    {
+        if (Log.Select(e => e.Ask).FirstOrDefault(c => c?.Ask.Id == ask.Id) is { AskedInVsCode: true } card)
+        {
+            card.AskedInVsCode = false;
+            card.Outcome = "Answered in VS Code.";
+        }
+    }
+
     /// <summary>"a chat in RawCutX": the folder the chat that asks works in, for a note when the Yard does not name it.</summary>
     private static string FolderOf(ChatAsk ask) =>
         ask.Step.Cwd is { Length: > 0 } cwd ? $"a chat in {CodeSwitchX.Core.Workspaces.WorkspaceProbe.FolderName(cwd)}" : "a chat";
@@ -3031,7 +3042,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.IsOpen = false;
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
-        card.AskedInVsCode = AsksInVsCode(closed);
+        card.AskedInVsCode = ChatAsks.AsksInVsCode(closed.Outcome); // its box says why, not greyed out (#298)
         Summarize(card.ShownIn);
         if (closed.Outcome == ChatAskOutcome.Answered)
         {
@@ -3239,10 +3250,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         (_, ChatAskOutcome.Stopped) => "The chat was stopped.",
         _ => "The chat stopped waiting for it.",
     };
-
-    /// <summary>Whether VS Code asks it now, as the chat's tab shows it: the card says so in its box, not greyed out (#298).</summary>
-    internal static bool AsksInVsCode(ChatAskClosed closed) =>
-        closed.Outcome is ChatAskOutcome.ToVsCode or ChatAskOutcome.TimedOut or ChatAskOutcome.OpenedInVsCode;
 
     /// <summary>An option was clicked: chosen, and for a card of one question that takes one option, sent at once.</summary>
     [RelayCommand]

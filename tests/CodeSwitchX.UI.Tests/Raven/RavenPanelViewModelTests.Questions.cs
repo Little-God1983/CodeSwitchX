@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
@@ -139,6 +140,23 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_left_to_VS_Code_and_answered_there_no_longer_says_VS_Code_asks_it()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Asking(), CancellationToken.None);
+        var card = Card(vm);
+        vm.AnswerInVsCodeCommand.Execute(card);
+        await WithinAsync(held);
+
+        _bus.Publish(new HookEventReceived(new HookEvent
+        {
+            SessionId = "a", EventName = "PostToolUse", At = _time.GetUtcNow(), ToolName = "AskUserQuestion", ToolUseId = "toolu_1",
+        }));
+
+        (card.IsOpen, card.AskedInVsCode, card.Outcome).ShouldBe((false, false, "Answered in VS Code."));
+    }
+
+    [Fact]
     public async Task A_question_answered_here_is_not_asked_in_VS_Code()
     {
         var (vm, asks) = await QuestionsVmAsync();
@@ -160,7 +178,7 @@ public sealed partial class RavenPanelViewModelTests
         var closed = new ChatAskClosed(Asking(), outcome, null);
 
         RavenPanelViewModel.OutcomeOf(closed).ShouldBe(said);
-        RavenPanelViewModel.AsksInVsCode(closed).ShouldBe(inVsCode);
+        ChatAsks.AsksInVsCode(closed.Outcome).ShouldBe(inVsCode);
     }
 
     [Fact]
