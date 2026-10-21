@@ -20,19 +20,20 @@ public sealed class ReplyVoiceTests : IDisposable
 
     public void Dispose() => _voice.Dispose();
 
+    // #290: spoken one by one, every sentence started from scratch and ended falling
     [Fact]
-    public async Task A_sentence_is_spoken_while_the_rest_of_the_reply_streams_in()
+    public async Task A_reply_is_spoken_in_one_request_once_it_is_complete()
     {
         var reply = _voice.Begin();
         reply.Add("Two chats need you. The API");
-        await Until(() => _tts.Spoken.Count == 1);
-        _tts.Spoken.ShouldBe(["Two chats need you."]);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _tts.Spoken.ShouldBeEmpty();
 
         reply.Add(" one waits.");
         reply.Complete();
         await _voice.WhenQuietAsync();
-        _tts.Spoken.ShouldBe(["Two chats need you.", "The API one waits."]);
-        _player.Played.ShouldBe(2);
+        _tts.Spoken.ShouldBe(["Two chats need you. The API one waits."]);
+        _player.Played.ShouldBe(1);
     }
 
     [Fact]
@@ -42,8 +43,22 @@ public sealed class ReplyVoiceTests : IDisposable
         reply.Add("One. Two. Three. Four. Five.");
         reply.Complete();
         await _voice.WhenQuietAsync();
-        _tts.Spoken.ShouldBe(["One.", "Two.", "Three."]);
+        _tts.Spoken.ShouldBe(["One. Two. Three."]);
         reply.IsCut.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_full_group_is_spoken_while_the_rest_of_a_reply_spoken_whole_streams_in()
+    {
+        var reply = _voice.Begin(whole: true);
+        reply.Add("One. Two. Three. Fo");
+        await Until(() => _tts.Spoken.Count == 1);
+        _tts.Spoken.ShouldBe(["One. Two. Three."]);
+
+        reply.Add("ur.");
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+        _tts.Spoken.ShouldBe(["One. Two. Three.", "Four."]);
     }
 
     // Review of #187: the sentence the chunker still held when the limit came was never looked at.
@@ -74,6 +89,21 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_break_says_what_came_before_it_without_waiting_for_the_rest()
+    {
+        var reply = _voice.Begin();
+        reply.Add("Let me check");
+        reply.Break(); // a card: the brain works now
+        await Until(() => _tts.Spoken.Count == 1);
+        _tts.Spoken.ShouldBe(["Let me check."]);
+
+        reply.Add("Two chats. One waits.");
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+        _tts.Spoken.ShouldBe(["Let me check.", "Two chats. One waits."]);
+    }
+
+    [Fact]
     public async Task A_reply_spoken_whole_says_every_sentence_and_tells_it_was_played_to_its_end()
     {
         // The app's read-back of a permission prompt (#108): "Say yes." must not be the fourth sentence that is dropped.
@@ -82,7 +112,7 @@ public sealed class ReplyVoiceTests : IDisposable
         reply.Complete();
 
         (await reply.Played.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).ShouldBeTrue();
-        _tts.Spoken.ShouldBe(["Run echo a.", "b in X?", "It deletes files.", "It pushes to a remote.", "Say yes."]);
+        _tts.Spoken.ShouldBe(["Run echo a. b in X? It deletes files.", "It pushes to a remote. Say yes."]);
     }
 
     [Fact]
@@ -90,7 +120,7 @@ public sealed class ReplyVoiceTests : IDisposable
     {
         _tts.Gate = new TaskCompletionSource();
         var reply = _voice.Begin(whole: true);
-        reply.Add("First. Second.");
+        reply.Add("First. Second. Third. Fourth.");
         reply.Complete();
         await Until(() => _tts.Spoken.Count == 1);
 
@@ -101,8 +131,9 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Theory]
-    // Each sentence of the fake voice is 10 ms of audio. Round 3: a press during "Say yes." cuts nothing the user needed.
-    [InlineData(5, true)]
+    // Each request of the fake voice is 10 ms of audio, and "Say yes." is a third of the text: about 3 ms of it. Round 3
+    // of #187: a press during "Say yes." cuts nothing the user needed.
+    [InlineData(2, true)]
     [InlineData(200, false)]
     public async Task A_hush_once_the_last_sentence_has_begun_to_play_counts_as_heard(int leftMs, bool heard)
     {
@@ -110,7 +141,7 @@ public sealed class ReplyVoiceTests : IDisposable
         var reply = _voice.Begin(whole: true);
         reply.Add("It deletes files. Say yes.");
         reply.Complete();
-        await Until(() => _player.Played == 2);
+        await Until(() => _player.Played == 1);
         await Task.Delay(50, TestContext.Current.CancellationToken); // its last sentence is all queued
 
         _player.Remaining = TimeSpan.FromMilliseconds(leftMs);
@@ -156,7 +187,7 @@ public sealed class ReplyVoiceTests : IDisposable
         reply.Add("**Done** ✅\n---\nSee `auth.cs`.");
         reply.Complete();
         await _voice.WhenQuietAsync();
-        _tts.Spoken.ShouldBe(["Done.", "See auth.cs."]);
+        _tts.Spoken.ShouldBe(["Done. See auth.cs."]);
     }
 
     [Fact]
@@ -186,19 +217,19 @@ public sealed class ReplyVoiceTests : IDisposable
     public async Task A_hush_stops_at_once_and_the_rest_of_the_reply_is_never_spoken()
     {
         _tts.Gate = new TaskCompletionSource();
-        var reply = _voice.Begin();
-        reply.Add("First sentence. Second sentence. ");
+        var reply = _voice.Begin(whole: true);
+        reply.Add("First sentence. Second sentence. Third sentence. ");
         await Until(() => _tts.Spoken.Count == 1);
 
         _voice.Hush();
         await Until(() => _player.Stops == 1);
         _tts.Cancelled.ShouldBeTrue();
         _tts.Gate.TrySetResult();
-        reply.Add("Third sentence.");
+        reply.Add("Fourth sentence.");
         reply.Complete();
         await _voice.WhenQuietAsync();
 
-        _tts.Spoken.ShouldBe(["First sentence."]);
+        _tts.Spoken.ShouldBe(["First sentence. Second sentence. Third sentence."]);
         _player.Played.ShouldBe(0);
         _voice.IsSpeaking.ShouldBeFalse();
     }
@@ -272,12 +303,12 @@ public sealed class ReplyVoiceTests : IDisposable
         var notes = new List<string>();
         _voice.Unspoken += (_, why) => { lock (notes) { notes.Add(why); } };
         _tts.NotReady = new TextToSpeechStatus(TextToSpeechState.Loading);
-        var reply = _voice.Begin();
-        reply.Add("One. Two. Three.");
+        var reply = _voice.Begin(whole: true);
+        reply.Add("One. Two. Three. Four.");
         reply.Complete();
         await _voice.WhenQuietAsync();
 
-        _tts.Spoken.ShouldBe(["One."]);
+        _tts.Spoken.ShouldBe(["One. Two. Three."]);
         notes.ShouldBe(["Raven's voice is still loading, so this answer is not spoken."]);
     }
 
@@ -306,7 +337,8 @@ public sealed class ReplyVoiceTests : IDisposable
         _tts.Gate = new TaskCompletionSource(); // a generation that never ends
         _tts.HonorsCancel = true;
         var reply = voice.Begin();
-        reply.Add("One. Two. ");
+        reply.Add("One. Two.");
+        reply.Complete();
         await Until(() => _tts.Spoken.Count == 1);
 
         time.Advance(ReplyVoice.FirstAudioTimeout);
@@ -320,10 +352,11 @@ public sealed class ReplyVoiceTests : IDisposable
     public async Task The_first_audio_is_told_once()
     {
         var heard = 0;
-        var reply = _voice.Begin(_ => Interlocked.Increment(ref heard));
-        reply.Add("One. Two.");
+        var reply = _voice.Begin(_ => Interlocked.Increment(ref heard), whole: true);
+        reply.Add("One. Two. Three. Four.");
         reply.Complete();
         await _voice.WhenQuietAsync();
+        _tts.Spoken.Count.ShouldBe(2);
         heard.ShouldBe(1);
     }
 
@@ -362,6 +395,7 @@ public sealed class ReplyVoiceTests : IDisposable
         _player.Opening = new TaskCompletionSource();
         var reply = _voice.Begin();
         reply.Add("One sentence. Two sentences. ");
+        reply.Complete();
         await Until(() => _player.Enqueuing);
 
         var dispose = Task.Run(_voice.Dispose, TestContext.Current.CancellationToken);
@@ -427,6 +461,7 @@ public sealed class ReplyVoiceTests : IDisposable
         _player.Opening = new TaskCompletionSource();
         var reply = _voice.Begin();
         reply.Add("A sentence that opens the device. ");
+        reply.Complete();
         await Until(() => _player.Enqueuing);
 
         var hush = Task.Run(_voice.Hush, TestContext.Current.CancellationToken);
@@ -457,6 +492,7 @@ public sealed class ReplyVoiceTests : IDisposable
         _player.Remaining = TimeSpan.FromSeconds(10);
         var reply = _voice.Begin();
         reply.Add("Hello there. ");
+        reply.Complete();
         await Until(() => _player.Played == 1);
 
         _voice.Hush();
@@ -476,6 +512,7 @@ public sealed class ReplyVoiceTests : IDisposable
         _tts.Gate = new TaskCompletionSource();
         var reply = _voice.Begin();
         reply.Add("Hello there. ");
+        reply.Complete();
         await Until(() => _tts.Spoken.Count == 1);
 
         _voice.Hush();

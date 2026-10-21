@@ -5,15 +5,19 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Voice.Speech;
 
 /// <summary>
-/// Speaks Raven's replies as they stream in: each reply's text is cut into sentences, and each sentence is spoken as soon
-/// as it is whole, while the rest of the reply is still coming. At most <see cref="MaximumSentences"/> per reply are
-/// spoken; the full text stays in the log. Replies are spoken in the order they began, one sentence at a time.
+/// Speaks Raven's replies: each reply's text is cut into sentences as it streams in, and its sentences are spoken together,
+/// <see cref="GroupSize"/> to a request, once the reply is complete or a group is full. Spoken one by one, every sentence
+/// started from scratch and ended falling, and Raven sounded bored (#290). At most <see cref="MaximumSentences"/> per reply
+/// are spoken; the full text stays in the log. Replies are spoken in the order they began, one group at a time.
 /// <see cref="Hush"/> (the user starts talking) stops at once, and what was begun before it is never spoken after it.
 /// </summary>
 public sealed class ReplyVoice : IDisposable
 {
     /// <summary>A spoken reply stays short: the panel shows the rest.</summary>
     public const int MaximumSentences = 3;
+
+    /// <summary>How many sentences are spoken in one request: a reply's, or a part of one spoken whole.</summary>
+    public const int GroupSize = 3;
 
     /// <summary>How long a sentence may take to its first audio: generation behind another sentence included.</summary>
     public static readonly TimeSpan FirstAudioTimeout = TimeSpan.FromSeconds(20);
@@ -368,7 +372,7 @@ public sealed class ReplyVoice : IDisposable
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }
 
-            reply.SpokenOne(audio); // all of this sentence is queued to play
+            reply.SpokenOne(audio * sentence.LastShare); // all of these sentences are queued to play
         }
         catch (OperationCanceledException) when (hush.IsCancellationRequested)
         {
@@ -557,7 +561,9 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
-    private sealed record Sentence(SpokenReply Reply, string Text);
+    /// <summary>What is spoken in one request: a group of a reply's sentences.</summary>
+    /// <param name="LastShare">The last sentence's share of the text: about that share of the audio is the last sentence's.</param>
+    private sealed record Sentence(SpokenReply Reply, string Text, double LastShare);
 
     /// <summary>One reply being spoken: fed its text as it streams in, in order, on one thread at a time, then completed.</summary>
     public sealed class SpokenReply
@@ -568,6 +574,12 @@ public sealed class ReplyVoice : IDisposable
         private readonly SentenceChunker _chunker = new();
         private readonly int _maximum;
         private readonly TaskCompletionSource<bool> _played = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Sentences taken to be spoken, and those of them not yet sent in a group.</summary>
+        private readonly List<string> _group = [];
+        private int _taken;
+
+        /// <summary>Groups sent to the voice, and those of them spoken.</summary>
         private int _queued;
         private int _spoken;
         private int _dropped;
@@ -615,13 +627,13 @@ public sealed class ReplyVoice : IDisposable
         /// </summary>
         public async Task<bool> HeardWholeAsync() => await Played.ConfigureAwait(false) && !IsCut;
 
-        /// <summary>Complete, and every sentence it queued has been spoken (under the voice's lock).</summary>
+        /// <summary>Complete, and every group it queued has been spoken (under the voice's lock).</summary>
         internal bool IsSpokenOut => Volatile.Read(ref _completed) == 1 && Volatile.Read(ref _spoken) >= _queued && _queued > 0;
 
-        /// <summary>How long the audio of the sentence spoken last is.</summary>
+        /// <summary>About how long the audio of the sentence spoken last is.</summary>
         internal TimeSpan LastSentenceAudio => TimeSpan.FromTicks(Volatile.Read(ref _lastAudio));
 
-        /// <summary>One more sentence, <paramref name="audio"/> long, is all queued to play.</summary>
+        /// <summary>One more group is all queued to play; its last sentence is about <paramref name="audio"/> long.</summary>
         internal void SpokenOne(TimeSpan audio)
         {
             Volatile.Write(ref _lastAudio, audio.Ticks);
@@ -633,8 +645,8 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>Nothing more of it is spoken, whatever comes: muted, dropped or hushed.</summary>
         private bool Stopped => _muted || Dropped || _voice.IsHushed(Number);
 
-        /// <summary>As many sentences queued as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
-        private bool Full => _queued >= _maximum;
+        /// <summary>As many sentences taken as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
+        private bool Full => _taken >= _maximum;
 
         /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken or looked at.</summary>
         public void Add(string piece)
@@ -645,7 +657,27 @@ public sealed class ReplyVoice : IDisposable
             }
         }
 
-        /// <summary>The reply is complete: what is left of it is a sentence too, and it no longer keeps the output awake.</summary>
+        /// <summary>
+        /// A sentence ends here, and what was taken so far is spoken now, without waiting for the rest: the brain goes off to
+        /// work (a card), and "Let me check." must not wait for the tool to finish.
+        /// </summary>
+        public void Break()
+        {
+            if (!Stopped && !IsCut)
+            {
+                Queue(_chunker.Add("\n"));
+            }
+
+            if (!Stopped)
+            {
+                Send();
+            }
+        }
+
+        /// <summary>
+        /// The reply is complete: what is left of it is a sentence too, the sentences not spoken yet are, and it no longer
+        /// keeps the output awake.
+        /// </summary>
         public void Complete()
         {
             if (Interlocked.Exchange(ref _completing, 1) == 1)
@@ -656,6 +688,11 @@ public sealed class ReplyVoice : IDisposable
             if (!Stopped && !IsCut)
             {
                 Queue(_chunker.Flush()); // past the limit too: a last sentence held back is one unsaid
+            }
+
+            if (!Stopped)
+            {
+                Send();
             }
 
             // Only now: complete, it may count as played out at once, and what awaits that reads IsCut.
@@ -687,9 +724,28 @@ public sealed class ReplyVoice : IDisposable
                     return;
                 }
 
-                _queued++;
-                _voice.Queue(new Sentence(this, SpeechText.EndSentence(spoken)));
+                _taken++;
+                _group.Add(SpeechText.EndSentence(spoken));
+                if (_group.Count == GroupSize)
+                {
+                    Send();
+                }
             }
+        }
+
+        /// <summary>The sentences taken and not sent yet go to the voice, to be spoken in one request.</summary>
+        private void Send()
+        {
+            if (_group.Count == 0)
+            {
+                return;
+            }
+
+            var text = string.Join(' ', _group);
+            var lastShare = (double)_group[^1].Length / text.Length;
+            _group.Clear();
+            _queued++;
+            _voice.Queue(new Sentence(this, text, lastShare));
         }
 
         /// <summary>True the first time: the reply is dropped now.</summary>

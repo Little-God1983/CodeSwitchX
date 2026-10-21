@@ -221,6 +221,7 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Answer = _ => [new BrainText("Let me look. One moment"), new BrainToolCall("t1", "list_chats", "{}"), new BrainToolResult("t1", false),
             new BrainText("There are two chats.")];
         _brain.Pause = new TaskCompletionSource();
+        _brain.PauseAfter = 2; // at the card: what comes before it is said (#290)
         var vm = await NewVmAsync();
         vm.IsOpen = false;
         Transcribes(Task.FromResult(new DictationResult("How many chats run?", TimeSpan.FromSeconds(1))));
@@ -230,7 +231,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(Hold);
         await WithinAsync(vm.ReleaseMicAsync(TalkInput.MicButton));
         await WithinAsync(vm.PendingTranscriptions);
-        await Until(() => _speech.Spoken.Contains("Let me look.")); // heard: the voice is ready, and speaking
+        await Until(() => _speech.Spoken.Contains("Let me look. One moment.")); // heard: the voice is ready, and speaking
 
         vm.IsMuted = true;
         _brain.Pause.SetResult();

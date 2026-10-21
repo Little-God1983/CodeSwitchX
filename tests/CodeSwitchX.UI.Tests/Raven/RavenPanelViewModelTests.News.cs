@@ -244,7 +244,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        _speech.Spoken.ShouldBe(["ContentAutomatorX is done.", "Okay."]);
+        _speech.Spoken.ShouldBe(["ContentAutomatorX is done. CodeSwitchX wants you.", "Okay."]); // one request, cut off as it plays (#290)
         _teller.Asked.Count.ShouldBe(1, "the dropped news is not told again");
         news.HasNews.ShouldBeFalse();
     }
