@@ -612,6 +612,8 @@ public sealed class ReplyVoiceTests : IDisposable
 
         _tts.Spoken.ShouldBe(["Done."]);
         (await reply.Played).ShouldBeTrue();
+        reply.IsCut.ShouldBeTrue("the rest was only written: what it told does not count as heard");
+        (await reply.HeardWholeAsync()).ShouldBeFalse();
     }
 
     private static async Task Until(Func<bool> condition)

@@ -661,7 +661,7 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>Nothing more of it is spoken, whatever comes: muted, dropped or hushed.</summary>
         private bool Stopped => _muted || Dropped || _voice.IsHushed(Number);
 
-        /// <summary>Completed: its text is all there is, and text fed after it is not spoken (#292).</summary>
+        /// <summary>Completed: its text is all there is; text fed after it is not spoken, and leaves it cut (#292).</summary>
         private bool Completing => Volatile.Read(ref _completing) == 1;
 
         /// <summary>As many sentences taken as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
@@ -670,7 +670,17 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken or looked at.</summary>
         public void Add(string piece)
         {
-            if (!Stopped && !IsCut && !Completing)
+            if (Completing)
+            {
+                if (piece.Any(char.IsLetterOrDigit))
+                {
+                    Volatile.Write(ref _cut, 1); // only written: it was not heard whole
+                }
+
+                return;
+            }
+
+            if (!Stopped && !IsCut)
             {
                 Queue(_chunker.Add(piece));
             }
