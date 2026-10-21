@@ -386,6 +386,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _deviceRefresh = time.CreateTimer(_ => ListAndPostDevices(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _catalog.DevicesChanged += (_, _) => _deviceRefresh.Change(DeviceChangeSettle, Timeout.InfiniteTimeSpan);
         _voice.SpeakingChanged += (_, speaking) => _dispatcher.Post(() => OnSpeakingChanged(speaking));
+        _voice.BusyEnded += (_, _) => _dispatcher.Post(UpdateState); // what held the floor was never heard (#292)
         _voice.LevelChanged += (_, level) => _dispatcher.Post(() => OnSpeechLevel(level));
         _voice.Unspoken += (_, why) => _dispatcher.Post(() => AddEntry(RavenLogKind.Note, why));
         _tts.StatusChanged += (_, status) => _dispatcher.Post(() => OnVoiceStatus(status));
@@ -2319,8 +2320,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// One question's turn: the reply grows in one entry as it streams in, each tool call gets a card, and text after a
-    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken once it is
-    /// complete, the words before a card ("Let me check.") at the card (#290). The awaits resume on the UI thread. Never
+    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken once its text
+    /// has ended (#292), the words before a card ("Let me check.") at the card (#290). The awaits resume on the UI thread. Never
     /// faults, so the question behind it always gets its turn.
     /// </summary>
     /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
@@ -2486,6 +2487,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         CountUnread(reply);
                         spoken.Add(piece);
                         break;
+                    case BrainTextEnded when said:
+                        // Spoken now, not once the turn has ended (#292). One that said nothing is left open: a teller's
+                        // fallback sentence is said in it.
+                        spoken.Complete();
+                        break;
                     case BrainToolCall call:
                         if (question is not null)
                         {
@@ -2623,10 +2629,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private bool FloorIsFree => TrafficWatcher.IsFree(Floor);
 
     private TrafficWatcher.Floor Floor => new(Capturing: _capturing, Holding: _heldInputs.Count > 0, Pending: _pending, Asking: _asking,
-        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null || _offerStands);
+        Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null || _offerStands,
+        Due: _voice.IsBusy);
 
-    /// <summary>The floor as a telling sees it: free but for the telling itself.</summary>
-    private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false });
+    /// <summary>The floor as a telling sees it: free but for the telling itself, and what it sent the voice.</summary>
+    private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false, Due = false });
 
     /// <summary>
     /// Another chat has news or a card: never spoken, it makes the short sound if the watcher lets it, and is marked in the

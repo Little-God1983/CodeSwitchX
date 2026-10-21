@@ -102,6 +102,12 @@ public sealed class ReplyVoice : IDisposable
     /// <summary>The loudness of what plays, 0..1; on the playback thread.</summary>
     public event EventHandler<float>? LevelChanged;
 
+    /// <summary>
+    /// Raised on the voice's thread when <see cref="IsBusy"/> turns false with nothing playing: what was queued was hushed or
+    /// dropped before it was heard (#292). Speech that played ends with <see cref="SpeakingChanged"/> instead.
+    /// </summary>
+    public event EventHandler? BusyEnded;
+
     /// <summary>A reply is not spoken (or not to its end), and why, for the user; on any thread.</summary>
     public event EventHandler<string>? Unspoken;
 
@@ -312,7 +318,10 @@ public sealed class ReplyVoice : IDisposable
                     }
                     finally
                     {
-                        Interlocked.Decrement(ref _pending);
+                        if (Interlocked.Decrement(ref _pending) == 0 && !IsSpeaking)
+                        {
+                            BusyEnded?.Invoke(this, EventArgs.Empty);
+                        }
                     }
                 }
 
@@ -652,12 +661,25 @@ public sealed class ReplyVoice : IDisposable
         /// <summary>Nothing more of it is spoken, whatever comes: muted, dropped or hushed.</summary>
         private bool Stopped => _muted || Dropped || _voice.IsHushed(Number);
 
+        /// <summary>Completed: its text is all there is; text fed after it is not spoken, and leaves it cut (#292).</summary>
+        private bool Completing => Volatile.Read(ref _completing) == 1;
+
         /// <summary>As many sentences taken as it may speak: what comes after is only cut into sentences, to see whether any is left unsaid.</summary>
         private bool Full => _taken >= _maximum;
 
         /// <summary>The next piece of the reply's text; not even cut into sentences once nothing more of it is spoken or looked at.</summary>
         public void Add(string piece)
         {
+            if (Completing)
+            {
+                if (piece.Any(char.IsLetterOrDigit))
+                {
+                    Volatile.Write(ref _cut, 1); // only written: it was not heard whole
+                }
+
+                return;
+            }
+
             if (!Stopped && !IsCut)
             {
                 Queue(_chunker.Add(piece));
@@ -670,6 +692,11 @@ public sealed class ReplyVoice : IDisposable
         /// </summary>
         public void Break()
         {
+            if (Completing)
+            {
+                return;
+            }
+
             if (!Stopped && !IsCut)
             {
                 Queue(_chunker.Add("\n"));

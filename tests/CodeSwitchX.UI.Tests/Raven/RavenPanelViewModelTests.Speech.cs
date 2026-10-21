@@ -46,6 +46,23 @@ public sealed partial class RavenPanelViewModelTests
         }
     }
 
+    /// <summary>#292: what the CLI does between the brain's last word and the end of its turn does not hold up the answer.</summary>
+    [Fact]
+    public async Task An_answer_is_spoken_once_its_text_ended_before_the_turn_does()
+    {
+        _brain.Answer = _ => [new BrainText("Two chats wait."), new BrainTextEnded()];
+        _brain.Ending = new TaskCompletionSource();
+        var vm = await NewVmAsync();
+
+        Type(vm, "What's waiting on me?");
+
+        await Until(() => _speech.Spoken.Count == 1);
+        _speech.Spoken.ShouldBe(["Two chats wait."]);
+        vm.PendingAnswers.IsCompleted.ShouldBeFalse("the turn has not ended");
+        _brain.Ending.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+    }
+
     [Fact]
     public async Task The_words_before_a_card_are_a_sentence_of_their_own()
     {

@@ -143,6 +143,10 @@ internal static class StreamJson
     public static string ToolResult(string id, bool error = false) =>
         $$"""{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"{{id}}","is_error":{{(error ? "true" : "false")}},"content":"[]"}]},"parent_tool_use_id":null}""";
 
+    /// <summary>The end of a message: <c>end_turn</c> for the last of a turn, <c>tool_use</c> for one that calls a tool.</summary>
+    public static string MessageEnd(string stopReason = "end_turn") =>
+        $$$"""{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"{{{stopReason}}}","stop_sequence":null},"usage":{"output_tokens":7}},"parent_tool_use_id":null}""";
+
     public static string AssistantText(string text) =>
         $$"""{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{{text}}"}]},"parent_tool_use_id":null}""";
 
