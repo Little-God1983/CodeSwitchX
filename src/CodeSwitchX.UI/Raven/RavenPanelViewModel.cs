@@ -1416,7 +1416,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     public void WriteSummary(string? askedIn, string text)
     {
-        AddSaid(text, AnswerChatOf(askedIn) ?? CurrentChat, said: false);
+        // Written in the turn that sums the chat up, it goes where that answer goes (#289).
+        var question = QuestionAskedIn(askedIn);
+        var entry = AddSaid(text, question?.Chat ?? ChatOfBrain(askedIn) ?? CurrentChat, said: false);
+        question?.Entries.Add(entry);
     }
 
     private const string NoMicrophoneWarning = "No microphone found. Plug one in or check Windows sound settings.";
@@ -2173,16 +2176,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <paramref name="tool"/>: started a chat there (#180), told, answered, stopped or looked at one, opened the window or
     /// switched to its chat (#289). The user follows the talk (<see cref="Follow"/>): the question whose turn it is, its
     /// words and its answer so far, moves to that window's Raven chat, chat 0 for null, where the rest of the answer comes,
-    /// and the panel shows that chat. Nothing happens when no question of that chat's is in a tool call (one asked since,
-    /// say, while a slow start went on), or the window has no chat. UI thread.
+    /// and the panel shows that chat. Nothing happens when no question of that chat's is under way, for a start that
+    /// finished after its question gave way to another (one asked since, while the slow start went on), or when the window
+    /// has no chat. UI thread.
     /// </summary>
     public void FollowWork(string askedIn, Guid? workspaceId, string tool)
     {
         var to = workspaceId is { } id ? Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == id) : YardChat;
-        var from = ChatOfBrain(askedIn);
-        // The question whose turn is in the tool: not one asked since in that chat, while a slow start went on.
-        var question = _questions.FirstOrDefault(q => q.Sent && !q.Ended && q.Tools.Count > 0 && q.AskedIn == from);
-        if (to is not null && question is not null)
+        // The question whose turn it is. A quick tool may be heard of before its call comes in the brain's stream; a start
+        // is slow, and the question still in it is the one it is for, not one asked since in that chat.
+        var question = QuestionAskedIn(askedIn);
+        if (to is not null && question is not null && (tool != "start_chat" || question.Tools.Count > 0))
         {
             Follow(question, to, tool);
         }
@@ -2235,9 +2239,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private static bool Shows(string tool) => tool is "switch_chat" or "back_to_yard" or "open_workspace" or "next_question";
 
     /// <summary>
-    /// The question's turn acted on <paramref name="to"/>'s window (#289). While every window it acts on is that one, the
-    /// question goes there; once it acts on a second, it goes back to the chat it was asked in, as it is about none of them
-    /// alone. A tool that shows a chat takes it there in any case, and there it stays. UI thread.
+    /// The question's turn acted on <paramref name="to"/>'s window (#289). While it acts on one window besides the one it
+    /// was asked in, it goes there once the tools are done (<see cref="Settle"/>), not at each one, so a turn that looks
+    /// at several windows shows none of them; once it acts on a second, it stays where it was asked, as it is about none
+    /// of them alone. A start moves it at once, as the new chat's news comes there (#180). A tool that shows a chat takes
+    /// it there at once, and there it stays. UI thread.
     /// </summary>
     private void Follow(Question question, RavenChat to, string tool)
     {
@@ -2245,13 +2251,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             question.Shown = true;
             Move(question, to, tool);
-            return;
         }
-
-        question.ActedOn.Add(to);
-        if (!question.Shown)
+        else if (to != question.AskedIn && question.ActedOn.TryAdd(to, tool) && tool == "start_chat")
         {
-            Move(question, question.ActedOn.Count == 1 ? to : question.AskedIn, tool);
+            Settle(question);
+        }
+    }
+
+    /// <summary>The question goes where its turn's tools took it (<see cref="Follow"/>): the one other window they acted on, or back home. UI thread.</summary>
+    private void Settle(Question question)
+    {
+        if (!question.Shown && question.ActedOn.Count > 0)
+        {
+            var (to, tool) = question.ActedOn.Count == 1 ? question.ActedOn.Single() : new KeyValuePair<RavenChat, string>(question.AskedIn, "");
+            Move(question, to, tool);
         }
     }
 
@@ -2271,14 +2284,24 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         question.Chat = to;
         UpdateState(); // the work goes on there now (#182)
         _carried.Remove(current); // moved on: the chat it was in is told nothing of it
+        var home = question.AskedIn;
+        // Moved with it, the user is shown its lines there. Back home, where they may not be, its unread lines stay unread.
+        var seen = to != home || SelectedChat == current || SelectedChat == to;
         var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
         foreach (var (entry, _) in kept)
         {
             if (entry.IsUnread)
             {
-                // The user is moved to the chat with it: its lines are shown to them, not come while they were away.
                 entry.Chat.Unread -= entry.Unread;
-                entry.Unread = 0;
+                if (seen)
+                {
+                    entry.Unread = 0;
+                }
+                else
+                {
+                    to.Unread += entry.Unread;
+                    PulseNews(to);
+                }
             }
 
             entry.Chat = to;
@@ -2291,7 +2314,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             question.Left = null;
         }
 
-        var home = question.AskedIn;
         if (to == home)
         {
             if (question.Origin is { } origin)
@@ -2380,8 +2402,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         /// <summary>The chat its answer goes to: the one it was asked in, or another once Raven moved the user with it (<see cref="FollowWork"/>).</summary>
         public RavenChat Chat { get; set; } = chat;
 
-        /// <summary>The chats of the windows its turn acted on (#289): it follows one, and goes back once there are two (<see cref="Follow"/>).</summary>
-        public HashSet<RavenChat> ActedOn { get; } = [];
+        /// <summary>
+        /// The chats of the windows its turn acted on besides its own (#289), each with the first tool that did: it follows
+        /// one, and stays home once there are two (<see cref="Follow"/>).
+        /// </summary>
+        public Dictionary<RavenChat, string> ActedOn { get; } = [];
 
         /// <summary>Its turn showed a chat (switch_chat, open_workspace, back_to_yard): there it stays (<see cref="Follow"/>).</summary>
         public bool Shown { get; set; }
@@ -2574,6 +2599,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var cards = new Dictionary<string, RavenLogEntry>(StringComparer.Ordinal);
             await foreach (var e in brain.AskAsync(text, floor))
             {
+                if (question is not null && e is not (BrainQuestionSent or BrainToolCall or BrainToolResult))
+                {
+                    Settle(question); // its tools are done: it goes where they took it, before what comes next (#289)
+                }
+
                 switch (e)
                 {
                     case BrainQuestionSent when question is not null:
@@ -2670,6 +2700,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         failedMidway = true; // what it was to tell may not have come (#243)
                         break;
                 }
+            }
+
+            if (question is not null)
+            {
+                Settle(question); // a turn that ended on its tools
             }
 
             if (reply is not null)
@@ -4984,14 +5019,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private RavenChat? ChatOfBrain(string? key) =>
         key == YardMcp.OverviewChat ? YardChat
             : Guid.TryParse(key, out var window) ? Chats.FirstOrDefault(c => !c.IsActivity && c.WorkspaceId == window) : null;
-
-    /// <summary>
-    /// Where the answer of the brain the key names goes now: the chat its question is in, once the user followed the talk
-    /// to another (#289); else that brain's chat. Null for a key that names no chat.
-    /// </summary>
-    private RavenChat? AnswerChatOf(string? key) => ChatOfBrain(key) is { } chat
-        ? _questions.FirstOrDefault(q => q.Sent && !q.Ended && !q.Merged && q.AskedIn == chat)?.Chat ?? chat
-        : null;
 
     /// <summary>A workspace's chat, the Yard's for none and for one the list does not show.</summary>
     private RavenChat ChatOf(Guid? workspaceId) =>
