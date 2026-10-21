@@ -116,6 +116,19 @@ public sealed class RavenActionsTests
         said.ShouldBe("The Fix the upload chat is closed. Its conversation stays in VS Code's session list, where the user can open it again.");
     }
 
+    /// <summary>#297: a tab VS Code lists is closed through its workspace's window when it runs no Claude Code; one it does not list never.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_close_tells_VS_Code_the_workspace_only_of_a_chat_whose_tab_it_lists(bool hasTab)
+    {
+        await StartAsync();
+
+        await _actions.CloseChatAsync(Chat("new-chat", "Fix the upload") with { HasTab = hasTab }, Ct);
+
+        _vsCode.ClosedListedIn.Select(w => w?.Id).ShouldBe([hasTab ? Diffusion.Id : null]);
+    }
+
     /// <summary>A turn of the chat: it works, then it is idle in the folder it runs in, with the title the Yard gives it.</summary>
     private void Turn(string id, string title = "Fix the upload", SessionState end = SessionState.Idle)
     {
@@ -791,9 +804,13 @@ public sealed class RavenActionsTests
                 : Task.FromResult(new VsCodeChat("new-chat", folder ?? workspace.RootPath, "diffusionnexus-4f"));
         }
 
-        public Task CloseAsync(string sessionId, CancellationToken ct)
+        /// <summary>The workspace each close was told lists the chat's tab, in order.</summary>
+        public List<Workspace?> ClosedListedIn { get; } = [];
+
+        public Task CloseAsync(string sessionId, Workspace? listedIn, CancellationToken ct)
         {
             Sequence.Add($"close {sessionId}");
+            ClosedListedIn.Add(listedIn);
             return Failure is { } failure ? Task.FromException(new YardActionException(failure)) : Task.CompletedTask;
         }
 

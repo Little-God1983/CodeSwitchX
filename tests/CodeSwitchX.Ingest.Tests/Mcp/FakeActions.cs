@@ -39,10 +39,22 @@ internal sealed class FakeActions : IYardActions
 
     public YardChat? Closed { get; private set; }
 
+    /// <summary>Every chat closed, in order.</summary>
+    public List<YardChat> ClosedAll { get; } = [];
+
+    /// <summary>The chats whose close the app refuses, by id, with what it says.</summary>
+    public Dictionary<string, string> CloseRefusals { get; } = [];
+
     public Task<string> CloseChatAsync(YardChat chat, CancellationToken ct)
     {
         Act("close_chat");
+        if (CloseRefusals.TryGetValue(chat.Id, out var refusal))
+        {
+            throw new YardActionException(refusal);
+        }
+
         Closed = chat;
+        ClosedAll.Add(chat);
         return Task.FromResult("closed");
     }
 

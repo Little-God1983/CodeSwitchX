@@ -269,7 +269,8 @@ public sealed class RavenActions : IYardActions
 
     public async Task<string> CloseChatAsync(YardChat chat, CancellationToken ct)
     {
-        await _vsCode.CloseAsync(chat.Id, ct).ConfigureAwait(false);
+        var listedIn = chat.HasTab ? await _workspaceOf(chat.WorkspaceId, ct).ConfigureAwait(false) : null;
+        await _vsCode.CloseAsync(chat.Id, listedIn, ct).ConfigureAwait(false);
         _started.TryRemove(chat.Id, out _);
 
         // Closed on purpose: no ended row lingers on the tile, and none is news. Its tab is gone either way, so a window

@@ -327,6 +327,68 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         return await Act(() => actions.CloseChatAsync(one, cancellationToken)).ConfigureAwait(false);
     }
 
+    [McpServerTool(Name = "close_idle_chats", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Closes every idle chat of one workspace's VS Code window (\"close all idle chats in …\", \"clean up the chats\"): the ones done "
+        + "with their turn, and tabs VS Code brought back that do not run. Chats that work or wait for the user are left open. Their "
+        + "conversations are not deleted: they stay in VS Code's session list. Do not ask first: say \"I close all idle chats in "
+        + "<workspace>\" and call it, then say in one sentence what it returns. In a window's chat, give no workspace for that window; "
+        + "it never closes chats of every window at once.")]
+    public async Task<string> CloseIdleChats(
+        [Description("The workspace as the user named it; left out in a window's chat for that window.")] string? workspace = null,
+        CancellationToken cancellationToken = default)
+    {
+        var window = string.IsNullOrWhiteSpace(workspace) || ThisChat(workspace)
+            ? await WindowAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new McpException("Say which window's idle chats to close: this is chat 0, the Yard, which closes none across all "
+                    + "windows. Nothing was closed.")
+            : (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
+        actions.ActedOn(scope?.Key, window.Id, "close_idle_chats");
+
+        var chats = (await yard.ChatsAsync(cancellationToken).ConfigureAwait(false)).Where(c => c.WorkspaceId == window.Id).ToList();
+        var busy = chats.Where(Busy).ToList();
+        // One closed already and kept greyed has no tab to close; one without a tab that still runs may be in a tab not written down yet.
+        var idle = chats.Where(c => !Busy(c) && (c.HasTab || c.State is SessionState.Idle or SessionState.Stale)).ToList();
+
+        var closed = new List<YardChat>();
+        var failed = new List<string>();
+        foreach (var chat in idle)
+        {
+            try
+            {
+                await actions.CloseChatAsync(chat, cancellationToken).ConfigureAwait(false);
+                closed.Add(chat);
+            }
+            catch (YardActionException ex)
+            {
+                failed.Add($"{chat.Title} ({ex.Message})");
+            }
+            catch (TimeoutException)
+            {
+                failed.Add($"{chat.Title} (CodeSwitchX's window did not respond in time)");
+            }
+        }
+
+        var said = closed.Count > 0
+            ? $"Closed {closed.Count} idle {(closed.Count == 1 ? "chat" : "chats")} in {window.Name}: {string.Join(", ", closed.Select(c => c.Title))}."
+            : idle.Count > 0 ? $"No idle chat in {window.Name} could be closed." : $"No idle chat in {window.Name} to close.";
+        if (failed.Count > 0)
+        {
+            said += $" Not closed: {string.Join(", ", failed)}.";
+        }
+
+        if (busy.Count > 0)
+        {
+            said += $" Left open: {string.Join(", ", busy.Select(c => $"{c.Title} ({Doing(c)})"))}.";
+        }
+
+        return said;
+
+        static bool Busy(YardChat chat) => chat.NeedsYou || chat.State is SessionState.Working or SessionState.Waiting or SessionState.Starting;
+
+        static string Doing(YardChat chat) =>
+            chat.NeedsYou || chat.State == SessionState.Waiting ? "waiting for the user" : chat.State == SessionState.Starting ? "starting" : "still working";
+    }
+
     [McpServerTool(Name = "compact_chat", ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false)]
     [Description("Compacts a chat as /compact typed in its tab would (\"compact the … chat\"): Claude Code sums its conversation up, and the "
         + "chat goes on from that summary with room in its context again; the whole conversation stays on disk. Its tab closes for the "

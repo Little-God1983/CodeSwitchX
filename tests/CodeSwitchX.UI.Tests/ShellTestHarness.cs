@@ -117,7 +117,7 @@ public sealed class ShellTestHarness
         public Task<VsCodeChat> StartAsync(Workspace workspace, string? folder, string? model, string? effort, CancellationToken ct) =>
             throw new NotSupportedException();
 
-        public Task CloseAsync(string sessionId, CancellationToken ct) => throw new NotSupportedException();
+        public Task CloseAsync(string sessionId, Workspace? listedIn, CancellationToken ct) => throw new NotSupportedException();
 
         public Task<bool> CompactAsync(string sessionId, string folder, string title, string? keep, Action<CompactionTab>? tab, CancellationToken ct) =>
             throw new NotSupportedException();

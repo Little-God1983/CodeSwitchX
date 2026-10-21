@@ -30,8 +30,12 @@ public interface IVsCodeChats
     /// Closes the chat's tab in the VS Code window it runs in, and returns once its Claude Code has ended. The conversation
     /// stays in Claude Code's session list when it has a name (<see cref="NameAsync"/>).
     /// </summary>
+    /// <param name="listedIn">
+    /// The workspace whose VS Code lists a tab of the chat, null when none does: a tab VS Code brought back runs no Claude
+    /// Code to find its window by (#297), so it is closed through that workspace's window.
+    /// </param>
     /// <exception cref="YardActionException">It could not be closed; the message says why.</exception>
-    Task CloseAsync(string sessionId, CancellationToken ct);
+    Task CloseAsync(string sessionId, Workspace? listedIn, CancellationToken ct);
 
     /// <summary>
     /// Shows the chat in the workspace's VS Code window (#115): its tab comes to the front, or is opened with the chat's
@@ -284,15 +288,34 @@ public sealed class VsCodeChats : IVsCodeChats
     /// <summary>
     /// The chat's window is the one whose extension host started its claude.exe; its companion closes the tab, and the
     /// close is done once that process is gone. A chat run in a terminal has no record of a VS Code tab and is not found.
+    /// A tab VS Code lists that runs no Claude Code (it brought the tab back) is closed by the companion of the workspace's
+    /// window, with no process to wait for; never one that is not listed, which the companion would open to find, and so
+    /// start a second Claude Code on the conversation of one running in a terminal.
     /// </summary>
-    public async Task CloseAsync(string sessionId, CancellationToken ct)
+    public async Task CloseAsync(string sessionId, Workspace? listedIn, CancellationToken ct)
     {
-        var chat = RunningTab(sessionId) ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
-        var window = WindowOf(chat, "closed");
-        Requires(window, ClosesSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
-            + "Reload that window (Developer: Reload Window) and try again.");
-        await CloseTabAsync(chat, window, ct).ConfigureAwait(false);
+        if (RunningTab(sessionId) is { } chat)
+        {
+            var window = WindowOf(chat, "closed");
+            Requires(window, ClosesSince, OlderCompanion);
+            await CloseTabAsync(chat, window, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var listing = (listedIn is null ? null : _windows.Find(listedIn))
+            ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        Requires(listing, ClosesSince, OlderCompanion);
+        var answer = await _windows.SendAsync(listing, CompanionWindows.CloseChat, sessionId, ct).ConfigureAwait(false);
+        if (!answer.Ok)
+        {
+            throw new YardActionException($"VS Code did not close the chat: {answer.Error}");
+        }
+
+        _logger.LogInformation("Closed chat {Id}'s tab in VS Code; it did not run", sessionId);
     }
+
+    private const string OlderCompanion = "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close "
+        + "chats. Reload that window (Developer: Reload Window) and try again.";
 
     /// <summary>The window whose companion runs the chat's tab; refused when it runs none, as the tab is then out of reach.</summary>
     private CompanionWindow WindowOf(LiveChat chat, string what) =>

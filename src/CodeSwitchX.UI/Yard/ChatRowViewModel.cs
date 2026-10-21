@@ -59,6 +59,9 @@ public sealed partial class ChatRowViewModel : ObservableObject
     public bool NeedsUser => SessionStateMachine.NeedsUser(State);
     public bool IsVoice => VoiceLabel is not null;
 
+    /// <summary>VS Code lists a tab of the chat in its workspace's window, running or not (#297).</summary>
+    public bool HasTab => _tab is not null;
+
     /// <summary>
     /// When a turn of the chat last started, waited or ended (#295): what orders a tile's rows, the latest first. A working
     /// chat counts from when it started working, so its tool calls do not move it; else its last use, as the engine stamps
