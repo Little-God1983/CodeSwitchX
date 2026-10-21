@@ -88,7 +88,23 @@ public sealed class CloseIdleChatsTests
         var said = await Tools().CloseIdleChats("Diffusion Full", Ct);
 
         said.ShouldNotContain("Not closed");
-        said.ShouldContain("Package update (runs outside VS Code's chat tabs)");
+        said.ShouldContain("Package update (not in a VS Code tab)");
+    }
+
+    /// <summary>Review of #297: with the window's VS Code closed every tab fails alike, and Raven says the reason once.</summary>
+    [Fact]
+    public async Task Chats_not_closed_for_the_same_reason_are_named_with_it_once()
+    {
+        const string closed = "Diffusion-Full's VS Code is not open: it brings the chat's tab back when it opens, and it can be closed then.";
+        foreach (var id in new[] { "cccccccc-0003", "dddddddd-0004", "eeeeeeee-0005", "ffffffff-0006" })
+        {
+            _actions.CloseRefusals[id] = closed;
+        }
+
+        var said = await Tools().CloseIdleChats("Diffusion Full", Ct);
+
+        said.ShouldStartWith("No idle chat in Diffusion-Full could be closed. Not closed: Installer icons, Package update, Engine uninstall, NuGet check "
+            + "(Diffusion-Full's VS Code is not open: it brings the chat's tab back when it opens, and it can be closed then).");
     }
 
     [Fact]

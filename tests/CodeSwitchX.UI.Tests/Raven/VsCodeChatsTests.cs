@@ -471,6 +471,17 @@ public sealed class VsCodeChatsTests : IDisposable
         await Should.ThrowAsync<ChatNotInTabException>(() => _chats.CloseAsync("in-a-terminal", null, Ct));
     }
 
+    /// <summary>Review of #297: the chat does not run, so the older companion is the workspace's window's, not "the window that chat runs in".</summary>
+    [Fact]
+    public async Task A_listed_tab_in_a_window_with_an_older_companion_says_whose_window_it_is()
+    {
+        _windows.Shown = Window(); // 0.1.1
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldStartWith("App's VS Code still runs an older CodeSwitchX companion");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task A_listed_tab_whose_window_does_not_run_is_not_closed()
     {

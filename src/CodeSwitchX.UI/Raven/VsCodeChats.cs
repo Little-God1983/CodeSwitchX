@@ -297,7 +297,8 @@ public sealed class VsCodeChats : IVsCodeChats
         if (RunningTab(sessionId) is { } chat)
         {
             var window = WindowOf(chat, "closed");
-            Requires(window, ClosesSince, OlderCompanion);
+            Requires(window, ClosesSince, "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close chats. "
+                + "Reload that window (Developer: Reload Window) and try again.");
             await CloseTabAsync(chat, window, ct).ConfigureAwait(false);
             return;
         }
@@ -319,7 +320,8 @@ public sealed class VsCodeChats : IVsCodeChats
         var listing = _windows.Find(listedIn)
             ?? throw new YardActionException($"{listedIn.Name}'s VS Code is not open: it brings the chat's tab back when it opens, and "
                 + "it can be closed then.");
-        Requires(listing, ClosesSince, OlderCompanion);
+        Requires(listing, ClosesSince, $"{listedIn.Name}'s VS Code still runs an older CodeSwitchX companion, which cannot close chats. Reload "
+            + "that window (Developer: Reload Window) and try again.");
         var answer = await _windows.SendAsync(listing, CompanionWindows.CloseChat, sessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
         {
@@ -328,9 +330,6 @@ public sealed class VsCodeChats : IVsCodeChats
 
         _logger.LogInformation("Closed chat {Id}'s tab in VS Code; it did not run", sessionId);
     }
-
-    private const string OlderCompanion = "The VS Code window that chat runs in still runs an older CodeSwitchX companion, which cannot close "
-        + "chats. Reload that window (Developer: Reload Window) and try again.";
 
     /// <summary>The window whose companion runs the chat's tab; refused when it runs none, as the tab is then out of reach.</summary>
     private CompanionWindow WindowOf(LiveChat chat, string what) =>

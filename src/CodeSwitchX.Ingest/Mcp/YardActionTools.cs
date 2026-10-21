@@ -350,7 +350,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         var idle = chats.Where(c => !Busy(c) && (c.HasTab || c.State is SessionState.Idle or SessionState.Stale)).ToList();
 
         var closed = new List<YardChat>();
-        var failed = new List<string>();
+        var failed = new List<(string Title, string Reason)>();
         var left = busy.Select(c => $"{c.Title} ({Doing(c)})").ToList();
         foreach (var chat in idle)
         {
@@ -361,15 +361,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             }
             catch (ChatNotInTabException)
             {
-                left.Add($"{chat.Title} (runs outside VS Code's chat tabs)"); // a terminal's chat is no failure to close
+                left.Add($"{chat.Title} (not in a VS Code tab)"); // a terminal's chat is no failure to close
             }
             catch (YardActionException ex)
             {
-                failed.Add($"{chat.Title} ({ex.Message.TrimEnd('.')})");
+                failed.Add((chat.Title, ex.Message.TrimEnd('.')));
             }
             catch (TimeoutException)
             {
-                failed.Add($"{chat.Title} (CodeSwitchX's window did not respond in time)");
+                failed.Add((chat.Title, "CodeSwitchX's window did not respond in time"));
             }
         }
 
@@ -378,7 +378,8 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             : failed.Count > 0 ? $"No idle chat in {window.Name} could be closed." : $"No idle chat in {window.Name} to close.";
         if (failed.Count > 0)
         {
-            said += $" Not closed: {string.Join(", ", failed)}.";
+            // A window whose VS Code is closed fails every tab alike: Raven says the reason once, not once a chat.
+            said += $" Not closed: {string.Join("; ", failed.GroupBy(f => f.Reason).Select(g => $"{string.Join(", ", g.Select(f => f.Title))} ({g.Key})"))}.";
         }
 
         if (left.Count > 0)
