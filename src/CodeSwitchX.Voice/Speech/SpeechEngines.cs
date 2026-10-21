@@ -93,6 +93,8 @@ public sealed class SpeechEngines : ITextToSpeech, IDisposable
 
     public void Recover() => Current?.Recover();
 
+    public bool SpeaksSentencesTogether => Current?.SpeaksSentencesTogether ?? false;
+
     private void OnEngineStatus(SpeechEngine engine, TextToSpeechStatus status)
     {
         EngineStatusChanged?.Invoke(this, new EngineStatus(engine, status));

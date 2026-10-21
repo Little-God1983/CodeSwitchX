@@ -38,6 +38,8 @@ internal sealed class FakeEngineVoice(SpeechEngine engine) : ISpeechEngineVoice
     {
     }
 
+    public bool SpeaksSentencesTogether => true;
+
     public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)
     {
         await Task.Yield();

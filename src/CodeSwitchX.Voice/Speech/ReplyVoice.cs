@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Voice.Speech;
 
 /// <summary>
-/// Speaks Raven's replies: each reply's text is cut into sentences as it streams in, and its sentences are spoken together,
-/// <see cref="GroupSize"/> to a request, once the reply is complete or a group is full. Spoken one by one, every sentence
-/// started from scratch and ended falling, and Raven sounded bored (#290). At most <see cref="MaximumSentences"/> per reply
+/// Speaks Raven's replies: each reply's text is cut into sentences as it streams in, and with a voice that speaks them
+/// together (<see cref="ITextToSpeech.SpeaksSentencesTogether"/>) they go <see cref="GroupSize"/> to a request, once the
+/// reply is complete or a group is full; otherwise each as soon as it is whole. Spoken one by one, every sentence started
+/// from scratch and ended falling, and Raven sounded bored (#290). A reply spoken whole says its last sentence alone, so
+/// whether it was heard to its end is known. At most <see cref="MaximumSentences"/> per reply
 /// are spoken; the full text stays in the log. Replies are spoken in the order they began, one group at a time.
 /// <see cref="Hush"/> (the user starts talking) stops at once, and what was begun before it is never spoken after it.
 /// </summary>
@@ -575,6 +577,7 @@ public sealed class ReplyVoice : IDisposable
         private readonly bool _muted;
         private readonly Action<DateTimeOffset>? _onFirstAudio;
         private readonly SentenceChunker _chunker = new();
+        private readonly bool _whole;
         private readonly int _maximum;
         private readonly TaskCompletionSource<bool> _played = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -598,6 +601,7 @@ public sealed class ReplyVoice : IDisposable
             Number = number;
             _muted = muted;
             _onFirstAudio = onFirstAudio;
+            _whole = whole;
             _maximum = whole ? int.MaxValue : MaximumSentences;
         }
 
@@ -695,6 +699,13 @@ public sealed class ReplyVoice : IDisposable
 
             if (!Stopped)
             {
+                if (_whole)
+                {
+                    // What the user must hear to its end ("Say yes."): its last sentence goes alone, so a hush during it is
+                    // known to be one, not guessed from a share of the text.
+                    Send(_group.Count - 1);
+                }
+
                 Send();
             }
 
@@ -729,26 +740,33 @@ public sealed class ReplyVoice : IDisposable
 
                 _taken++;
                 _group.Add(SpeechText.EndSentence(spoken));
-                if (_group.Count == GroupSize)
+                var size = _voice._tts.SpeaksSentencesTogether ? GroupSize : 1;
+                if (_whole && _group.Count > size)
                 {
-                    Send();
+                    Send(size); // spoken whole, the newest may be its last, which goes alone: it waits for the next
+                }
+                else if (!_whole && (_group.Count >= size || Full))
+                {
+                    Send(); // nothing more can join it
                 }
             }
         }
 
-        /// <summary>The sentences taken and not sent yet go to the voice, to be spoken in one request.</summary>
-        private void Send()
+        /// <summary>The first <paramref name="count"/> sentences taken and not sent yet go to the voice, to be spoken in one request.</summary>
+        private void Send(int count = int.MaxValue)
         {
-            if (_group.Count == 0)
+            count = Math.Min(count, _group.Count);
+            if (count <= 0)
             {
                 return;
             }
 
-            var text = string.Join(' ', _group);
-            // Only guessed when the last sentence shares the request: then half of it, so a hush at the end of the one before,
-            // in a read-back whose heard end lets a bare "yes" allow (#108), is never taken for one during "Say yes.".
-            var lastShare = _group.Count == 1 ? 1 : LastShareMargin * _group[^1].Length / text.Length;
-            _group.Clear();
+            var sent = _group[..count];
+            _group.RemoveRange(0, count);
+            var text = string.Join(' ', sent);
+            // Only guessed when the last sentence shares the request (a reply not spoken whole): then half of it, so a hush at
+            // the end of the one before is never taken for one during the last, in an offer a bare "yes" may take.
+            var lastShare = sent.Count == 1 ? 1 : LastShareMargin * sent[^1].Length / text.Length;
             _queued++;
             _voice.Queue(new Sentence(this, text, lastShare));
         }

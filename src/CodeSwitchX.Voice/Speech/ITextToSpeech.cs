@@ -29,6 +29,13 @@ public interface ITextToSpeech
     IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, CancellationToken ct);
 
     /// <summary>
+    /// Whether a reply's sentences are spoken together, in one request: by an engine that streams them as they are made
+    /// (Qwen3-TTS), so they flow (#290). One that makes a request whole before sending it (Kokoro) gets a sentence each:
+    /// its first audio does not wait for the rest, nor a later sentence for the watchdog's chunk timeout.
+    /// </summary>
+    bool SpeaksSentencesTogether { get; }
+
+    /// <summary>
     /// The engine hung (a sentence got no audio in time): it is stopped and started again, so the next sentences do not
     /// wait behind the hung one. Returns at once and never throws.
     /// </summary>
