@@ -55,7 +55,20 @@ public sealed class RavenActionsTests
         // no Raven chat, nothing moves.
         await StartAsync(askedIn: askedIn);
 
-        _shell.Followed.ShouldBe(follows ? [(askedIn!, Diffusion.Id)] : []);
+        _shell.Followed.ShouldBe(follows ? [(askedIn!, Diffusion.Id, "start_chat")] : []);
+    }
+
+    [Theory]
+    [InlineData("11111111-1111-1111-1111-111111111111", true)]
+    [InlineData("overview", true)]
+    [InlineData(null, false)]
+    public void The_user_follows_the_talk_to_a_window_a_Raven_chat_acted_on(string? askedIn, bool follows)
+    {
+        // #289: as for a chat started there, the panel is told which chat asked; asked by no Raven chat, nothing moves.
+        _actions.ActedOn(askedIn, Diffusion.Id, "stop_chat");
+        _actions.ActedOn(askedIn, null, "back_to_yard");
+
+        _shell.Followed.ShouldBe(follows ? [(askedIn!, Diffusion.Id, "stop_chat"), (askedIn!, null, "back_to_yard")] : []);
     }
 
     [Fact]
@@ -750,9 +763,9 @@ public sealed class RavenActionsTests
 
         public void Tell(Guid workspaceId, string text, bool failed) => Told.Add((workspaceId, text, failed));
 
-        public List<(string AskedIn, Guid WorkspaceId)> Followed { get; } = [];
+        public List<(string AskedIn, Guid? WorkspaceId, string Tool)> Followed { get; } = [];
 
-        public void FollowWork(string askedIn, Guid workspaceId) => Followed.Add((askedIn, workspaceId));
+        public void FollowWork(string askedIn, Guid? workspaceId, string tool) => Followed.Add((askedIn, workspaceId, tool));
 
         public List<WindowRequest> Windows { get; } = [];
 

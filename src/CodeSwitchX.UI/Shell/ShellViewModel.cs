@@ -261,7 +261,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Cab.Clear();
         if (Mode == ShellMode.Cab)
         {
-            BackToYard();
+            LeaveCab();
         }
     }
 
@@ -273,7 +273,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     {
         if (Mode == ShellMode.Cab && ActiveWorkspaceId == workspaceId)
         {
-            BackToYard();
+            LeaveCab();
         }
     }
 
@@ -659,8 +659,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     {
         if (Mode != ShellMode.Yard)
         {
-            BackToYard();
+            LeaveCab();
         }
+
+        Raven.SelectedChat = Raven.YardChat; // "back to the Yard" said in a window's chat goes on in chat 0 (#289)
     }
 
     string? IRavenShell.NextQuestion(string? askedIn) => Raven.NextQuestionForBrain(askedIn);
@@ -683,10 +685,21 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
 
     void IRavenShell.Tell(Guid workspaceId, string text, bool failed) => Raven.Tell(workspaceId, text, failed);
 
-    void IRavenShell.FollowWork(string askedIn, Guid workspaceId) => Raven.FollowWork(askedIn, workspaceId);
+    void IRavenShell.FollowWork(string askedIn, Guid? workspaceId, string tool) => Raven.FollowWork(askedIn, workspaceId, tool);
 
+    /// <summary>
+    /// The user goes back to the Yard (Back, its key or mouse button, the tray): the Yard is shown, and Raven's panel shows
+    /// chat 0, as opening a window shows that window's chat (#289).
+    /// </summary>
     [RelayCommand]
     public void BackToYard()
+    {
+        LeaveCab();
+        Raven.SelectedChat = Raven.YardChat;
+    }
+
+    /// <summary>Shows the Yard instead of the Cab; Raven's panel stays on its chat. Also when the window shown went away.</summary>
+    private void LeaveCab()
     {
         LeaveChatShow();
         _host.HideAll();

@@ -245,6 +245,30 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task The_brain_s_next_question_takes_its_answer_along_to_the_card_s_chat()
+    {
+        // #289: shown chat 2, the user would not see the answer in chat 1, where they asked.
+        var (vm, asks) = await NextQuestionVmAsync();
+        _ = await AsksFruitAsync(vm, asks, "c");
+        await GraceAsync(vm);
+        IEnumerable<BrainEvent> Next()
+        {
+            yield return new BrainToolCall("t1", "next_question", "{}");
+            vm.NextQuestionForBrain(YardMcp.ChatKey(FakeYardDirectory.WorkspaceOf("ContentAutomatorX"), overview: false));
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("Chat 2, DiffusionNexus.");
+        }
+
+        _brain.Answer = _ => Next();
+
+        Type(vm, "take me through what waits for me");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven && e.Text == "Chat 2, DiffusionNexus.").Chat.ShouldBe(ChatNumbered(vm, 2));
+    }
+
+    [Fact]
     public async Task The_brain_s_next_question_shows_the_chat_and_its_card_is_read_after_the_answer()
     {
         var (vm, asks) = await NextQuestionVmAsync();

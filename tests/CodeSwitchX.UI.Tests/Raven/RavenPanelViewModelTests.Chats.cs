@@ -20,8 +20,8 @@ public sealed partial class RavenPanelViewModelTests
 
     private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> ChatsVmAsync()
     {
-        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry");
-        _yard.Show("b", "CodeSwitchX", "Release notes");
+        _yard.Show("a", "ContentAutomatorX", "Fix the upload retry", "contentautomatorx-1a");
+        _yard.Show("b", "CodeSwitchX", "Release notes", "codeswitchx-2b");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
             NullLogger<RavenPanelViewModel>.Instance, asks: asks, yard: _yard);
@@ -128,7 +128,7 @@ public sealed partial class RavenPanelViewModelTests
     {
         yield return new BrainText(before);
         yield return new BrainToolCall("t1", "start_chat", "{}");
-        vm.FollowWork(YardMcp.ChatKey(askedIn, overview: false)!, window);
+        vm.FollowWork(YardMcp.ChatKey(askedIn, overview: false)!, window, "start_chat");
         seen?.AddRange(vm.Chats.Where(c => !c.IsActivity).Select(c => (c.Number, c.IsWorking)));
         yield return new BrainToolResult("t1", false);
         yield return new BrainText(after);
@@ -143,7 +143,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = ChatNumbered(vm, 1);
         Type(vm, "what's the time");
 
-        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX);
+        vm.FollowWork(YardMcp.ChatKey(CodeSwitchX, overview: false)!, ContentAutomatorX, "start_chat");
         _brain.Gate.SetResult();
         await WithinAsync(vm.PendingAnswers);
 
@@ -177,17 +177,20 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task A_second_chat_started_in_the_same_answer_moves_the_question_on()
+    public async Task Chats_started_in_two_windows_in_one_answer_leave_the_question_where_it_was_asked()
     {
-        // "A bug chat in ContentAutomatorX and a docs chat in CodeSwitchX", asked in chat 0: the question follows each.
+        // "A bug chat in ContentAutomatorX and a docs chat in CodeSwitchX", asked in chat 0: about neither window alone, the
+        // question follows the first and comes back with the second (#289). The news of each comes in its window's chat.
         var (vm, _) = await ChatsVmAsync();
+        var shown = new List<int>();
         IEnumerable<BrainEvent> Both()
         {
             yield return new BrainToolCall("t1", "start_chat", "{}");
-            vm.FollowWork(YardMcp.OverviewChat, ContentAutomatorX);
+            vm.FollowWork(YardMcp.OverviewChat, ContentAutomatorX, "start_chat");
+            shown.Add(vm.SelectedChat.Number);
             yield return new BrainToolResult("t1", false);
             yield return new BrainToolCall("t2", "start_chat", "{}");
-            vm.FollowWork(YardMcp.OverviewChat, CodeSwitchX);
+            vm.FollowWork(YardMcp.OverviewChat, CodeSwitchX, "start_chat");
             yield return new BrainToolResult("t2", false);
             yield return new BrainText("Both started.");
         }
@@ -197,22 +200,139 @@ public sealed partial class RavenPanelViewModelTests
         Type(vm, "Start a bug chat in ContentAutomatorX and a docs chat in CodeSwitchX");
         await WithinAsync(vm.PendingAnswers);
 
-        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        shown.ShouldBe([3]);
+        vm.SelectedChat.ShouldBe(vm.YardChat);
         vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
         [
-            (RavenLogKind.Note, "Asked in chat 0, the Yard."),
             (RavenLogKind.You, "Start a bug chat in ContentAutomatorX and a docs chat in CodeSwitchX"),
             (RavenLogKind.Action, "start_chat"),
             (RavenLogKind.Action, "start_chat"),
             (RavenLogKind.Raven, "Both started."),
         ]);
-        vm.SelectedChat = ChatNumbered(vm, 3);
-        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 1, CodeSwitchX: Raven started a chat there."]);
-        Type(vm, "open it");
+        vm.Log.ShouldAllBe(e => e.Kind != RavenLogKind.Note, "no note says it went anywhere");
+    }
+
+    [Fact]
+    public async Task The_user_follows_the_talk_to_a_window_whose_chats_Raven_looks_at()
+    {
+        // #289: in chat 1, "I meant the ContentAutomatorX one, it has a question": Raven looks its chats up, and the user is
+        // moved to chat 3 with the question and its answer, as when Raven starts a chat there.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => Acting(vm, CodeSwitchX, [("list_chats", ContentAutomatorX)], "It asks which retry to keep.");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "I meant the ContentAutomatorX one, it has a question");
         await WithinAsync(vm.PendingAnswers);
-        _brain.Asked[^1].ShouldNotContain("moved here", Case.Insensitive, "the user did not stay there");
-        vm.SelectedChat = vm.YardChat;
-        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 3, ContentAutomatorX: Raven started a chat there."]);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
+        vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
+        [
+            (RavenLogKind.Note, "Asked in chat 1, CodeSwitchX."),
+            (RavenLogKind.You, "I meant the ContentAutomatorX one, it has a question"),
+            (RavenLogKind.Action, "list_chats"),
+            (RavenLogKind.Raven, "It asks which retry to keep."),
+        ]);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 3, ContentAutomatorX: it is about that window."]);
+    }
+
+    [Fact]
+    public async Task Looking_at_its_own_window_and_acting_on_another_leaves_the_question_where_it_was_asked()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => Acting(vm, CodeSwitchX, [("list_chats", CodeSwitchX), ("stop_chat", ContentAutomatorX)], "Stopped it.");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "Is anything working here? Then stop the ContentAutomatorX chat");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        vm.Log.ShouldAllBe(e => e.Chat.Number == 1 && e.Kind != RavenLogKind.Note);
+    }
+
+    [Theory]
+    [InlineData("contentautomatorx-1a", 3)]
+    [InlineData("someone-else-9", 1)]
+    public async Task Telling_another_window_s_chat_something_takes_the_user_there(string to, int lands)
+    {
+        // #289: SendMessage is Claude Code's own tool: the app knows the chat by its send name. One the Yard does not show
+        // moves nothing.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => [new BrainToolCall("t1", "SendMessage", $$"""{"to":"{{to}}","message":"Keep the second retry."}"""),
+            new BrainToolResult("t1", false), new BrainText("Told it.")];
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "Tell the ContentAutomatorX chat to keep the second retry");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, lands));
+        vm.Log.Where(e => e.Kind != RavenLogKind.Note).ShouldAllBe(e => e.Chat.Number == lands);
+    }
+
+    [Fact]
+    public async Task Back_to_the_Yard_said_in_a_window_s_chat_goes_on_in_chat_0_whatever_the_answer_does_next()
+    {
+        // #289: the answer comes in chat 0, which the panel shows; looking at a window after that does not take it away.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Answer = _ => Acting(vm, CodeSwitchX, [("back_to_yard", null), ("list_chats", ContentAutomatorX)], "It asks which retry to keep.");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "Go back to the Yard and tell me what ContentAutomatorX asks");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        vm.Shown.Select(e => (e.Kind, e.Text)).ShouldBe(
+        [
+            (RavenLogKind.Note, "Asked in chat 1, CodeSwitchX."),
+            (RavenLogKind.You, "Go back to the Yard and tell me what ContentAutomatorX asks"),
+            (RavenLogKind.Action, "back_to_yard"),
+            (RavenLogKind.Action, "list_chats"),
+            (RavenLogKind.Raven, "It asks which retry to keep."),
+        ]);
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        vm.Shown.Select(e => e.Text).ShouldBe(["Continued in chat 0, the Yard: Raven switched to it."]);
+    }
+
+    [Fact]
+    public async Task A_chat_s_summary_is_written_where_the_user_followed_the_talk()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        var key = YardMcp.ChatKey(CodeSwitchX, overview: false)!;
+        IEnumerable<BrainEvent> Summing()
+        {
+            yield return new BrainToolCall("t1", "summarize_chat", "{}");
+            vm.FollowWork(key, ContentAutomatorX, "summarize_chat");
+            vm.WriteSummary(key, "The retry chat fixed the upload and waits for a review.");
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("It fixed the upload.");
+        }
+
+        _brain.Answer = _ => Summing();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "Sum up the ContentAutomatorX chat");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.Single(e => e.Text.StartsWith("The retry chat", StringComparison.Ordinal)).Chat.Number.ShouldBe(3);
+    }
+
+    /// <summary>
+    /// An answer whose tools act on windows, asked in <paramref name="askedIn"/>'s chat: the app is told of each while it
+    /// runs, as the MCP tools tell it (a null window: the Yard).
+    /// </summary>
+    private static IEnumerable<BrainEvent> Acting(RavenPanelViewModel vm, Guid askedIn, IEnumerable<(string Tool, Guid? Window)> tools, string after)
+    {
+        var key = YardMcp.ChatKey(askedIn, overview: false)!;
+        var number = 0;
+        foreach (var (tool, window) in tools)
+        {
+            var id = $"t{++number}";
+            yield return new BrainToolCall(id, tool, "{}");
+            vm.FollowWork(key, window, tool);
+            yield return new BrainToolResult(id, false);
+        }
+
+        yield return new BrainText(after);
     }
 
     [Fact]

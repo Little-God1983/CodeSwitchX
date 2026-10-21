@@ -72,6 +72,38 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task Each_tool_that_acts_on_or_looks_at_one_window_names_it_for_the_user_to_follow()
+    {
+        // #289: asked in Diffusion-Full's chat, Raven turns to CodeSwitchX: the app is told each window, and moves the user.
+        var key = FakeYard.DiffusionId.ToString("D");
+        var looking = new YardTools(_yard, scope: InDiffusion, actions: _actions);
+        var acting = new YardActionTools(_yard, _actions, scope: InDiffusion);
+
+        await looking.ListChats(workspace: "CodeSwitchX", cancellationToken: Ct);
+        await looking.ListChats(cancellationToken: Ct);
+        await looking.ListChats(workspace: "all", cancellationToken: Ct);
+        await looking.GetChat("cccc", Ct);
+        await acting.StopChat("aaaa", Ct);
+        await acting.OpenWorkspace("CodeSwitchX", cancellationToken: Ct);
+        await acting.SwitchChat("chat 1", cancellationToken: Ct);
+        await acting.SwitchChat("Yard", cancellationToken: Ct);
+        await acting.SwitchChat("activity", cancellationToken: Ct);
+        await acting.BackToYard(Ct);
+
+        _actions.Acted.ShouldBe(
+        [
+            (key, FakeYard.CodeSwitchXId, "list_chats"),
+            (key, FakeYard.DiffusionId, "list_chats"),
+            (key, FakeYard.DiffusionId, "get_chat"),
+            (key, FakeYard.CodeSwitchXId, "stop_chat"),
+            (key, FakeYard.CodeSwitchXId, "open_workspace"),
+            (key, FakeYard.CodeSwitchXId, "switch_chat"),
+            (key, null, "switch_chat"),
+            (key, null, "back_to_yard"),
+        ], "every window's chats is about none of them; Activity is no chat to be in");
+    }
+
+    [Fact]
     public async Task Stop_it_where_no_chat_works_stops_nothing_and_does_not_reach_into_another_window()
     {
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).StopChat(cancellationToken: Ct));

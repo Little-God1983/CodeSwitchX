@@ -270,8 +270,9 @@ internal sealed class FakeYardDirectory : IYardDirectory
 {
     private readonly List<YardChat> _chats = [];
 
-    public void Show(string id, string workspace, string title) => _chats.Add(new YardChat(id, title, WorkspaceOf(workspace), workspace,
-        SessionState.Idle, false, DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null));
+    /// <param name="sendName">The name SendMessage tells it something by; null for none.</param>
+    public void Show(string id, string workspace, string title, string? sendName = null) => _chats.Add(new YardChat(id, title, WorkspaceOf(workspace),
+        workspace, SessionState.Idle, false, DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null, SendName: sendName));
 
     /// <summary>The chat as the board shows it now.</summary>
     public void Now(string id, SessionState state, bool needsYou = false)

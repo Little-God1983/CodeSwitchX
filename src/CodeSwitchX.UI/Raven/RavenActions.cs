@@ -63,9 +63,10 @@ public interface IRavenShell
 
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
-    /// (#180): the user is moved to that window's Raven chat, with the question and its answer.
+    /// (#180), or acted on it otherwise with <paramref name="tool"/> (#289): the user is moved to that window's Raven chat,
+    /// chat 0 for null, with the question and its answer.
     /// </summary>
-    void FollowWork(string askedIn, Guid workspaceId);
+    void FollowWork(string askedIn, Guid? workspaceId, string tool);
 }
 
 /// <summary>
@@ -231,6 +232,14 @@ public sealed class RavenActions : IYardActions
 
     public bool StartedByRaven(string chatId) => _started.ContainsKey(chatId);
 
+    public void ActedOn(string? askedIn, Guid? workspaceId, string tool)
+    {
+        if (askedIn is not null)
+        {
+            _ui.Post(() => _shell().FollowWork(askedIn, workspaceId, tool)); // the panel knows whether the user is there already
+        }
+    }
+
     public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, string? askedIn,
         CancellationToken ct)
     {
@@ -247,7 +256,7 @@ public sealed class RavenActions : IYardActions
         {
             // The user follows the work to the window's chat, where the chat's news comes (#180); the panel knows whether
             // that is where they are.
-            _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id));
+            _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id, "start_chat"));
         }
 
         _logger.LogInformation("Raven opened chat {Id} in {Workspace}", chat.SessionId, workspace.Name);

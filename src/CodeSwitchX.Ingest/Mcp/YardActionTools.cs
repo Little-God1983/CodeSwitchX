@@ -87,13 +87,13 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         {
             var window = await WindowAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new McpException("Say which workspace or chat to open.");
-            return await Act(() => actions.OpenWorkspaceAsync(window, null, cancellationToken)).ConfigureAwait(false);
+            return Shown(await Act(() => actions.OpenWorkspaceAsync(window, null, cancellationToken)).ConfigureAwait(false), window.Id);
         }
 
         if (string.IsNullOrWhiteSpace(chat))
         {
             var named = (await OneWorkspaceAsync(workspace!, cancellationToken).ConfigureAwait(false)).Workspace;
-            return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false);
+            return Shown(await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false), named.Id);
         }
 
         // A chat is in one workspace only, so it says which. A workspace named with it still opens when the chat is not found.
@@ -105,13 +105,27 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         catch (McpException ex) when (!string.IsNullOrWhiteSpace(workspace))
         {
             var named = (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
-            return await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false)
+            return Shown(await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false), named.Id)
                 + $" No chat was brought to the front: {ex.Message}";
         }
 
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)
             ?? throw new McpException($"The workspace of chat '{chat}' is not on the Yard any more.");
-        return await Act(() => actions.OpenWorkspaceAsync(target, one, cancellationToken)).ConfigureAwait(false);
+        return Shown(await Act(() => actions.OpenWorkspaceAsync(target, one, cancellationToken)).ConfigureAwait(false), target.Id);
+    }
+
+    /// <summary>The window opened shows its Raven chat, and the user is taken there with their question (#289).</summary>
+    private string Shown(string said, Guid workspaceId)
+    {
+        actions.ActedOn(scope?.Key, workspaceId, "open_workspace");
+        return said;
+    }
+
+    /// <summary>The turn acts on <paramref name="chat"/>'s window (#289): the user follows the talk there. Returns the chat.</summary>
+    private YardChat On(YardChat chat, string tool)
+    {
+        actions.ActedOn(scope?.Key, chat.WorkspaceId, tool);
+        return chat;
     }
 
     [McpServerTool(Name = "switch_chat", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -125,7 +139,19 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var target = await NamedChatAsync(chat.Trim(), open, cancellationToken).ConfigureAwait(false);
-        return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
+        var said = await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
+        if (!target.Activity && target.Number is { } number)
+        {
+            // The user is taken to the chat shown with their question, whose answer would land unseen in the chat they left (#289).
+            var window = number == 0 ? null
+                : (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Number == number);
+            if (number == 0 || window is not null)
+            {
+                actions.ActedOn(scope?.Key, window?.Id, "switch_chat");
+            }
+        }
+
+        return said;
     }
 
     /// <summary>
@@ -189,9 +215,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        var one = string.IsNullOrWhiteSpace(chat)
+        var one = On(string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(_ => true, "to sum up", "is shown", cancellationToken).ConfigureAwait(false)
-            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "summarize_chat");
         return await Act(() => actions.SummarizeChatAsync(one, scope?.Key, cancellationToken)).ConfigureAwait(false);
     }
 
@@ -239,6 +265,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             await actions.BackToYardAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }).ConfigureAwait(false);
+        actions.ActedOn(scope?.Key, null, "back_to_yard"); // chat 0 is shown with it, and the user is taken there (#289)
         return "The Yard is shown.";
     }
 
@@ -286,7 +313,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True only once the user, told the chat is still working and asked \"Close it anyway?\", said yes.")] bool anyway = false,
         CancellationToken cancellationToken = default)
     {
-        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var one = On(await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "close_chat");
         if (!anyway && (one.State == SessionState.Working || one.NeedsYou))
         {
             throw new McpException($"The {one.Title} chat is {(one.NeedsYou ? "waiting for the user in the middle of its turn" : "still working")}: "
@@ -311,7 +338,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         [Description("True only once the user, told the chat is still working and asked \"Compact it anyway?\", said yes.")] bool anyway = false,
         CancellationToken cancellationToken = default)
     {
-        var one = await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+        var one = On(await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "compact_chat");
         if (!anyway && (one.State == SessionState.Working || one.NeedsYou))
         {
             throw new McpException($"The {one.Title} chat is {(one.NeedsYou ? "waiting for the user in the middle of its turn" : "still working")}: "
@@ -332,9 +359,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         string? chat = null,
         CancellationToken cancellationToken = default)
     {
-        var one = string.IsNullOrWhiteSpace(chat)
+        var one = On(string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(c => c.State == SessionState.Working && !c.NeedsYou, "to stop", "is working", cancellationToken).ConfigureAwait(false)
-            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "stop_chat");
         if (one.NeedsYou)
         {
             throw new McpException($"The {one.Title} chat is waiting for the user, not working: they can answer or refuse it in its VS Code tab. Nothing was stopped.");
@@ -361,9 +388,9 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         NotFromTheOverview();
-        var one = string.IsNullOrWhiteSpace(chat)
+        var one = On(string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(Asking(ChatAskKind.Question), "to answer", "asks a question in Raven's panel", cancellationToken).ConfigureAwait(false)
-            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "answer_question");
         var held = asks?.Open().Where(a => a.SessionId == one.Id).ToList() ?? [];
         var open = held.Where(a => a.Kind == ChatAskKind.Question).ToList();
         var ask = open switch
@@ -427,10 +454,10 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
                 .Select(a => a.SessionId).Distinct().ToList() is [var session] ? session : null;
         }
 
-        var one = byId is not null ? await OneChatAsync(byId, "", cancellationToken).ConfigureAwait(false)
+        var one = On(byId is not null ? await OneChatAsync(byId, "", cancellationToken).ConfigureAwait(false)
             : string.IsNullOrWhiteSpace(chat)
             ? await WindowChatAsync(Asking(ChatAskKind.Permission), "to answer", "asks for permission in Raven's panel", cancellationToken).ConfigureAwait(false)
-            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false);
+            : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "answer_permission");
         var allow = (decision ?? "").Trim().ToLowerInvariant() switch
         {
             "allow" or "yes" => true,
