@@ -74,6 +74,13 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     public string RootPath => Workspace.RootPath;
     public ObservableCollection<ChatRowViewModel> Chats { get; } = [];
 
+    /// <summary>The rows the tile draws (#295): the first <see cref="YardViewModel.MaxChats"/> of <see cref="Chats"/>.</summary>
+    public ObservableCollection<ChatRowViewModel> ShownChats { get; } = [];
+
+    /// <summary>How many chats do not fit on the tile: its "+N more" line, none when 0.</summary>
+    [ObservableProperty]
+    private int _moreChats;
+
     /// <summary>A chat of the window works (#182): Raven's chat list marks the window's chat with it. Summed up in <see cref="Recompute"/>.</summary>
     [ObservableProperty]
     private bool _isWorking;
@@ -240,7 +247,8 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
 
     /// <summary>
     /// Makes the rows what the tile shows now (#164): the chat tabs open in the workspace's VS Code window, and the chats
-    /// that run. Rows keep their place; a new one goes last.
+    /// that run. The latest turn leads (#295), unless the pointer holds the order: then rows keep their place, and a new
+    /// one goes last.
     /// </summary>
     private void Arrange(DateTimeOffset now)
     {
@@ -289,7 +297,55 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
             row.ShowTab(tab, notRunning: !runs, _tabActivity.GetValueOrDefault(tab.SessionId), _tabs!.WrittenAt, waits);
         }
 
+        if (!_owner.OrderHeld)
+        {
+            Order();
+        }
+
+        ShowRows();
         Recompute();
+    }
+
+    /// <summary>The latest turn first; rows of the same time keep their places.</summary>
+    private void Order()
+    {
+        var ordered = Chats.OrderByDescending(c => c.LastTurnAt).ToList();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var current = Chats.IndexOf(ordered[i]);
+            if (current != i)
+            {
+                Chats.Move(current, i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes <see cref="ShownChats"/> the first rows that fit, moving rather than rebuilding: this runs each second, and a
+    /// row drawn anew would close the tooltip the user has open.
+    /// </summary>
+    private void ShowRows()
+    {
+        var shown = Chats.Take(_owner.MaxChats).ToList();
+        for (var i = 0; i < shown.Count; i++)
+        {
+            var current = ShownChats.IndexOf(shown[i]);
+            if (current < 0)
+            {
+                ShownChats.Insert(i, shown[i]);
+            }
+            else if (current != i)
+            {
+                ShownChats.Move(current, i);
+            }
+        }
+
+        while (ShownChats.Count > shown.Count)
+        {
+            ShownChats.RemoveAt(ShownChats.Count - 1);
+        }
+
+        MoreChats = Chats.Count - shown.Count;
     }
 
     private ChatRowViewModel NewRow(string sessionId) =>

@@ -48,6 +48,36 @@ public class ShellViewModelTests
     }
 
     [Fact]
+    public async Task The_yard_starts_at_the_stored_font_size_and_a_change_is_stored()
+    {
+        _h.Settings.GetAsync<double?>(SettingKeys.FontScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.25));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        _h.Shell.Yard.FontScale.ShouldBe(1.25);
+        _h.Shell.Yard.TileScale.ShouldBe(1, "the font size is not the tile size (#295)");
+
+        _h.Shell.Yard.FontScale = 0.9000000000000001;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await _h.Shell.Settings.FlushSavesAsync(timeout.Token);
+
+        await _h.Settings.Received(1).SetAsync(SettingKeys.FontScale, 0.9, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_yard_shows_the_most_chats_the_settings_say()
+    {
+        _h.Settings.GetAsync<int?>(SettingKeys.YardMaxChats, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(8));
+
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Yard.MaxChats.ShouldBe(8);
+
+        _h.Shell.Settings.YardMaxChats = 4;
+
+        _h.Shell.Yard.MaxChats.ShouldBe(4);
+    }
+
+    [Fact]
     public async Task The_raven_panel_starts_in_its_stored_state()
     {
         _h.Settings.GetAsync<bool?>(SettingKeys.RavenPanelOpen, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));

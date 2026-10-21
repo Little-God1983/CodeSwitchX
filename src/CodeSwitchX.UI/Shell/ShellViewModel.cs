@@ -125,15 +125,20 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
                 Yard.HooksInstalled = HooksReachUs(Settings.HookState);
             }
         };
-        // The Yard owns its tile size and the settings store it. The window shows only after this method, so the tiles
-        // are never drawn at the default size first.
+        // The Yard owns its tile and font size and the settings store them. The window shows only after this method, so
+        // the tiles are never drawn at the default size first.
         Yard.TileScale = Settings.TileScale;
+        Yard.FontScale = Settings.FontScale;
         ShowYardRules();
         Yard.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(YardViewModel.TileScale))
             {
                 Settings.TileScale = Yard.TileScale;
+            }
+            else if (e.PropertyName == nameof(YardViewModel.FontScale))
+            {
+                Settings.FontScale = Yard.FontScale;
             }
         };
         // The same for the Raven panel: it owns its open state and microphone choice, the settings store them. Only the
@@ -205,7 +210,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 Raven.FollowUpSeconds = Settings.RavenFollowUpSeconds;
             }
-            else if (e.PropertyName is nameof(SettingsViewModel.YardKeepClosedMinutes) or nameof(SettingsViewModel.YardHideIdleHours))
+            else if (e.PropertyName is nameof(SettingsViewModel.YardKeepClosedMinutes) or nameof(SettingsViewModel.YardHideIdleHours)
+                or nameof(SettingsViewModel.YardMaxChats))
             {
                 ShowYardRules();
             }
@@ -439,9 +445,10 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;
 
-    /// <summary>The tiles follow the Yard page: how long a closed chat is kept, and when an idle one is hidden (#164).</summary>
+    /// <summary>The tiles follow the Yard page: how long a closed chat is kept, when an idle one is hidden (#164), and how many show (#295).</summary>
     private void ShowYardRules()
     {
+        Yard.MaxChats = Settings.YardMaxChats;
         Yard.KeepClosed = TimeSpan.FromMinutes(Settings.YardKeepClosedMinutes);
         Yard.HideIdleAfter = Settings.YardHideIdleHours > 0 ? TimeSpan.FromHours(Settings.YardHideIdleHours) : null;
     }

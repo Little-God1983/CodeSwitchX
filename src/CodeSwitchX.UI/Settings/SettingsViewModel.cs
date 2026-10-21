@@ -49,6 +49,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The Yard's tile size as stored; the Yard owns it (see <see cref="Yard.YardViewModel.TileScale"/>).</summary>
     [ObservableProperty] private double _tileScale = 1;
 
+    /// <summary>The Yard's font size as stored; the Yard owns it (see <see cref="Yard.YardViewModel.FontScale"/>).</summary>
+    [ObservableProperty] private double _fontScale = 1;
+
     /// <summary>Whether the Raven panel is open or folded to its rail, as stored; the panel owns it (see <see cref="Raven.RavenPanelViewModel.IsOpen"/>).</summary>
     [ObservableProperty] private bool _ravenPanelOpen = true;
 
@@ -118,6 +121,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>How long, in hours, a chat may be idle before its tile hides it (#164): one of <see cref="HideIdleChoices"/>, 0 for never.</summary>
     [ObservableProperty] private int _yardHideIdleHours;
 
+    /// <summary>The most chat rows a tile shows (#295): one of <see cref="MaxChatsChoices"/>; the rest are a "+N more" line.</summary>
+    [ObservableProperty] private int _yardMaxChats = Yard.YardViewModel.DefaultMaxChats;
+
+    /// <summary>The most chats a tile can show, as the Yard page offers them.</summary>
+    public IReadOnlyList<SettingChoice> MaxChatsChoices { get; } =
+        [.. Yard.YardViewModel.MaxChatsChoices.Select(n => new SettingChoice(n, MaxChatsText(n)))];
+
     /// <summary>The times a closed chat can be kept for, as the Yard page offers them.</summary>
     public IReadOnlyList<SettingChoice> KeepClosedChoices { get; } =
         [.. Yard.YardViewModel.KeepClosedMinutesChoices.Select(m => new SettingChoice(m, KeepClosedText(m)))];
@@ -127,6 +137,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         [.. Yard.YardViewModel.HideIdleHoursChoices.Select(h => new SettingChoice(h, HideIdleText(h)))];
 
     public static string KeepClosedText(int minutes) => minutes == 0 ? "Off" : minutes == 1 ? "1 minute" : $"{minutes} minutes";
+
+    public static string MaxChatsText(int chats) => $"{chats} chats";
 
     public static string HideIdleText(int hours) => hours == 0 ? "Never" : hours == 1 ? "1 hour" : $"{hours} hours";
 
@@ -417,6 +429,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
             // the writer's flag rather than reading the row again, which could disagree with what the writer does.
             TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
+            // Before #295 the tile size zoomed the text too: until a font size is stored, the text keeps the size it had.
+            FontScale = await LoadOrDefaultAsync<double?>(SettingKeys.FontScale, "the tiles' font size", ct) ?? TileScale;
             RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
             RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
             RavenSpeaker = await LoadOrDefaultAsync<SpeakerDevice>(SettingKeys.RavenSpeaker, "the Raven output", ct);
@@ -447,6 +461,8 @@ public sealed partial class SettingsViewModel : ObservableObject
                 && Yard.YardViewModel.KeepClosedMinutesChoices.Contains(keep) ? keep : 0;
             YardHideIdleHours = await LoadOrDefaultAsync<int?>(SettingKeys.YardHideIdleHours, "when an idle chat is hidden", ct) is { } hide
                 && Yard.YardViewModel.HideIdleHoursChoices.Contains(hide) ? hide : 0;
+            YardMaxChats = await LoadOrDefaultAsync<int?>(SettingKeys.YardMaxChats, "the most chats on a tile", ct) is { } most
+                && Yard.YardViewModel.MaxChatsChoices.Contains(most) ? most : Yard.YardViewModel.DefaultMaxChats;
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
             RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? true;
@@ -562,6 +578,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>A drag of the slider changes the value many times; the save queue keeps only the latest.</summary>
     partial void OnTileScaleChanged(double value) => Persist(SettingKeys.TileScale, value);
 
+    partial void OnFontScaleChanged(double value) => Persist(SettingKeys.FontScale, value);
+
     /// <summary>
     /// In a try of its own: a stored value of the wrong shape (edited by hand) reads as missing, without a message in the
     /// Settings view and without losing the settings read after it.
@@ -602,6 +620,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnYardKeepClosedMinutesChanged(int value) => Persist(SettingKeys.YardKeepClosedMinutes, value);
 
     partial void OnYardHideIdleHoursChanged(int value) => Persist(SettingKeys.YardHideIdleHours, value);
+
+    partial void OnYardMaxChatsChanged(int value) => Persist(SettingKeys.YardMaxChats, value);
 
     partial void OnRavenMutedWindowsChanged(IReadOnlyList<Guid> value) => Persist(SettingKeys.RavenMutedWindows, value);
 

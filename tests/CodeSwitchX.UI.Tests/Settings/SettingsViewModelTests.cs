@@ -8,6 +8,7 @@ using CodeSwitchX.Ingest.Hooks;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Tests.Voice;
 using CodeSwitchX.UI.Voice;
+using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Audio;
@@ -294,6 +295,47 @@ public class SettingsViewModelTests : IDisposable
 
         await _store.Received().SetAsync(SettingKeys.YardKeepClosedMinutes, 5, Arg.Any<CancellationToken>());
         await _store.Received().SetAsync(SettingKeys.YardHideIdleHours, 24, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>#295: a tile shows 6 chats until the user says otherwise; a stored count the page does not offer is the default too.</summary>
+    [Theory]
+    [InlineData(null, YardViewModel.DefaultMaxChats)]
+    [InlineData(9, 9)]
+    [InlineData(3, YardViewModel.DefaultMaxChats)]
+    public async Task The_most_chats_on_a_tile_defaults_to_six_and_is_saved(int? stored, int most)
+    {
+        _store.GetAsync<int?>(SettingKeys.YardMaxChats, Arg.Any<CancellationToken>()).Returns(Task.FromResult(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.YardMaxChats.ShouldBe(most);
+        _vm.YardMaxChats = 10;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.YardMaxChats, 10, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>#295: before it, the tile size zoomed the text too; the text keeps that size until the user changes it.</summary>
+    [Fact]
+    public async Task A_font_size_never_stored_starts_at_the_tile_size()
+    {
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.5));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.FontScale.ShouldBe(1.5);
+    }
+
+    [Fact]
+    public async Task The_font_size_is_loaded_and_saved()
+    {
+        _store.GetAsync<double?>(SettingKeys.FontScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.25));
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.FontScale.ShouldBe(1.25);
+
+        _vm.FontScale = 0.9;
+        await FlushAsync();
+
+        await _store.Received().SetAsync(SettingKeys.FontScale, 0.9, Arg.Any<CancellationToken>());
     }
 
     /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>

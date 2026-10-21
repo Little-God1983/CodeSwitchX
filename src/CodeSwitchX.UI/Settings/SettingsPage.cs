@@ -38,7 +38,7 @@ public sealed record SettingsPageItem(SettingsPage Page, string Group, string Ti
         new(SettingsPage.Shortcuts, "Raven", "Shortcuts", "\uE765", "Keys that switch Raven's chat from anywhere, VS Code too.",
             ["hotkey", "shortcut", "keys", "chat", "switch", "F12", "previous", "next", "taken"]),
         new(SettingsPage.Yard, "CodeSwitchX", "Yard", "\uF0E2", "Which chats a workspace's tile shows.",
-            ["tile", "chats", "tabs", "closed chat", "keep a closed chat", "idle", "hide a chat that has been idle", "ended"]),
+            ["tile", "chats", "tabs", "closed chat", "keep a closed chat", "idle", "hide a chat that has been idle", "ended", "most chats on a tile", "more"]),
         new(SettingsPage.ClaudeCode, "CodeSwitchX", "Claude Code", "", "The hooks that let every Claude Code session report its state.",
             ["hooks", "install", "remove", "settings file", "relay", "csx-hook"]),
         new(SettingsPage.Usage, "CodeSwitchX", "Usage", "", "A reminder line for the tokens of the 5-hour window.",
