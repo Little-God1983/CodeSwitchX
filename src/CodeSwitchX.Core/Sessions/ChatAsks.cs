@@ -103,6 +103,9 @@ public enum ChatAskOutcome
 
     /// <summary>A permission prompt was answered in the chat's VS Code tab: the agent that asked has moved on.</summary>
     AnsweredInVsCode,
+
+    /// <summary>The user opened the chat's own VS Code window (the Cab shows it): VS Code asks it in the chat's tab (#298).</summary>
+    OpenedInVsCode,
 }
 
 /// <summary>
@@ -207,6 +210,15 @@ public sealed class ChatAsks : IDisposable
 
     internal const int EndedKept = 64;
 
+    /// <summary>
+    /// The asks let go to VS Code lately (<see cref="AsksInVsCode"/>), by their id, until VS Code is done with them: their
+    /// tool use or their agent's turn ended (<see cref="EndedInVsCode"/>). The oldest go past <see cref="InVsCodeKept"/>.
+    /// </summary>
+    private readonly Dictionary<string, ChatAsk> _inVsCode = new(StringComparer.Ordinal);
+    private readonly Queue<string> _inVsCodeOrder = new();
+
+    public const int InVsCodeKept = 64;
+
     /// <summary>The asks taken here lately, held or ended, for <see cref="Explains"/>.</summary>
     private readonly Queue<(string SessionId, DateTimeOffset At)> _taken = new();
 
@@ -242,6 +254,13 @@ public sealed class ChatAsks : IDisposable
     public Func<ChatAsk, bool> Keeps { get; set; } = _ => true;
 
     /// <summary>
+    /// Whether the user opened the chat's own VS Code window: an ask not kept then ends as
+    /// <see cref="ChatAskOutcome.OpenedInVsCode"/>, any other as <see cref="ChatAskOutcome.ToVsCode"/>. Tells none until the
+    /// app says otherwise.
+    /// </summary>
+    public Func<ChatAsk, bool> OpenInVsCode { get; set; } = _ => false;
+
+    /// <summary>
     /// Whether the chat's VS Code tab shows a prompt now (Claude Code's own record of it waits on the user); null when that
     /// cannot be told. A permission prompt held here whose tab shows none was answered there, whatever its hooks said.
     /// Asked off the UI thread. Tells nothing until the app says otherwise.
@@ -253,6 +272,16 @@ public sealed class ChatAsks : IDisposable
 
     /// <summary>A held ask ended, however it did. Raised on the thread that ended it.</summary>
     public event Action<ChatAskClosed>? Closed;
+
+    /// <summary>
+    /// An ask let go to VS Code is done there: answered (or allowed) in the chat's tab when its tool use ended well (true);
+    /// its tool use failed or its agent's turn ended (false). Raised on the hook's or the bus's thread.
+    /// </summary>
+    public event Action<ChatAsk, bool>? EndedInVsCode;
+
+    /// <summary>Whether an ask that ended so is asked in the chat's VS Code tab now: let go there, not answered or ended.</summary>
+    public static bool AsksInVsCode(ChatAskOutcome outcome) =>
+        outcome is ChatAskOutcome.ToVsCode or ChatAskOutcome.TimedOut or ChatAskOutcome.OpenedInVsCode;
 
     /// <summary>An allow was proposed (<see cref="Propose"/>): the user's next words decide. Raised on the proposer's thread.</summary>
     public event Action<ChatAllowProposal>? ProposedAllow;
@@ -336,7 +365,7 @@ public sealed class ChatAsks : IDisposable
         // The window may have changed since Takes said yes, in a Recheck that could not see this ask yet.
         if (!KeepsSafely(ask))
         {
-            Close(ask.Id, ChatAskOutcome.ToVsCode, null);
+            Close(ask.Id, LetGoOutcome(ask), null);
             return await held.Done.Task.ConfigureAwait(false);
         }
 
@@ -670,7 +699,7 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>The window changed: a held ask it does not keep any more (<see cref="Keeps"/>) goes to VS Code.</summary>
-    public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), ChatAskOutcome.ToVsCode);
+    public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), LetGoOutcome);
 
     private bool KeepsSafely(ChatAsk ask)
     {
@@ -681,6 +710,19 @@ public sealed class ChatAsks : IDisposable
         catch (Exception)
         {
             return true; // a window that cannot say leaves the ask where it is
+        }
+    }
+
+    /// <summary>How an ask the window does not keep ends: the user opened its chat in VS Code, or it is just left there.</summary>
+    private ChatAskOutcome LetGoOutcome(ChatAsk ask)
+    {
+        try
+        {
+            return OpenInVsCode(ask) ? ChatAskOutcome.OpenedInVsCode : ChatAskOutcome.ToVsCode;
+        }
+        catch (Exception)
+        {
+            return ChatAskOutcome.ToVsCode; // a window that cannot say tells only that VS Code asks it
         }
     }
 
@@ -771,6 +813,7 @@ public sealed class ChatAsks : IDisposable
         }
 
         CloseWhere(h => h.Ask.SessionId == change.Current.SessionId, ChatAskOutcome.Gone);
+        DoneInVsCode(a => a.SessionId == change.Current.SessionId, answered: false);
         lock (_lock)
         {
             foreach (var id in _begun.Where(b => b.Value.SessionId == change.Current.SessionId).Select(b => b.Key).ToList())
@@ -842,13 +885,17 @@ public sealed class ChatAsks : IDisposable
                     Close(asked.Ask.Id, ChatAskOutcome.AnsweredInVsCode, null);
                 }
 
+                // A prompt's tool that ran and failed was allowed all the same: only a question's failure is no answer.
+                DoneInVsCode(a => a.Step.ToolUseId == id, a => a.Kind == ChatAskKind.Permission || step.EventName == "PostToolUse");
                 break;
             case "SubagentStop":
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                DoneInVsCode(a => SameAgent(a, step) && step.At >= a.At, answered: false);
                 break;
             case "Stop":
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.SessionId == step.SessionId && h.Ask.Step.AgentId is null
                     && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                DoneInVsCode(a => a.SessionId == step.SessionId && a.Step.AgentId is null && step.At >= a.At, answered: false);
                 break;
         }
     }
@@ -873,14 +920,15 @@ public sealed class ChatAsks : IDisposable
         var settled = _time.GetUtcNow() - SettleTime;
         lock (_lock)
         {
-            if (!_held.Values.Any(h => h.Ask.Kind == ChatAskKind.Permission))
+            // The prompts held, and those left to VS Code that it may not tell the end of.
+            var prompts = _held.Values.Select(h => h.Ask).Concat(_inVsCode.Values).Where(a => a.Kind == ChatAskKind.Permission).ToList();
+            if (prompts.Count == 0)
             {
                 _sweep.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 return;
             }
 
-            sessions = _held.Values.Where(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.At <= settled)
-                .Select(h => h.Ask.SessionId).Distinct(StringComparer.Ordinal).ToList();
+            sessions = prompts.Where(a => a.At <= settled).Select(a => a.SessionId).Distinct(StringComparer.Ordinal).ToList();
         }
 
         foreach (var session in sessions)
@@ -898,6 +946,7 @@ public sealed class ChatAsks : IDisposable
             if (shows == false)
             {
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.SessionId == session && h.Ask.At <= settled, ChatAskOutcome.AnsweredInVsCode);
+                DoneInVsCode(a => a.Kind == ChatAskKind.Permission && a.SessionId == session && a.At <= settled, answered: true);
             }
         }
     }
@@ -906,7 +955,9 @@ public sealed class ChatAsks : IDisposable
         ask.SessionId == step.SessionId && string.Equals(ask.Step.AgentId, step.AgentId, StringComparison.Ordinal);
 
     /// <summary>Ends the held asks that <paramref name="ends"/> picks; it is asked outside the lock.</summary>
-    private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome)
+    private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome) => CloseWhere(ends, _ => outcome);
+
+    private void CloseWhere(Func<Held, bool> ends, Func<ChatAsk, ChatAskOutcome> outcome)
     {
         List<Held> held;
         lock (_lock)
@@ -916,7 +967,7 @@ public sealed class ChatAsks : IDisposable
 
         foreach (var one in held.Where(ends))
         {
-            Close(one.Ask.Id, outcome, null);
+            Close(one.Ask.Id, outcome(one.Ask), null);
         }
     }
 
@@ -929,10 +980,46 @@ public sealed class ChatAsks : IDisposable
             {
                 return false;
             }
+
+            // Under the same lock as its leaving _held: a step that ends it in VS Code finds it in one or the other.
+            if (AsksInVsCode(outcome) && _inVsCode.TryAdd(askId, held.Ask))
+            {
+                _inVsCodeOrder.Enqueue(askId);
+                while (_inVsCodeOrder.Count > InVsCodeKept)
+                {
+                    _inVsCode.Remove(_inVsCodeOrder.Dequeue());
+                }
+
+                if (held.Ask.Kind == ChatAskKind.Permission)
+                {
+                    _sweep.Change(SweepEvery, SweepEvery); // denied there with words, only its tab tells it is over
+                }
+            }
         }
 
         Finish(held, outcome, answers, permit);
         return true;
+    }
+
+    /// <summary>The asks let go to VS Code that <paramref name="ends"/> picks are done there: each is told once.</summary>
+    private void DoneInVsCode(Func<ChatAsk, bool> ends, bool answered) => DoneInVsCode(ends, _ => answered);
+
+    private void DoneInVsCode(Func<ChatAsk, bool> ends, Func<ChatAsk, bool> answered)
+    {
+        List<ChatAsk> done;
+        lock (_lock)
+        {
+            done = [.. _inVsCode.Values.Where(ends)];
+            foreach (var ask in done)
+            {
+                _inVsCode.Remove(ask.Id);
+            }
+        }
+
+        foreach (var ask in done)
+        {
+            EndedInVsCode?.Invoke(ask, answered(ask));
+        }
     }
 
     private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)

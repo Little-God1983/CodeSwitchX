@@ -209,6 +209,146 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
+    public async Task An_ask_let_go_as_the_Cab_opened_the_chat_s_VS_Code_says_so()
+    {
+        var onNoTile = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var inCab = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
+        _asks.Keeps = _ => false;
+        _asks.OpenInVsCode = ask => ask.SessionId == "s2";
+
+        _asks.Recheck();
+
+        (await inCab).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.OpenedInVsCode);
+        (await onNoTile).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode, "its window was removed, nobody opened VS Code");
+    }
+
+    [Fact]
+    public async Task An_ask_left_to_VS_Code_says_when_its_tool_use_ends_there()
+    {
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        var left = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var answered = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
+        _asks.ToVsCode("toolu_1");
+        _asks.Answer("toolu_2", ["Apple"]);
+        await left;
+        await answered;
+
+        Step("PostToolUse", "toolu_2", session: "s2", tool: "AskUserQuestion");
+        Step("PostToolUse", "toolu_9", tool: "AskUserQuestion");
+        ended.ShouldBeEmpty("answered here, or never held: nothing ended in VS Code");
+
+        Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
+        Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
+        ended.ShouldBe([("toolu_1", true)], "told once");
+    }
+
+    [Fact]
+    public async Task An_ask_left_to_VS_Code_whose_tool_use_fails_there_was_not_answered()
+    {
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        var left = _asks.HoldAsync(Ask(), CancellationToken.None);
+        _asks.ToVsCode("toolu_1");
+        await left;
+
+        Step("PostToolUseFailure", "toolu_1", tool: "AskUserQuestion");
+
+        ended.ShouldBe([("toolu_1", false)]);
+    }
+
+    [Fact]
+    public async Task A_prompt_left_to_VS_Code_whose_tool_fails_there_was_answered_there()
+    {
+        // Allowed in the tab, the command ran and failed: the prompt itself was answered.
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        Step("PreToolUse", "toolu_1", input: "npm test");
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.ToVsCode("p1");
+        await held;
+
+        Step("PostToolUseFailure", "toolu_1", input: "npm test");
+
+        ended.ShouldBe([("p1", true)]);
+    }
+
+    [Fact]
+    public async Task A_prompt_left_to_VS_Code_and_denied_there_with_words_ends_once_its_tab_shows_none()
+    {
+        // No hook tells it, and the agent carries on: the chat's record waits on nobody any more.
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        bool? shows = true;
+        _asks.ShowsPrompt = _ => shows;
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.ToVsCode("p1");
+        await held;
+
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        ended.ShouldBeEmpty("its tab shows the prompt");
+
+        shows = false;
+        _time.Advance(ChatAsks.SweepEvery);
+        ended.ShouldBe([("p1", true)]);
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        ended.Count.ShouldBe(1, "told once");
+    }
+
+    [Fact]
+    public async Task An_ask_left_to_VS_Code_ends_there_with_its_agent_s_turn()
+    {
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        // A permission prompt that claimed no tool use: only its turn's end tells it is over.
+        var prompt = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var subAgent = _asks.HoldAsync(Ask(toolUse: "toolu_2") with
+        {
+            Step = new HookEvent { SessionId = "s1", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolUseId = "toolu_2", AgentId = "agent_1" },
+        }, CancellationToken.None);
+        var otherChat = _asks.HoldAsync(Ask("s2", "toolu_3"), CancellationToken.None);
+        foreach (var id in new[] { "p1", "toolu_2", "toolu_3" })
+        {
+            _asks.ToVsCode(id);
+        }
+
+        await Task.WhenAll(prompt, subAgent, otherChat);
+
+        Step("Stop");
+        ended.ShouldBe([("p1", false)], "the main agent's turn ended; its sub-agent may run on");
+        Step("SubagentStop", agent: "agent_1");
+        ended.ShouldBe([("p1", false), ("toolu_2", false)]);
+        Turn("s2", SessionState.Idle);
+        ended.ShouldBe([("p1", false), ("toolu_2", false), ("toolu_3", false)]);
+        Step("Stop");
+        Turn("s2", SessionState.Idle);
+        ended.Count.ShouldBe(3, "told once");
+    }
+
+    [Theory]
+    [InlineData(ChatAskOutcome.ToVsCode, true)]
+    [InlineData(ChatAskOutcome.TimedOut, true)]
+    [InlineData(ChatAskOutcome.OpenedInVsCode, true)]
+    [InlineData(ChatAskOutcome.Answered, false)]
+    [InlineData(ChatAskOutcome.AnsweredInVsCode, false)]
+    [InlineData(ChatAskOutcome.Gone, false)]
+    [InlineData(ChatAskOutcome.Stopped, false)]
+    public void Only_an_ask_let_go_is_asked_in_VS_Code_now(ChatAskOutcome outcome, bool inVsCode) =>
+        ChatAsks.AsksInVsCode(outcome).ShouldBe(inVsCode);
+
+    [Fact]
+    public async Task A_window_that_cannot_say_whether_VS_Code_shows_the_chat_lets_it_go_as_left_to_VS_Code()
+    {
+        var held = _asks.HoldAsync(Ask(), CancellationToken.None);
+        _asks.Keeps = _ => false;
+        _asks.OpenInVsCode = _ => throw new InvalidOperationException("the window is gone");
+
+        _asks.Recheck();
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+    }
+
+    [Fact]
     public async Task The_same_step_asked_again_replaces_the_one_before()
     {
         var first = _asks.HoldAsync(Ask(), CancellationToken.None);

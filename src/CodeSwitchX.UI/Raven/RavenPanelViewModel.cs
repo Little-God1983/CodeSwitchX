@@ -309,6 +309,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The question cards still open, by their ask's id (UI thread).</summary>
     private readonly Dictionary<string, ChatAskCard> _askCards = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The cards closed as asked in VS Code, by their ask, until VS Code is done with them (<see cref="OnEndedInVsCode"/>);
+    /// placed or not yet. The oldest go past <see cref="ChatAsks.InVsCodeKept"/>, as ChatAsks forgets them too.
+    /// </summary>
+    private readonly Dictionary<string, ChatAskCard> _inVsCodeCards = new(StringComparer.Ordinal);
+    private readonly Queue<string> _inVsCodeOrder = new();
+
     /// <summary>Questions shown and not yet read out: they go before the news when the floor is free (UI thread).</summary>
     private readonly List<ChatAskCard> _untold = [];
 
@@ -426,6 +433,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             asks.Opened += ask => _dispatcher.Post(() => OnAsked(ask));
             asks.Closed += closed => _dispatcher.Post(() => OnAskClosed(closed));
+            asks.EndedInVsCode += (ask, answered) => _dispatcher.Post(() => OnEndedInVsCode(ask, answered));
             asks.ProposedAllow += proposal => _dispatcher.Post(() => OnProposed(proposal));
             asks.ProposalEnded += (proposal, end) => _dispatcher.Post(() => OnProposalEnded(proposal, end));
         }
@@ -3001,6 +3009,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>A card let go to VS Code is done there: it says how, and no longer that VS Code asks it.</summary>
+    private void OnEndedInVsCode(ChatAsk ask, bool answered)
+    {
+        if (_inVsCodeCards.Remove(ask.Id, out var card))
+        {
+            card.AskedInVsCode = false;
+            card.Outcome = answered ? "Answered in VS Code." : "Done in VS Code.";
+            Summarize(card.ShownIn);
+        }
+    }
+
     /// <summary>"a chat in RawCutX": the folder the chat that asks works in, for a note when the Yard does not name it.</summary>
     private static string FolderOf(ChatAsk ask) =>
         ask.Step.Cwd is { Length: > 0 } cwd ? $"a chat in {CodeSwitchX.Core.Workspaces.WorkspaceProbe.FolderName(cwd)}" : "a chat";
@@ -3031,6 +3050,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.IsOpen = false;
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
+        card.AskedInVsCode = ChatAsks.AsksInVsCode(closed.Outcome); // its box says why, not greyed out (#298)
+        card.HandedToVsCode = card.AskedInVsCode;
+        if (card.AskedInVsCode)
+        {
+            _inVsCodeCards[closed.Ask.Id] = card;
+            _inVsCodeOrder.Enqueue(closed.Ask.Id);
+            while (_inVsCodeOrder.Count > ChatAsks.InVsCodeKept)
+            {
+                _inVsCodeCards.Remove(_inVsCodeOrder.Dequeue());
+            }
+        }
+
         Summarize(card.ShownIn);
         if (closed.Outcome == ChatAskOutcome.Answered)
         {
@@ -3228,11 +3259,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         },
         (ChatAskKind.Permission, ChatAskOutcome.ToVsCode) => "Left to VS Code: answer it in the chat's tab.",
         (ChatAskKind.Permission, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: answer it in the chat's tab.",
+        (ChatAskKind.Permission, ChatAskOutcome.OpenedInVsCode) => "You opened this chat in VS Code, so you answer it in its tab.",
         (_, ChatAskOutcome.AnsweredInVsCode) => "Answered in VS Code.",
         (ChatAskKind.Permission, ChatAskOutcome.Gone) => "Answered in VS Code, or the chat's turn ended.",
         (_, ChatAskOutcome.Answered) => "Answered: " + string.Join("; ", closed.Answers ?? []),
         (_, ChatAskOutcome.ToVsCode) => "Left to VS Code: it asks there.",
         (_, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
+        (_, ChatAskOutcome.OpenedInVsCode) => "You opened this chat in VS Code, so you answer it there.",
         (_, ChatAskOutcome.Stopped) => "The chat was stopped.",
         _ => "The chat stopped waiting for it.",
     };

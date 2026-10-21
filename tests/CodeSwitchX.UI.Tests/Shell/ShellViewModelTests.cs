@@ -443,6 +443,7 @@ public class ShellViewModelTests
         _h.Shell.AskRulesChanged += (_, _) => changes++;
         _h.Shell.Raven.TogglePanelCommand.Execute(null);
         _h.Shell.KeepsAsks(_h.App.Id).ShouldBeTrue("the rail counts it");
+        _h.Shell.CabShows(_h.App.Id).ShouldBeFalse();
 
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
@@ -450,12 +451,16 @@ public class ShellViewModelTests
 
         changes.ShouldBeGreaterThan(0);
         _h.Shell.KeepsAsks(_h.App.Id).ShouldBeFalse("the user is looking at that chat's tab");
+        _h.Shell.CabShows(_h.App.Id).ShouldBeTrue("the card says the user opened it there (#298)");
         _h.Shell.KeepsAsks(other).ShouldBeTrue();
+        _h.Shell.CabShows(other).ShouldBeFalse();
         _h.Shell.KeepsAsks(null).ShouldBeFalse("a chat on no tile is asked in its VS Code tab (#148)");
+        _h.Shell.CabShows(null).ShouldBeFalse();
 
         var seen = changes;
         _h.Shell.SetShellMinimized(true);
         _h.Shell.KeepsAsks(_h.App.Id).ShouldBeTrue("push-to-talk answers what Raven reads out");
+        _h.Shell.CabShows(_h.App.Id).ShouldBeFalse();
         changes.ShouldBe(seen + 1);
     }
 

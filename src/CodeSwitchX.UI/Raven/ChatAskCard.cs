@@ -84,6 +84,17 @@ public sealed partial class ChatAskCard : ObservableObject
     [ObservableProperty]
     private string? _outcome;
 
+    /// <summary>
+    /// It ended with VS Code asking it in the chat's tab (left there, opened there, or not answered in time): the card shows
+    /// why in a coloured box instead of its options, so it reads as moved, not broken (#298).
+    /// </summary>
+    [ObservableProperty]
+    private bool _askedInVsCode;
+
+    /// <summary>It went to VS Code to be asked there, done there or not yet: its options are there, so the card hides them.</summary>
+    [ObservableProperty]
+    private bool _handedToVsCode;
+
     /// <summary>Raven's brain proposed to allow it on the user's word: the user's next yes, found by the app, allows it.</summary>
     [ObservableProperty]
     private bool _awaitsYes;
