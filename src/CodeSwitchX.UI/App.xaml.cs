@@ -107,6 +107,7 @@ public partial class App : Application
             var asks = _host.Services.GetRequiredService<ChatAsks>();
             asks.Takes = ask => shell.TakesAsks(engine.Get(ask.SessionId)?.WorkspaceId);
             asks.Keeps = ask => shell.KeepsAsks(engine.Get(ask.SessionId)?.WorkspaceId);
+            asks.OpenInVsCode = ask => shell.CabShows(engine.Get(ask.SessionId)?.WorkspaceId);
             // A permission prompt held here closes once the chat's tab shows none: answered there (#102).
             asks.ShowsPrompt = _host.Services.GetRequiredService<ClaudeLiveSessions>().ShowsPrompt;
             shell.AskRulesChanged += (_, _) => asks.Recheck();

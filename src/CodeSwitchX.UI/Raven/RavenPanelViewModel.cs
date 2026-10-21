@@ -3031,6 +3031,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.IsOpen = false;
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
+        card.AskedInVsCode = AsksInVsCode(closed);
         Summarize(card.ShownIn);
         if (closed.Outcome == ChatAskOutcome.Answered)
         {
@@ -3228,14 +3229,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         },
         (ChatAskKind.Permission, ChatAskOutcome.ToVsCode) => "Left to VS Code: answer it in the chat's tab.",
         (ChatAskKind.Permission, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: answer it in the chat's tab.",
+        (ChatAskKind.Permission, ChatAskOutcome.OpenedInVsCode) => "You opened this chat in VS Code, so you answer it in its tab.",
         (_, ChatAskOutcome.AnsweredInVsCode) => "Answered in VS Code.",
         (ChatAskKind.Permission, ChatAskOutcome.Gone) => "Answered in VS Code, or the chat's turn ended.",
         (_, ChatAskOutcome.Answered) => "Answered: " + string.Join("; ", closed.Answers ?? []),
         (_, ChatAskOutcome.ToVsCode) => "Left to VS Code: it asks there.",
         (_, ChatAskOutcome.TimedOut) => $"Not answered within {ChatNewsLine.Span(ChatAsks.Lifetime)}: VS Code asks it now.",
+        (_, ChatAskOutcome.OpenedInVsCode) => "You opened this chat in VS Code, so you answer it there.",
         (_, ChatAskOutcome.Stopped) => "The chat was stopped.",
         _ => "The chat stopped waiting for it.",
     };
+
+    /// <summary>Whether VS Code asks it now, as the chat's tab shows it: the card says so in its box, not greyed out (#298).</summary>
+    internal static bool AsksInVsCode(ChatAskClosed closed) =>
+        closed.Outcome is ChatAskOutcome.ToVsCode or ChatAskOutcome.TimedOut or ChatAskOutcome.OpenedInVsCode;
 
     /// <summary>An option was clicked: chosen, and for a card of one question that takes one option, sent at once.</summary>
     [RelayCommand]

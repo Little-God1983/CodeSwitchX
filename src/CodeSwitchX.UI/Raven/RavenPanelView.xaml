@@ -322,6 +322,25 @@
         </Setter.Value>
       </Setter>
     </Style>
+    <!-- On a card VS Code asks now (left there, opened there, or not answered in time): why, in a coloured box, so the card reads
+         as moved to VS Code and not as broken (#298). Its DataContext is the card. -->
+    <Style x:Key="InVsCodeBox" TargetType="ContentControl">
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="Margin" Value="0,6,0,0" />
+      <Setter Property="Visibility" Value="{Binding AskedInVsCode, Converter={StaticResource BoolVisible}}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContentControl">
+            <Border Background="#263B82F6" BorderBrush="#3B82F6" BorderThickness="1" CornerRadius="5" Padding="8,5,8,6">
+              <DockPanel>
+                <TextBlock DockPanel.Dock="Left" FontFamily="{StaticResource Icons}" FontSize="12" Foreground="#93C5FD" Text="&#xE8A7;" Margin="0,2,7,0" />
+                <TextBlock FontSize="12" Foreground="#DBEAFE" TextWrapping="Wrap" Text="{Binding Outcome}" />
+              </DockPanel>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
     <!-- A chat's question: each question with its options to click. A card of one question that takes one option is answered by
          the click; any other is sent with Send. Answer in VS Code leaves it to the chat's tab. Answered or let go, it says how. -->
     <DataTemplate x:Key="QuestionEntry" DataType="{x:Type raven:RavenLogEntry}">
@@ -338,7 +357,9 @@
               <DataTemplate DataType="{x:Type raven:ChatQuestionView}">
                 <StackPanel Margin="0,6,0,0">
                   <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding Text}" />
-                  <ItemsControl ItemsSource="{Binding Options}" Focusable="False" Margin="0,5,0,0">
+                  <!-- Asked in VS Code now, the options are there; the box below says so (#298). -->
+                  <ItemsControl ItemsSource="{Binding Options}" Focusable="False" Margin="0,5,0,0"
+                                Visibility="{Binding Card.AskedInVsCode, Converter={StaticResource BoolCollapsed}}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate DataType="{x:Type raven:ChatOptionView}">
                         <Button Command="{Binding DataContext.ChooseOptionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -387,6 +408,7 @@
                     ToolTip="Leave the question to the chat's VS Code tab, which asks it there" />
           </StackPanel>
           <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
+          <ContentControl Style="{StaticResource InVsCodeBox}" />
         </StackPanel>
       </Border>
       <DataTemplate.Triggers>
@@ -394,6 +416,10 @@
           <Setter TargetName="Card" Property="BorderBrush" Value="#1F2937" />
           <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
           <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Ask.AskedInVsCode}" Value="True">
+          <Setter TargetName="Card" Property="BorderBrush" Value="#3B82F6" />
+          <Setter TargetName="Outcome" Property="Visibility" Value="Collapsed" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>
@@ -480,6 +506,7 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
           <TextBlock x:Name="Outcome" FontSize="12" Foreground="#9CA3AF" TextWrapping="Wrap" Text="{Binding Outcome}" Margin="0,4,0,0" Visibility="Collapsed" />
+          <ContentControl Style="{StaticResource InVsCodeBox}" />
         </StackPanel>
       </Border>
       <DataTemplate.Triggers>
@@ -488,6 +515,10 @@
           <Setter TargetName="Buttons" Property="Visibility" Value="Collapsed" />
           <Setter TargetName="Always" Property="Visibility" Value="Collapsed" />
           <Setter TargetName="Outcome" Property="Visibility" Value="Visible" />
+        </DataTrigger>
+        <DataTrigger Binding="{Binding Ask.AskedInVsCode}" Value="True">
+          <Setter TargetName="Card" Property="BorderBrush" Value="#3B82F6" />
+          <Setter TargetName="Outcome" Property="Visibility" Value="Collapsed" />
         </DataTrigger>
       </DataTemplate.Triggers>
     </DataTemplate>

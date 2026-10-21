@@ -442,6 +442,18 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// <summary>Under <see cref="_askGate"/>.</summary>
     private bool Keeps(Guid? workspaceId) => workspaceId is { } id && _tiled.Contains(id) && id != _cabShowing;
 
+    /// <summary>
+    /// Whether the Cab shows this workspace's VS Code now (<c>ChatAsks.OpenInVsCode</c>): a question let go then was let go
+    /// because the user opened its chat there, and its card says so (#298). Asked on any thread.
+    /// </summary>
+    public bool CabShows(Guid? workspaceId)
+    {
+        lock (_askGate)
+        {
+            return workspaceId is { } id && id == _cabShowing;
+        }
+    }
+
     /// <summary>The window changed what <see cref="KeepsAsks"/> says. Raised on the UI thread.</summary>
     public event EventHandler? AskRulesChanged;
 

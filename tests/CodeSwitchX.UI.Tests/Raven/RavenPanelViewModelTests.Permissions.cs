@@ -926,6 +926,7 @@ public sealed partial class RavenPanelViewModelTests
 
     [Theory]
     [InlineData(ChatAskOutcome.TimedOut, null, "Not answered within 10 minutes: answer it in the chat's tab.")]
+    [InlineData(ChatAskOutcome.OpenedInVsCode, null, "You opened this chat in VS Code, so you answer it in its tab.")]
     [InlineData(ChatAskOutcome.Gone, null, "Answered in VS Code, or the chat's turn ended.")]
     [InlineData(ChatAskOutcome.Stopped, null, "The chat was stopped.")]
     [InlineData(ChatAskOutcome.Answered, "Run the tests instead.", "Denied: Run the tests instead.")]

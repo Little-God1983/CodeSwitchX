@@ -103,6 +103,9 @@ public enum ChatAskOutcome
 
     /// <summary>A permission prompt was answered in the chat's VS Code tab: the agent that asked has moved on.</summary>
     AnsweredInVsCode,
+
+    /// <summary>The user opened the chat's own VS Code window (the Cab shows it): VS Code asks it in the chat's tab (#298).</summary>
+    OpenedInVsCode,
 }
 
 /// <summary>
@@ -242,6 +245,13 @@ public sealed class ChatAsks : IDisposable
     public Func<ChatAsk, bool> Keeps { get; set; } = _ => true;
 
     /// <summary>
+    /// Whether the user opened the chat's own VS Code window: an ask not kept then ends as
+    /// <see cref="ChatAskOutcome.OpenedInVsCode"/>, any other as <see cref="ChatAskOutcome.ToVsCode"/>. Tells none until the
+    /// app says otherwise.
+    /// </summary>
+    public Func<ChatAsk, bool> OpenInVsCode { get; set; } = _ => false;
+
+    /// <summary>
     /// Whether the chat's VS Code tab shows a prompt now (Claude Code's own record of it waits on the user); null when that
     /// cannot be told. A permission prompt held here whose tab shows none was answered there, whatever its hooks said.
     /// Asked off the UI thread. Tells nothing until the app says otherwise.
@@ -336,7 +346,7 @@ public sealed class ChatAsks : IDisposable
         // The window may have changed since Takes said yes, in a Recheck that could not see this ask yet.
         if (!KeepsSafely(ask))
         {
-            Close(ask.Id, ChatAskOutcome.ToVsCode, null);
+            Close(ask.Id, LetGoOutcome(ask), null);
             return await held.Done.Task.ConfigureAwait(false);
         }
 
@@ -670,7 +680,7 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>The window changed: a held ask it does not keep any more (<see cref="Keeps"/>) goes to VS Code.</summary>
-    public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), ChatAskOutcome.ToVsCode);
+    public void Recheck() => CloseWhere(h => !KeepsSafely(h.Ask), LetGoOutcome);
 
     private bool KeepsSafely(ChatAsk ask)
     {
@@ -681,6 +691,19 @@ public sealed class ChatAsks : IDisposable
         catch (Exception)
         {
             return true; // a window that cannot say leaves the ask where it is
+        }
+    }
+
+    /// <summary>How an ask the window does not keep ends: the user opened its chat in VS Code, or it is just left there.</summary>
+    private ChatAskOutcome LetGoOutcome(ChatAsk ask)
+    {
+        try
+        {
+            return OpenInVsCode(ask) ? ChatAskOutcome.OpenedInVsCode : ChatAskOutcome.ToVsCode;
+        }
+        catch (Exception)
+        {
+            return ChatAskOutcome.ToVsCode; // a window that cannot say tells only that VS Code asks it
         }
     }
 
@@ -906,7 +929,9 @@ public sealed class ChatAsks : IDisposable
         ask.SessionId == step.SessionId && string.Equals(ask.Step.AgentId, step.AgentId, StringComparison.Ordinal);
 
     /// <summary>Ends the held asks that <paramref name="ends"/> picks; it is asked outside the lock.</summary>
-    private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome)
+    private void CloseWhere(Func<Held, bool> ends, ChatAskOutcome outcome) => CloseWhere(ends, _ => outcome);
+
+    private void CloseWhere(Func<Held, bool> ends, Func<ChatAsk, ChatAskOutcome> outcome)
     {
         List<Held> held;
         lock (_lock)
@@ -916,7 +941,7 @@ public sealed class ChatAsks : IDisposable
 
         foreach (var one in held.Where(ends))
         {
-            Close(one.Ask.Id, outcome, null);
+            Close(one.Ask.Id, outcome(one.Ask), null);
         }
     }
 

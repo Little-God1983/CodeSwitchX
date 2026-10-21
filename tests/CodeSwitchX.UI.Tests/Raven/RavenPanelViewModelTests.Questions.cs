@@ -119,6 +119,48 @@ public sealed partial class RavenPanelViewModelTests
         (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
         card.IsOpen.ShouldBeFalse();
         card.Outcome.ShouldBe("Left to VS Code: it asks there.");
+        card.AskedInVsCode.ShouldBeTrue("VS Code asks it now: the card says so in its box, not greyed out");
+    }
+
+    [Fact]
+    public async Task A_question_let_go_as_the_Cab_opened_its_chat_says_the_user_answers_it_in_VS_Code()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Asking(), CancellationToken.None);
+        var card = Card(vm);
+
+        asks.Keeps = _ => false;
+        asks.OpenInVsCode = _ => true;
+        asks.Recheck();
+
+        await WithinAsync(held);
+        (card.IsOpen, card.AskedInVsCode).ShouldBe((false, true));
+        card.Outcome.ShouldBe("You opened this chat in VS Code, so you answer it there.");
+    }
+
+    [Fact]
+    public async Task A_question_answered_here_is_not_asked_in_VS_Code()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Asking(), CancellationToken.None);
+        var card = Card(vm);
+
+        vm.ChooseOptionCommand.Execute(card.Questions[0].Options[1]);
+
+        await WithinAsync(held);
+        (card.IsOpen, card.AskedInVsCode).ShouldBe((false, false));
+    }
+
+    [Theory]
+    [InlineData(ChatAskOutcome.TimedOut, "Not answered within 10 minutes: VS Code asks it now.", true)]
+    [InlineData(ChatAskOutcome.OpenedInVsCode, "You opened this chat in VS Code, so you answer it there.", true)]
+    [InlineData(ChatAskOutcome.Gone, "The chat stopped waiting for it.", false)]
+    public void A_closed_question_card_says_how_it_ended_and_whether_VS_Code_asks_it(ChatAskOutcome outcome, string said, bool inVsCode)
+    {
+        var closed = new ChatAskClosed(Asking(), outcome, null);
+
+        RavenPanelViewModel.OutcomeOf(closed).ShouldBe(said);
+        RavenPanelViewModel.AsksInVsCode(closed).ShouldBe(inVsCode);
     }
 
     [Fact]

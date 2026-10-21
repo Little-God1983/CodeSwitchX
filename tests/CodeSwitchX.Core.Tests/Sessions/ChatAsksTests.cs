@@ -209,6 +209,32 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
+    public async Task An_ask_let_go_as_the_Cab_opened_the_chat_s_VS_Code_says_so()
+    {
+        var onNoTile = _asks.HoldAsync(Ask(), CancellationToken.None);
+        var inCab = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
+        _asks.Keeps = _ => false;
+        _asks.OpenInVsCode = ask => ask.SessionId == "s2";
+
+        _asks.Recheck();
+
+        (await inCab).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.OpenedInVsCode);
+        (await onNoTile).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode, "its window was removed, nobody opened VS Code");
+    }
+
+    [Fact]
+    public async Task A_window_that_cannot_say_whether_VS_Code_shows_the_chat_lets_it_go_as_left_to_VS_Code()
+    {
+        var held = _asks.HoldAsync(Ask(), CancellationToken.None);
+        _asks.Keeps = _ => false;
+        _asks.OpenInVsCode = _ => throw new InvalidOperationException("the window is gone");
+
+        _asks.Recheck();
+
+        (await held).ShouldNotBeNull().Outcome.ShouldBe(ChatAskOutcome.ToVsCode);
+    }
+
+    [Fact]
     public async Task The_same_step_asked_again_replaces_the_one_before()
     {
         var first = _asks.HoldAsync(Ask(), CancellationToken.None);
