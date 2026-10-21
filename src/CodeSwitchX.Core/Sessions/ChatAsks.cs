@@ -885,7 +885,8 @@ public sealed class ChatAsks : IDisposable
                     Close(asked.Ask.Id, ChatAskOutcome.AnsweredInVsCode, null);
                 }
 
-                DoneInVsCode(a => a.Step.ToolUseId == id, answered: step.EventName == "PostToolUse");
+                // A prompt's tool that ran and failed was allowed all the same: only a question's failure is no answer.
+                DoneInVsCode(a => a.Step.ToolUseId == id, a => a.Kind == ChatAskKind.Permission || step.EventName == "PostToolUse");
                 break;
             case "SubagentStop":
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.Gone);
@@ -919,14 +920,15 @@ public sealed class ChatAsks : IDisposable
         var settled = _time.GetUtcNow() - SettleTime;
         lock (_lock)
         {
-            if (!_held.Values.Any(h => h.Ask.Kind == ChatAskKind.Permission))
+            // The prompts held, and those left to VS Code that it may not tell the end of.
+            var prompts = _held.Values.Select(h => h.Ask).Concat(_inVsCode.Values).Where(a => a.Kind == ChatAskKind.Permission).ToList();
+            if (prompts.Count == 0)
             {
                 _sweep.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 return;
             }
 
-            sessions = _held.Values.Where(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.At <= settled)
-                .Select(h => h.Ask.SessionId).Distinct(StringComparer.Ordinal).ToList();
+            sessions = prompts.Where(a => a.At <= settled).Select(a => a.SessionId).Distinct(StringComparer.Ordinal).ToList();
         }
 
         foreach (var session in sessions)
@@ -944,6 +946,7 @@ public sealed class ChatAsks : IDisposable
             if (shows == false)
             {
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.SessionId == session && h.Ask.At <= settled, ChatAskOutcome.AnsweredInVsCode);
+                DoneInVsCode(a => a.Kind == ChatAskKind.Permission && a.SessionId == session && a.At <= settled, answered: true);
             }
         }
     }
@@ -986,6 +989,11 @@ public sealed class ChatAsks : IDisposable
                 {
                     _inVsCode.Remove(_inVsCodeOrder.Dequeue());
                 }
+
+                if (held.Ask.Kind == ChatAskKind.Permission)
+                {
+                    _sweep.Change(SweepEvery, SweepEvery); // denied there with words, only its tab tells it is over
+                }
             }
         }
 
@@ -994,7 +1002,9 @@ public sealed class ChatAsks : IDisposable
     }
 
     /// <summary>The asks let go to VS Code that <paramref name="ends"/> picks are done there: each is told once.</summary>
-    private void DoneInVsCode(Func<ChatAsk, bool> ends, bool answered)
+    private void DoneInVsCode(Func<ChatAsk, bool> ends, bool answered) => DoneInVsCode(ends, _ => answered);
+
+    private void DoneInVsCode(Func<ChatAsk, bool> ends, Func<ChatAsk, bool> answered)
     {
         List<ChatAsk> done;
         lock (_lock)
@@ -1008,7 +1018,7 @@ public sealed class ChatAsks : IDisposable
 
         foreach (var ask in done)
         {
-            EndedInVsCode?.Invoke(ask, answered);
+            EndedInVsCode?.Invoke(ask, answered(ask));
         }
     }
 

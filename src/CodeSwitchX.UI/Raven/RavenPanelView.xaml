@@ -360,9 +360,9 @@
               <DataTemplate DataType="{x:Type raven:ChatQuestionView}">
                 <StackPanel Margin="0,6,0,0">
                   <TextBlock FontSize="13" Foreground="#E5E7EB" TextWrapping="Wrap" Text="{Binding Text}" />
-                  <!-- Asked in VS Code now, the options are there; the box below says so (#298). -->
+                  <!-- Handed to VS Code, the options are there, answered there or not yet; the box below says so (#298). -->
                   <ItemsControl ItemsSource="{Binding Options}" Focusable="False" Margin="0,5,0,0"
-                                Visibility="{Binding Card.AskedInVsCode, Converter={StaticResource BoolCollapsed}}">
+                                Visibility="{Binding Card.HandedToVsCode, Converter={StaticResource BoolCollapsed}}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate DataType="{x:Type raven:ChatOptionView}">
                         <Button Command="{Binding DataContext.ChooseOptionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"

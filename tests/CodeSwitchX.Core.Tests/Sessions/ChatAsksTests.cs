@@ -258,6 +258,44 @@ public sealed class ChatAsksTests : IDisposable
     }
 
     [Fact]
+    public async Task A_prompt_left_to_VS_Code_whose_tool_fails_there_was_answered_there()
+    {
+        // Allowed in the tab, the command ran and failed: the prompt itself was answered.
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        Step("PreToolUse", "toolu_1", input: "npm test");
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.ToVsCode("p1");
+        await held;
+
+        Step("PostToolUseFailure", "toolu_1", input: "npm test");
+
+        ended.ShouldBe([("p1", true)]);
+    }
+
+    [Fact]
+    public async Task A_prompt_left_to_VS_Code_and_denied_there_with_words_ends_once_its_tab_shows_none()
+    {
+        // No hook tells it, and the agent carries on: the chat's record waits on nobody any more.
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        bool? shows = true;
+        _asks.ShowsPrompt = _ => shows;
+        var held = _asks.HoldAsync(Permission(), CancellationToken.None);
+        _asks.ToVsCode("p1");
+        await held;
+
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        ended.ShouldBeEmpty("its tab shows the prompt");
+
+        shows = false;
+        _time.Advance(ChatAsks.SweepEvery);
+        ended.ShouldBe([("p1", true)]);
+        _time.Advance(ChatAsks.SweepEvery * 3);
+        ended.Count.ShouldBe(1, "told once");
+    }
+
+    [Fact]
     public async Task An_ask_left_to_VS_Code_ends_there_with_its_agent_s_turn()
     {
         var ended = new List<(string, bool)>();

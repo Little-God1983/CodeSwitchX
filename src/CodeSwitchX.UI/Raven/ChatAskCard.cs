@@ -91,6 +91,10 @@ public sealed partial class ChatAskCard : ObservableObject
     [ObservableProperty]
     private bool _askedInVsCode;
 
+    /// <summary>It went to VS Code to be asked there, done there or not yet: its options are there, so the card hides them.</summary>
+    [ObservableProperty]
+    private bool _handedToVsCode;
+
     /// <summary>Raven's brain proposed to allow it on the user's word: the user's next yes, found by the app, allows it.</summary>
     [ObservableProperty]
     private bool _awaitsYes;

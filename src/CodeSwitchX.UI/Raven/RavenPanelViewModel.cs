@@ -3051,6 +3051,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
         card.AskedInVsCode = ChatAsks.AsksInVsCode(closed.Outcome); // its box says why, not greyed out (#298)
+        card.HandedToVsCode = card.AskedInVsCode;
         if (card.AskedInVsCode)
         {
             _inVsCodeCards[closed.Ask.Id] = card;

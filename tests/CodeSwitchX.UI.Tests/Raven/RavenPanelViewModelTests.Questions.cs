@@ -121,6 +121,7 @@ public sealed partial class RavenPanelViewModelTests
         card.IsOpen.ShouldBeFalse();
         card.Outcome.ShouldBe("Left to VS Code: it asks there.");
         card.AskedInVsCode.ShouldBeTrue("VS Code asks it now: the card says so in its box, not greyed out");
+        card.HandedToVsCode.ShouldBeTrue();
     }
 
     [Fact]
@@ -154,6 +155,7 @@ public sealed partial class RavenPanelViewModelTests
         }));
 
         (card.IsOpen, card.AskedInVsCode, card.Outcome).ShouldBe((false, false, "Answered in VS Code."));
+        card.HandedToVsCode.ShouldBeTrue("its options were answered there: they do not come back greyed out");
     }
 
     [Fact]
@@ -180,7 +182,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.ChooseOptionCommand.Execute(card.Questions[0].Options[1]);
 
         await WithinAsync(held);
-        (card.IsOpen, card.AskedInVsCode).ShouldBe((false, false));
+        (card.IsOpen, card.AskedInVsCode, card.HandedToVsCode).ShouldBe((false, false, false));
     }
 
     [Theory]
