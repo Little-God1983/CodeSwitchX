@@ -27,7 +27,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         + "send_to name: then send it its task with SendMessage to that name, or it does nothing. Leave model "
         + "and effort out to use the defaults; give them only when the user wants them for this one chat. In a window's chat, leave "
         + "workspace out for that window. A chat started in another window than the chat the user is in moves the user to that "
-        + "window's Raven chat, where the new chat's news comes: say so in a few words.")]
+        + "window's Raven chat, where the new chat's news comes, unless your answer is about other windows too: say so in a few words.")]
     public async Task<StartedChatView> StartChat(
         [Description("The workspace or project as the user named it, matched like find_workspace. Left out: the window of the chat the user is in.")]
         string? workspace = null,
@@ -142,10 +142,10 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var target = await NamedChatAsync(chat.Trim(), open, cancellationToken).ConfigureAwait(false);
-        var said = await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
         if (!target.Activity && target.Number is { } number)
         {
-            // The user is taken to the chat shown with their question, whose answer would land unseen in the chat they left (#289).
+            // The user is taken to the chat shown with their question, whose answer would land unseen in the chat they left
+            // (#289): before it is shown, so a window that then fails to open has Raven's word of it there too.
             var window = number == 0 ? null
                 : (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Number == number);
             if (number == 0 || window is not null)
@@ -154,7 +154,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
             }
         }
 
-        return said;
+        return await Act(() => actions.SwitchChatAsync(target, cancellationToken)).ConfigureAwait(false);
     }
 
     /// <summary>

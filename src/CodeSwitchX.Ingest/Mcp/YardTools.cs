@@ -105,7 +105,6 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
         else if (window is { } own)
         {
             shown = shown.Where(c => c.WorkspaceId == own);
-            actions?.ActedOn(scope?.Key, own, "list_chats");
         }
 
         var asked = asks?.Open().ToLookup(a => a.SessionId);

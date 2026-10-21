@@ -2174,7 +2174,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // What Raven answered there too (#289): "Close it anyway?" or the options a chat asks for are answered here, by
         // this brain, which did not say them.
         var (question, how) = (carried.Question, carried.How);
-        var answer = string.Join(" ", question.Entries.Where(e => e.Kind == RavenLogKind.Raven).Select(e => e.Text.Trim()).Where(t => t.Length > 0));
+        var answer = string.Join(" ", question.Replies.Select(e => e.Text.Trim()).Where(t => t.Length > 0));
         return $"[The user asked this in chat {question.AskedIn.Number}, {NameOf(question.AskedIn)}, and was moved here {how}: \"{question.Text}\"]\n"
             + (answer.Length > 0 ? $"[Raven answered it: \"{answer}\"]\n" : "");
     }
@@ -2199,7 +2199,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // The question whose turn it is. A quick tool may be heard of before its call comes in the brain's stream; a start
         // is slow, and the question still in it is the one it is for, not one asked since in that chat.
         var question = QuestionAskedIn(askedIn);
-        if (to is not null && question is not null && (tool != "start_chat" || question.Tools.Count > 0))
+        if (to is not null && question is not null && (tool != "start_chat" || question.Tools.ContainsValue(tool)))
         {
             Follow(question, to, tool);
         }
@@ -2434,8 +2434,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         /// <summary>The note above it saying where it was asked, once it was moved (<see cref="FollowWork"/>); moves with it.</summary>
         public RavenLogEntry? Origin { get; set; }
 
-        /// <summary>The tool calls of its turn under way, by id: one acting on a window moves the user (<see cref="FollowWork"/>).</summary>
-        public HashSet<string> Tools { get; } = new(StringComparer.Ordinal);
+        /// <summary>The tool calls of its turn under way, by id, with their tools: one acting on a window moves the user (<see cref="FollowWork"/>).</summary>
+        public Dictionary<string, string> Tools { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Raven's replies in its turn, what its brain said: told to the brain of a chat it moved to (<see cref="Carried"/>).
+        /// A summary written with it is not among them: a chat's words, worded by a model, are never told to a brain as Raven's.
+        /// </summary>
+        public List<RavenLogEntry> Replies { get; } = [];
 
         /// <summary>Its entries in the log so far: the words asked, the replies and the cards; what moves with it.</summary>
         public List<RavenLogEntry> Entries { get; } = [];
@@ -2643,6 +2649,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         if (piece.TrimStart() is { Length: > 0 } start)
                         {
                             reply = Track(AddSaid(start, Where(), spoken));
+                            question?.Replies.Add(reply);
                             said = true;
                             spoken.Add(start);
                         }
@@ -2661,7 +2668,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainToolCall call:
                         if (question is not null)
                         {
-                            question.Tools.Add(call.Id); // the app moves the user while a tool acting on a window runs (#180, #289)
+                            question.Tools[call.Id] = call.Tool; // the app moves the user while a tool acting on a window runs (#180, #289)
                             if (call.Tool == SendTool)
                             {
                                 _ = FollowMessageAsync(question, call.Input);

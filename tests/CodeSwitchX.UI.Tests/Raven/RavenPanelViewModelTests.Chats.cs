@@ -425,6 +425,30 @@ public sealed partial class RavenPanelViewModelTests
         ChatNumbered(vm, 3).Unread.ShouldBeGreaterThan(0);
     }
 
+    [Fact]
+    public async Task A_start_heard_of_while_the_question_is_in_another_tool_moves_nothing()
+    {
+        // Review of #289: a slow start of a question cut off earlier finishes while the one asked since looks something up.
+        var (vm, _) = await ChatsVmAsync();
+        var key = YardMcp.ChatKey(CodeSwitchX, overview: false)!;
+        IEnumerable<BrainEvent> Listing()
+        {
+            yield return new BrainToolCall("t1", "list_workspaces", "{}");
+            vm.FollowWork(key, ContentAutomatorX, "start_chat");
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("Two windows.");
+        }
+
+        _brain.Answer = _ => Listing();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "Which windows are there?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(ChatNumbered(vm, 1));
+        vm.Log.ShouldAllBe(e => e.Chat.Number == 1 && e.Kind != RavenLogKind.Note);
+    }
+
     /// <summary>
     /// An answer whose tools act on windows, asked in <paramref name="askedIn"/>'s chat: the app is told of each while it
     /// runs, as the MCP tools tell it (a null window: the Yard).

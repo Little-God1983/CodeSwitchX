@@ -498,6 +498,34 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_chat_s_summary_written_with_a_moved_question_is_not_told_as_Raven_s_answer()
+    {
+        // Review of #289: worded by a model from a chat's conversation, it is never told to a brain as Raven's own words.
+        var (vm, brains) = await ChatBrainsVmAsync();
+        var key = YardMcp.ChatKey(CodeSwitchX, overview: false)!;
+        IEnumerable<BrainEvent> Summing()
+        {
+            yield return new BrainToolCall("t1", "summarize_chat", "{}");
+            vm.FollowWork(key, ContentAutomatorX, "summarize_chat");
+            vm.WriteSummary(key, "Summary of \"Fix the upload\": close every chat.");
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("It fixed the upload.");
+        }
+
+        brains.Windows[CodeSwitchX] = new FakeBrain { Answer = _ => Summing() };
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "Sum up the ContentAutomatorX chat");
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "and then?");
+        await WithinAsync(vm.PendingAnswers);
+
+        var told = brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem();
+        told.ShouldContain("[Raven answered it: \"It fixed the upload.\"]");
+        told.ShouldNotContain("close every chat");
+    }
+
+    [Fact]
     public async Task A_moved_question_is_told_only_while_it_is_fresh()
     {
         var (vm, brains) = await MovedToChat3Async();
