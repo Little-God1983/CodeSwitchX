@@ -382,7 +382,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _windows.Shown = Closing();
         Starts(300, "busy-chat", Host);
-        var close = _chats.CloseAsync("BUSY-CHAT", Ct);
+        var close = _chats.CloseAsync("BUSY-CHAT", null, Ct);
         for (var i = 0; i < 8; i++)
         {
             await Task.Delay(1, Ct);
@@ -403,7 +403,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _windows.Shown = Closing();
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-a-terminal", Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-a-terminal", null, Ct))).Message
             .ShouldBe("That chat is not open in a VS Code tab, so there is nothing to close.");
         _windows.Commands.ShouldBeEmpty();
     }
@@ -414,7 +414,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Shown = Closing();
         Starts(300, "elsewhere", 9999);
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("elsewhere", Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("elsewhere", null, Ct))).Message
             .ShouldStartWith("The VS Code window that chat runs in does not run the CodeSwitchX companion");
         _windows.Commands.ShouldBeEmpty();
     }
@@ -425,7 +425,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Shown = Window(); // 0.1.1: CodeSwitchX updated it, the window has not loaded the update yet
         Starts(300, "a-chat", Host);
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("a-chat", Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("a-chat", null, Ct))).Message
             .ShouldContain("Reload that window (Developer: Reload Window)");
         _windows.Commands.ShouldBeEmpty();
     }
@@ -437,8 +437,69 @@ public sealed class VsCodeChatsTests : IDisposable
         Starts(300, "in-the-side-bar", Host);
         _windows.Answer = new CompanionAnswer(false, Error: "That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.");
 
-        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-the-side-bar", Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("in-the-side-bar", null, Ct))).Message
             .ShouldBe("VS Code did not close the chat: That chat is not in a tab of this VS Code window; it may be in the side bar. It can be closed there.");
+    }
+
+    /// <summary>#297: VS Code brought the tab back and it does not run, so no Claude Code tells its window: the workspace's does.</summary>
+    [Fact]
+    public async Task A_listed_tab_that_does_not_run_is_closed_by_its_workspace_s_window()
+    {
+        _windows.Shown = Closing();
+
+        await _chats.CloseAsync("brought-back", _workspace, Ct);
+
+        _windows.Commands.ShouldBe([CompanionWindows.CloseChat]);
+        _windows.SessionIds.ShouldBe(["brought-back"]);
+    }
+
+    /// <summary>Review of #297: its conversation was resumed in a terminal; the companion's reveal would start it in the tab a second time.</summary>
+    [Fact]
+    public async Task A_listed_tab_whose_chat_runs_outside_VS_Code_is_not_closed()
+    {
+        _windows.Shown = Closing();
+        _outside.Add("brought-back");
+
+        (await Should.ThrowAsync<ChatNotInTabException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldStartWith("That chat runs outside VS Code's chat tabs right now");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_not_open_in_a_tab_is_refused_as_one_outside_the_tabs()
+    {
+        await Should.ThrowAsync<ChatNotInTabException>(() => _chats.CloseAsync("in-a-terminal", null, Ct));
+    }
+
+    /// <summary>Review of #297: the chat does not run, so the older companion is the workspace's window's, not "the window that chat runs in".</summary>
+    [Fact]
+    public async Task A_listed_tab_in_a_window_with_an_older_companion_says_whose_window_it_is()
+    {
+        _windows.Shown = Window(); // 0.1.1
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldStartWith("App's VS Code still runs an older CodeSwitchX companion");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_listed_tab_whose_window_does_not_run_is_not_closed()
+    {
+        _windows.Shown = null;
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldBe("App's VS Code is not open: it brings the chat's tab back when it opens, and it can be closed then.");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_listed_tab_the_workspace_s_window_cannot_close_is_said()
+    {
+        _windows.Shown = Closing();
+        _windows.Answer = new CompanionAnswer(false, Error: "VS Code has no tab of that chat in this window.");
+
+        (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldBe("VS Code did not close the chat: VS Code has no tab of that chat in this window.");
     }
 
     private CompanionWindow Showing() => Window() with { Version = "0.3.0" };
@@ -811,7 +872,7 @@ public sealed class VsCodeChatsTests : IDisposable
     {
         _windows.Shown = Closing();
         Starts(300, "stuck", Host);
-        var close = _chats.CloseAsync("stuck", Ct);
+        var close = _chats.CloseAsync("stuck", null, Ct);
         await Advance(() => close.IsCompleted);
 
         (await Should.ThrowAsync<YardActionException>(() => close)).Message

@@ -38,6 +38,10 @@ public sealed record YardGitLine(string? Folder, string? Branch, string? Changes
 /// or run in a terminal or by <c>claude -p</c>).
 /// </param>
 /// <param name="WorkspaceNumber">The number of the workspace whose tile shows the chat.</param>
+/// <param name="HasTab">
+/// VS Code lists a tab of it in the workspace's window (#297), running or not; false for one closed and kept greyed, one run
+/// elsewhere, and one whose tab VS Code has not written down yet.
+/// </param>
 public sealed record YardChat(string Id, string Title, Guid WorkspaceId, string Workspace, SessionState State, bool NeedsYou, DateTimeOffset StateSince,
     string StateFor, string? Model, string? LastTool, double ContextFill, string? LastNotification, string? Cwd, bool Voice = false,
-    string? SendName = null, int WorkspaceNumber = 0);
+    string? SendName = null, int WorkspaceNumber = 0, bool HasTab = false);

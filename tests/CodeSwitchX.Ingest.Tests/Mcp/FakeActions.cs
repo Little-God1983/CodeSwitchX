@@ -39,10 +39,34 @@ internal sealed class FakeActions : IYardActions
 
     public YardChat? Closed { get; private set; }
 
+    /// <summary>Every chat closed, in order.</summary>
+    public List<YardChat> ClosedAll { get; } = [];
+
+    /// <summary>The chats that run outside VS Code's chat tabs (a terminal), whose close the app refuses as such.</summary>
+    public HashSet<string> OutsideTabs { get; } = [];
+
+    /// <summary>The chats whose close the app refuses, by id, with what it says.</summary>
+    public Dictionary<string, string> CloseRefusals { get; } = [];
+
+    /// <summary>What happens on the Yard as a chat is closed: another chat starts working, say.</summary>
+    public Action<YardChat>? OnClose { get; set; }
+
     public Task<string> CloseChatAsync(YardChat chat, CancellationToken ct)
     {
         Act("close_chat");
+        OnClose?.Invoke(chat);
+        if (CloseRefusals.TryGetValue(chat.Id, out var refusal))
+        {
+            throw new YardActionException(refusal);
+        }
+
+        if (OutsideTabs.Contains(chat.Id))
+        {
+            throw new ChatNotInTabException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        }
+
         Closed = chat;
+        ClosedAll.Add(chat);
         return Task.FromResult("closed");
     }
 

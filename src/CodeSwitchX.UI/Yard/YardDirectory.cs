@@ -59,7 +59,7 @@ public sealed class YardDirectory : IYardDirectory
     {
         var rows = await _ui.InvokeAsync(() => _yard.Tiles
             .SelectMany(tile => tile.Chats.Select(row => (tile.Workspace, Row: new Row(row.SessionId, row.Title, row.State, row.NeedsUser,
-                row.StateSince, row.ElapsedText, row.LastToolName, row.ContextFill))))
+                row.StateSince, row.ElapsedText, row.LastToolName, row.ContextFill, row.HasTab))))
             .ToList(), UiTimeout, ct).ConfigureAwait(false);
 
         return rows.Select(r =>
@@ -67,7 +67,7 @@ public sealed class YardDirectory : IYardDirectory
                 var snapshot = _sessionOf(r.Row.Id);
                 return new YardChat(r.Row.Id, r.Row.Title, r.Workspace.Id, r.Workspace.Name, r.Row.State, r.Row.NeedsYou, r.Row.StateSince,
                     r.Row.StateFor, snapshot?.Model, r.Row.LastTool, r.Row.ContextFill, snapshot?.LastNotification, snapshot?.Cwd, _isVoice(r.Row.Id),
-                    _sendNameOf(r.Row.Id), r.Workspace.Number);
+                    _sendNameOf(r.Row.Id), r.Workspace.Number, r.Row.HasTab);
             })
             .ToList();
     }
@@ -97,5 +97,5 @@ public sealed class YardDirectory : IYardDirectory
     }
 
     private sealed record Row(string Id, string Title, SessionState State, bool NeedsYou, DateTimeOffset StateSince, string StateFor, string? LastTool,
-        double ContextFill);
+        double ContextFill, bool HasTab);
 }
