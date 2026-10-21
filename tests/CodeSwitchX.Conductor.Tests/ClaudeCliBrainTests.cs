@@ -152,6 +152,15 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _launcher.Started.ShouldAllBe(s => s.Process.Disposed && s.Process.Written.Count == 1, "what one digest's chats said is gone before the next");
     }
 
+    /// <summary>#292: the reply ends where the model ends the turn, before Claude Code's result.</summary>
+    [Fact]
+    public async Task A_turn_says_when_its_reply_ended()
+    {
+        _launcher.Answer = _ => [StreamJson.Init(), StreamJson.Text("Sure."), StreamJson.AssistantText("Sure."), StreamJson.MessageEnd(), StreamJson.Result("Sure.")];
+
+        (await AskAsync("Hi")).ShouldBe([new BrainText("Sure."), new BrainTextEnded()]);
+    }
+
     [Fact]
     public async Task The_teller_has_no_tools_no_MCP_server_and_a_conversation_of_its_own()
     {

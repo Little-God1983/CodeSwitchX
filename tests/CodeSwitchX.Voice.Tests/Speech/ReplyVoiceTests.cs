@@ -564,6 +564,56 @@ public sealed class ReplyVoiceTests : IDisposable
         }
     }
 
+    // #292: sent before its first audio, a reply holds the floor; hushed before a word of it played, the voice says it is done
+    [Fact]
+    public async Task A_reply_sent_is_busy_before_its_first_audio_and_hushed_then_it_tells_it_is_done()
+    {
+        var ended = 0;
+        _voice.BusyEnded += (_, _) => Interlocked.Increment(ref ended);
+        _tts.Gate = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Add("Hello there.");
+        reply.Complete();
+        _voice.IsBusy.ShouldBeTrue("sent, not heard yet");
+        await Until(() => _tts.Spoken.Count == 1);
+
+        _voice.Hush();
+        _tts.Gate.TrySetResult();
+
+        await Until(() => Volatile.Read(ref ended) == 1);
+        _voice.IsBusy.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_reply_heard_ends_with_speaking_not_with_busy_ended()
+    {
+        var ended = 0;
+        _voice.BusyEnded += (_, _) => Interlocked.Increment(ref ended);
+        var reply = _voice.Begin();
+        reply.Add("Hello there.");
+        reply.Complete();
+
+        await _voice.WhenQuietAsync();
+
+        (await reply.Played).ShouldBeTrue();
+        Volatile.Read(ref ended).ShouldBe(0);
+    }
+
+    // #292: completed when the brain's text ends, a reply says nothing fed after it
+    [Fact]
+    public async Task Text_fed_after_a_reply_is_complete_is_not_spoken()
+    {
+        var reply = _voice.Begin();
+        reply.Add("Done.");
+        reply.Complete();
+        reply.Add(" More.");
+        reply.Break();
+        await _voice.WhenQuietAsync();
+
+        _tts.Spoken.ShouldBe(["Done."]);
+        (await reply.Played).ShouldBeTrue();
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);

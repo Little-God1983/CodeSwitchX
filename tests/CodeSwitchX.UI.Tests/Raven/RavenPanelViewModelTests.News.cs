@@ -303,10 +303,12 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldHaveSingleItem();
     }
 
-    [Fact]
-    public async Task A_teller_that_gives_no_words_says_the_plain_sentence()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // #292: a reply that ended with no words is not completed before its plain sentence
+    public async Task A_teller_that_gives_no_words_says_the_plain_sentence(bool ended)
     {
-        _teller.Answer = _ => [];
+        _teller.Answer = _ => ended ? [new BrainTextEnded()] : [];
         var (vm, _) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
         Changes("b", SessionState.Working, SessionState.Waiting);

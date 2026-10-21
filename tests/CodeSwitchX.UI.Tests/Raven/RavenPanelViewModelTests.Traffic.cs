@@ -175,6 +175,48 @@ public sealed partial class RavenPanelViewModelTests
         _chime.Plays.ShouldBe(1, "the cooldown is over");
     }
 
+    /// <summary>#292: an answer sent to the voice holds the floor before its first audio: no chime lands just before it.</summary>
+    [Fact]
+    public async Task Another_chat_s_news_waits_for_an_answer_sent_but_not_heard_yet()
+    {
+        _brain.Answer = _ => [new BrainText("Sure.")];
+        var (vm, _) = await TrafficVmAsync();
+        _speech.Gate = new TaskCompletionSource(); // the voice is still making the first audio
+        Type(vm, "hello");
+        await WithinAsync(vm.PendingAnswers);
+        await Until(() => _speech.Spoken.Count == 1);
+
+        Changes("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await WithinAsync(vm.PendingAnswers);
+
+        _chime.Plays.ShouldBe(0);
+        vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.News, "told once the answer was heard");
+
+        _speech.Gate.SetResult();
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+    }
+
+    /// <summary>#292: an answer that never got its first audio gives the floor back.</summary>
+    [Fact]
+    public async Task An_answer_the_voice_could_not_say_gives_the_floor_back()
+    {
+        _brain.Answer = _ => [new BrainText("Sure.")];
+        var (vm, _) = await TrafficVmAsync();
+        _speech.Gate = new TaskCompletionSource();
+        _speech.Fails = new InvalidOperationException("the sidecar broke");
+        Type(vm, "hello");
+        await WithinAsync(vm.PendingAnswers);
+        Changes("a", SessionState.Working, SessionState.Idle);
+
+        _speech.Gate.SetResult();
+        await GraceAsync(vm);
+
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+        _chime.Plays.ShouldBe(1);
+    }
+
     [Fact]
     public async Task With_the_sound_off_other_chats_are_only_marked()
     {

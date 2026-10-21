@@ -8,7 +8,7 @@ public sealed class TrafficWatcherTests
 {
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 5, 9, 0, 0, TimeSpan.Zero));
 
-    private static readonly TrafficWatcher.Floor Free = new(false, false, 0, 0, false, false, false, false);
+    private static readonly TrafficWatcher.Floor Free = new(false, false, 0, 0, false, false, false, false, false);
 
     [Fact]
     public void The_first_sound_is_allowed_and_one_inside_the_cooldown_is_not()
@@ -134,5 +134,6 @@ public sealed class TrafficWatcherTests
         TrafficWatcher.IsFree(Free with { Speaking = true }).ShouldBeFalse();
         TrafficWatcher.IsFree(Free with { OpenSpeech = true }).ShouldBeFalse();
         TrafficWatcher.IsFree(Free with { AwaitingYes = true }).ShouldBeFalse();
+        TrafficWatcher.IsFree(Free with { Due = true }).ShouldBeFalse();
     }
 }

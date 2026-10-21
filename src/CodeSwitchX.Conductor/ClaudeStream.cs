@@ -39,7 +39,8 @@ internal sealed record ClaudeTaken(string? Id, bool FromPeer, string? Message = 
 /// <summary>
 /// Reads the stream-json lines of Claude Code, as run with <c>--verbose --include-partial-messages</c> (checked against
 /// CLI 2.1.285): the reply comes as <c>stream_event</c> text deltas, a tool call in the <c>assistant</c> message that
-/// holds it, its result in the next <c>user</c> message, and the turn ends with a <c>result</c> line. Lines of a
+/// holds it, its result in the next <c>user</c> message, the last message's <c>message_delta</c> says it ends the turn
+/// (<c>end_turn</c>), and the turn ends with a <c>result</c> line. Lines of a
 /// subagent (a <c>parent_tool_use_id</c>) and everything else are no news. Never throws: a line that is no JSON, or not
 /// the shape expected, is null.
 /// </summary>
@@ -118,10 +119,21 @@ internal static class ClaudeStream
 
     private static ClaudeEvents? Delta(JsonElement root)
     {
-        if (root.TryGetProperty("event", out var e) && Text(e, "type") == "content_block_delta"
-            && e.TryGetProperty("delta", out var delta) && Text(delta, "type") == "text_delta" && Text(delta, "text") is { Length: > 0 } text)
+        if (!root.TryGetProperty("event", out var e) || !e.TryGetProperty("delta", out var delta))
+        {
+            return null;
+        }
+
+        if (Text(e, "type") == "content_block_delta" && Text(delta, "type") == "text_delta" && Text(delta, "text") is { Length: > 0 } text)
         {
             return new ClaudeEvents([new BrainText(text)]);
+        }
+
+        // The model is done: Claude Code ends the turn after its own bookkeeping, which the reply need not wait for (#292).
+        // A message that stops for a tool call goes on with the tool's result.
+        if (Text(e, "type") == "message_delta" && Text(delta, "stop_reason") == "end_turn")
+        {
+            return new ClaudeEvents([new BrainTextEnded()]);
         }
 
         return null;

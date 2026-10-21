@@ -34,6 +34,12 @@ public sealed record BrainQuestionSent : BrainEvent;
 /// <summary>The next piece of the reply.</summary>
 public sealed record BrainText(string Delta) : BrainEvent;
 
+/// <summary>
+/// The reply is over: the brain stopped talking, and its turn ends without saying more (#292). The turn's end may still
+/// take a while (Claude Code's own bookkeeping); what the reply said is all there is to say.
+/// </summary>
+public sealed record BrainTextEnded : BrainEvent;
+
 /// <summary>The brain called a tool.</summary>
 /// <param name="Tool">The tool's own name (<c>list_chats</c>), without the prefix a provider adds.</param>
 /// <param name="Input">Its arguments as compact JSON; <c>{}</c> for none.</param>

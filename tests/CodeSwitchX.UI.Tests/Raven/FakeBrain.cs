@@ -49,7 +49,15 @@ internal sealed class FakeBrain : IConductorBrain
             given++;
             yield return e;
         }
+
+        if (Ending is { } ending)
+        {
+            await ending.Task.WaitAsync(ct);
+        }
     }
+
+    /// <summary>While set and not completed, a turn waits for it after its last event: Claude Code's bookkeeping before its result.</summary>
+    public TaskCompletionSource? Ending { get; set; }
 
     /// <summary>Every turn fails before its question goes in (no Claude Code, a process that will not start).</summary>
     public bool FailsBeforeSent { get; set; }

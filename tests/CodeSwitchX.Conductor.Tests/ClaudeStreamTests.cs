@@ -16,6 +16,15 @@ public sealed class ClaudeStreamTests
         ClaudeStream.Read(StreamJson.AssistantText("Hey")).ShouldBeOfType<ClaudeAnswer>();
     }
 
+    /// <summary>#292: the reply is over when the model ends the turn, before Claude Code's result; a tool call goes on.</summary>
+    [Fact]
+    public void A_message_that_ends_the_turn_ends_the_reply_and_one_that_calls_a_tool_does_not()
+    {
+        ClaudeStream.Read(StreamJson.MessageEnd()).ShouldBeOfType<ClaudeEvents>().Events.ShouldBe([new BrainTextEnded()]);
+        ClaudeStream.Read(StreamJson.MessageEnd("tool_use")).ShouldBeNull();
+        ClaudeStream.Read(StreamJson.MessageEnd().Replace("\"parent_tool_use_id\":null", "\"parent_tool_use_id\":\"toolu_1\"")).ShouldBeNull();
+    }
+
     [Fact]
     public void A_tool_use_is_a_call_under_the_tool_s_own_name()
     {

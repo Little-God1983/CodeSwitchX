@@ -70,13 +70,14 @@ public sealed class TrafficWatcher(TimeProvider time)
     public bool OwnNewsWaits { get; set; }
 
     /// <summary>
-    /// Nobody talks: no recording, no clip or question unanswered, nothing being said, and no allow waiting for the user's
+    /// Nobody talks: no recording, no clip or question unanswered, nothing being said or sent to be said, and no allow waiting for the user's
     /// yes. The user's next words answer the read-back, so nothing else is said or written to them in between: a yes or
     /// an okay to another chat's question or news would allow the prompt.
     /// </summary>
     public static bool IsFree(Floor floor) => floor is
     {
         Capturing: false, Holding: false, Pending: 0, Asking: 0, Telling: false, Speaking: false, OpenSpeech: false, AwaitingYes: false,
+        Due: false,
     };
 
     /// <summary>Raven said something, or stopped saying it: the cooldown runs from now.</summary>
@@ -104,6 +105,7 @@ public sealed class TrafficWatcher(TimeProvider time)
     public bool MaySpeakOwnNews => !OwnNewsWaits || CooledDown;
 
     /// <summary>What the floor is made of, from the panel's state.</summary>
+    /// <param name="Due">The voice has something to say not heard yet: a reply sent, before its first audio (#292).</param>
     public readonly record struct Floor(bool Capturing, bool Holding, int Pending, int Asking, bool Telling, bool Speaking, bool OpenSpeech,
-        bool AwaitingYes);
+        bool AwaitingYes, bool Due);
 }
