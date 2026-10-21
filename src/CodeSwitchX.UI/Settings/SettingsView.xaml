@@ -1107,6 +1107,15 @@
                              Text="A chat that has done nothing for this long drops off its tile, though its tab is still open. It comes back when you write in it. Never, a tile shows every open chat tab." />
                 </StackPanel>
               </DockPanel>
+              <DockPanel Margin="0,16,0,0">
+                <ComboBox DockPanel.Dock="Right" Width="130" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Most chats on a tile"
+                          ItemsSource="{Binding MaxChatsChoices}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding YardMaxChats}" />
+                <StackPanel>
+                  <TextBlock Text="Most chats on a tile" FontSize="14.5" FontWeight="SemiBold" />
+                  <TextBlock Style="{StaticResource Help}" Margin="0,3,0,0"
+                             Text="A tile grows with its chats up to this many rows, the one you used last on top. More than that, the last line says how many more there are." />
+                </StackPanel>
+              </DockPanel>
             </StackPanel>
           </Border>
         </StackPanel>

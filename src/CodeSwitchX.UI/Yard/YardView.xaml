@@ -82,7 +82,10 @@
     <!-- GitLineTemplate is in App.xaml: Raven's chat header shows the same lines. -->
 
     <DataTemplate x:Key="TileTemplate" DataType="{x:Type yard:WorkspaceTileViewModel}">
-      <Border x:Name="TileBorder" Width="300" MinHeight="150" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
+      <!-- the Tile size slider sizes the tile and the Font size slider its text, each apart from the other (#295) -->
+      <Border x:Name="TileBorder" Margin="8" Padding="12" CornerRadius="10" BorderThickness="2"
+              Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
+              MinHeight="{Binding DataContext.TileMinHeight, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
               Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" Cursor="Hand">
         <Border.InputBindings>
           <MouseBinding MouseAction="LeftClick" Command="{Binding OpenCommand}" />
@@ -137,6 +140,11 @@
           <!-- A chat of the window works (#276): a streak of light runs round the tile's border, over the accent and the amber pulse. -->
           <infra:RunningLight Margin="-14" CornerRadius="10" StrokeThickness="2" Stroke="#22C55E" IsRunning="{Binding IsWorking}" />
           <StackPanel>
+          <!-- a layout transform: the text is laid out in the tile's width divided by the font size, so a wider tile fits more of it -->
+          <StackPanel.LayoutTransform>
+            <ScaleTransform ScaleX="{Binding DataContext.FontScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
+                            ScaleY="{Binding DataContext.FontScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}" />
+          </StackPanel.LayoutTransform>
           <DockPanel>
             <TextBlock DockPanel.Dock="Right" FontSize="11" Opacity="0.7" VerticalAlignment="Center"
                        Text="{Binding HostState, Converter={StaticResource HostStateText}}" />
@@ -151,7 +159,19 @@
             <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
           </DockPanel>
           <ItemsControl ItemsSource="{Binding GitLines}" ItemTemplate="{StaticResource GitLineTemplate}" Margin="0,4,0,8" />
-          <ItemsControl ItemsSource="{Binding Chats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
+          <ItemsControl ItemsSource="{Binding ShownChats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
+          <!-- the chats that do not fit (#295); a click on it opens the window, as one on the tile does -->
+          <TextBlock Text="{Binding MoreChats, StringFormat='+{0} more'}" Opacity="0.7" Margin="18,4,0,0">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding MoreChats}" Value="0">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
           <TextBlock Text="No Claude Code chats yet" FontStyle="Italic" Opacity="0.5" Margin="0,6,0,0">
             <TextBlock.Style>
               <Style TargetType="TextBlock">
@@ -228,6 +248,12 @@
                   Value="{Binding TileScale}" />
           <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
                      Margin="0,0,16,0" />
+          <TextBlock Text="Font size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+          <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinFontScale}" Maximum="{x:Static yard:YardViewModel.MaxFontScale}"
+                  TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Font size"
+                  Value="{Binding FontScale}" />
+          <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                     Margin="0,0,16,0" />
           <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
           <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
           <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
@@ -261,11 +287,6 @@
                 <TextBlock Text="{Binding Tiles.Count, StringFormat='· {0}'}" FontSize="16" Opacity="0.5" Margin="8,0,0,0" VerticalAlignment="Center" />
               </StackPanel>
               <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
-                <!-- the Tile size slider zooms the tiles, text and all; a layout transform, so the wrap panel makes room -->
-                <ItemsControl.LayoutTransform>
-                  <ScaleTransform ScaleX="{Binding DataContext.TileScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}"
-                                  ScaleY="{Binding DataContext.TileScale, RelativeSource={RelativeSource AncestorType=yard:YardView}}" />
-                </ItemsControl.LayoutTransform>
                 <ItemsControl.ItemsPanel>
                   <ItemsPanelTemplate>
                     <WrapPanel />

@@ -183,8 +183,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public void ReleaseOrder()
     {
         _holdOrderUntil = DateTimeOffset.MinValue;
+        Rearrange(); // the tiles' rows too (#295)
         Resort();
     }
+
+    /// <summary>The pointer or a context menu holds the tiles and their rows where they are (<see cref="HoldOrder"/>).</summary>
+    internal bool OrderHeld => _menuOpen || Now < _holdOrderUntil;
     [ObservableProperty] private bool _hooksInferredOnly;
 
     /// <summary>
@@ -207,7 +211,64 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public double TileScale
     {
         get => _tileScale;
-        set => SetProperty(ref _tileScale, double.IsFinite(value) ? Math.Round(Math.Clamp(value, MinTileScale, MaxTileScale), 2) : 1);
+        set
+        {
+            if (SetProperty(ref _tileScale, Slid(value, MinTileScale, MaxTileScale)))
+            {
+                OnPropertyChanged(nameof(TileWidth));
+                OnPropertyChanged(nameof(TileMinHeight));
+            }
+        }
+    }
+
+    /// <summary>A tile's width at <see cref="TileScale"/> 1.</summary>
+    public const double TileBaseWidth = 300;
+
+    /// <summary>A tile's least height at <see cref="TileScale"/> 1.</summary>
+    public const double TileBaseMinHeight = 150;
+
+    /// <summary>A tile's width: the tile size sizes the tile, not its text (#295), so a wider one shows more of a title.</summary>
+    public double TileWidth => TileBaseWidth * TileScale;
+
+    public double TileMinHeight => TileBaseMinHeight * TileScale;
+
+    public const double MinFontScale = 0.75;
+    public const double MaxFontScale = 1.5;
+    private double _fontScale = 1;
+
+    /// <summary>
+    /// How big the tiles' text is drawn, apart from the tile size (#295): 1 is its normal size. The slider in the header sets
+    /// it, and the shell stores it as it does the tile size; kept in the slider's range and to two decimals the same way.
+    /// </summary>
+    public double FontScale
+    {
+        get => _fontScale;
+        set => SetProperty(ref _fontScale, Slid(value, MinFontScale, MaxFontScale));
+    }
+
+    private static double Slid(double value, double min, double max) => double.IsFinite(value) ? Math.Round(Math.Clamp(value, min, max), 2) : 1;
+
+    public const int MinMaxChats = 4;
+    public const int MaxMaxChats = 10;
+    public const int DefaultMaxChats = 6;
+
+    /// <summary>The most chats a tile can be set to show, as the Yard page offers them.</summary>
+    public static readonly IReadOnlyList<int> MaxChatsChoices = [.. Enumerable.Range(MinMaxChats, MaxMaxChats - MinMaxChats + 1)];
+
+    private int _maxChats = DefaultMaxChats;
+
+    /// <summary>
+    /// The most chat rows a tile shows (#295); the rest are a "+N more" line. The shell sets it from Settings; a value outside
+    /// <see cref="MinMaxChats"/>..<see cref="MaxMaxChats"/> is pulled into it.
+    /// </summary>
+    public int MaxChats
+    {
+        get => _maxChats;
+        set
+        {
+            _maxChats = Math.Clamp(value, MinMaxChats, MaxMaxChats);
+            Rearrange();
+        }
     }
 
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
@@ -921,11 +982,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     private void Resort()
     {
-        var now = Now;
-        if (_menuOpen || now < _holdOrderUntil)
+        if (OrderHeld)
         {
             return;
         }
+
+        var now = Now;
 
         var changed = false;
         foreach (var group in Groups)

@@ -321,6 +321,21 @@ public sealed class AppSettingsTests
         set.Values!.ShouldBe(Enum.GetValues<WhisperModel>().Select(ModelLamp.RowNameOf));
     }
 
+    /// <summary>#295: the most chats on a tile is set by voice to a count the page offers; the tiles follow at once.</summary>
+    [Fact]
+    public async Task The_most_chats_on_a_tile_is_set_by_voice()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.SetAsync("max chats", "8", Ct)).Value.ShouldBe("8 chats");
+        _h.Shell.Yard.MaxChats.ShouldBe(8);
+        (await _settings.SetAsync("chats per tile", "4 chats", Ct)).Value.ShouldBe("4 chats");
+        _h.Shell.Yard.MaxChats.ShouldBe(4);
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("max chats", "12", Ct))).Message
+            .ShouldBe("The most chats on a tile is one of 4, 5, 6, 7, 8, 9, 10, not '12'. Nothing was changed.");
+        _h.Shell.Yard.MaxChats.ShouldBe(4);
+    }
+
     /// <summary>#164: the Yard's two times are set by voice to ones the page offers, or off; the tiles follow at once.</summary>
     [Fact]
     public async Task The_Yard_s_times_are_set_by_voice()

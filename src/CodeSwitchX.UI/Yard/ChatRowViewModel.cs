@@ -59,6 +59,13 @@ public sealed partial class ChatRowViewModel : ObservableObject
     public bool NeedsUser => SessionStateMachine.NeedsUser(State);
     public bool IsVoice => VoiceLabel is not null;
 
+    /// <summary>
+    /// When a turn of the chat last started, waited or ended (#295): what orders a tile's rows, the latest first. A working
+    /// chat counts from when it started working, so its tool calls do not move it; else its last use, as the engine stamps
+    /// it, or for a tab the app knows no chat of, when the chat was last written in; such a tab never written in goes last.
+    /// </summary>
+    public DateTimeOffset LastTurnAt { get; private set; }
+
     /// <summary>Engine version of the snapshot shown; older snapshots arriving late are ignored.</summary>
     public long Version { get; private set; }
 
@@ -75,6 +82,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
+        LastTurnAt = snapshot.State == SessionState.Working ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
         Inferred = snapshot.Inferred;
         LastToolName = snapshot.LastToolName;
         Model = snapshot.Model;
@@ -106,6 +114,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
             // as anyone knows. The time is shown only when it is known; the tab's own title is cut short, the conversation's is not.
             _ownTitle = conversation?.Title;
             StateSince = conversation?.WrittenAt ?? listedAt;
+            LastTurnAt = conversation?.WrittenAt ?? DateTimeOffset.MinValue; // a list's writing is no use of the chat
             _timed = conversation is not null;
             var state = notRunning ? SessionState.Ended : waits ? SessionState.Waiting : SessionState.Idle;
             if (State != state)

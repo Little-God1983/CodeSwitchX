@@ -458,6 +458,17 @@ public sealed class AppSettings : IAppSettings
                     + "every open chat tab.",
                 ["hide idle chats", "idle chats", "idle chat", "hide a chat that has been idle"], SettingsViewModel.HideIdleText, 60, Yard.YardViewModel.HideIdleHoursChoices,
                 () => S.YardHideIdleHours, v => S.YardHideIdleHours = v),
+            new(new("most chats on a tile", Title(SettingsPage.Yard), "How many chat rows a tile shows, the latest first; the rest "
+                    + "are a \"+N more\" line.", [.. Yard.YardViewModel.MaxChatsChoices.Select(SettingsViewModel.MaxChatsText)]), SettingsPage.Yard,
+                ["max chats", "most chats", "chats on a tile", "chats per tile", "chat rows"],
+                () => SettingsViewModel.MaxChatsText(S.YardMaxChats),
+                v =>
+                {
+                    S.YardMaxChats = Number(v) is { } n && Yard.YardViewModel.MaxChatsChoices.Contains((int)Math.Min(n, int.MaxValue)) ? (int)n
+                        : throw new YardActionException($"The most chats on a tile is one of {string.Join(", ", Yard.YardViewModel.MaxChatsChoices)}, "
+                            + $"not '{v}'. Nothing was changed.");
+                    return null;
+                }),
 
             // Usage
             new(new("5-hour budget", Title(SettingsPage.Usage), "The tokens of the 5-hour window the bottom bar measures against; \"off\" for "

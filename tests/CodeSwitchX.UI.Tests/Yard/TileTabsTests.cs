@@ -386,11 +386,12 @@ public sealed class TileTabsTests
 
         await VsCodeWrites(Tab("runs", "Text-to-speech setup dia…"), Tab("asleep", "DiffusionNexus.Installer…"), Tab("waits", "Permission"));
 
+        // The one written in last leads (#295); the two written in at the same time keep their places.
         App.Chats.Select(c => (c.Title, c.State, c.NotRunning)).ShouldBe(
         [
+            ("Permission", SessionState.Waiting, false),
             ("Text-to-speech setup dialog with voice selector", SessionState.Idle, false),
             ("DiffusionNexus.Installer…", SessionState.Ended, true),
-            ("Permission", SessionState.Waiting, false),
         ]);
         App.NeedsAttention.ShouldBeTrue("its tab waits on the user");
     }
@@ -447,7 +448,7 @@ public sealed class TileTabsTests
         Rows.ShouldBe(["unknown"], "a tab nothing is known of is not hidden");
 
         Says(Chat("a", SessionState.Working) with { LastEventAt = Now - TimeSpan.FromHours(5), Version = 2 });
-        Rows.ShouldBe(["unknown", "a"]);
+        Rows.ShouldBe(["a", "unknown"], "a chat that works again leads (#295)");
 
         _yard.HideIdleAfter = null;
         Rows.ShouldBe(["unknown", "a", "yesterday", "this-morning"], ignoreOrder: true);
