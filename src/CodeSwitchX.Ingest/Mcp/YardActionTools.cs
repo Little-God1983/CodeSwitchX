@@ -354,10 +354,24 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         var left = busy.Select(c => $"{c.Title} ({Doing(c)})").ToList();
         foreach (var chat in idle)
         {
+            // The closes run one after another, each waiting for its Claude Code to end: a chat that started a turn
+            // meanwhile is not cut off, and one gone from the tile meanwhile is closed already.
+            var now = (await yard.ChatsAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(c => c.Id == chat.Id);
+            if (now is null)
+            {
+                continue;
+            }
+
+            if (Busy(now))
+            {
+                left.Add($"{now.Title} ({Doing(now)})");
+                continue;
+            }
+
             try
             {
-                await actions.CloseChatAsync(chat, cancellationToken).ConfigureAwait(false);
-                closed.Add(chat);
+                await actions.CloseChatAsync(now, cancellationToken).ConfigureAwait(false);
+                closed.Add(now);
             }
             catch (ChatNotInTabException)
             {

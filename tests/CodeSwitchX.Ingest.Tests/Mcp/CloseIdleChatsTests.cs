@@ -91,6 +91,25 @@ public sealed class CloseIdleChatsTests
         said.ShouldContain("Package update (not in a VS Code tab)");
     }
 
+    /// <summary>Review of #297: the closes run one after another, and a chat that starts a turn meanwhile is not cut off.</summary>
+    [Fact]
+    public async Task A_chat_that_starts_working_while_the_others_close_is_left_open()
+    {
+        _actions.OnClose = closing =>
+        {
+            if (closing.Id == "cccccccc-0003")
+            {
+                var i = _yard.Chats.FindIndex(c => c.Id == "eeeeeeee-0005");
+                _yard.Chats[i] = _yard.Chats[i] with { State = SessionState.Working };
+            }
+        };
+
+        var said = await Tools().CloseIdleChats("Diffusion Full", Ct);
+
+        _actions.ClosedAll.Select(c => c.Title).ShouldBe(["Installer icons", "Package update", "NuGet check"]);
+        said.ShouldContain("Engine uninstall (still working)");
+    }
+
     /// <summary>Review of #297: with the window's VS Code closed every tab fails alike, and Raven says the reason once.</summary>
     [Fact]
     public async Task Chats_not_closed_for_the_same_reason_are_named_with_it_once()
