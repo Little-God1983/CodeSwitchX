@@ -51,7 +51,7 @@ public sealed class ReplyVoice : IDisposable
     private readonly ITimer _sleep;
     private readonly TimeProvider _time;
     private readonly ILogger<ReplyVoice> _logger;
-    private readonly Channel<Sentence> _sentences = Channel.CreateUnbounded<Sentence>();
+    private readonly Channel<Request> _requests = Channel.CreateUnbounded<Request>();
     private readonly Lock _lock = new();
 
     /// <summary>Taken while <see cref="_speaking"/> changes and the change is told, so the changes are told in order.</summary>
@@ -257,7 +257,7 @@ public sealed class ReplyVoice : IDisposable
 
         Interlocked.Increment(ref _stopsAsked);
         _ = Task.Run(StopAsAskedAsync);
-        hushed.Cancel(); // outside the lock: the cancelled request's callbacks run here. Not disposed: a sentence may still hold its token.
+        hushed.Cancel(); // outside the lock: the cancelled request's callbacks run here. Not disposed: a request may still hold its token.
         SetSpeaking(false);
         Settle(playedOut: false, left); // what was begun before the hush is not heard to its end, unless only its last sentence was cut
     }
@@ -288,10 +288,10 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
-    private void Queue(Sentence sentence)
+    private void Queue(Request request)
     {
         Interlocked.Increment(ref _pending);
-        if (!_sentences.Writer.TryWrite(sentence))
+        if (!_requests.Writer.TryWrite(request))
         {
             Interlocked.Decrement(ref _pending); // disposed
         }
@@ -299,16 +299,16 @@ public sealed class ReplyVoice : IDisposable
 
     private async Task RunAsync()
     {
-        var reader = _sentences.Reader;
+        var reader = _requests.Reader;
         while (await reader.WaitToReadAsync().ConfigureAwait(false))
         {
             try
             {
-                while (reader.TryRead(out var sentence))
+                while (reader.TryRead(out var request))
                 {
                     try
                     {
-                        await SpeakAsync(sentence).ConfigureAwait(false);
+                        await SpeakAsync(request).ConfigureAwait(false);
                     }
                     finally
                     {
@@ -320,15 +320,15 @@ public sealed class ReplyVoice : IDisposable
             }
             catch (Exception ex)
             {
-                // A handler of the events threw: the voice goes on with the next sentence.
+                // A handler of the events threw: the voice goes on with the next request.
                 _logger.LogError(ex, "Raven's voice failed");
             }
         }
     }
 
-    private async Task SpeakAsync(Sentence sentence)
+    private async Task SpeakAsync(Request request)
     {
-        var reply = sentence.Reply;
+        var reply = request.Reply;
         CancellationToken hush;
         lock (_lock)
         {
@@ -346,7 +346,7 @@ public sealed class ReplyVoice : IDisposable
         var audio = TimeSpan.Zero;
         try
         {
-            await foreach (var chunk in _tts.SpeakAsync(sentence.Text, stalled.Token).ConfigureAwait(false))
+            await foreach (var chunk in _tts.SpeakAsync(request.Text, stalled.Token).ConfigureAwait(false))
             {
                 watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan);
                 await _playerGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -377,7 +377,7 @@ public sealed class ReplyVoice : IDisposable
                 reply.HeardFirstAudio(_time.GetUtcNow());
             }
 
-            reply.SpokenOne(audio * sentence.LastShare); // all of these sentences are queued to play
+            reply.SpokenOne(audio * request.LastShare); // all of these sentences are queued to play
         }
         catch (OperationCanceledException) when (hush.IsCancellationRequested)
         {
@@ -385,9 +385,9 @@ public sealed class ReplyVoice : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Hung: likely the sidecar itself (a generation that never ends holds its lock), so every later sentence
+            // Hung: likely the sidecar itself (a generation that never ends holds its lock), so every later request
             // would wait behind it. It is started again.
-            _logger.LogWarning("Raven's voice stalled on \"{Sentence}\"", sentence.Text);
+            _logger.LogWarning("Raven's voice stalled on \"{Request}\"", request.Text);
             _tts.Recover();
             Drop(reply, "Raven's voice hung and is starting again, so the rest of this answer is not spoken.");
         }
@@ -397,7 +397,7 @@ public sealed class ReplyVoice : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Raven could not speak \"{Sentence}\"", sentence.Text);
+            _logger.LogWarning(ex, "Raven could not speak \"{Request}\"", request.Text);
             Drop(reply, $"Raven could not speak: {ex.Message}");
         }
     }
@@ -410,7 +410,7 @@ public sealed class ReplyVoice : IDisposable
         }
         catch (ObjectDisposedException)
         {
-            // The sentence ended meanwhile.
+            // The request ended meanwhile.
         }
     }
 
@@ -434,11 +434,11 @@ public sealed class ReplyVoice : IDisposable
     };
 
     /// <summary>
-    /// Nothing more is queued: lets what plays play out, then closes the device, unless the next sentence comes first
+    /// Nothing more is queued: lets what plays play out, then closes the device, unless the next request comes first
     /// (then it plays on) or a hush came meanwhile. The player gets the length of its audio and a margin; past that it
     /// counts as hung, and is stopped.
     /// </summary>
-    private async Task PlayOutAsync(ChannelReader<Sentence> reader)
+    private async Task PlayOutAsync(ChannelReader<Request> reader)
     {
         CancellationToken hush;
         lock (_lock)
@@ -530,7 +530,7 @@ public sealed class ReplyVoice : IDisposable
         }
     }
 
-    /// <summary>Completes once every sentence queued so far has been spoken or dropped, and played out; for the tests.</summary>
+    /// <summary>Completes once every request queued so far has been spoken or dropped, and played out; for the tests.</summary>
     internal async Task WhenQuietAsync()
     {
         while (Volatile.Read(ref _pending) > 0 || IsSpeaking)
@@ -547,9 +547,9 @@ public sealed class ReplyVoice : IDisposable
     public void Dispose()
     {
         _disposed = true;
-        _sentences.Writer.TryComplete();
+        _requests.Writer.TryComplete();
         Hush();
-        // The loop ends once the hushed sentence lets go: after it, nothing touches the timer disposed below.
+        // The loop ends once the hushed request lets go: after it, nothing touches the timer disposed below.
         _loop.Wait(TimeSpan.FromSeconds(2));
         _sleep.Dispose();
         _keepAlive.Stop();
@@ -568,7 +568,7 @@ public sealed class ReplyVoice : IDisposable
 
     /// <summary>What is spoken in one request: a group of a reply's sentences.</summary>
     /// <param name="LastShare">The last sentence's share of the text: about that share of the audio is the last sentence's.</param>
-    private sealed record Sentence(SpokenReply Reply, string Text, double LastShare);
+    private sealed record Request(SpokenReply Reply, string Text, double LastShare);
 
     /// <summary>One reply being spoken: fed its text as it streams in, in order, on one thread at a time, then completed.</summary>
     public sealed class SpokenReply
@@ -768,7 +768,7 @@ public sealed class ReplyVoice : IDisposable
             // the end of the one before is never taken for one during the last, in an offer a bare "yes" may take.
             var lastShare = sent.Count == 1 ? 1 : LastShareMargin * sent[^1].Length / text.Length;
             _queued++;
-            _voice.Queue(new Sentence(this, text, lastShare));
+            _voice.Queue(new Request(this, text, lastShare));
         }
 
         /// <summary>True the first time: the reply is dropped now.</summary>
