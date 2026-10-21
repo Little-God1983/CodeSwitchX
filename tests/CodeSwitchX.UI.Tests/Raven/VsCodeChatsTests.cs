@@ -459,7 +459,7 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.Shown = null;
 
         (await Should.ThrowAsync<YardActionException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
-            .ShouldBe("That chat is not open in a VS Code tab, so there is nothing to close.");
+            .ShouldBe("App's VS Code is not open: it brings the chat's tab back when it opens, and it can be closed then.");
         _windows.Commands.ShouldBeEmpty();
     }
 

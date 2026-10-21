@@ -302,8 +302,15 @@ public sealed class VsCodeChats : IVsCodeChats
             return;
         }
 
-        var listing = (listedIn is null ? null : _windows.Find(listedIn))
-            ?? throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        if (listedIn is null)
+        {
+            throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        }
+
+        // VS Code is closed and keeps the tab to bring back (seen on screen, #297): it can only be closed once it is open.
+        var listing = _windows.Find(listedIn)
+            ?? throw new YardActionException($"{listedIn.Name}'s VS Code is not open: it brings the chat's tab back when it opens, and "
+                + "it can be closed then.");
         Requires(listing, ClosesSince, OlderCompanion);
         var answer = await _windows.SendAsync(listing, CompanionWindows.CloseChat, sessionId, ct).ConfigureAwait(false);
         if (!answer.Ok)
