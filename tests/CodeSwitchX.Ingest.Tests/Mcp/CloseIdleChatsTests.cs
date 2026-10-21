@@ -70,12 +70,25 @@ public sealed class CloseIdleChatsTests
     [Fact]
     public async Task A_chat_that_cannot_be_closed_is_told_and_the_others_are_closed()
     {
-        _actions.CloseRefusals["dddddddd-0004"] = "That chat is not open in a VS Code tab, so there is nothing to close.";
+        _actions.CloseRefusals["dddddddd-0004"] = "VS Code did not close the chat: VS Code did not close the tab.";
 
         var said = await Tools().CloseIdleChats("Diffusion Full", Ct);
 
         said.ShouldStartWith("Closed 3 idle chats in Diffusion-Full: Installer icons, Engine uninstall, NuGet check.");
-        said.ShouldContain("Not closed: Package update (That chat is not open in a VS Code tab, so there is nothing to close.)");
+        said.ShouldContain("Not closed: Package update (VS Code did not close the chat: VS Code did not close the tab).", Case.Sensitive,
+            "one period, not \".).\"");
+    }
+
+    /// <summary>Review of #297: one running in a terminal is no chat of the window's tabs, and no failure to close.</summary>
+    [Fact]
+    public async Task An_idle_chat_outside_VS_Code_s_tabs_is_left_open_and_said_to_run_elsewhere()
+    {
+        _actions.OutsideTabs.Add("dddddddd-0004");
+
+        var said = await Tools().CloseIdleChats("Diffusion Full", Ct);
+
+        said.ShouldNotContain("Not closed");
+        said.ShouldContain("Package update (runs outside VS Code's chat tabs)");
     }
 
     [Fact]

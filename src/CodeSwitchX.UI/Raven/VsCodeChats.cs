@@ -304,7 +304,15 @@ public sealed class VsCodeChats : IVsCodeChats
 
         if (listedIn is null)
         {
-            throw new YardActionException("That chat is not open in a VS Code tab, so there is nothing to close.");
+            throw new ChatNotInTabException("That chat is not open in a VS Code tab, so there is nothing to close.");
+        }
+
+        // Its conversation goes on in a terminal (resumed there since): the companion's reveal would start it in the tab too,
+        // two Claude Codes on one conversation, as an open or a compaction would (#297 review).
+        if (_runsOutside(sessionId))
+        {
+            throw new ChatNotInTabException("That chat runs outside VS Code's chat tabs right now (in a terminal, a script or another app), "
+                + "so its tab is not closed: closing it would start it there a second time. Close it where it runs.");
         }
 
         // VS Code is closed and keeps the tab to bring back (seen on screen, #297): it can only be closed once it is open.

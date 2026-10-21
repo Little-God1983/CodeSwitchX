@@ -453,6 +453,24 @@ public sealed class VsCodeChatsTests : IDisposable
         _windows.SessionIds.ShouldBe(["brought-back"]);
     }
 
+    /// <summary>Review of #297: its conversation was resumed in a terminal; the companion's reveal would start it in the tab a second time.</summary>
+    [Fact]
+    public async Task A_listed_tab_whose_chat_runs_outside_VS_Code_is_not_closed()
+    {
+        _windows.Shown = Closing();
+        _outside.Add("brought-back");
+
+        (await Should.ThrowAsync<ChatNotInTabException>(() => _chats.CloseAsync("brought-back", _workspace, Ct))).Message
+            .ShouldStartWith("That chat runs outside VS Code's chat tabs right now");
+        _windows.Commands.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_chat_not_open_in_a_tab_is_refused_as_one_outside_the_tabs()
+    {
+        await Should.ThrowAsync<ChatNotInTabException>(() => _chats.CloseAsync("in-a-terminal", null, Ct));
+    }
+
     [Fact]
     public async Task A_listed_tab_whose_window_does_not_run_is_not_closed()
     {

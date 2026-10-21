@@ -351,6 +351,7 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
         var closed = new List<YardChat>();
         var failed = new List<string>();
+        var left = busy.Select(c => $"{c.Title} ({Doing(c)})").ToList();
         foreach (var chat in idle)
         {
             try
@@ -358,9 +359,13 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
                 await actions.CloseChatAsync(chat, cancellationToken).ConfigureAwait(false);
                 closed.Add(chat);
             }
+            catch (ChatNotInTabException)
+            {
+                left.Add($"{chat.Title} (runs outside VS Code's chat tabs)"); // a terminal's chat is no failure to close
+            }
             catch (YardActionException ex)
             {
-                failed.Add($"{chat.Title} ({ex.Message})");
+                failed.Add($"{chat.Title} ({ex.Message.TrimEnd('.')})");
             }
             catch (TimeoutException)
             {
@@ -370,15 +375,15 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
 
         var said = closed.Count > 0
             ? $"Closed {closed.Count} idle {(closed.Count == 1 ? "chat" : "chats")} in {window.Name}: {string.Join(", ", closed.Select(c => c.Title))}."
-            : idle.Count > 0 ? $"No idle chat in {window.Name} could be closed." : $"No idle chat in {window.Name} to close.";
+            : failed.Count > 0 ? $"No idle chat in {window.Name} could be closed." : $"No idle chat in {window.Name} to close.";
         if (failed.Count > 0)
         {
             said += $" Not closed: {string.Join(", ", failed)}.";
         }
 
-        if (busy.Count > 0)
+        if (left.Count > 0)
         {
-            said += $" Left open: {string.Join(", ", busy.Select(c => $"{c.Title} ({Doing(c)})"))}.";
+            said += $" Left open: {string.Join(", ", left)}.";
         }
 
         return said;

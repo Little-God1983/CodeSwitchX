@@ -132,7 +132,13 @@ public enum WindowRequest
 }
 
 /// <summary>A request the Yard cannot carry out; the message says why, in words for the user.</summary>
-public sealed class YardActionException(string message) : Exception(message);
+public class YardActionException(string message) : Exception(message);
+
+/// <summary>
+/// The chat is no chat of VS Code's tabs right now (#297 review): it runs in a terminal, a script or another app, or has no tab
+/// at all. Closing all idle chats of a window leaves it as one that runs elsewhere, not as a close that failed.
+/// </summary>
+public sealed class ChatNotInTabException(string message) : YardActionException(message);
 
 /// <param name="Model">The alias name or id chats start with; null for Claude Code's own default.</param>
 /// <param name="Effort">The effort level; null for Claude Code's own default.</param>
