@@ -131,9 +131,11 @@ public sealed class ReplyVoiceTests : IDisposable
     }
 
     [Theory]
-    // Each request of the fake voice is 10 ms of audio, and "Say yes." is a third of the text: about 3 ms of it. Round 3
-    // of #187: a press during "Say yes." cuts nothing the user needed.
-    [InlineData(2, true)]
+    // Each request of the fake voice is 10 ms of audio, and "Say yes." is a third of the text, taken at half: about 1.6 ms
+    // of it. Round 3 of #187: a press during "Say yes." cuts nothing the user needed. Review of #290: the guess errs early,
+    // a press at the end of "It deletes files." (2 to 3 ms left) is not taken for one during "Say yes.".
+    [InlineData(1, true)]
+    [InlineData(3, false)]
     [InlineData(200, false)]
     public async Task A_hush_once_the_last_sentence_has_begun_to_play_counts_as_heard(int leftMs, bool heard)
     {

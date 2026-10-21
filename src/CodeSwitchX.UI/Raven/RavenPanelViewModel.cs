@@ -2319,9 +2319,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// One question's turn: the reply grows in one entry as it streams in, each tool call gets a card, and text after a
-    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken as it comes,
-    /// the words before a card ("Let me check.") too. The awaits resume on the UI thread. Never faults, so the question
-    /// behind it always gets its turn.
+    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken once it is
+    /// complete, the words before a card ("Let me check.") at the card (#290). The awaits resume on the UI thread. Never
+    /// faults, so the question behind it always gets its turn.
     /// </summary>
     /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
     /// <param name="floor">Cancelled when the user takes the floor: the answer is interrupted, and ends with "(interrupted)".</param>

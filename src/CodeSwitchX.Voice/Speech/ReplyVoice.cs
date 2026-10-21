@@ -19,10 +19,13 @@ public sealed class ReplyVoice : IDisposable
     /// <summary>How many sentences are spoken in one request: a reply's, or a part of one spoken whole.</summary>
     public const int GroupSize = 3;
 
-    /// <summary>How long a sentence may take to its first audio: generation behind another sentence included.</summary>
+    /// <summary>How much of the last sentence's share of a request's text is taken for its share of the audio.</summary>
+    private const double LastShareMargin = 0.5;
+
+    /// <summary>How long a request (a group of sentences) may take to its first audio: generation behind another included.</summary>
     public static readonly TimeSpan FirstAudioTimeout = TimeSpan.FromSeconds(20);
 
-    /// <summary>How long the audio of a sentence may pause between two chunks before the voice counts as hung.</summary>
+    /// <summary>How long the audio of a request may pause between two chunks before the voice counts as hung.</summary>
     public static readonly TimeSpan ChunkTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
@@ -72,7 +75,7 @@ public sealed class ReplyVoice : IDisposable
     private volatile bool _muted;
     private volatile bool _disposed;
 
-    /// <summary>Sentences queued and not yet spoken or dropped.</summary>
+    /// <summary>Requests queued and not yet spoken or dropped; sentences a reply still holds are not among them.</summary>
     private int _pending;
 
     /// <summary>Replies begun and not yet complete: the brain is still working on them.</summary>
@@ -742,7 +745,9 @@ public sealed class ReplyVoice : IDisposable
             }
 
             var text = string.Join(' ', _group);
-            var lastShare = (double)_group[^1].Length / text.Length;
+            // Only guessed when the last sentence shares the request: then half of it, so a hush at the end of the one before,
+            // in a read-back whose heard end lets a bare "yes" allow (#108), is never taken for one during "Say yes.".
+            var lastShare = _group.Count == 1 ? 1 : LastShareMargin * _group[^1].Length / text.Length;
             _group.Clear();
             _queued++;
             _voice.Queue(new Sentence(this, text, lastShare));
