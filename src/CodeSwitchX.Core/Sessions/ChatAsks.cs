@@ -211,13 +211,13 @@ public sealed class ChatAsks : IDisposable
     internal const int EndedKept = 64;
 
     /// <summary>
-    /// The asks let go to VS Code lately (<see cref="AsksInVsCode"/>), by their tool use, until it ends: then VS Code is done
-    /// with it (<see cref="EndedInVsCode"/>). The oldest go past <see cref="InVsCodeKept"/>.
+    /// The asks let go to VS Code lately (<see cref="AsksInVsCode"/>), by their id, until VS Code is done with them: their
+    /// tool use or their agent's turn ended (<see cref="EndedInVsCode"/>). The oldest go past <see cref="InVsCodeKept"/>.
     /// </summary>
     private readonly Dictionary<string, ChatAsk> _inVsCode = new(StringComparer.Ordinal);
     private readonly Queue<string> _inVsCodeOrder = new();
 
-    internal const int InVsCodeKept = 64;
+    public const int InVsCodeKept = 64;
 
     /// <summary>The asks taken here lately, held or ended, for <see cref="Explains"/>.</summary>
     private readonly Queue<(string SessionId, DateTimeOffset At)> _taken = new();
@@ -274,10 +274,10 @@ public sealed class ChatAsks : IDisposable
     public event Action<ChatAskClosed>? Closed;
 
     /// <summary>
-    /// An ask let go to VS Code is done there: its tool use ended, answered (or allowed) in the chat's tab, or failed. Raised
-    /// on the hook's thread.
+    /// An ask let go to VS Code is done there: answered (or allowed) in the chat's tab when its tool use ended well (true);
+    /// its tool use failed or its agent's turn ended (false). Raised on the hook's or the bus's thread.
     /// </summary>
-    public event Action<ChatAsk>? EndedInVsCode;
+    public event Action<ChatAsk, bool>? EndedInVsCode;
 
     /// <summary>Whether an ask that ended so is asked in the chat's VS Code tab now: let go there, not answered or ended.</summary>
     public static bool AsksInVsCode(ChatAskOutcome outcome) =>
@@ -813,6 +813,7 @@ public sealed class ChatAsks : IDisposable
         }
 
         CloseWhere(h => h.Ask.SessionId == change.Current.SessionId, ChatAskOutcome.Gone);
+        DoneInVsCode(a => a.SessionId == change.Current.SessionId, answered: false);
         lock (_lock)
         {
             foreach (var id in _begun.Where(b => b.Value.SessionId == change.Current.SessionId).Select(b => b.Key).ToList())
@@ -865,10 +866,8 @@ public sealed class ChatAsks : IDisposable
                 break;
             case "PostToolUse" or "PostToolUseFailure" when step.ToolUseId is { } id:
                 Held? asked;
-                ChatAsk? inVsCode;
                 lock (_lock)
                 {
-                    _inVsCode.Remove(id, out inVsCode);
                     _begun.Remove(id, out var begun);
                     asked = _held.Values.FirstOrDefault(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.Step.ToolUseId == id);
                     if (asked is null && begun is not null)
@@ -886,18 +885,16 @@ public sealed class ChatAsks : IDisposable
                     Close(asked.Ask.Id, ChatAskOutcome.AnsweredInVsCode, null);
                 }
 
-                if (inVsCode is not null)
-                {
-                    EndedInVsCode?.Invoke(inVsCode);
-                }
-
+                DoneInVsCode(a => a.Step.ToolUseId == id, answered: step.EventName == "PostToolUse");
                 break;
             case "SubagentStop":
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && SameAgent(h.Ask, step) && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                DoneInVsCode(a => SameAgent(a, step) && step.At >= a.At, answered: false);
                 break;
             case "Stop":
                 CloseWhere(h => h.Ask.Kind == ChatAskKind.Permission && h.Ask.SessionId == step.SessionId && h.Ask.Step.AgentId is null
                     && step.At >= h.Ask.At, ChatAskOutcome.Gone);
+                DoneInVsCode(a => a.SessionId == step.SessionId && a.Step.AgentId is null && step.At >= a.At, answered: false);
                 break;
         }
     }
@@ -980,30 +977,44 @@ public sealed class ChatAsks : IDisposable
             {
                 return false;
             }
+
+            // Under the same lock as its leaving _held: a step that ends it in VS Code finds it in one or the other.
+            if (AsksInVsCode(outcome) && _inVsCode.TryAdd(askId, held.Ask))
+            {
+                _inVsCodeOrder.Enqueue(askId);
+                while (_inVsCodeOrder.Count > InVsCodeKept)
+                {
+                    _inVsCode.Remove(_inVsCodeOrder.Dequeue());
+                }
+            }
         }
 
         Finish(held, outcome, answers, permit);
         return true;
     }
 
-    private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)
+    /// <summary>The asks let go to VS Code that <paramref name="ends"/> picks are done there: each is told once.</summary>
+    private void DoneInVsCode(Func<ChatAsk, bool> ends, bool answered)
     {
-        var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
-        if (AsksInVsCode(outcome) && held.Ask.Step.ToolUseId is { } toolUse)
+        List<ChatAsk> done;
+        lock (_lock)
         {
-            lock (_lock)
+            done = [.. _inVsCode.Values.Where(ends)];
+            foreach (var ask in done)
             {
-                if (_inVsCode.TryAdd(toolUse, held.Ask))
-                {
-                    _inVsCodeOrder.Enqueue(toolUse);
-                    while (_inVsCodeOrder.Count > InVsCodeKept)
-                    {
-                        _inVsCode.Remove(_inVsCodeOrder.Dequeue());
-                    }
-                }
+                _inVsCode.Remove(ask.Id);
             }
         }
 
+        foreach (var ask in done)
+        {
+            EndedInVsCode?.Invoke(ask, answered);
+        }
+    }
+
+    private void Finish(Held held, ChatAskOutcome outcome, IReadOnlyList<string>? answers, ChatPermit? permit = null)
+    {
+        var closed = new ChatAskClosed(held.Ask, outcome, answers, permit);
         held.Done.TrySetResult(closed);
         Closed?.Invoke(closed);
         // An allow proposed for it waits for no yes any more (a Confirm took its proposal before it got here).

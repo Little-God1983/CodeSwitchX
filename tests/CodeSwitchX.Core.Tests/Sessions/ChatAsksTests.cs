@@ -225,8 +225,8 @@ public sealed class ChatAsksTests : IDisposable
     [Fact]
     public async Task An_ask_left_to_VS_Code_says_when_its_tool_use_ends_there()
     {
-        var ended = new List<string>();
-        _asks.EndedInVsCode += ask => ended.Add(ask.Id);
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
         var left = _asks.HoldAsync(Ask(), CancellationToken.None);
         var answered = _asks.HoldAsync(Ask("s2", "toolu_2"), CancellationToken.None);
         _asks.ToVsCode("toolu_1");
@@ -240,7 +240,51 @@ public sealed class ChatAsksTests : IDisposable
 
         Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
         Step("PostToolUse", "toolu_1", tool: "AskUserQuestion");
-        ended.ShouldBe(["toolu_1"], "told once");
+        ended.ShouldBe([("toolu_1", true)], "told once");
+    }
+
+    [Fact]
+    public async Task An_ask_left_to_VS_Code_whose_tool_use_fails_there_was_not_answered()
+    {
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        var left = _asks.HoldAsync(Ask(), CancellationToken.None);
+        _asks.ToVsCode("toolu_1");
+        await left;
+
+        Step("PostToolUseFailure", "toolu_1", tool: "AskUserQuestion");
+
+        ended.ShouldBe([("toolu_1", false)]);
+    }
+
+    [Fact]
+    public async Task An_ask_left_to_VS_Code_ends_there_with_its_agent_s_turn()
+    {
+        var ended = new List<(string, bool)>();
+        _asks.EndedInVsCode += (ask, answered) => ended.Add((ask.Id, answered));
+        // A permission prompt that claimed no tool use: only its turn's end tells it is over.
+        var prompt = _asks.HoldAsync(Permission(), CancellationToken.None);
+        var subAgent = _asks.HoldAsync(Ask(toolUse: "toolu_2") with
+        {
+            Step = new HookEvent { SessionId = "s1", EventName = "PreToolUse", At = _time.GetUtcNow(), ToolUseId = "toolu_2", AgentId = "agent_1" },
+        }, CancellationToken.None);
+        var otherChat = _asks.HoldAsync(Ask("s2", "toolu_3"), CancellationToken.None);
+        foreach (var id in new[] { "p1", "toolu_2", "toolu_3" })
+        {
+            _asks.ToVsCode(id);
+        }
+
+        await Task.WhenAll(prompt, subAgent, otherChat);
+
+        Step("Stop");
+        ended.ShouldBe([("p1", false)], "the main agent's turn ended; its sub-agent may run on");
+        Step("SubagentStop", agent: "agent_1");
+        ended.ShouldBe([("p1", false), ("toolu_2", false)]);
+        Turn("s2", SessionState.Idle);
+        ended.ShouldBe([("p1", false), ("toolu_2", false), ("toolu_3", false)]);
+        Step("Stop");
+        Turn("s2", SessionState.Idle);
+        ended.Count.ShouldBe(3, "told once");
     }
 
     [Theory]

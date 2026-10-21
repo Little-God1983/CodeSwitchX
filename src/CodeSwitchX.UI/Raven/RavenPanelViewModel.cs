@@ -309,6 +309,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>The question cards still open, by their ask's id (UI thread).</summary>
     private readonly Dictionary<string, ChatAskCard> _askCards = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The cards closed as asked in VS Code, by their ask, until VS Code is done with them (<see cref="OnEndedInVsCode"/>);
+    /// placed or not yet. The oldest go past <see cref="ChatAsks.InVsCodeKept"/>, as ChatAsks forgets them too.
+    /// </summary>
+    private readonly Dictionary<string, ChatAskCard> _inVsCodeCards = new(StringComparer.Ordinal);
+    private readonly Queue<string> _inVsCodeOrder = new();
+
     /// <summary>Questions shown and not yet read out: they go before the news when the floor is free (UI thread).</summary>
     private readonly List<ChatAskCard> _untold = [];
 
@@ -426,7 +433,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             asks.Opened += ask => _dispatcher.Post(() => OnAsked(ask));
             asks.Closed += closed => _dispatcher.Post(() => OnAskClosed(closed));
-            asks.EndedInVsCode += ask => _dispatcher.Post(() => OnEndedInVsCode(ask));
+            asks.EndedInVsCode += (ask, answered) => _dispatcher.Post(() => OnEndedInVsCode(ask, answered));
             asks.ProposedAllow += proposal => _dispatcher.Post(() => OnProposed(proposal));
             asks.ProposalEnded += (proposal, end) => _dispatcher.Post(() => OnProposalEnded(proposal, end));
         }
@@ -3002,13 +3009,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>A card let go to VS Code was answered there: it says so, and no longer that VS Code asks it.</summary>
-    private void OnEndedInVsCode(ChatAsk ask)
+    /// <summary>A card let go to VS Code is done there: it says how, and no longer that VS Code asks it.</summary>
+    private void OnEndedInVsCode(ChatAsk ask, bool answered)
     {
-        if (Log.Select(e => e.Ask).FirstOrDefault(c => c?.Ask.Id == ask.Id) is { AskedInVsCode: true } card)
+        if (_inVsCodeCards.Remove(ask.Id, out var card))
         {
             card.AskedInVsCode = false;
-            card.Outcome = "Answered in VS Code.";
+            card.Outcome = answered ? "Answered in VS Code." : "Done in VS Code.";
+            Summarize(card.ShownIn);
         }
     }
 
@@ -3043,6 +3051,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         card.AwaitsYes = false; // an allow proposed for it ends with it, and no yes is asked for any more
         card.Outcome = OutcomeOf(closed);
         card.AskedInVsCode = ChatAsks.AsksInVsCode(closed.Outcome); // its box says why, not greyed out (#298)
+        if (card.AskedInVsCode)
+        {
+            _inVsCodeCards[closed.Ask.Id] = card;
+            _inVsCodeOrder.Enqueue(closed.Ask.Id);
+            while (_inVsCodeOrder.Count > ChatAsks.InVsCodeKept)
+            {
+                _inVsCodeCards.Remove(_inVsCodeOrder.Dequeue());
+            }
+        }
+
         Summarize(card.ShownIn);
         if (closed.Outcome == ChatAskOutcome.Answered)
         {

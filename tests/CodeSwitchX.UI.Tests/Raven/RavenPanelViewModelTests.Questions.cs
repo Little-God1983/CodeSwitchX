@@ -157,6 +157,20 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_question_left_to_VS_Code_whose_turn_ends_there_unanswered_says_it_is_done_there()
+    {
+        var (vm, asks) = await QuestionsVmAsync();
+        var held = asks.HoldAsync(Asking(), CancellationToken.None);
+        var card = Card(vm);
+        vm.AnswerInVsCodeCommand.Execute(card);
+        await WithinAsync(held);
+
+        _bus.Publish(new HookEventReceived(new HookEvent { SessionId = "a", EventName = "Stop", At = _time.GetUtcNow() }));
+
+        (card.AskedInVsCode, card.Outcome).ShouldBe((false, "Done in VS Code."));
+    }
+
+    [Fact]
     public async Task A_question_answered_here_is_not_asked_in_VS_Code()
     {
         var (vm, asks) = await QuestionsVmAsync();
