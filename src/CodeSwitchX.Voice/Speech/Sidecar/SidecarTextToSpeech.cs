@@ -75,6 +75,9 @@ public sealed class SidecarTextToSpeech : ISpeechEngineVoice, IDisposable
 
     public SpeechEngine Engine { get; }
 
+    /// <summary>Qwen3-TTS streams a request as it is made; Kokoro's sidecar makes it whole first.</summary>
+    public bool SpeaksSentencesTogether => Engine == SpeechEngine.Qwen;
+
     public TextToSpeechStatus Status
     {
         get

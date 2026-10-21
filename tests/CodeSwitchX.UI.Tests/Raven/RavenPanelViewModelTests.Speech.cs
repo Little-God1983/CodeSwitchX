@@ -37,9 +37,9 @@ public sealed partial class RavenPanelViewModelTests
 
         Type(vm, "What's waiting on me?");
         await WithinAsync(vm.PendingAnswers);
-        await Until(() => vm.State == RavenState.Idle && _speech.Spoken.Count == 2);
+        await Until(() => vm.State == RavenState.Idle && _speech.Spoken.Count == 1);
 
-        _speech.Spoken.ShouldBe(["You have one chat waiting.", "It is the API one."]);
+        _speech.Spoken.ShouldBe(["You have one chat waiting. It is the API one."]);
         lock (states)
         {
             states.ShouldContain(RavenState.Speaking);
@@ -61,7 +61,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Talking_while_Raven_speaks_stops_it_and_the_rest_of_the_answer_is_not_said()
     {
         _speech.Gate = new TaskCompletionSource();
-        _brain.Answer = _ => [new BrainText("First this. Then that.")];
+        _brain.Answer = _ => [new BrainText("First this."), ListChats(), new BrainToolResult("t1", false), new BrainText("Then that.")];
         var vm = await AskedAsync("What's up?");
         await Until(() => _speech.Spoken.Count == 1);
 
@@ -94,21 +94,21 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_typed_question_silences_Raven_and_nothing_of_the_cut_off_answer_is_said()
     {
-        _speech.Gate = new TaskCompletionSource();
         _brain.Pause = new TaskCompletionSource();
         _brain.Answer = q => q == "next" ? [new BrainText("Sure.")] : [new BrainText("First this. Then"), new BrainText(" that.")];
         var vm = await NewVmAsync();
         Type(vm, "What's up?"); // its answer pauses after "First this. Then"
-        await Until(() => _speech.Spoken.Count == 1);
+        await Until(() => _brain.Sent.Count == 1);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _speech.Spoken.ShouldBeEmpty("a reply is said once it is complete (#290)");
 
         _brain.Pause = null;
         Type(vm, "next");
-        _speech.Gate.TrySetResult();
         await WithinAsync(vm.PendingAnswers);
-        await Until(() => _speech.Spoken.Count == 2);
+        await Until(() => _speech.Spoken.Count == 1);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        _speech.Spoken.ShouldBe(["First this.", "Sure."]);
+        _speech.Spoken.ShouldBe(["Sure."]);
     }
 
     [Fact]

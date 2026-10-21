@@ -54,6 +54,17 @@ public sealed class SpeechEnginesTests
         chunks.ShouldHaveSingleItem();
     }
 
+    // Review round 2 of #290: Kokoro makes a request whole, so three sentences in one waited long for the first audio
+    [Fact]
+    public void Sentences_are_spoken_together_as_the_engine_picked_does()
+    {
+        _engines.SpeaksSentencesTogether.ShouldBeFalse("no engine");
+        _settings.Engine = SpeechEngine.Kokoro;
+        _engines.SpeaksSentencesTogether.ShouldBeFalse();
+        _settings.Engine = SpeechEngine.Qwen;
+        _engines.SpeaksSentencesTogether.ShouldBeTrue();
+    }
+
     [Fact]
     public void Picking_another_engine_stops_the_one_before_and_tells_where_the_new_one_stands()
     {
@@ -143,6 +154,8 @@ public sealed class SpeechEnginesTests
         public void CheckInstall() => Checks++;
 
         public void Recover() => Recovered++;
+
+        public bool SpeaksSentencesTogether => Engine == SpeechEngine.Qwen;
 
         public async IAsyncEnumerable<SpeechChunk> SpeakAsync(string text, [EnumeratorCancellation] CancellationToken ct)
         {

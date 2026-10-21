@@ -2319,9 +2319,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// One question's turn: the reply grows in one entry as it streams in, each tool call gets a card, and text after a
-    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken as it comes,
-    /// the words before a card ("Let me check.") too. The awaits resume on the UI thread. Never faults, so the question
-    /// behind it always gets its turn.
+    /// card starts a new entry below it, so the log reads in the order things happened. The reply is spoken once it is
+    /// complete, the words before a card ("Let me check.") at the card (#290). The awaits resume on the UI thread. Never
+    /// faults, so the question behind it always gets its turn.
     /// </summary>
     /// <param name="asked">Set to when the question goes to the brain, for the log line on its first word.</param>
     /// <param name="floor">Cancelled when the user takes the floor: the answer is interrupted, and ends with "(interrupted)".</param>
@@ -2492,7 +2492,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                             question.StartingChat = call.Tool == "start_chat"; // the app moves the user while it runs (#180)
                         }
 
-                        spoken.Add("\n"); // a sentence ends at the card, with or without its full stop
+                        spoken.Break(); // a sentence ends at the card, with or without its full stop, and is said before it runs
                         // The part of the reply before the card is done: "Let me check.\n\n" keeps no empty lines.
                         if (reply is not null)
                         {
@@ -2528,7 +2528,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     case BrainChatMessage { Text: var message }:
                         // A chat's message folded into the answer (#197) is noted in its place: a sentence ends there, and the
                         // text after it is a reply of its own, below it.
-                        spoken.Add("\n");
+                        spoken.Break();
                         if (reply is not null)
                         {
                             reply.Text = reply.Text.TrimEnd();

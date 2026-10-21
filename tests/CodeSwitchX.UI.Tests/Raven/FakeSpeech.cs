@@ -31,6 +31,8 @@ internal sealed class FakeSpeech : ITextToSpeech
 
     public TextToSpeechStatus Status { get; private set; } = new(TextToSpeechState.Ready);
 
+    public bool SpeaksSentencesTogether => true;
+
     public event EventHandler<TextToSpeechStatus>? StatusChanged;
 
     public void Report(TextToSpeechStatus status)
