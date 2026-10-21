@@ -429,7 +429,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             // The startup coordinator read the stored choice into the writer before the first hook event; the view shows
             // the writer's flag rather than reading the row again, which could disagree with what the writer does.
             TileScale = await LoadOrDefaultAsync<double?>(SettingKeys.TileScale, "the tile size", ct) ?? 1;
-            FontScale = await LoadOrDefaultAsync<double?>(SettingKeys.FontScale, "the tiles' font size", ct) ?? 1;
+            // Before #295 the tile size zoomed the text too: until a font size is stored, the text keeps the size it had.
+            FontScale = await LoadOrDefaultAsync<double?>(SettingKeys.FontScale, "the tiles' font size", ct) ?? TileScale;
             RavenPanelOpen = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenPanelOpen, "the Raven panel state", ct) ?? true;
             RavenMicrophone = await LoadOrDefaultAsync<MicrophoneDevice>(SettingKeys.RavenMicrophone, "the Raven microphone", ct);
             RavenSpeaker = await LoadOrDefaultAsync<SpeakerDevice>(SettingKeys.RavenSpeaker, "the Raven output", ct);

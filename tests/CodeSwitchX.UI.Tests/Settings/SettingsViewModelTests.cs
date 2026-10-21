@@ -314,6 +314,17 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.YardMaxChats, 10, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>#295: before it, the tile size zoomed the text too; the text keeps that size until the user changes it.</summary>
+    [Fact]
+    public async Task A_font_size_never_stored_starts_at_the_tile_size()
+    {
+        _store.GetAsync<double?>(SettingKeys.TileScale, Arg.Any<CancellationToken>()).Returns(Task.FromResult<double?>(1.5));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.FontScale.ShouldBe(1.5);
+    }
+
     [Fact]
     public async Task The_font_size_is_loaded_and_saved()
     {
