@@ -58,8 +58,12 @@ public interface IRavenShell
     /// <remarks>News still held back for the pause or a busy floor is told too (#256). Started on the UI thread.</remarks>
     Task<string> WhatsNewAsync(string? askedIn, int? number);
 
-    /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
-    void WriteSummary(string? askedIn, string text);
+    /// <summary>
+    /// Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in
+    /// for null. Written in the turn that asked for it, it goes with that answer, wherever the user followed it (#289).
+    /// </summary>
+    /// <param name="late">Done after that turn ended (a long recap): written where it was asked.</param>
+    void WriteSummary(string? askedIn, string text, bool late = false);
 
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
@@ -553,7 +557,7 @@ public sealed class RavenActions : IYardActions
 
                 var written = done.IsCompletedSuccessfully ? $"Your last working session: {done.Result}"
                     : done.Exception?.InnerException is YardActionException refused ? refused.Message : "Summing up your last working session failed.";
-                _ui.Post(() => _shell().WriteSummary(askedIn, written));
+                _ui.Post(() => _shell().WriteSummary(askedIn, written, late: true));
             }, TaskScheduler.Default);
             if (ex is OperationCanceledException)
             {

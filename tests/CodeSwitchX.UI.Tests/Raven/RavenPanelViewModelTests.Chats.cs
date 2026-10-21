@@ -382,6 +382,49 @@ public sealed partial class RavenPanelViewModelTests
         vm.Log.Single(e => e.Text.StartsWith("The retry chat", StringComparison.Ordinal)).Chat.Number.ShouldBe(3);
     }
 
+    [Fact]
+    public async Task A_recap_done_after_its_turn_is_written_where_it_was_asked_not_with_a_later_answer()
+    {
+        // Review of #289: a long recap is written once its turn is over; a question asked since, followed elsewhere, is another.
+        var (vm, _) = await ChatsVmAsync();
+        var key = YardMcp.ChatKey(CodeSwitchX, overview: false)!;
+        IEnumerable<BrainEvent> Looking()
+        {
+            yield return new BrainToolCall("t1", "list_chats", "{}");
+            vm.FollowWork(key, ContentAutomatorX, "list_chats");
+            vm.WriteSummary(key, "Your last working session: the docs got done.", late: true);
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("It is idle.");
+        }
+
+        _brain.Answer = _ => Looking();
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "What does ContentAutomatorX do?");
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.Single(e => e.Text.StartsWith("Your last", StringComparison.Ordinal)).Chat.ShouldBe(ChatNumbered(vm, 1));
+    }
+
+    [Fact]
+    public async Task A_user_who_went_to_another_chat_meanwhile_stays_there_and_the_answer_is_news_where_it_went()
+    {
+        // Review of #289: as an answer to a chat left (#120), a move does not take the user from where they went themselves.
+        var (vm, _) = await ChatsVmAsync();
+        _brain.Gate = new TaskCompletionSource();
+        _brain.Answer = _ => Acting(vm, CodeSwitchX, [("list_chats", ContentAutomatorX)], "It is idle.");
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        Type(vm, "What does ContentAutomatorX do?");
+        vm.SelectedChat = vm.YardChat;
+        _brain.Gate.SetResult();
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.SelectedChat.ShouldBe(vm.YardChat);
+        vm.Log.Where(e => e.Kind != RavenLogKind.Note).ShouldAllBe(e => e.Chat.Number == 3);
+        ChatNumbered(vm, 3).Unread.ShouldBeGreaterThan(0);
+    }
+
     /// <summary>
     /// An answer whose tools act on windows, asked in <paramref name="askedIn"/>'s chat: the app is told of each while it
     /// runs, as the MCP tools tell it (a null window: the Yard).

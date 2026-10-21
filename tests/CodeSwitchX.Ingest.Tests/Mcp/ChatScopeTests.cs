@@ -104,6 +104,17 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task A_window_opened_with_its_chat_not_brought_to_the_front_still_takes_the_user_there()
+    {
+        // Review of #289: the Cab shows the window, so Raven's answer that the chat is not in front belongs in its chat.
+        _actions.Refusal = "CodeSwitchX is open, but the chat Speech gate is not in front.";
+
+        await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).OpenWorkspace(chat: "aaaa", cancellationToken: Ct));
+
+        _actions.Acted.ShouldBe([(FakeYard.DiffusionId.ToString("D"), (Guid?)FakeYard.CodeSwitchXId, "open_workspace")]);
+    }
+
+    [Fact]
     public async Task Stop_it_where_no_chat_works_stops_nothing_and_does_not_reach_into_another_window()
     {
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).StopChat(cancellationToken: Ct));

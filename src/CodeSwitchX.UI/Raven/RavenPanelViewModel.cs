@@ -1414,10 +1414,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// A chat's summary (#234), written in the Raven chat it was asked in (by its key, as its brain sends it), unspoken: Raven
     /// says its short part. The chat the user is in for null, or for a chat the list no longer shows.
     /// </summary>
-    public void WriteSummary(string? askedIn, string text)
+    public void WriteSummary(string? askedIn, string text, bool late = false)
     {
-        // Written in the turn that sums the chat up, it goes where that answer goes (#289).
-        var question = QuestionAskedIn(askedIn);
+        // Written in the turn that sums the chat up, it goes where that answer goes (#289). One done after its turn (a long
+        // recap) is no part of a question asked since.
+        var question = late ? null : QuestionAskedIn(askedIn);
         var entry = AddSaid(text, question?.Chat ?? ChatOfBrain(askedIn) ?? CurrentChat, said: false);
         question?.Entries.Add(entry);
     }
@@ -2163,13 +2164,25 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What the next question in a chat is told first, once, while it is fresh: the question Raven moved there with the
     /// user (#180), as that chat's brain is another and knows nothing of it. Empty for none. UI thread.
     /// </summary>
-    private string Carried(RavenChat chat) =>
-        _carried.Remove(chat, out var carried) && _time.GetUtcNow() - carried.At < CarriedLifetime ? carried.Text : "";
+    private string Carried(RavenChat chat)
+    {
+        if (!_carried.Remove(chat, out var carried) || _time.GetUtcNow() - carried.At >= CarriedLifetime)
+        {
+            return "";
+        }
+
+        // What Raven answered there too (#289): "Close it anyway?" or the options a chat asks for are answered here, by
+        // this brain, which did not say them.
+        var (question, how) = (carried.Question, carried.How);
+        var answer = string.Join(" ", question.Entries.Where(e => e.Kind == RavenLogKind.Raven).Select(e => e.Text.Trim()).Where(t => t.Length > 0));
+        return $"[The user asked this in chat {question.AskedIn.Number}, {NameOf(question.AskedIn)}, and was moved here {how}: \"{question.Text}\"]\n"
+            + (answer.Length > 0 ? $"[Raven answered it: \"{answer}\"]\n" : "");
+    }
 
     /// <summary>How long a question moved to a chat is told to its next question (#180): one asked much later is about something else.</summary>
     internal static readonly TimeSpan CarriedLifetime = TimeSpan.FromMinutes(10);
 
-    private readonly Dictionary<RavenChat, (string Text, DateTimeOffset At)> _carried = [];
+    private readonly Dictionary<RavenChat, (Question Question, string How, DateTimeOffset At)> _carried = [];
 
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, acted on <paramref name="workspaceId"/>'s window with
@@ -2285,8 +2298,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         UpdateState(); // the work goes on there now (#182)
         _carried.Remove(current); // moved on: the chat it was in is told nothing of it
         var home = question.AskedIn;
-        // Moved with it, the user is shown its lines there. Back home, where they may not be, its unread lines stay unread.
-        var seen = to != home || SelectedChat == current || SelectedChat == to;
+        // The user in the chat it is in goes with it, and is shown its lines there. One who went to another chat meanwhile
+        // stays there, and its unread lines stay unread where it goes.
+        var follows = SelectedChat == current;
+        var seen = follows || SelectedChat == to;
         var kept = question.Entries.Select(e => (Entry: e, At: Log.IndexOf(e))).Where(e => e.At >= 0).ToList();
         foreach (var (entry, _) in kept)
         {
@@ -2347,8 +2362,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (BrainOf(to) != BrainOf(home))
             {
                 // That chat's brain is another, and knows nothing of the question: its next question is told.
-                _carried[to] = ($"[The user asked this in chat {home.Number}, {NameOf(home)}, and was moved here {how}: \"{question.Text}\"]\n",
-                    _time.GetUtcNow());
+                _carried[to] = (question, how, _time.GetUtcNow());
             }
         }
 
@@ -2357,9 +2371,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             ShowSelected(); // the entries moved into the chat shown
         }
-        else if (to != home || SelectedChat == current)
+        else if (follows)
         {
-            SelectedChat = to; // back where it was asked only from the chat it leaves: the user may have gone on elsewhere
+            SelectedChat = to;
         }
     }
 

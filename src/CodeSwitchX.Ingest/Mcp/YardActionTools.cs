@@ -87,13 +87,13 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         {
             var window = await WindowAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new McpException("Say which workspace or chat to open.");
-            return Shown(await Act(() => actions.OpenWorkspaceAsync(window, null, cancellationToken)).ConfigureAwait(false), window.Id);
+            return await Act(() => actions.OpenWorkspaceAsync(Showing(window), null, cancellationToken)).ConfigureAwait(false);
         }
 
         if (string.IsNullOrWhiteSpace(chat))
         {
             var named = (await OneWorkspaceAsync(workspace!, cancellationToken).ConfigureAwait(false)).Workspace;
-            return Shown(await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false), named.Id);
+            return await Act(() => actions.OpenWorkspaceAsync(Showing(named), null, cancellationToken)).ConfigureAwait(false);
         }
 
         // A chat is in one workspace only, so it says which. A workspace named with it still opens when the chat is not found.
@@ -105,20 +105,23 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         catch (McpException ex) when (!string.IsNullOrWhiteSpace(workspace))
         {
             var named = (await OneWorkspaceAsync(workspace, cancellationToken).ConfigureAwait(false)).Workspace;
-            return Shown(await Act(() => actions.OpenWorkspaceAsync(named, null, cancellationToken)).ConfigureAwait(false), named.Id)
+            return await Act(() => actions.OpenWorkspaceAsync(Showing(named), null, cancellationToken)).ConfigureAwait(false)
                 + $" No chat was brought to the front: {ex.Message}";
         }
 
         var target = (await yard.WorkspacesAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(w => w.Id == one.WorkspaceId)
             ?? throw new McpException($"The workspace of chat '{chat}' is not on the Yard any more.");
-        return Shown(await Act(() => actions.OpenWorkspaceAsync(target, one, cancellationToken)).ConfigureAwait(false), target.Id);
+        return await Act(() => actions.OpenWorkspaceAsync(Showing(target), one, cancellationToken)).ConfigureAwait(false);
     }
 
-    /// <summary>The window opened shows its Raven chat, and the user is taken there with their question (#289).</summary>
-    private string Shown(string said, Guid workspaceId)
+    /// <summary>
+    /// The window to open shows its Raven chat, and the user is taken there with their question (#289): before it opens,
+    /// so an open that fails halfway (its chat not brought to the front) still has the answer where the user is.
+    /// </summary>
+    private YardWorkspace Showing(YardWorkspace workspace)
     {
-        actions.ActedOn(scope?.Key, workspaceId, "open_workspace");
-        return said;
+        actions.ActedOn(scope?.Key, workspace.Id, "open_workspace");
+        return workspace;
     }
 
     /// <summary>The turn acts on <paramref name="chat"/>'s window (#289): the user follows the talk there. Returns the chat.</summary>

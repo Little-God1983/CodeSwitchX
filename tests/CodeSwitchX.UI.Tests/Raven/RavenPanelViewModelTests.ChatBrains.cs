@@ -491,6 +491,7 @@ public sealed partial class RavenPanelViewModelTests
         var three = brains.Windows[ContentAutomatorX].Sent;
         three[0].ShouldStartWith("[The user asked this in chat 1, CodeSwitchX, and was moved here when Raven started a chat in this window: "
             + "\"In ContentAutomatorX, create a bug report chat for the F keys\"]");
+        three[0].ShouldContain("[Raven answered it: \"On it. Started.\"]", Case.Sensitive, "a yes to what Raven asked there is answered here (#289)");
         three[0].ShouldEndWith("open it");
         three[1].ShouldNotContain("moved here", Case.Insensitive, "told once");
         brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem("chat 1's brain answered the question itself");
