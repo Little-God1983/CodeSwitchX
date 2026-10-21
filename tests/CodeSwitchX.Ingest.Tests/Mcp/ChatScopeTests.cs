@@ -72,6 +72,59 @@ public sealed class ChatScopeTests
     }
 
     [Fact]
+    public async Task Each_tool_that_acts_on_or_looks_at_one_window_names_it_for_the_user_to_follow()
+    {
+        // #289: asked in Diffusion-Full's chat, Raven turns to CodeSwitchX: the app is told each window, and moves the user.
+        var key = FakeYard.DiffusionId.ToString("D");
+        var looking = new YardTools(_yard, scope: InDiffusion, actions: _actions);
+        var acting = new YardActionTools(_yard, _actions, scope: InDiffusion);
+
+        await looking.ListChats(workspace: "CodeSwitchX", cancellationToken: Ct);
+        await looking.ListChats(cancellationToken: Ct);
+        await looking.ListChats(workspace: "all", cancellationToken: Ct);
+        await looking.GetChat("cccc", Ct);
+        await acting.StopChat("aaaa", Ct);
+        await acting.OpenWorkspace("CodeSwitchX", cancellationToken: Ct);
+        await acting.SwitchChat("chat 1", cancellationToken: Ct);
+        await acting.SwitchChat("Yard", cancellationToken: Ct);
+        await acting.SwitchChat("activity", cancellationToken: Ct);
+        await acting.BackToYard(Ct);
+
+        _actions.Acted.ShouldBe(
+        [
+            (key, FakeYard.CodeSwitchXId, "list_chats"),
+            (key, FakeYard.DiffusionId, "get_chat"),
+            (key, FakeYard.CodeSwitchXId, "stop_chat"),
+            (key, FakeYard.CodeSwitchXId, "open_workspace"),
+            (key, FakeYard.CodeSwitchXId, "switch_chat"),
+            (key, null, "switch_chat"),
+            (key, null, "back_to_yard"),
+        ], "the chat's own window is none to follow; every window's chats is about none of them; Activity is no chat to be in");
+    }
+
+    [Fact]
+    public async Task A_window_opened_with_its_chat_not_brought_to_the_front_still_takes_the_user_there()
+    {
+        // Review of #289: the Cab shows the window, so Raven's answer that the chat is not in front belongs in its chat.
+        _actions.Refusal = "CodeSwitchX is open, but the chat Speech gate is not in front.";
+
+        await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).OpenWorkspace(chat: "aaaa", cancellationToken: Ct));
+
+        _actions.Acted.ShouldBe([(FakeYard.DiffusionId.ToString("D"), (Guid?)FakeYard.CodeSwitchXId, "open_workspace")]);
+    }
+
+    [Fact]
+    public async Task A_chat_switched_to_whose_window_then_fails_to_open_still_takes_the_user_there()
+    {
+        // Review of #289: the panel shows the chat before the window is opened; Raven's word of the failure belongs there.
+        _actions.Refusal = "Chat 1, CodeSwitchX. Its window could not be opened: VS Code did not start.";
+
+        await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).SwitchChat("chat 1", open: true, Ct));
+
+        _actions.Acted.ShouldBe([(FakeYard.DiffusionId.ToString("D"), (Guid?)FakeYard.CodeSwitchXId, "switch_chat")]);
+    }
+
+    [Fact]
     public async Task Stop_it_where_no_chat_works_stops_nothing_and_does_not_reach_into_another_window()
     {
         var error = await Should.ThrowAsync<McpException>(() => new YardActionTools(_yard, _actions, scope: InDiffusion).StopChat(cancellationToken: Ct));

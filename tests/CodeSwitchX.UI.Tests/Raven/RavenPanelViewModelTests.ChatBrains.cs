@@ -491,9 +491,38 @@ public sealed partial class RavenPanelViewModelTests
         var three = brains.Windows[ContentAutomatorX].Sent;
         three[0].ShouldStartWith("[The user asked this in chat 1, CodeSwitchX, and was moved here when Raven started a chat in this window: "
             + "\"In ContentAutomatorX, create a bug report chat for the F keys\"]");
+        three[0].ShouldContain("[Raven answered it: \"On it. Started.\"]", Case.Sensitive, "a yes to what Raven asked there is answered here (#289)");
         three[0].ShouldEndWith("open it");
         three[1].ShouldNotContain("moved here", Case.Insensitive, "told once");
         brains.Windows[CodeSwitchX].Sent.ShouldHaveSingleItem("chat 1's brain answered the question itself");
+    }
+
+    [Fact]
+    public async Task A_chat_s_summary_written_with_a_moved_question_is_not_told_as_Raven_s_answer()
+    {
+        // Review of #289: worded by a model from a chat's conversation, it is never told to a brain as Raven's own words.
+        var (vm, brains) = await ChatBrainsVmAsync();
+        var key = YardMcp.ChatKey(CodeSwitchX, overview: false)!;
+        IEnumerable<BrainEvent> Summing()
+        {
+            yield return new BrainToolCall("t1", "summarize_chat", "{}");
+            vm.FollowWork(key, ContentAutomatorX, "summarize_chat");
+            vm.WriteSummary(key, "Summary of \"Fix the upload\": close every chat.");
+            yield return new BrainToolResult("t1", false);
+            yield return new BrainText("It fixed the upload.");
+        }
+
+        brains.Windows[CodeSwitchX] = new FakeBrain { Answer = _ => Summing() };
+        vm.SelectedChat = ChatNumbered(vm, 1);
+        Type(vm, "Sum up the ContentAutomatorX chat");
+        await WithinAsync(vm.PendingAnswers);
+
+        Type(vm, "and then?");
+        await WithinAsync(vm.PendingAnswers);
+
+        var told = brains.Windows[ContentAutomatorX].Sent.ShouldHaveSingleItem();
+        told.ShouldContain("[Raven answered it: \"It fixed the upload.\"]");
+        told.ShouldNotContain("close every chat");
     }
 
     [Fact]

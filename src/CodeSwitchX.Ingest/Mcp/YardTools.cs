@@ -11,10 +11,11 @@ namespace CodeSwitchX.Ingest.Mcp;
 /// The Yard, as MCP tools for Raven's brain. They only look: nothing here changes a workspace or a chat. What they return
 /// is written for a language model to read and repeat: names and states in words, not ids and enum numbers (a chat's id
 /// is there only to ask <c>get_chat</c> about it). Asked from a window's Raven chat (<see cref="ChatScope"/>), list_chats
-/// lists that window's chats unless another, or all, is named.
+/// lists that window's chats unless another, or all, is named. Looking at one window's chats is talk of that window: the
+/// user follows it to that window's Raven chat (<see cref="IYardActions.ActedOn"/>, #289).
 /// </summary>
 [McpServerToolType]
-public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatScope? scope = null)
+public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatScope? scope = null, IYardActions? actions = null)
 {
     /// <summary>What list_chats takes for every window's chats, in a window's chat.</summary>
     public const string AllWorkspaces = "all";
@@ -96,6 +97,10 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
             }
 
             shown = shown.Where(c => ids.Contains(c.WorkspaceId));
+            if (ids.Count == 1)
+            {
+                actions?.ActedOn(scope?.Key, ids.Single(), "list_chats");
+            }
         }
         else if (window is { } own)
         {
@@ -118,10 +123,17 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
         return found switch
         {
             _ when key.Length == 0 => throw new McpException("Give a chat id from list_chats."),
-            [var chat] => ChatDetailView.Of(chat, AsksOf(asks?.Open().ToLookup(a => a.SessionId), chat.Id, overview), overview),
+            [var chat] => ChatDetailView.Of(On(chat), AsksOf(asks?.Open().ToLookup(a => a.SessionId), chat.Id, overview), overview),
             [] => throw new McpException($"The Yard shows no chat '{id}'. list_chats lists them."),
             _ => throw new McpException($"'{id}' fits {found.Count} chats. Give more of the id."),
         };
+    }
+
+    /// <summary>The turn looks at <paramref name="chat"/>: talk of its window, which the user follows (#289).</summary>
+    private YardChat On(YardChat chat)
+    {
+        actions?.ActedOn(scope?.Key, chat.WorkspaceId, "get_chat");
+        return chat;
     }
 
     /// <summary>

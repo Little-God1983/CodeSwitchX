@@ -148,6 +148,11 @@ internal sealed class FakeActions : IYardActions
         return Task.FromResult($"CodeSwitchX: {request}.");
     }
 
+    /// <summary>The windows the tools said they acted on, in order: the chat that asked, the window (null for the Yard) and the tool.</summary>
+    public List<(string? AskedIn, Guid? Workspace, string Tool)> Acted { get; } = [];
+
+    public void ActedOn(string? askedIn, Guid? workspaceId, string tool) => Acted.Add((askedIn, workspaceId, tool));
+
     private void Act(string call)
     {
         Calls.Add(call);

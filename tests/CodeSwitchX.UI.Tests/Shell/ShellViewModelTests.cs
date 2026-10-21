@@ -537,7 +537,7 @@ public class ShellViewModelTests
         _h.Shell.Raven.IsListFolded.ShouldBeTrue();
         _h.Shell.BackToYardCommand.Execute(null);
         _h.Shell.Raven.IsListFolded.ShouldBeFalse();
-        _h.Shell.Raven.SelectedChat.Label.ShouldBe("2 App", "going back chooses no other chat");
+        _h.Shell.Raven.SelectedChat.Label.ShouldBe("0 Yard", "going back shows chat 0, as opening a window shows its own (#289)");
     }
 
     /// <summary>
@@ -948,6 +948,7 @@ public class ShellViewModelTests
     public async Task Closing_the_vscode_window_shown_in_the_cab_returns_to_the_yard()
     {
         // Closed by its X button, VS Code left an empty Cab behind, and the user had to find the way back themselves.
+        _h.App.Number = 2; // a window with a Raven chat
         await _h.Shell.InitializeAsync(CancellationToken.None);
         _h.VsCodeWindowAppears();
         _h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
@@ -956,6 +957,7 @@ public class ShellViewModelTests
         _h.Host.WindowDestroyed(500);
 
         _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.Raven.SelectedChat.WorkspaceId.ShouldBe(_h.App.Id, "the user did not go back: Raven stays in the window's chat");
     }
 
     [Fact]

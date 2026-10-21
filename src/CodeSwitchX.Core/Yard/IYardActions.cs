@@ -108,6 +108,16 @@ public interface IYardActions
 
     /// <summary>Whether Raven started the chat while this app runs. Any thread.</summary>
     bool StartedByRaven(string chatId);
+
+    /// <summary>
+    /// A tool of the turn of the Raven chat <paramref name="askedIn"/> names acted on one window, or looked at it (#289): the
+    /// user follows the talk to that window's Raven chat with their question, as for a chat started there (#180). Never throws.
+    /// </summary>
+    /// <param name="askedIn">The key of the Raven chat whose brain called it, as its chat header names it; null for a caller
+    /// that is no Raven chat, which moves nothing.</param>
+    /// <param name="workspaceId">The window; null for chat 0, the Yard, which only a switch goes to.</param>
+    /// <param name="tool">The tool: one that shows the chat (switch_chat, back_to_yard, open_workspace) takes the user there in any case.</param>
+    void ActedOn(string? askedIn, Guid? workspaceId, string tool);
 }
 
 /// <summary>What the user asks of CodeSwitchX's own window.</summary>

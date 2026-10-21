@@ -58,14 +58,19 @@ public interface IRavenShell
     /// <remarks>News still held back for the pause or a busy floor is told too (#256). Started on the UI thread.</remarks>
     Task<string> WhatsNewAsync(string? askedIn, int? number);
 
-    /// <summary>Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in for null.</summary>
-    void WriteSummary(string? askedIn, string text);
+    /// <summary>
+    /// Writes a chat's summary (#234) in the Raven chat <paramref name="askedIn"/> names, unspoken; the one the user is in
+    /// for null. Written in the turn that asked for it, it goes with that answer, wherever the user followed it (#289).
+    /// </summary>
+    /// <param name="late">Done after that turn ended (a long recap): written where it was asked.</param>
+    void WriteSummary(string? askedIn, string text, bool late = false);
 
     /// <summary>
     /// Raven, asked in the chat <paramref name="askedIn"/> names, started a chat in <paramref name="workspaceId"/>'s window
-    /// (#180): the user is moved to that window's Raven chat, with the question and its answer.
+    /// (#180), or acted on it otherwise with <paramref name="tool"/> (#289): the user is moved to that window's Raven chat,
+    /// chat 0 for null, with the question and its answer.
     /// </summary>
-    void FollowWork(string askedIn, Guid workspaceId);
+    void FollowWork(string askedIn, Guid? workspaceId, string tool);
 }
 
 /// <summary>
@@ -231,6 +236,14 @@ public sealed class RavenActions : IYardActions
 
     public bool StartedByRaven(string chatId) => _started.ContainsKey(chatId);
 
+    public void ActedOn(string? askedIn, Guid? workspaceId, string tool)
+    {
+        if (askedIn is not null)
+        {
+            _ui.Post(() => _shell().FollowWork(askedIn, workspaceId, tool)); // the panel knows whether the user is there already
+        }
+    }
+
     public async Task<VoiceChatView> StartChatAsync(YardWorkspace workspace, YardFolder? folder, string? model, string? effort, string? askedIn,
         CancellationToken ct)
     {
@@ -247,7 +260,7 @@ public sealed class RavenActions : IYardActions
         {
             // The user follows the work to the window's chat, where the chat's news comes (#180); the panel knows whether
             // that is where they are.
-            _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id));
+            _ui.Post(() => _shell().FollowWork(askedIn, workspace.Id, "start_chat"));
         }
 
         _logger.LogInformation("Raven opened chat {Id} in {Workspace}", chat.SessionId, workspace.Name);
@@ -544,7 +557,7 @@ public sealed class RavenActions : IYardActions
 
                 var written = done.IsCompletedSuccessfully ? $"Your last working session: {done.Result}"
                     : done.Exception?.InnerException is YardActionException refused ? refused.Message : "Summing up your last working session failed.";
-                _ui.Post(() => _shell().WriteSummary(askedIn, written));
+                _ui.Post(() => _shell().WriteSummary(askedIn, written, late: true));
             }, TaskScheduler.Default);
             if (ex is OperationCanceledException)
             {
