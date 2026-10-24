@@ -54,7 +54,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
-        _speech.Spoken.First().ShouldStartWith("Told: Catch-up");
+        _speech.Spoken.First().ShouldStartWith("Chat ContentAutomatorX finished:");
 
         await OnlyTheGracePassesAsync(vm);
         string.Join(" ", _speech.Spoken).ShouldNotContain("npm test");
@@ -80,7 +80,8 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(vm.Traffic.PauseLeft);
         await WithinAsync(vm.PendingAnswers);
         await WithinAsync(_voice.WhenQuietAsync());
-        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task b");
+        _teller.Asked.ShouldHaveSingleItem();
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.StartsWith("Chat CodeSwitchX finished:"));
     }
 
     /// <summary>A shorter pause set while news waits is the one it waits for: it is not held to the longer one.</summary>
@@ -99,7 +100,8 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         await WithinAsync(_voice.WhenQuietAsync());
 
-        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task b");
+        _teller.Asked.ShouldHaveSingleItem();
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.StartsWith("Chat CodeSwitchX finished:"));
     }
 
     [Fact]
