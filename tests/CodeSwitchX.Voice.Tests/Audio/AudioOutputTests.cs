@@ -993,7 +993,7 @@ public sealed class AudioOutputTests
     private static WaveOutSpeechPlayer Speech(Devices devices) =>
         new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), move => move());
 
-    /// <summary>A tenth of a second of silence with one loud byte at 4000, to find where the rest of it plays.</summary>
+    /// <summary>One sample over and over, a steady tone the level is easy to read from.</summary>
     private static SpeechChunk Steady(short sample, int count)
     {
         var samples = Enumerable.Repeat(sample, count).ToArray();
@@ -1011,6 +1011,7 @@ public sealed class AudioOutputTests
         return samples;
     }
 
+    /// <summary>A tenth of a second of silence with one loud byte at 4000, to find where the rest of it plays.</summary>
     private static SpeechChunk MarkedSpeech()
     {
         var pcm = new byte[4800];

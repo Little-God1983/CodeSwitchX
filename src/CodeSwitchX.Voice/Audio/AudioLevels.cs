@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using NAudio.Wave;
 
 namespace CodeSwitchX.Voice.Audio;
@@ -8,10 +9,13 @@ namespace CodeSwitchX.Voice.Audio;
 /// </summary>
 public sealed class AudioLevels
 {
-    private float _sounds = GainOf(60);
+    /// <summary>The sounds' slider before it is moved: as loud as the chime was before there was a slider.</summary>
+    public const int DefaultSoundsPercent = 60;
+
+    private float _sounds = GainOf(DefaultSoundsPercent);
     private float _voice = 1f;
 
-    /// <summary>The gain of the chats' sounds; Settings' default is 60 %, about as loud as the chime was before.</summary>
+    /// <summary>The gain of the chats' sounds.</summary>
     public float Sounds
     {
         get => Volatile.Read(ref _sounds);
@@ -63,11 +67,11 @@ internal sealed class Loudness : IWaveProvider
             return read;
         }
 
-        var samples = new Span<byte>(buffer, offset, read - read % 2);
-        for (var i = 0; i < samples.Length; i += 2)
+        // Only ever quieter, so a scaled sample always fits; rounded half away from zero, as -0.5 and 0.5 are alike.
+        var samples = MemoryMarshal.Cast<byte, short>(buffer.AsSpan(offset, read - read % 2));
+        for (var i = 0; i < samples.Length; i++)
         {
-            var scaled = Math.Round(BitConverter.ToInt16(samples[i..]) * gain, MidpointRounding.AwayFromZero);
-            BitConverter.TryWriteBytes(samples[i..], (short)Math.Clamp(scaled, short.MinValue, short.MaxValue));
+            samples[i] = (short)MathF.Round(samples[i] * gain, MidpointRounding.AwayFromZero);
         }
 
         return read;

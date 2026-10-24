@@ -123,7 +123,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>How loud Raven's voice plays, 0..100 % (#305): answers, news, the samples. Full is as before there was a slider.</summary>
     [ObservableProperty] private int _ravenVoiceVolume = DefaultVoiceVolume;
 
-    public const int DefaultSoundVolume = 60, DefaultVoiceVolume = 100;
+    public const int DefaultSoundVolume = AudioLevels.DefaultSoundsPercent, DefaultVoiceVolume = 100;
 
     /// <summary>How long, in minutes, a chat stays on its tile after its tab was closed (#164): one of <see cref="KeepClosedChoices"/>, 0 for not at all.</summary>
     [ObservableProperty] private int _yardKeepClosedMinutes;

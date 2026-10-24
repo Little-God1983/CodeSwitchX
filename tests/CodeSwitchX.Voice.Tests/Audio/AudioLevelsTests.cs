@@ -20,6 +20,7 @@ public sealed class AudioLevelsTests
         var levels = new AudioLevels();
 
         (levels.Sounds, levels.Voice).ShouldBe((AudioLevels.GainOf(60), 1f));
+        AudioLevels.DefaultSoundsPercent.ShouldBe(60);
     }
 
     [Fact]
@@ -70,7 +71,7 @@ public sealed class AudioLevelsTests
     public void The_chime_at_the_default_level_is_as_loud_as_before()
     {
         var pcm = ChatChime.Pcm.ToArray();
-        var loudness = new Loudness(new RawSourceWaveStream(pcm, 0, pcm.Length, new WaveFormat(24000, 16, 1)), () => AudioLevels.GainOf(60));
+        var loudness = new Loudness(new RawSourceWaveStream(pcm, 0, pcm.Length, new WaveFormat(24000, 16, 1)), () => AudioLevels.GainOf(AudioLevels.DefaultSoundsPercent));
 
         var peak = Read(loudness, pcm.Length / 2).Max(s => Math.Abs((int)s));
 

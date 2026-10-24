@@ -13,10 +13,6 @@ public partial class SettingsView : UserControl
         InitializeComponent();
     }
 
-    /// <summary>
-    /// The search box folded away with the sidebar (#162) while it had the keyboard: the pages' list takes it, so the next
-    /// key is not lost.
-    /// </summary>
     /// <summary>A volume slider let go, its thumb or a click on its track (#305): it plays at the level just set.</summary>
     private void OnLevelLetGo(object sender, MouseButtonEventArgs e) => PlayLevel(sender);
 
@@ -37,6 +33,10 @@ public partial class SettingsView : UserControl
         }
     }
 
+    /// <summary>
+    /// The search box folded away with the sidebar (#162) while it had the keyboard: the pages' list takes it, so the next
+    /// key is not lost.
+    /// </summary>
     private void OnSearchVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is false && SearchBox.IsKeyboardFocusWithin)

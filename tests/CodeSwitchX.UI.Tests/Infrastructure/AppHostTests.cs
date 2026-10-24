@@ -61,21 +61,24 @@ public class AppHostTests
             "telemetry must listen before the first scan, or the usage that scan finds is in neither the database it loaded nor its memory until the next start");
     }
 
-    /// <summary>A constructor parameter without a registration otherwise shows up only as "CodeSwitchX failed to start" at the next manual run.</summary>
     /// <summary>#305: the sliders on the Sounds page set the levels the chime and the voice play at, not a copy of their own.</summary>
     [Fact]
-    public void The_settings_sliders_set_the_levels_the_audio_plays_at()
+    public async Task The_settings_sliders_set_the_levels_the_audio_plays_at()
     {
-        using var host = Builder().Build();
+        var builder = Builder();
+        builder.Services.Replace(ServiceDescriptor.Singleton(NSubstitute.Substitute.For<CodeSwitchX.Core.Persistence.ISettingsStore>()));
+        using var host = builder.Build();
         var settings = host.Services.GetRequiredService<SettingsViewModel>();
 
         settings.RavenVoiceVolume = 50;
         settings.RavenSoundVolume = 0;
+        await settings.FlushSavesAsync(TestContext.Current.CancellationToken);
 
         var levels = host.Services.GetRequiredService<CodeSwitchX.Voice.Audio.AudioLevels>();
         (levels.Voice, levels.Sounds).ShouldBe((0.25f, 0f));
     }
 
+    /// <summary>A constructor parameter without a registration otherwise shows up only as "CodeSwitchX failed to start" at the next manual run.</summary>
     [Fact]
     public void Every_registered_service_can_be_built()
     {

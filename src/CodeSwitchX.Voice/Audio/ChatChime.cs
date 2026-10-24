@@ -18,7 +18,8 @@ public sealed class ChatChime : IChatChime
 {
     private const int SampleRate = 24000;
 
-    private static readonly double Peak = 0.33 / AudioLevels.GainOf(60);
+    // Before Made: the tones are made with it.
+    private static readonly double Peak = 0.33 / AudioLevels.GainOf(AudioLevels.DefaultSoundsPercent);
 
     private static readonly byte[] Made = Make();
 

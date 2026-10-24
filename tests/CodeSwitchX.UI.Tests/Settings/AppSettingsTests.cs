@@ -72,8 +72,41 @@ public sealed class AppSettingsTests
     }
 
     [Theory]
+    [InlineData("off", 0)]
+    [InlineData("mute", 0)]
+    [InlineData("full", 100)]
+    [InlineData("max", 100)]
+    public async Task A_volume_said_in_words_is_set(string said, int volume)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Settings.RavenVoiceVolume = 50;
+
+        await _settings.SetAsync("voice volume", said, Ct);
+
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(volume);
+    }
+
+    /// <summary>A step up or down is not a level: "20 % louder" must not set the voice to 20 %.</summary>
+    [Theory]
+    [InlineData("20 % louder")]
+    [InlineData("down by 10")]
+    [InlineData("10 percent quieter")]
+    [InlineData("+10")]
+    public async Task A_volume_said_as_a_change_is_refused_and_nothing_changes(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
+
+        error.Message.ShouldContain("level");
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(100);
+    }
+
+    [Theory]
     [InlineData("150")]
     [InlineData("loud")]
+    [InlineData("40.5")]
+    [InlineData("40,5")]
     public async Task A_volume_not_from_0_to_100_is_refused_and_nothing_changes(string said)
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
@@ -529,6 +562,8 @@ public sealed class AppSettingsTests
     [InlineData("the yard settings", SettingsPage.Yard)]
     [InlineData("volume", SettingsPage.Sounds)]
     [InlineData("how loud", SettingsPage.Sounds)]
+    [InlineData("the sound settings", SettingsPage.Sounds)]
+    [InlineData("chime", SettingsPage.Sounds)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
     [Theory]
