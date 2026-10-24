@@ -73,6 +73,16 @@ public sealed class TranscriptLastReplyTests : IDisposable
         TranscriptLastReply.Read(_path).ShouldBe("npm test passes now. Should I merge?");
     }
 
+    // Review round 2 of #301: numbered items and a bold line as heading ran into the next sentence; quoted code was told.
+    [Fact]
+    public void Numbered_items_and_a_bold_heading_end_as_sentences_and_quoted_code_is_left_out()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "**Summary**\\n\\n1. Fixed login\\n2) Fixed logout\\n\\n> ```cs\\n> x();\\n> ```\\n> | a | b |\\n\\nAll green")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Summary. Fixed login. Fixed logout. All green");
+    }
+
     [Fact]
     public void A_reply_that_is_only_a_table_says_nothing_rather_than_an_earlier_reply()
     {

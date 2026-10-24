@@ -104,7 +104,7 @@ public static partial class TranscriptLastReply
         string? fence = null; // the open code block's fence ("```", "````", "~~~"): only a run as long, alone, closes it
         foreach (var raw in text.Split('\n'))
         {
-            var line = raw.Trim();
+            var line = Quote().Replace(raw.Trim(), ""); // quoted code or a quoted table is left out as well
             if (fence is not null)
             {
                 if (line.Length >= fence.Length && line.All(c => c == fence[0]))
@@ -126,8 +126,8 @@ public static partial class TranscriptLastReply
                 continue;
             }
 
-            line = Quote().Replace(line, "");
             var item = Heading().Match(line) is { Success: true } heading ? heading : Bullet().Match(line);
+            var bold = BoldLine().IsMatch(line); // "**Summary**" stands as a heading
             line = Link().Replace(line[item.Length..], "$1").Replace("**", "").Replace("`", "").Trim();
             if (line.Length == 0)
             {
@@ -135,7 +135,7 @@ public static partial class TranscriptLastReply
             }
 
             prose.Append(line);
-            if (item.Success && !".!?:;…".Contains(line[^1]))
+            if ((item.Success || bold) && !".!?:;…".Contains(line[^1]))
             {
                 prose.Append('.'); // "## Done" and "- Fixed login" are told as sentences, not "Done Fixed login"
             }
@@ -158,8 +158,13 @@ public static partial class TranscriptLastReply
     [GeneratedRegex(@"^#{1,6}\s+")]
     private static partial Regex Heading();
 
-    [GeneratedRegex(@"^[-*+]\s+")]
+    /// <summary>A list item's mark: "-", "*", "+", or a number with "." or ")".</summary>
+    [GeneratedRegex(@"^([-*+]|\d+[.)])\s+")]
     private static partial Regex Bullet();
+
+    /// <summary>A line all in bold, as a heading is often written.</summary>
+    [GeneratedRegex(@"^\*\*[^*]+\*\*:?$")]
+    private static partial Regex BoldLine();
 
     [GeneratedRegex(@"^(>\s?)+")]
     private static partial Regex Quote();
