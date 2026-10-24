@@ -177,8 +177,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
 
-        _teller.Asked.ShouldHaveSingleItem();
-        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.StartsWith("Chat CodeSwitchX finished:"));
+        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task b");
     }
 
     [Fact]

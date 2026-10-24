@@ -65,7 +65,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         await WithinAsync(_voice.WhenQuietAsync());
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
         _brain.Asked.ShouldBeEmpty("the app goes there itself");
     }
 
@@ -102,7 +102,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 3));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         await WithinAsync(_voice.WhenQuietAsync());
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
         _brain.Asked.ShouldBeEmpty("the yes goes to no brain");
     }
 
@@ -123,11 +123,11 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle);
         _time.Advance(vm.Traffic.WaitBeforeTelling);
         await Task.Delay(100, TestContext.Current.CancellationToken);
-        _speech.Spoken.ShouldNotContain(s => s.Contains("Task a is done."), "the offer stands");
+        _speech.Spoken.ShouldNotContain("Task a is done.", "the offer stands");
 
         _time.Advance(RavenPanelViewModel.NextOfferLifetime);
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Any(s => s.Contains("Task a is done.")));
+        await Until(() => _speech.Spoken.Contains("Task a is done."));
     }
 
     [Fact]
@@ -282,7 +282,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         await WithinAsync(_voice.WhenQuietAsync());
-        SpokenSince(before).ShouldBe("Chat DiffusionNexus wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("DiffusionNexus, chat \"Task c\" asks: Which fruit? Apple or Banana.");
     }
 
     /// <summary>#234: a chat's summary is written in the Raven chat it was asked in.</summary>
@@ -374,7 +374,7 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.SelectedChat.ShouldBe(ChatNumbered(vm, 2));
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
-        SpokenSince(before).ShouldBe("Chat DiffusionNexus wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("DiffusionNexus, chat \"Task c\" asks: Which fruit? Apple or Banana.");
     }
 
     // #233: a long command is read in the teller's words, as when its card came
@@ -382,7 +382,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Next_question_reads_a_long_command_in_the_teller_s_words()
     {
         const string command = "$out = Join-Path $PSScriptRoot 'dist'\nRemove-Item $out -Recurse -Force\ndotnet publish -c Release -o $out";
-        _teller.Answer = _ => [new BrainText("Chat RawCutX wants to run a script that builds the installer")];
+        _teller.Answer = _ => [new BrainText("RawCutX, chat \"Task d\" wants to run a script that builds the installer")];
         var (vm, asks) = await NextQuestionVmAsync();
         var ask = new ChatAsk("p_d",
             new HookEvent { SessionId = "d", EventName = "PermissionRequest", At = _time.GetUtcNow(), ToolName = "PowerShell", ToolInputHash = command },
@@ -395,7 +395,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.GoToNextQuestionByKey();
 
         await Until(() => SpokenSince(before).EndsWith("It's on the card.", StringComparison.Ordinal));
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to run a script that builds the installer. It deletes files. It's on the card.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" wants to run a script that builds the installer. It deletes files. It's on the card.");
     }
 
     // #233: "next question" while the user talks in Open mic switched to the card but neither said nor wrote it
@@ -428,7 +428,7 @@ public sealed partial class RavenPanelViewModelTests
         SpokenSince(before).ShouldBeEmpty("the grace first: the user may go on after a breath");
         _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
     }
 
     // #233: in Open mic, "Next?" takes a bare yes; other talk around the room stays out
@@ -554,7 +554,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
         await WithinAsync(_voice.WhenQuietAsync());
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
     }
 
     // #233: an offer Raven kept quiet holds no floor: a card that comes meanwhile in the muted chat is read at once
@@ -712,7 +712,7 @@ public sealed partial class RavenPanelViewModelTests
         vm.GoToNextQuestionByKey();
 
         await Until(() => SpokenSince(before).EndsWith("Banana.", StringComparison.Ordinal));
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
     }
 
     // #252: a card taken by a telling that the floor was taken from before it was read is read later, not lost
@@ -720,7 +720,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task A_long_command_s_card_cut_off_while_its_words_are_found_is_read_after_the_answer()
     {
         const string command = "$out = Join-Path $PSScriptRoot 'dist'\nRemove-Item $out -Recurse -Force\ndotnet publish -c Release -o $out";
-        _teller.Answer = _ => [new BrainText("Chat ContentAutomatorX wants to run a script that builds the installer")];
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX, chat \"Task a\" wants to run a script that builds the installer")];
         _brain.Answer = _ => [new BrainText("Noon.")];
         var (vm, asks) = await NextQuestionVmAsync();
         _teller.Gate = new TaskCompletionSource(); // its words are being found when the user asks
@@ -970,6 +970,6 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(vm.PendingAnswers);
         vm.Log.ShouldContain(e => e.Text.StartsWith("The release notes changed", StringComparison.Ordinal) && e.Text.Contains("(interrupted)"));
         vm.Log.ShouldNotContain(e => e.Text.Contains("the rest of it"), "the answer stopped");
-        SpokenSince(before).ShouldBe("Chat RawCutX wants to know: Which fruit? Apple or Banana.");
+        SpokenSince(before).ShouldBe("RawCutX, chat \"Task d\" asks: Which fruit? Apple or Banana.");
     }
 }

@@ -47,8 +47,8 @@ public sealed partial class ChatAskCard : ObservableObject
     private string WhoWants(string ofAgent, string ofChat) =>
         (Permission!.Agent is { } agent ? $"{ofAgent}{agent} sub-agent wants to " : ofChat) + Permission.Wants;
 
-    /// <summary>Who asks, as Raven says it: the chat (<see cref="Called"/>), or "…'s Explore sub-agent".</summary>
-    public string Asker => Permission?.Agent is { } agent ? $"{Called}'s {agent} sub-agent" : Called;
+    /// <summary>Who asks, as Raven says it: the chat (<see cref="Said"/>), or "…'s Explore sub-agent".</summary>
+    public string Asker => Permission?.Agent is { } agent ? $"{Said}'s {agent} sub-agent" : Said;
 
     /// <summary>"Risky: deletes files and pushes to a remote", on the card; null when nothing in it is risky.</summary>
     public string? RiskLine => Permission?.Risks is { Count: > 0 } risks ? "Risky: " + PermissionRisks.Phrase(risks) : null;
@@ -69,14 +69,8 @@ public sealed partial class ChatAskCard : ObservableObject
     /// <summary>The workspace's name, "ContentAutomatorX"; null until named.</summary>
     public string? Workspace { get; set; }
 
-    /// <summary>The chat as Raven's brain is told it: "ContentAutomatorX, chat "Fix the upload retry"".</summary>
+    /// <summary>The chat as Raven says it: "ContentAutomatorX, chat "Fix the upload retry"".</summary>
     public string Said { get; set; } = "A chat";
-
-    /// <summary>
-    /// The chat as Raven says it aloud (#301): "Chat ContentAutomatorX". Its title, often a long sentence of its own, made
-    /// every line slow to get to the point; it stays on the card.
-    /// </summary>
-    public string Called => Workspace is { Length: > 0 } workspace ? $"Chat {workspace}" : "A chat";
 
     /// <summary>The Yard naming the chat; read out only once it is done.</summary>
     public Task Naming { get; set; } = Task.CompletedTask;

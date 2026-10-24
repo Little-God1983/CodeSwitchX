@@ -734,8 +734,9 @@ public sealed partial class RavenPanelViewModelTests
 
         vm.Log.Where(e => e.Kind == RavenLogKind.News).Select(e => (e.Chat.Number, e.Lines!.Single().SessionId)).ShouldBe([(3, "a"), (1, "b")]);
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
-        _teller.Asked.ShouldHaveSingleItem().ShouldContain("exactly 1 line");
-        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("Chat CodeSwitchX finished: Release notes are done.");
+        var digest = _teller.Asked.ShouldHaveSingleItem();
+        digest.ShouldContain("Release notes");
+        digest.ShouldNotContain("Fix the upload retry");
     }
 
     /// <summary>A window's chat carries its tile: its header shows the tile's colour and where its repositories stand, as they change.</summary>

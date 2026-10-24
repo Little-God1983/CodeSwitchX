@@ -737,9 +737,9 @@ public sealed partial class RavenPanelViewModelTests
         two.Unread.ShouldBe(0);
     }
 
-    // Review of #188: the fallback said only how many things came, not what. Since #301 the app says each chat itself.
+    // Review of #188: the fallback says only how many things came, not what: it took every line off.
     [Fact]
-    public async Task Collapsed_a_catch_up_whose_teller_said_nothing_still_tells_each_chat_and_reads_it()
+    public async Task Collapsed_a_catch_up_that_could_only_say_how_many_things_came_leaves_the_marks()
     {
         var vm = await AwayFromChatTwoAsync();
         _teller.Answer = _ => [];
@@ -751,17 +751,16 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
         await WithinAsync(vm.PendingHeardCheck);
 
-        vm.Log.ShouldContain(e => e.Text == "Chat ContentAutomatorX failed. Chat ContentAutomatorX finished.");
-        two.Unread.ShouldBe(0);
+        vm.Log.ShouldContain(e => e.Text == "2 things came in here.");
+        two.Unread.ShouldBe(2);
     }
 
-    // Review round 3 of #188: a teller that failed after its first words counted as having said everything. Since #301 the
-    // app says each chat, and a line the failure cut off is no one's summary.
+    // Review round 3 of #188: a teller that failed after its first words counted as having said everything.
     [Fact]
-    public async Task Collapsed_a_catch_up_whose_teller_failed_midway_still_tells_each_chat_without_the_cut_line()
+    public async Task Collapsed_a_catch_up_whose_teller_failed_midway_leaves_the_marks()
     {
         var vm = await AwayFromChatTwoAsync();
-        _teller.Answer = _ => [new BrainText("the build broke on a mis"), new BrainFailed("The teller stopped.")];
+        _teller.Answer = _ => [new BrainText("While you were away, Task a finished."), new BrainFailed("The teller stopped.")];
         vm.IsOpen = false;
         var two = ChatNumbered(vm, 2);
 
@@ -770,8 +769,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
         await WithinAsync(vm.PendingHeardCheck);
 
-        vm.Log.ShouldContain(e => e.Text == "Chat ContentAutomatorX failed. Chat ContentAutomatorX finished.");
-        two.Unread.ShouldBe(0);
+        two.Unread.ShouldBe(2, "Task a2's failure was never said");
     }
 
     // Review round 3 of #188: a line counted later in a removed chat started its pulse timer again.

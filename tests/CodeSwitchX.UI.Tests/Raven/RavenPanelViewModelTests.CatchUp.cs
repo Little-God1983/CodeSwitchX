@@ -45,7 +45,9 @@ public sealed partial class RavenPanelViewModelTests
 
         var asked = _teller.Asked.ShouldHaveSingleItem();
         asked.ShouldStartWith("Catch-up:");
-        asked.ShouldContain("exactly 2 lines", customMessage: "both chats are summed up");
+        asked.ShouldContain("Task a\"");
+        asked.ShouldContain("Task a2");
+        asked.ShouldContain("\n- chat \"Task a\"", customMessage: "the user is in the window: its name is not told (#301)");
         _speech.Spoken.ShouldNotBeEmpty();
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(2);
     }
@@ -182,7 +184,7 @@ public sealed partial class RavenPanelViewModelTests
 
         _teller.Asked.ShouldHaveSingleItem().ShouldNotContain("npm test", Case.Sensitive, "the card is read on its own");
         string.Join(" ", _speech.Spoken).ShouldContain("npm test");
-        _speech.Spoken.First().ShouldStartWith("Chat ContentAutomatorX finished:", customMessage: "the catch-up comes before the card");
+        _speech.Spoken.First().ShouldStartWith("Told: Catch-up");
     }
 
     [Fact]
@@ -266,9 +268,7 @@ public sealed partial class RavenPanelViewModelTests
         await PassGraceAsync(vm);
         await Until(() => _teller.Asked.Count == 2);
 
-        _teller.Asked[1].ShouldStartWith("Catch-up:");
-        await WithinAsync(_voice.WhenQuietAsync());
-        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Chat.Number == 3 && e.Text.StartsWith("Chat DiffusionNexus finished:"));
+        _teller.Asked[1].ShouldContain("Task c");
     }
 
     /// <summary>An allow waiting for the user's yes holds the floor: no catch-up talks over its read-back.</summary>
@@ -344,9 +344,8 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldBeEmpty();
     }
 
-    // #301: each chat is said by the app ("Chat ContentAutomatorX failed."), with or without the teller's summary.
     [Fact]
-    public async Task A_teller_that_says_nothing_still_says_each_chat_the_most_pressing_first()
+    public async Task A_teller_that_says_nothing_leaves_a_plain_catch_up()
     {
         var vm = await AwayFromChatTwoAsync();
         _teller.Answer = _ => [];
@@ -357,89 +356,22 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = vm.Log.Single(e => e.Kind == RavenLogKind.Raven);
         said.Chat.Number.ShouldBe(2);
-        said.Text.ShouldBe("Chat ContentAutomatorX failed. Chat ContentAutomatorX finished.");
+        said.Text.ShouldBe("2 things came in here.");
         _speech.Spoken.ShouldNotBeEmpty();
     }
 
     [Fact]
-    public async Task The_tellers_lines_follow_the_apps_start_of_each_chat()
-    {
-        var vm = await AwayFromChatTwoAsync();
-        _teller.Answer = _ => [new BrainText("1. the build broke on a missing file\n2. "), new BrainText("the tests pass, and it asks to merge")];
-
-        vm.SelectedChat = ChatNumbered(vm, 2);
-        await GraceAsync(vm);
-        await WithinAsync(_voice.WhenQuietAsync());
-
-        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe(
-            "Chat ContentAutomatorX failed: the build broke on a missing file. Chat ContentAutomatorX finished: the tests pass, and it asks to merge.");
-        var asked = _teller.Asked.ShouldHaveSingleItem();
-        asked.ShouldStartWith("Catch-up:");
-        asked.ShouldContain("exactly 2 lines");
-        asked.ShouldNotContain("Task a", customMessage: "the title is not said, so the teller is not given it");
-    }
-
-    [Fact]
-    public async Task More_chats_than_a_reply_says_are_counted_and_stay_unread()
-    {
-        var (vm, _) = await TrafficVmAsync();
-        vm.CatchUp = true;
-        _teller.Answer = _ => [];
-        foreach (var id in new[] { "a2", "a3", "a4" })
-        {
-            _yard.Show(id, "ContentAutomatorX", $"Task {id}");
-        }
-
-        foreach (var id in new[] { "a", "a2", "a3", "a4" })
-        {
-            Changes(id, SessionState.Working, SessionState.Idle);
-        }
-
-        await GraceAsync(vm);
-        await Until(() => ChatNumbered(vm, 2).Unread == 4);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
-
-        vm.SelectedChat = ChatNumbered(vm, 2);
-        await GraceAsync(vm);
-        await WithinAsync(_voice.WhenQuietAsync());
-
-        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe(
-            "Chat ContentAutomatorX finished. Chat ContentAutomatorX finished. And 2 more.");
-    }
-
-    [Fact]
-    public async Task A_catch_up_in_the_yard_says_which_window()
-    {
-        var (vm, _) = await TrafficVmAsync();
-        vm.CatchUp = true;
-        _yard.Show("z", "LooseWindow", "Task z"); // a window with no chat of its own: its news is the Yard's
-        Changes("z", SessionState.Working, SessionState.Idle);
-        await GraceAsync(vm);
-        await Until(() => vm.YardChat.Unread == 1);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
-        _teller.Answer = _ => [new BrainText("the tests pass")];
-
-        vm.SelectedChat = vm.YardChat;
-        await GraceAsync(vm);
-        await WithinAsync(_voice.WhenQuietAsync());
-
-        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("Chat LooseWindow finished: the tests pass.");
-    }
-
-    [Fact]
-    public void The_catch_up_tells_news_and_warnings_not_answers_or_cards()
+    public void The_catch_up_is_worded_from_news_and_warnings_not_answers_or_cards()
     {
         var at = DateTimeOffset.UnixEpoch;
-        var warning = new RavenLogEntry(RavenLogKind.Warning, "The voice failed.", at);
-        var (lines, warnings) = RavenPanelViewModel.CatchUpItems([
+        var lines = RavenPanelViewModel.CatchUpLines([
             new RavenLogEntry(RavenLogKind.Raven, "It is green.", at),
-            warning,
+            new RavenLogEntry(RavenLogKind.Warning, "The voice failed.", at),
             new RavenLogEntry(RavenLogKind.Note, "Installing…", at),
             new RavenLogEntry(RavenLogKind.Permission, "asks", at),
         ]);
 
-        lines.ShouldBeEmpty();
-        warnings.ShouldBe([warning], "Raven's answers were heard as they came; cards are read on their own");
+        lines.ShouldBe(["- A warning: The voice failed."], "Raven's answers were heard as they came; cards are read on their own");
     }
 
     // Review round 2 of #188: a warning had no heard mark, so a catch-up worded again said it again.
@@ -455,10 +387,61 @@ public sealed partial class RavenPanelViewModelTests
         var warning = new RavenLogEntry(RavenLogKind.Warning, "The voice failed.", at);
         warning.MarkHeard();
 
-        var (lines, warnings) = RavenPanelViewModel.CatchUpItems([news, warning]);
+        var lines = RavenPanelViewModel.CatchUpLines([news, warning]);
 
-        lines.ShouldBe([untold]);
-        warnings.ShouldBeEmpty();
+        lines.ShouldBe(["- chat \"Release notes\": failed"]);
+    }
+
+    /// <summary>Two chats of one title in two news cards are told apart, as in one card.</summary>
+    [Fact]
+    public void Twin_chats_in_two_news_cards_are_numbered()
+    {
+        var at = DateTimeOffset.UnixEpoch;
+        var workspace = Guid.NewGuid();
+        RavenLogEntry News(string session) => new(RavenLogKind.News, "Chat news", at)
+        {
+            Lines = [new ChatNewsLine(session, workspace, "CodeSwitchX", "Weather discussion", ChatNewsKind.Finished, null, null, false)],
+        };
+
+        var lines = RavenPanelViewModel.CatchUpLines([News("s1"), News("s2")]);
+
+        lines.ShouldBe(["- chat \"Weather discussion\" (1 of 2): finished", "- chat \"Weather discussion\" (2 of 2): finished"]);
+    }
+
+    // Review round 2 of #301: only the helpers were tried with the Yard; switching to it is what picks them.
+    [Fact]
+    public async Task Switching_to_the_yard_names_the_window_its_news_came_from()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("z", "LooseWindow", "Task z"); // a window with no chat of its own: its news is the Yard's
+        Changes("z", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.YardChat.Unread == 1);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+
+        vm.SelectedChat = vm.YardChat;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        var asked = _teller.Asked.ShouldHaveSingleItem();
+        asked.ShouldContain("\n- LooseWindow, chat \"Task z\"");
+        asked.ShouldNotContain("no window name");
+    }
+
+    /// <summary>#301: the Yard holds the news of windows with no chat of their own, so its catch-up still names them.</summary>
+    [Fact]
+    public void The_yards_catch_up_names_the_window_a_windows_chat_does_not()
+    {
+        var news = new RavenLogEntry(RavenLogKind.News, "Chat news", DateTimeOffset.UnixEpoch)
+        {
+            Lines = [new ChatNewsLine("s1", Guid.NewGuid(), "CodeSwitchX", "Release notes", ChatNewsKind.Finished, null, null, false)],
+        };
+
+        RavenPanelViewModel.CatchUpLines([news], inWindow: false).ShouldBe(["- CodeSwitchX, chat \"Release notes\": finished"]);
+        RavenPanelViewModel.CatchUpLines([news]).ShouldBe(["- chat \"Release notes\": finished"]);
+        RavenPanelViewModel.CatchUpPrompt(["- x"], inWindow: false).ShouldNotContain("no window name");
+        RavenPanelViewModel.CatchUpPrompt(["- x"]).ShouldContain("no window name");
     }
 
     [Fact]

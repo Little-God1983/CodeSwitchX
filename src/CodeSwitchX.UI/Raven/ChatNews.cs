@@ -26,9 +26,6 @@ public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Wor
         _ => "failed",
     };
 
-    /// <summary>The chat as Raven says it aloud (#301): "Chat ContentAutomatorX"; the card shows its title.</summary>
-    public string Called => Workspace.Length > 0 ? $"Chat {Workspace}" : "A chat";
-
     /// <summary>The card's line: "ContentAutomatorX · Fix the upload retry: finished".</summary>
     public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? $" (older than {Span(ChatNews.MaximumAge)})" : "");
 

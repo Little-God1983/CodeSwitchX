@@ -35,7 +35,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("npm test.", StringComparison.Ordinal));
 
         (card.Chat, card.Wants, card.Permission!.Subject).ShouldBe(("ContentAutomatorX · Fix the upload retry", " wants to run a command", "npm test"));
-        string.Join(" ", _speech.Spoken).ShouldBe("Chat ContentAutomatorX wants to run npm test.");
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run npm test.");
         card.RiskLine.ShouldBeNull();
 
         vm.AllowCommand.Execute(card);
@@ -747,7 +747,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("remote.", StringComparison.Ordinal));
 
         string.Join(" ", _speech.Spoken).ShouldBe(
-            "Chat ContentAutomatorX wants to run rm -rf dist, then git push. It deletes files and pushes to a remote.");
+            "ContentAutomatorX, chat \"Fix the upload retry\" wants to run rm -rf dist, then git push. It deletes files and pushes to a remote.");
         PermissionCards(vm).Single().RiskLine.ShouldBe("Risky: deletes files and pushes to a remote");
         _teller.Asked.ShouldBeEmpty("a short command needs no wording");
     }
@@ -755,7 +755,7 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public async Task A_long_command_is_said_in_the_teller_s_words_and_the_app_adds_its_risks()
     {
-        _teller.Answer = _ => [new BrainText("Chat ContentAutomatorX wants to run a script that "), new BrainText("builds the installer")];
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a script that "), new BrainText("builds the installer")];
         var (vm, asks) = await QuestionsVmAsync();
 
         _ = asks.HoldAsync(Permitting(tool: "PowerShell", subject: LongCommand, risks: [PermissionRisk.DeletesFiles]), CancellationToken.None);
@@ -763,7 +763,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
 
-        string.Join(" ", _speech.Spoken).ShouldBe("Chat ContentAutomatorX wants to run a script that builds the installer. "
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a script that builds the installer. "
             + "It deletes files. It's on the card.");
         var question = _teller.Asked.ShouldHaveSingleItem();
         question.ShouldContain("finish the sentence \"The chat wants to run …\"");
@@ -780,7 +780,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
 
-        string.Join(" ", _speech.Spoken).ShouldBe("Chat ContentAutomatorX wants to run a long command that deletes files. It's on the card.");
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a long command that deletes files. It's on the card.");
     }
 
     [Fact]
@@ -818,7 +818,7 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Answer = _ => [new BrainText("Release notes is done.")];
         _yard.Show("b", "ContentAutomatorX", "Release notes"); // in the window the user is in: its news is told
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
-        var news = new ChatNews(_bus, _yard, _time, _ => "Done.", askedHere: asks.Explains); // last words: the teller sums them up
+        var news = new ChatNews(_bus, _yard, _time, _ => null, askedHere: asks.Explains);
         _time.Advance(TimeSpan.FromSeconds(1));
         var (vm, _) = await QuestionsVmAsyncWith(asks, news);
         Changes("b", SessionState.Working, SessionState.Idle);
@@ -859,7 +859,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("It's on the card.", StringComparison.Ordinal));
 
-        string.Join(" ", _speech.Spoken).ShouldBe("Chat ContentAutomatorX wants to run a long command that deletes files. It's on the card.");
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" wants to run a long command that deletes files. It's on the card.");
     }
 
     [Fact]
@@ -876,17 +876,17 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Theory]
-    [InlineData("Edit", "edit a file", @"E:\Repos\App\App.xaml.cs", new[] { PermissionRisk.WritesOutsideItsFolder }, "Chat CodeSwitchX wants to edit App.xaml.cs. It writes outside its folder.")]
-    [InlineData("Write", "write a file", "src/notes.md", new[] { PermissionRisk.EmptiesAFile }, "Chat CodeSwitchX wants to write notes.md. It empties a file.")]
-    [InlineData("NotebookEdit", "edit a notebook", "/home/me/a.ipynb", new PermissionRisk[0], "Chat CodeSwitchX wants to edit the notebook a.ipynb.")]
-    [InlineData("Read", "read a file", @"C:\outside\notes.md", new PermissionRisk[0], "Chat CodeSwitchX wants to read notes.md.")]
-    [InlineData("WebFetch", "fetch a web page", "https://www.github.com/x/y", new PermissionRisk[0], "Chat CodeSwitchX wants to fetch github.com.")]
-    [InlineData("WebSearch", "search the web", "dotnet 10 release notes", new PermissionRisk[0], "Chat CodeSwitchX wants to search the web for dotnet 10 release notes.")]
-    [InlineData("mcp__github__create_issue", "use mcp__github__create_issue", "title: Bug", new PermissionRisk[0], "Chat CodeSwitchX wants to use create issue from github.")]
-    [InlineData("Bash", "use Bash", "description: no command", new PermissionRisk[0], "Chat CodeSwitchX wants to use Bash.")]
+    [InlineData("Edit", "edit a file", @"E:\Repos\App\App.xaml.cs", new[] { PermissionRisk.WritesOutsideItsFolder }, "CodeSwitchX, chat \"Fix\" wants to edit App.xaml.cs. It writes outside its folder.")]
+    [InlineData("Write", "write a file", "src/notes.md", new[] { PermissionRisk.EmptiesAFile }, "CodeSwitchX, chat \"Fix\" wants to write notes.md. It empties a file.")]
+    [InlineData("NotebookEdit", "edit a notebook", "/home/me/a.ipynb", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to edit the notebook a.ipynb.")]
+    [InlineData("Read", "read a file", @"C:\outside\notes.md", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to read notes.md.")]
+    [InlineData("WebFetch", "fetch a web page", "https://www.github.com/x/y", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to fetch github.com.")]
+    [InlineData("WebSearch", "search the web", "dotnet 10 release notes", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to search the web for dotnet 10 release notes.")]
+    [InlineData("mcp__github__create_issue", "use mcp__github__create_issue", "title: Bug", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to use create issue from github.")]
+    [InlineData("Bash", "use Bash", "description: no command", new PermissionRisk[0], "CodeSwitchX, chat \"Fix\" wants to use Bash.")]
     public void Another_tool_is_said_by_its_file_site_or_name(string tool, string wants, string subject, PermissionRisk[] risks, string said)
     {
-        var card = new ChatAskCard(Permitting(tool: tool, wants: wants, subject: subject, risks: risks)) { Said = "CodeSwitchX, chat \"Fix\"", Workspace = "CodeSwitchX" };
+        var card = new ChatAskCard(Permitting(tool: tool, wants: wants, subject: subject, risks: risks)) { Said = "CodeSwitchX, chat \"Fix\"" };
 
         PermissionLine.Said(card).ShouldBe(said);
     }
@@ -897,29 +897,28 @@ public sealed partial class RavenPanelViewModelTests
         var card = new ChatAskCard(Permitting(agent: "a1", subject: "git fetch; git push --force | tee log", risks: [PermissionRisk.Pushes, PermissionRisk.RewritesHistory]))
         {
             Said = "CodeSwitchX, chat \"Fix\"",
-            Workspace = "CodeSwitchX",
         };
 
-        PermissionLine.Said(card).ShouldBe("Chat CodeSwitchX's Explore sub-agent wants to run git fetch, then git push --force piped to tee log. It pushes to a remote and rewrites history.");
+        PermissionLine.Said(card).ShouldBe("CodeSwitchX, chat \"Fix\"'s Explore sub-agent wants to run git fetch, then git push --force piped to tee log. It pushes to a remote and rewrites history.");
     }
 
     [Theory]
     [InlineData("", null)]
     [InlineData("  \n ", null)]
-    [InlineData("a script that `builds` the **installer**\n\nand tests it", "Chat CodeSwitchX wants to run a script that builds the installer and tests it.")]
-    [InlineData("run a script that builds the installer.", "Chat CodeSwitchX wants to run a script that builds the installer.")]
-    [InlineData("The chat wants to run the build. Then it tests v1.2 too.", "Chat CodeSwitchX wants to run the build.")]
-    [InlineData("A script that builds the installer.", "Chat CodeSwitchX wants to run a script that builds the installer.")]
-    [InlineData("3 scripts that build the installer", "Chat CodeSwitchX wants to run 3 scripts that build the installer.")]
+    [InlineData("a script that `builds` the **installer**\n\nand tests it", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer and tests it.")]
+    [InlineData("run a script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
+    [InlineData("The chat wants to run the build. Then it tests v1.2 too.", "CodeSwitchX, chat \"Fix\" wants to run the build.")]
+    [InlineData("A script that builds the installer.", "CodeSwitchX, chat \"Fix\" wants to run a script that builds the installer.")]
+    [InlineData("3 scripts that build the installer", "CodeSwitchX, chat \"Fix\" wants to run 3 scripts that build the installer.")]
     [InlineData("Sure.", null)]
     [InlineData("Sure thing.", null)]
     [InlineData("Okay, done.", null)]
     [InlineData("Sure: a script that builds the installer.", null)]
     [InlineData("This command cleans the build output and re-runs the tests. It is safe.",
-        "Chat CodeSwitchX wants to run a long command. This command cleans the build output and re-runs the tests.")]
+        "CodeSwitchX, chat \"Fix\" wants to run a long command. This command cleans the build output and re-runs the tests.")]
     public void The_teller_s_words_are_said_after_who_asks_as_a_few_plain_words_or_not_at_all(string words, string? said)
     {
-        var card = new ChatAskCard(Permitting(subject: LongCommand, risks: [PermissionRisk.DeletesFiles])) { Said = "CodeSwitchX, chat \"Fix\"", Workspace = "CodeSwitchX" };
+        var card = new ChatAskCard(Permitting(subject: LongCommand, risks: [PermissionRisk.DeletesFiles])) { Said = "CodeSwitchX, chat \"Fix\"" };
 
         PermissionLine.WithTellersWords(card, words).ShouldBe(said is null ? null : said + " It deletes files. It's on the card.");
         PermissionLine.WithTellersWords(card, string.Join(' ', Enumerable.Repeat("word", PermissionLine.MaxTellerWords + 1)))

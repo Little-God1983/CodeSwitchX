@@ -53,7 +53,7 @@ public sealed partial class RavenPanelViewModelTests
     public async Task Three_chats_that_finish_while_the_user_talks_are_told_in_one_digest_after_the_answer()
     {
         _brain.Answer = _ => [new BrainText("Sure.")];
-        _teller.Answer = _ => [new BrainText("the upload retry works\nthe loader is faster")];
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX and DiffusionNexus are done, and CodeSwitchX wants you.")];
         var (vm, _) = await NewsVmAsync();
 
         vm.PressMic(TalkInput.MicButton);
@@ -67,23 +67,19 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked.ShouldBeEmpty("not while Raven answers");
 
         await GraceAsync(vm);
-        await Until(() => _speech.Spoken.Count == 3);
+        await Until(() => _speech.Spoken.Count == 2);
 
         var digest = _teller.Asked.ShouldHaveSingleItem();
-        digest.ShouldContain("exactly 2 lines", customMessage: "what needs the user has nothing to sum up");
-        digest.ShouldContain("\n1. finished: \"All done.");
-        digest.ShouldNotContain("Fix the upload retry");
+        digest.ShouldContain("- ContentAutomatorX, chat \"Fix the upload retry\": finished. It last said: \"All done.");
+        digest.ShouldContain("- CodeSwitchX, chat \"Release notes\": needs you: \"Pick a branch\"");
+        digest.ShouldContain("- DiffusionNexus, chat \"Speed up the loader\": finished");
         var card = vm.Log.Single(e => e.Kind == RavenLogKind.News);
         card.Lines!.Select(l => l.Text).ShouldBe([
             "ContentAutomatorX · Fix the upload retry: finished",
             "CodeSwitchX · Release notes: needs you",
             "DiffusionNexus · Speed up the loader: finished",
         ]);
-        _speech.Spoken.ShouldBe([
-            "Sure.",
-            "Chat CodeSwitchX needs you: Pick a branch.", // said at once: it waits for no summary
-            "Chat ContentAutomatorX finished: the upload retry works. Chat DiffusionNexus finished: the loader is faster.",
-        ]);
+        _speech.Spoken.ShouldBe(["Sure.", "ContentAutomatorX and DiffusionNexus are done, and CodeSwitchX wants you."]);
         _teller.WarmUps.ShouldBeGreaterThan(0, "the teller starts while the news waits for the floor");
     }
 
@@ -117,14 +113,14 @@ public sealed partial class RavenPanelViewModelTests
         _brain.Answer = _ => [new BrainText("Opening it.")];
         Transcribes(Task.FromResult(new CodeSwitchX.Voice.Dictation.DictationResult("open it", TimeSpan.FromSeconds(1))));
         var (vm, _) = await NewsVmAsync();
-        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Waiting);
         _time.Advance(TrafficWatcher.NewsGrace);
         await Until(() => _teller.Asked.Count == 1);
 
         await HoldAsync(vm);
         await WithinAsync(vm.PendingAnswers);
 
-        _brain.Sent.ShouldBe([Told + "ContentAutomatorX, chat \"Fix the upload retry\" (chat id a): finished.]\nopen it"]);
+        _brain.Sent.ShouldBe([Told + "CodeSwitchX, chat \"Release notes\" (chat id b): needs you.]\nopen it"]);
     }
 
     [Fact]
@@ -227,14 +223,14 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
 
         vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.Warning);
-        vm.Log[^1].Text.ShouldBe("Chat ContentAutomatorX finished.");
+        vm.Log[^1].Text.ShouldBe("ContentAutomatorX finished.");
     }
 
     [Fact]
     public async Task Talking_during_the_digest_drops_the_rest_of_it()
     {
         _speech.Gate = new TaskCompletionSource();
-        _teller.Answer = _ => [new BrainText("the upload retry works")];
+        _teller.Answer = _ => [new BrainText("ContentAutomatorX is done. CodeSwitchX wants you.")];
         _brain.Answer = _ => [new BrainText("Okay.")];
         var (vm, news) = await NewsVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
@@ -248,7 +244,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        _speech.Spoken.ShouldBe(["Chat CodeSwitchX needs you.", "Okay."]); // cut off as it plays; the summary after it is dropped
+        _speech.Spoken.ShouldBe(["ContentAutomatorX is done. CodeSwitchX wants you.", "Okay."]); // one request, cut off as it plays (#290)
         _teller.Asked.Count.ShouldBe(1, "the dropped news is not told again");
         news.HasNews.ShouldBeFalse();
     }
@@ -289,8 +285,8 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
 
         var digest = _teller.Asked.ShouldHaveSingleItem();
-        digest.ShouldContain("exactly 1 line");
-        digest.ShouldContain("\n1. failed: ");
+        digest.Split('\n').Count(l => l.StartsWith("- ", StringComparison.Ordinal)).ShouldBe(1);
+        digest.ShouldContain("ContentAutomatorX, chat \"Fix the upload retry\": failed");
     }
 
     [Fact]
@@ -318,9 +314,10 @@ public sealed partial class RavenPanelViewModelTests
         Changes("b", SessionState.Working, SessionState.Waiting);
 
         await GraceAsync(vm);
-        await Until(() => string.Join(" ", _speech.Spoken) == "Chat CodeSwitchX needs you. Chat ContentAutomatorX finished.");
+        await Until(() => _speech.Spoken.Count == 1);
 
-        vm.Log[^1].Text.ShouldBe("Chat CodeSwitchX needs you. Chat ContentAutomatorX finished.");
+        vm.Log[^1].Text.ShouldBe("ContentAutomatorX finished, and CodeSwitchX needs you.");
+        _speech.Spoken.ShouldBe(["ContentAutomatorX finished, and CodeSwitchX needs you."]);
     }
 
     [Fact]

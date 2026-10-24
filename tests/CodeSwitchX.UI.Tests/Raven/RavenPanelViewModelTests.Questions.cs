@@ -57,7 +57,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => string.Join(" ", _speech.Spoken).EndsWith("Banana.", StringComparison.Ordinal));
 
         card.Chat.ShouldBe("ContentAutomatorX · Fix the upload retry");
-        string.Join(" ", _speech.Spoken).ShouldBe("Chat ContentAutomatorX wants to know: Which fruit? Apple or Banana.");
+        string.Join(" ", _speech.Spoken).ShouldBe("ContentAutomatorX, chat \"Fix the upload retry\" asks: Which fruit? Apple or Banana.");
         card.NeedsSend.ShouldBeFalse();
 
         vm.ChooseOptionCommand.Execute(card.Questions[0].Options[1]);
@@ -294,11 +294,11 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Waiting);
         await GraceAsync(vm);
         await GraceAsync(vm);
-        // The question is read in two pieces: wait for the news itself. It has no last words: the app says it, no teller.
-        await Until(() => _speech.Spoken.Contains("Chat ContentAutomatorX finished."));
+        // The question is read in two pieces: wait for the news itself.
+        await Until(() => _speech.Spoken.Contains("Release notes is done."));
 
-        string.Join(" ", _speech.Spoken).ShouldStartWith("Chat ContentAutomatorX wants to know: Which fruit?");
-        _speech.Spoken[^1].ShouldBe("Chat ContentAutomatorX finished.");
+        string.Join(" ", _speech.Spoken).ShouldStartWith("ContentAutomatorX, chat \"Fix the upload retry\" asks: Which fruit?");
+        _speech.Spoken[^1].ShouldBe("Release notes is done.");
         vm.Log.Single(e => e.Kind == RavenLogKind.News).Lines!.Select(l => l.SessionId).ShouldBe(["b"], "the card tells that the chat needs the user");
     }
 
@@ -315,9 +315,9 @@ public sealed partial class RavenPanelViewModelTests
     [Fact]
     public void What_Raven_says_of_several_questions_names_each_and_its_options()
     {
-        var card = new ChatAskCard(Asking(Fruit, Colours)) { Said = "CodeSwitchX, chat \"Release notes\"", Workspace = "CodeSwitchX" };
+        var card = new ChatAskCard(Asking(Fruit, Colours)) { Said = "CodeSwitchX, chat \"Release notes\"" };
 
         RavenPanelViewModel.QuestionSentence([card]).ShouldBe(
-            "Chat CodeSwitchX wants to know 2 things. Which fruit? Apple or Banana. Which colours? Any of Red or Blue.");
+            "CodeSwitchX, chat \"Release notes\" asks 2 questions. Which fruit? Apple or Banana. Which colours? Any of Red or Blue.");
     }
 }
