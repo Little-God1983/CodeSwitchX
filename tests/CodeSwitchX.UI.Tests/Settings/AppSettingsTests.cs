@@ -33,6 +33,7 @@ public sealed class AppSettingsTests
     [InlineData("Brain & chats", SettingsPage.Brain)]
     [InlineData("privacy", SettingsPage.Privacy)]
     [InlineData("claude code", SettingsPage.ClaudeCode)]
+    [InlineData("sounds", SettingsPage.Sounds)]
     public async Task Open_the_voice_settings_opens_settings_at_that_page(string said, SettingsPage page)
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
@@ -485,6 +486,16 @@ public sealed class AppSettingsTests
         (await _settings.GetAsync("open mic", Ct)).Value.ShouldStartWith("off");
     }
 
+    /// <summary>#305: the Sounds page sits right after Voice, under Raven.</summary>
+    [Fact]
+    public void The_sidebar_lists_Sounds_right_after_Voice_under_Raven()
+    {
+        var pages = SettingsPageItem.All.ToList();
+        var sounds = pages[pages.FindIndex(p => p.Page == SettingsPage.Voice) + 1];
+
+        (sounds.Page, sounds.Group).ShouldBe((SettingsPage.Sounds, "Raven"));
+    }
+
     [Fact]
     public async Task Every_setting_has_a_page_the_sidebar_lists_and_a_description()
     {
@@ -516,6 +527,8 @@ public sealed class AppSettingsTests
     [InlineData("budget", SettingsPage.Usage)]
     [InlineData("idle", SettingsPage.Yard)]
     [InlineData("the yard settings", SettingsPage.Yard)]
+    [InlineData("volume", SettingsPage.Sounds)]
+    [InlineData("how loud", SettingsPage.Sounds)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
     [Theory]

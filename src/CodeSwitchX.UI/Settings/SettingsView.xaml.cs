@@ -17,6 +17,26 @@ public partial class SettingsView : UserControl
     /// The search box folded away with the sidebar (#162) while it had the keyboard: the pages' list takes it, so the next
     /// key is not lost.
     /// </summary>
+    /// <summary>A volume slider let go, its thumb or a click on its track (#305): it plays at the level just set.</summary>
+    private void OnLevelLetGo(object sender, MouseButtonEventArgs e) => PlayLevel(sender);
+
+    /// <summary>The keys that move a slider play it too, once each.</summary>
+    private void OnLevelKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)
+        {
+            PlayLevel(sender);
+        }
+    }
+
+    private static void PlayLevel(object sender)
+    {
+        if (sender is FrameworkElement { Tag: ICommand play } && play.CanExecute(null))
+        {
+            play.Execute(null);
+        }
+    }
+
     private void OnSearchVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is false && SearchBox.IsKeyboardFocusWithin)

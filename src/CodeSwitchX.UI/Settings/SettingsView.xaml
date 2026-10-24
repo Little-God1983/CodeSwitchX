@@ -759,6 +759,32 @@
           </Border>
         </StackPanel>
 
+        <!-- Sounds (#305): how loud the chats' sounds and Raven's voice play; letting go of a slider plays it at that level. -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Sounds}">
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Volume" />
+              <TextBlock Style="{StaticResource Help}" Text="How loud the chats' sounds and Raven's voice are, in CodeSwitchX only: Windows' volume stays as it is. Let go of a slider to hear it." />
+              <DockPanel Margin="0,4,0,0">
+                <TextBlock DockPanel.Dock="Left" Text="Sounds" FontSize="14.5" FontWeight="SemiBold" Width="130" VerticalAlignment="Center" />
+                <TextBlock DockPanel.Dock="Right" Text="{Binding RavenSoundVolume, StringFormat={}{0} %}" FontFamily="{StaticResource Mono}" FontSize="13"
+                           Width="48" TextAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+                <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
+                        Value="{Binding RavenSoundVolume}" AutomationProperties.Name="Sounds volume" Tag="{Binding PlaySoundLevelCommand}"
+                        PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
+              </DockPanel>
+              <DockPanel Margin="0,14,0,0">
+                <TextBlock DockPanel.Dock="Left" Text="Raven's voice" FontSize="14.5" FontWeight="SemiBold" Width="130" VerticalAlignment="Center" />
+                <TextBlock DockPanel.Dock="Right" Text="{Binding RavenVoiceVolume, StringFormat={}{0} %}" FontFamily="{StaticResource Mono}" FontSize="13"
+                           Width="48" TextAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
+                <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
+                        Value="{Binding RavenVoiceVolume}" AutomationProperties.Name="Raven's voice volume" Tag="{Binding PlayVoiceLevelCommand}"
+                        PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
+              </DockPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
         <!-- Listening -->
         <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Listening}">
           <Border Style="{StaticResource Card}">
