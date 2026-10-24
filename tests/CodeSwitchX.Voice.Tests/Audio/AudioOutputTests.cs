@@ -35,6 +35,58 @@ public sealed class AudioOutputTests
         inner.StoppedOnPlayThread.ShouldBeFalse();
     }
 
+    /// <summary>#305: the voice's slider makes Raven quieter, but the orb moves as much as before: it measures before the level.</summary>
+    [Fact]
+    public void The_voice_level_scales_speech_but_not_the_orb()
+    {
+        var devices = new Devices();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels { Voice = 0.25f }, move => move());
+        var orb = 0f;
+        speech.LevelChanged += (_, level) => orb = Math.Max(orb, level);
+        speech.Enqueue(Steady(8000, 2400));
+
+        var heard = ReadSamples(devices.Players[0], 2400);
+
+        heard.ShouldAllBe(s => s == 2000);
+        orb.ShouldBe(8000 / 32768f, 0.001f);
+    }
+
+    [Fact]
+    public void A_voice_level_changed_mid_reply_is_heard_from_the_next_read()
+    {
+        var devices = new Devices();
+        var levels = new AudioLevels();
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, levels, move => move());
+        speech.Enqueue(Steady(8000, 2400));
+
+        var before = ReadSamples(devices.Players[0], 240);
+        levels.Voice = 0.25f;
+        var after = ReadSamples(devices.Players[0], 240);
+
+        before.ShouldAllBe(s => s == 8000);
+        after.ShouldAllBe(s => s == 2000);
+    }
+
+    /// <summary>#305: the chats' sound plays at the sounds' level.</summary>
+    [Fact]
+    public async Task The_chime_plays_at_the_sounds_level()
+    {
+        var devices = new Devices();
+        var chime = new ChatChime(devices.Output, NullLogger<ChatChime>.Instance, new AudioLevels { Sounds = 0.25f });
+
+        chime.Play();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (devices.Players.Count == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        var peak = ReadSamples(devices.Players.Single(), ChatChime.Pcm.Length / 2).Max(s => Math.Abs((int)s));
+        var made = new short[ChatChime.Pcm.Length / 2];
+        Buffer.BlockCopy(ChatChime.Pcm.ToArray(), 0, made, 0, ChatChime.Pcm.Length);
+        ((double)peak).ShouldBe(made.Max(s => Math.Abs((int)s)) * 0.25, 1);
+    }
+
     [Fact]
     public void The_orb_s_level_comes_about_twenty_times_a_second_however_often_the_output_reads()
     {
@@ -942,6 +994,23 @@ public sealed class AudioOutputTests
         new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), move => move());
 
     /// <summary>A tenth of a second of silence with one loud byte at 4000, to find where the rest of it plays.</summary>
+    private static SpeechChunk Steady(short sample, int count)
+    {
+        var samples = Enumerable.Repeat(sample, count).ToArray();
+        var pcm = new byte[count * 2];
+        Buffer.BlockCopy(samples, 0, pcm, 0, pcm.Length);
+        return new SpeechChunk(pcm, 24000);
+    }
+
+    private static short[] ReadSamples(FakePlayer player, int count)
+    {
+        var bytes = new byte[count * 2];
+        var read = player.Source!.Read(bytes, 0, bytes.Length);
+        var samples = new short[read / 2];
+        Buffer.BlockCopy(bytes, 0, samples, 0, read);
+        return samples;
+    }
+
     private static SpeechChunk MarkedSpeech()
     {
         var pcm = new byte[4800];
