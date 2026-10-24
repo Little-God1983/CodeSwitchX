@@ -18,13 +18,16 @@ public enum ChatNewsKind
 public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Workspace, string Title, ChatNewsKind Kind, string? Detail,
     string? LastSaid, bool Stale)
 {
-    /// <summary>What happened, as the card and the fallback sentence say it ("finished", "needs you").</summary>
+    /// <summary>What happened, as the card and Raven say it ("finished", "needs you").</summary>
     public string What => Kind switch
     {
         ChatNewsKind.Finished => "finished",
         ChatNewsKind.NeedsYou => "needs you",
         _ => "failed",
     };
+
+    /// <summary>The chat as Raven says it aloud (#301): "Chat ContentAutomatorX"; the card shows its title.</summary>
+    public string Called => Workspace.Length > 0 ? $"Chat {Workspace}" : "A chat";
 
     /// <summary>The card's line: "ContentAutomatorX · Fix the upload retry: finished".</summary>
     public string Text => $"{Workspace} · {Title}: {What}" + (Stale ? $" (older than {Span(ChatNews.MaximumAge)})" : "");

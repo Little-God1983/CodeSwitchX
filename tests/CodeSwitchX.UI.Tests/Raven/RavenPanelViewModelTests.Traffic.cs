@@ -53,10 +53,9 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
 
         var digest = _teller.Asked.ShouldHaveSingleItem();
-        digest.ShouldContain("Task b");
-        digest.ShouldNotContain("Task a");
-        string.Join(" ", _speech.Spoken).ShouldContain("Task b");
-        string.Join(" ", _speech.Spoken).ShouldNotContain("Task a");
+        digest.ShouldContain("exactly 1 line", customMessage: "chat 1's news only");
+        string.Join(" ", _speech.Spoken).ShouldStartWith("Chat CodeSwitchX finished:");
+        string.Join(" ", _speech.Spoken).ShouldNotContain("ContentAutomatorX");
         _chime.Plays.ShouldBe(0, "chat 1's news is spoken: that is the announcement, the others are only marked");
         vm.Chats.Where(c => c.Number is >= 2 and <= 5).ShouldAllBe(c => c.Unread > 0);
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
@@ -466,7 +465,8 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
 
-        _teller.Asked.ShouldHaveSingleItem().ShouldContain("Task a");
+        _teller.Asked.ShouldHaveSingleItem();
+        vm.Log.ShouldContain(e => e.Kind == RavenLogKind.Raven && e.Text.StartsWith("Chat ContentAutomatorX finished:"));
     }
 }
 

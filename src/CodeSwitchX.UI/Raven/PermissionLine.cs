@@ -29,7 +29,7 @@ internal static class PermissionLine
     public static bool NeedsTeller(ChatAskCard card) => card.Permission is { } permission && IsCommand(permission) && !IsShort(permission.Subject);
 
     /// <summary>
-    /// The whole line where the app words it: "CodeSwitchX, chat "Fix it" wants to run npm test.", "… wants to edit
+    /// The whole line where the app words it: "Chat CodeSwitchX wants to run npm test.", "… wants to edit
     /// App.xaml.cs. It writes outside its folder."; for a long command, the fallback: "… wants to run a long command that
     /// deletes files. It's on the card."
     /// </summary>
@@ -55,7 +55,7 @@ internal static class PermissionLine
     public static string? WithTellersWords(ChatAskCard card, string words)
     {
         var text = TextCut.OneLine(words.Replace("`", "").Replace("*", ""));
-        // "CodeSwitchX, chat "Fix it" wants to run a script …": what follows is its part.
+        // "Chat CodeSwitchX wants to run a script …": what follows is its part.
         const string wantsToRun = "wants to run ";
         if (text.LastIndexOf(wantsToRun, StringComparison.OrdinalIgnoreCase) is var at and >= 0)
         {

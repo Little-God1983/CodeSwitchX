@@ -177,19 +177,83 @@ public sealed class ChatNewsTests : IDisposable
         arrivals.ShouldBe(2);
     }
 
+    // #301: the app starts each line with the chat as the user knows it, and the teller only sums up what it said.
     [Fact]
-    public void Chats_that_share_a_title_are_numbered_for_the_teller_so_it_tells_them_apart()
+    public void Each_line_is_said_from_the_apps_start_then_what_it_is()
     {
-        ChatNewsLine Line(string id, string title) => new(id, Guid.Empty, "AudioVisualizer", title, ChatNewsKind.Finished, null, null, false);
+        ChatNewsLine Line(ChatNewsKind kind, string? detail = null) => new("a", Guid.Empty, "AudioVisualizer", "A long auto title", kind, detail, null, false);
 
-        var prompt = RavenPanelViewModel.DigestPrompt([Line("a", "Weather discussion"), Line("b", "Tea"), Line("c", "Weather discussion")]);
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "the tests pass").ShouldBe("Chat AudioVisualizer finished: the tests pass.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Failed), null).ShouldBe("Chat AudioVisualizer failed.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.NeedsYou, "Claude needs your permission to use Bash"), "ignored")
+            .ShouldBe("Chat AudioVisualizer needs you: Claude needs your permission to use Bash.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished) with { Workspace = "" }, "done?").ShouldBe("A chat finished: done?");
+    }
 
-        prompt.Split('\n').ShouldBe([
-            "News of the chats:",
-            "- AudioVisualizer, chat \"Weather discussion\" (1 of 2): finished",
-            "- AudioVisualizer, chat \"Tea\": finished",
-            "- AudioVisualizer, chat \"Weather discussion\" (2 of 2): finished",
-        ]);
+    [Fact]
+    public void What_needs_the_user_is_told_first_then_what_failed()
+    {
+        ChatNewsLine Line(string id, ChatNewsKind kind) => new(id, Guid.Empty, "W", id, kind, null, null, false);
+        var done = Line("done", ChatNewsKind.Finished);
+        var broke = Line("broke", ChatNewsKind.Failed);
+        var asks = Line("asks", ChatNewsKind.NeedsYou);
+        var later = Line("later", ChatNewsKind.Finished);
+
+        RavenPanelViewModel.Pressing([done, broke, asks, later]).ShouldBe([asks, broke, done, later]);
+    }
+
+    [Fact]
+    public void The_teller_is_given_only_what_each_chat_last_said_and_its_numbering_is_taken_off()
+    {
+        ChatNewsLine Line(ChatNewsKind kind, string lastSaid) => new("a", Guid.Empty, "W", "Secret title", kind, null, lastSaid, false);
+
+        var prompt = RavenPanelViewModel.SummaryPrompt("News of the chats", [Line(ChatNewsKind.Finished, "All green."), Line(ChatNewsKind.Failed, "Boom.")]);
+
+        prompt.ShouldStartWith("News of the chats:");
+        prompt.ShouldContain("exactly 2 lines");
+        prompt.ShouldEndWith("\n1. finished: \"All green.\"\n2. failed: \"Boom.\"");
+        prompt.ShouldNotContain("Secret title");
+        RavenPanelViewModel.Summed(" 2. \"the tests pass\" ").Summary.ShouldBe("the tests pass");
+        RavenPanelViewModel.Summed("- it asks to merge").Summary.ShouldBe("it asks to merge");
+        RavenPanelViewModel.Summed("v1.2 is out").Summary.ShouldBe("v1.2 is out");
+    }
+
+    // Review round 1 of #303: a line of two sentences took two of the three a reply speaks, and later chats went unheard.
+    [Fact]
+    public void Each_line_is_one_sentence()
+    {
+        ChatNewsLine Line(ChatNewsKind kind, string? detail = null) => new("a", Guid.Empty, "W", "T", kind, detail, null, false);
+
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "the tests pass. It asks to merge").ShouldBe("Chat W finished: the tests pass.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.NeedsYou, "Claude is waiting.\nPlease answer."), null).ShouldBe("Chat W needs you: Claude is waiting.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "v1.2 is out and 3.5x faster").ShouldBe("Chat W finished: v1.2 is out and 3.5x faster.");
+        // Review round 3 of #303: "e.g." ends no sentence for the voice, so none here either.
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it prefers e.g. the cached build").ShouldBe("Chat W finished: it prefers e.g. the cached build.");
+        // Review round 2 of #303: the voice ends a sentence after a closing quote or bracket too.
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it says \"Done.\" and stops").ShouldBe("Chat W finished: it says \"Done.\"");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it asks (why not?) and waits").ShouldBe("Chat W finished: it asks (why not?)");
+    }
+
+    // Review round 1 of #303: a version at the start lost its "0.", and an echoed "finished:" was said twice.
+    [Fact]
+    public void Only_a_list_number_and_an_echoed_status_are_taken_off_a_summary()
+    {
+        RavenPanelViewModel.Summed("0.1.0.24 is published").Summary.ShouldBe("0.1.0.24 is published");
+        RavenPanelViewModel.Summed("10:30 build passed").Summary.ShouldBe("10:30 build passed");
+        RavenPanelViewModel.Summed("1. finished: the tests pass").Summary.ShouldBe("the tests pass");
+        RavenPanelViewModel.Summed("Failed: the build broke").Summary.ShouldBe("the build broke");
+    }
+
+    // #301: Haiku keeps to "at most ten words" for several chats, not always for one: a long summary keeps its first clauses.
+    [Fact]
+    public void A_summary_past_sixteen_words_keeps_the_clauses_that_fit()
+    {
+        RavenPanelViewModel.Summed("the 3 HotkeyServiceTests fail the same way on main, probably because the running stable build holds the hotkeys, "
+            + "and the migration keeps 482 of 580 chats' last use").Summary.ShouldBe("the 3 HotkeyServiceTests fail the same way on main");
+        RavenPanelViewModel.Summed("the ingest, conductor and ui tests pass, but three hotkey tests are blocked, and it waits for your call on skipped findings")
+            .Summary.ShouldBe("the ingest, conductor and ui tests pass, but three hotkey tests are blocked");
+        const string noBreak = "the stable build script wants your go-ahead to publish 0.1.0.24 and push the version bump to main";
+        RavenPanelViewModel.Summed(noBreak).Summary.ShouldBe(noBreak, "with no clause to end at it is kept whole, not cut in a phrase");
     }
 
     [Fact]
