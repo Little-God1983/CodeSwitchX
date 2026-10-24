@@ -227,6 +227,8 @@ public sealed class ChatNewsTests : IDisposable
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "the tests pass. It asks to merge").ShouldBe("Chat W finished: the tests pass.");
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.NeedsYou, "Claude is waiting.\nPlease answer."), null).ShouldBe("Chat W needs you: Claude is waiting.");
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "v1.2 is out and 3.5x faster").ShouldBe("Chat W finished: v1.2 is out and 3.5x faster.");
+        // Review round 3 of #303: "e.g." ends no sentence for the voice, so none here either.
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it prefers e.g. the cached build").ShouldBe("Chat W finished: it prefers e.g. the cached build.");
         // Review round 2 of #303: the voice ends a sentence after a closing quote or bracket too.
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it says \"Done.\" and stops").ShouldBe("Chat W finished: it says \"Done.\"");
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it asks (why not?) and waits").ShouldBe("Chat W finished: it asks (why not?)");

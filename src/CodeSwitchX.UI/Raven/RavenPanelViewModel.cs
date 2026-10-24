@@ -2765,7 +2765,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     /// <param name="kind">What it is for, as the teller is told: "Catch-up", "News of the chats".</param>
     /// <returns>Whether any of it was said, and the lines and warnings told one by one; with <c>Whole</c> unless it was stopped.</returns>
-    private async Task<(bool Said, bool Whole, HashSet<ChatNewsLine> Lines, HashSet<RavenLogEntry> Warnings)> TellLinesAsync(string kind,
+    private async Task<(bool Said, bool Whole, bool Asked, HashSet<ChatNewsLine> Lines, HashSet<RavenLogEntry> Warnings)> TellLinesAsync(string kind,
         IReadOnlyList<ChatNewsLine> lines, IReadOnlyList<RavenLogEntry> warnings, ReplyVoice.SpokenReply spoken, CancellationToken floor,
         RavenChat chat)
     {
@@ -2812,6 +2812,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         var stopped = false;
+        var asked = false;
         try
         {
             SayReady(all: _teller is null || summed.Count == 0);
@@ -2838,6 +2839,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     }
                 }
 
+                asked = true;
                 await foreach (var e in _teller!.AskAsync(SummaryPrompt(kind, summed), floor))
                 {
                     switch (e)
@@ -2897,7 +2899,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 reply.Text = reply.Text.TrimEnd() + " (interrupted)";
             }
 
-            return (reply is not null, false, [.. told.Take(next)], []);
+            return (reply is not null, false, asked, [.. told.Take(next)], []);
         }
 
         SayReady(all: true);
@@ -2911,7 +2913,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Say($"And {total - each} more.");
         }
 
-        return (reply is not null, true, [.. told], [.. toldWarnings]);
+        return (reply is not null, true, asked, [.. told], [.. toldWarnings]);
     }
 
     /// <summary>
@@ -3765,11 +3767,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             spoken = _newsReply = _voice.Begin(heard => _logger.LogInformation(
                 "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
-            asked = _teller is not null;
             asking = _time.GetUtcNow();
             // Spoken, the selected chat's news is the announcement: other chats' news is only marked.
             var chat = CurrentChat;
-            var (said, whole, toldLines, _) = await TellLinesAsync("News of the chats", own, [], spoken, floor, chat);
+            var (said, whole, used, toldLines, _) = await TellLinesAsync("News of the chats", own, [], spoken, floor, chat);
+            asked = used; // only a chat with last words to sum up asks the teller (#303)
             if (said && whole && appended.TryGetValue(chat, out var told))
             {
                 // Collapsed, the card of the chat talked to is told: once heard to its end its fresh lines no longer count,
@@ -3891,26 +3893,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     internal static string FirstSentence(string? text)
     {
-        var line = TextCut.OneLine(text);
-        for (var i = 0; i < line.Length - 1; i++)
-        {
-            if (line[i] is '.' or '!' or '?')
-            {
-                // As the voice cuts it: after closing quotes or brackets too ("it says "Done." and stops").
-                var end = i + 1;
-                while (end < line.Length && line[end] is '"' or '\'' or ')' or ']' or '’' or '”')
-                {
-                    end++;
-                }
-
-                if (end < line.Length && line[end] == ' ')
-                {
-                    return line[..end];
-                }
-            }
-        }
-
-        return line;
+        // Cut as the voice cuts it: after a closing quote too, never at "e.g." (#303).
+        var chunker = new SentenceChunker();
+        return chunker.Add(TextCut.OneLine(text) + " ").Concat(chunker.Flush()).FirstOrDefault()?.Trim() ?? "";
     }
 
     /// <summary>
@@ -5018,7 +5003,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
             var (lines, warnings) = CatchUpItems(covered);
-            var (said, whole, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
+            var (said, whole, _, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
             if (said && whole)
             {
                 // Collapsed, the catch-up is how the user learns what came (#173): heard to its end, what it told no longer
