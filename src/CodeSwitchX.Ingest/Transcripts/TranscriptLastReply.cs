@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CodeSwitchX.Core;
 
 namespace CodeSwitchX.Ingest.Transcripts;
@@ -8,7 +9,7 @@ namespace CodeSwitchX.Ingest.Transcripts;
 /// What a chat last said: the text of the last assistant message of the main chat (no subagent's) in its transcript,
 /// read from the end of the file, so a long transcript costs no more than a short one.
 /// </summary>
-public static class TranscriptLastReply
+public static partial class TranscriptLastReply
 {
     /// <summary>How much of the file's end is read: the last reply and the tool calls after it fit easily.</summary>
     public const int TailBytes = 256 * 1024;
@@ -83,7 +84,8 @@ public static class TranscriptLastReply
                 }
             }
 
-            return string.IsNullOrWhiteSpace(text.ToString()) ? null : text.ToString();
+            var said = text.ToString();
+            return string.IsNullOrWhiteSpace(said) ? null : said;
         }
         catch (JsonException)
         {
@@ -92,38 +94,79 @@ public static class TranscriptLastReply
     }
 
     /// <summary>
-    /// A reply's sentences on one line (#301): its table rows and code blocks left out, and the marks of headings, list items,
-    /// quotes, bold and code taken off. A reply ending in a table gave its last cells ("| Skipped | 580 rows |") to be told.
+    /// A reply's sentences on one line (#301): its table rows, rules and code blocks left out, a link's target too, and the marks
+    /// of headings, list items, quotes, bold and code taken off; a heading or list item ends as a sentence. A reply ending in a
+    /// table gave its last cells ("| Skipped | 580 rows |") to be told.
     /// </summary>
     internal static string Prose(string text)
     {
         var prose = new StringBuilder();
-        var inCode = false;
+        string? fence = null; // the open code block's fence ("```", "````", "~~~"): only a run as long, alone, closes it
         foreach (var raw in text.Split('\n'))
         {
             var line = raw.Trim();
-            if (line.StartsWith("```", StringComparison.Ordinal) || line.StartsWith("~~~", StringComparison.Ordinal))
+            if (fence is not null)
             {
-                inCode = !inCode;
+                if (line.Length >= fence.Length && line.All(c => c == fence[0]))
+                {
+                    fence = null;
+                }
+
                 continue;
             }
 
-            if (inCode || line.StartsWith('|'))
+            if (Fence().Match(line) is { Success: true } open)
+            {
+                fence = open.Groups[1].Value;
+                continue;
+            }
+
+            if (line.StartsWith('|') || Rule().IsMatch(line))
             {
                 continue;
             }
 
-            line = line.TrimStart('#', '>').TrimStart();
-            if (line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal) || line.StartsWith("+ ", StringComparison.Ordinal))
+            line = Quote().Replace(line, "");
+            var item = Heading().Match(line) is { Success: true } heading ? heading : Bullet().Match(line);
+            line = Link().Replace(line[item.Length..], "$1").Replace("**", "").Replace("`", "").Trim();
+            if (line.Length == 0)
             {
-                line = line[2..];
+                continue;
             }
 
-            prose.Append(line.Replace("**", "").Replace("`", "")).Append(' ');
+            prose.Append(line);
+            if (item.Success && !".!?:;…".Contains(line[^1]))
+            {
+                prose.Append('.'); // "## Done" and "- Fixed login" are told as sentences, not "Done Fixed login"
+            }
+
+            prose.Append(' ');
         }
 
         return TextCut.OneLine(prose.ToString());
     }
+
+    /// <summary>A code fence opening: three or more backticks or tildes, then an info string with no backtick ("```npm test``` passes" is prose).</summary>
+    [GeneratedRegex(@"^(`{3,}|~{3,})[^`]*$")]
+    private static partial Regex Fence();
+
+    /// <summary>A rule or setext underline: "---", "***", "___", "===".</summary>
+    [GeneratedRegex(@"^([-*_=])(\s*\1){2,}$")]
+    private static partial Regex Rule();
+
+    /// <summary>A heading's marks: one to six '#' and a space, so "#301 is merged" keeps its number.</summary>
+    [GeneratedRegex(@"^#{1,6}\s+")]
+    private static partial Regex Heading();
+
+    [GeneratedRegex(@"^[-*+]\s+")]
+    private static partial Regex Bullet();
+
+    [GeneratedRegex(@"^(>\s?)+")]
+    private static partial Regex Quote();
+
+    /// <summary>A markdown link: its words are told, not its target.</summary>
+    [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)")]
+    private static partial Regex Link();
 
     private static string Shorten(string text, int maxChars)
     {

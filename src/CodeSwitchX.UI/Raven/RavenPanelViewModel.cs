@@ -4808,7 +4808,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Worded now, once what was heard before (a digest, a catch-up hushed at its last sentence) is noted: none of it
             // is told again.
             await _pendingReads.Done;
-            if (stop.IsCancellationRequested || CatchUpLeft(away, chat.WorkspaceId is not null) is not var (lines, covered))
+            var inWindow = chat.WorkspaceId is not null; // the Yard's news is of several windows: they are named (#301)
+            if (stop.IsCancellationRequested || CatchUpLeft(away, inWindow) is not var (lines, covered))
             {
                 return;
             }
@@ -4816,7 +4817,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
             var whole = new StrongBox<bool>();
-            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines, chat.WorkspaceId is not null), spoken, stop, chat, quiet: true, whole: whole);
+            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines, inWindow), spoken, stop, chat, quiet: true, whole: whole);
             if (said && whole.Value)
             {
                 // Collapsed, the catch-up is how the user learns what came (#173): heard to its end, what it said no longer

@@ -42,7 +42,35 @@ public sealed class TranscriptLastReplyTests : IDisposable
             "## Review\\n\\n| # | Finding | Verdict |\\n|---|---|---|\\n| 1 | Capped list | Skipped |\\n\\n```powershell\\n.\\\\build.ps1\\n```\\n\\n"
             + "- All tests pass.\\n\\nTell me **which** to fix in `TileView.cs`, or say merge.")]);
 
-        TranscriptLastReply.Read(_path).ShouldBe("Review All tests pass. Tell me which to fix in TileView.cs, or say merge.");
+        TranscriptLastReply.Read(_path).ShouldBe("Review. All tests pass. Tell me which to fix in TileView.cs, or say merge.");
+    }
+
+    // Review round 1 of #301: a line starting with an issue number lost its '#', rules and link targets were told.
+    [Fact]
+    public void Issue_numbers_rules_and_link_targets_are_read_as_prose_would_say_them()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "#301 is fixed.\\n\\n---\\n\\n***\\n\\nOpened [PR #302](https://github.com/Little-God1983/CodeSwitchX/pull/302).")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("#301 is fixed. Opened PR #302.");
+    }
+
+    [Fact]
+    public void A_heading_and_list_items_end_as_sentences()
+    {
+        File.WriteAllLines(_path, [Assistant("## Done\\n- Fixed login\\n- Fixed logout\\n\\nAll green.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Done. Fixed login. Fixed logout. All green.");
+    }
+
+    // Review round 1 of #301: inline triple backticks or a longer fence flipped the code flag, and the closing words were lost.
+    [Fact]
+    public void Inline_triple_backticks_and_longer_fences_leave_the_closing_words()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "```npm test``` passes now.\\n\\n````md\\n```cs\\nx();\\n```\\n````\\n\\nShould I merge?")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("npm test passes now. Should I merge?");
     }
 
     [Fact]
