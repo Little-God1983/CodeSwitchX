@@ -751,7 +751,7 @@ public sealed partial class RavenPanelViewModelTests
         await WithinAsync(_voice.WhenQuietAsync());
         await WithinAsync(vm.PendingHeardCheck);
 
-        vm.Log.ShouldContain(e => e.Text == "While you were away, 2 things came in here.");
+        vm.Log.ShouldContain(e => e.Text == "2 things came in here.");
         two.Unread.ShouldBe(2);
     }
 

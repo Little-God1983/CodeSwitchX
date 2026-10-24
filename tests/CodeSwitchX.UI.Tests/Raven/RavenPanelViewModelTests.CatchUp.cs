@@ -47,6 +47,7 @@ public sealed partial class RavenPanelViewModelTests
         asked.ShouldStartWith("Catch-up:");
         asked.ShouldContain("Task a\"");
         asked.ShouldContain("Task a2");
+        asked.ShouldContain("\n- chat \"Task a\"", customMessage: "the user is in the window: its name is not told (#301)");
         _speech.Spoken.ShouldNotBeEmpty();
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(2);
     }
@@ -355,7 +356,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var said = vm.Log.Single(e => e.Kind == RavenLogKind.Raven);
         said.Chat.Number.ShouldBe(2);
-        said.Text.ShouldStartWith("While you were away");
+        said.Text.ShouldBe("2 things came in here.");
         _speech.Spoken.ShouldNotBeEmpty();
     }
 
@@ -388,7 +389,7 @@ public sealed partial class RavenPanelViewModelTests
 
         var lines = RavenPanelViewModel.CatchUpLines([news, warning]);
 
-        lines.ShouldBe(["- CodeSwitchX, chat \"Release notes\": failed"]);
+        lines.ShouldBe(["- chat \"Release notes\": failed"]);
     }
 
     /// <summary>Two chats of one title in two news cards are told apart, as in one card.</summary>
@@ -404,7 +405,43 @@ public sealed partial class RavenPanelViewModelTests
 
         var lines = RavenPanelViewModel.CatchUpLines([News("s1"), News("s2")]);
 
-        lines.ShouldBe(["- CodeSwitchX, chat \"Weather discussion\" (1 of 2): finished", "- CodeSwitchX, chat \"Weather discussion\" (2 of 2): finished"]);
+        lines.ShouldBe(["- chat \"Weather discussion\" (1 of 2): finished", "- chat \"Weather discussion\" (2 of 2): finished"]);
+    }
+
+    // Review round 2 of #301: only the helpers were tried with the Yard; switching to it is what picks them.
+    [Fact]
+    public async Task Switching_to_the_yard_names_the_window_its_news_came_from()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("z", "LooseWindow", "Task z"); // a window with no chat of its own: its news is the Yard's
+        Changes("z", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.YardChat.Unread == 1);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+
+        vm.SelectedChat = vm.YardChat;
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        var asked = _teller.Asked.ShouldHaveSingleItem();
+        asked.ShouldContain("\n- LooseWindow, chat \"Task z\"");
+        asked.ShouldNotContain("no window name");
+    }
+
+    /// <summary>#301: the Yard holds the news of windows with no chat of their own, so its catch-up still names them.</summary>
+    [Fact]
+    public void The_yards_catch_up_names_the_window_a_windows_chat_does_not()
+    {
+        var news = new RavenLogEntry(RavenLogKind.News, "Chat news", DateTimeOffset.UnixEpoch)
+        {
+            Lines = [new ChatNewsLine("s1", Guid.NewGuid(), "CodeSwitchX", "Release notes", ChatNewsKind.Finished, null, null, false)],
+        };
+
+        RavenPanelViewModel.CatchUpLines([news], inWindow: false).ShouldBe(["- CodeSwitchX, chat \"Release notes\": finished"]);
+        RavenPanelViewModel.CatchUpLines([news]).ShouldBe(["- chat \"Release notes\": finished"]);
+        RavenPanelViewModel.CatchUpPrompt(["- x"], inWindow: false).ShouldNotContain("no window name");
+        RavenPanelViewModel.CatchUpPrompt(["- x"]).ShouldContain("no window name");
     }
 
     [Fact]

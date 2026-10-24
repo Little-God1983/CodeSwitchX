@@ -34,6 +34,72 @@ public sealed class TranscriptLastReplyTests : IDisposable
         TranscriptLastReply.Read(_path, maxChars: 15).ShouldBe("…delta epsilon");
     }
 
+    // #301: a reply that ended in a table gave the teller "| Skipped | 580 rows, no measurable cost. |" to word.
+    [Fact]
+    public void A_reply_is_read_as_prose_without_its_tables_code_and_markdown()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "## Review\\n\\n| # | Finding | Verdict |\\n|---|---|---|\\n| 1 | Capped list | Skipped |\\n\\n```powershell\\n.\\\\build.ps1\\n```\\n\\n"
+            + "- All tests pass.\\n\\nTell me **which** to fix in `TileView.cs`, or say merge.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Review. All tests pass. Tell me which to fix in TileView.cs, or say merge.");
+    }
+
+    // Review round 1 of #301: a line starting with an issue number lost its '#', rules and link targets were told.
+    [Fact]
+    public void Issue_numbers_rules_and_link_targets_are_read_as_prose_would_say_them()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "#301 is fixed.\\n\\n---\\n\\n***\\n\\nOpened [PR #302](https://github.com/Little-God1983/CodeSwitchX/pull/302).")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("#301 is fixed. Opened PR #302.");
+    }
+
+    [Fact]
+    public void A_heading_and_list_items_end_as_sentences()
+    {
+        File.WriteAllLines(_path, [Assistant("## Done\\n- Fixed login\\n- Fixed logout\\n\\nAll green.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Done. Fixed login. Fixed logout. All green.");
+    }
+
+    // Review round 1 of #301: inline triple backticks or a longer fence flipped the code flag, and the closing words were lost.
+    [Fact]
+    public void Inline_triple_backticks_and_longer_fences_leave_the_closing_words()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "```npm test``` passes now.\\n\\n````md\\n```cs\\nx();\\n```\\n````\\n\\nShould I merge?")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("npm test passes now. Should I merge?");
+    }
+
+    // Review round 2 of #301: numbered items and a bold line as heading ran into the next sentence; quoted code was told.
+    [Fact]
+    public void Numbered_items_and_a_bold_heading_end_as_sentences_and_quoted_code_is_left_out()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "**Summary**\\n\\n1. Fixed login\\n2) Fixed logout\\n\\n> ```cs\\n> x();\\n> ```\\n> | a | b |\\n\\nAll green")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Summary. Fixed login. Fixed logout. All green");
+    }
+
+    // Review round 3 of #301: a quote indented past one space kept it, and its fence and bullet went unseen.
+    [Fact]
+    public void An_indented_quote_is_read_as_a_quote()
+    {
+        File.WriteAllLines(_path, [Assistant(">  ```cs\\n>  x();\\n>  ```\\n>   - Fixed login\\n\\nAll green.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Fixed login. All green.");
+    }
+
+    [Fact]
+    public void A_reply_that_is_only_a_table_says_nothing_rather_than_an_earlier_reply()
+    {
+        File.WriteAllLines(_path, [Assistant("Now the tests."), ToolUse, ToolResult, Assistant("| a | b |\\n|---|---|\\n| 1 | 2 |")]);
+
+        TranscriptLastReply.Read(_path).ShouldBeNull();
+    }
+
     [Fact]
     public void No_file_and_no_reply_are_null()
     {
