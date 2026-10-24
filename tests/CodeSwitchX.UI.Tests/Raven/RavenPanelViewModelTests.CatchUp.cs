@@ -394,6 +394,35 @@ public sealed partial class RavenPanelViewModelTests
             "Chat ContentAutomatorX failed: the build broke. Chat ContentAutomatorX finished: the tests pass.");
     }
 
+    // Review round 2 of #303: a lead-in with no colon took the first chat's place, and its numbered line was dropped.
+    [Fact]
+    public async Task A_lead_in_sentence_is_no_chats_summary_once_the_lines_are_numbered()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("Sure, here are the summaries.\n1. the build broke\n2. the tests pass\nLet me know if you need more.")];
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe(
+            "Chat ContentAutomatorX failed: the build broke. Chat ContentAutomatorX finished: the tests pass.");
+    }
+
+    [Fact]
+    public async Task Lines_with_no_numbers_still_go_to_the_chats_in_order()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("the build broke\nthe tests pass")];
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe(
+            "Chat ContentAutomatorX failed: the build broke. Chat ContentAutomatorX finished: the tests pass.");
+    }
+
     // Review round 1 of #303: a chat in two news cards was told twice.
     [Fact]
     public async Task A_chat_that_finished_twice_while_away_is_told_once()

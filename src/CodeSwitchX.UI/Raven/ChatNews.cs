@@ -18,7 +18,7 @@ public enum ChatNewsKind
 public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Workspace, string Title, ChatNewsKind Kind, string? Detail,
     string? LastSaid, bool Stale)
 {
-    /// <summary>What happened, as the card and the fallback sentence say it ("finished", "needs you").</summary>
+    /// <summary>What happened, as the card and Raven say it ("finished", "needs you").</summary>
     public string What => Kind switch
     {
         ChatNewsKind.Finished => "finished",

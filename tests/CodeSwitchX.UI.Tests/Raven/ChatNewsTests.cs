@@ -213,9 +213,9 @@ public sealed class ChatNewsTests : IDisposable
         prompt.ShouldContain("exactly 2 lines");
         prompt.ShouldEndWith("\n1. finished: \"All green.\"\n2. failed: \"Boom.\"");
         prompt.ShouldNotContain("Secret title");
-        RavenPanelViewModel.SummaryOf(" 2. \"the tests pass\" ").ShouldBe("the tests pass");
-        RavenPanelViewModel.SummaryOf("- it asks to merge").ShouldBe("it asks to merge");
-        RavenPanelViewModel.SummaryOf("v1.2 is out").ShouldBe("v1.2 is out");
+        RavenPanelViewModel.Summed(" 2. \"the tests pass\" ").Summary.ShouldBe("the tests pass");
+        RavenPanelViewModel.Summed("- it asks to merge").Summary.ShouldBe("it asks to merge");
+        RavenPanelViewModel.Summed("v1.2 is out").Summary.ShouldBe("v1.2 is out");
     }
 
     // Review round 1 of #303: a line of two sentences took two of the three a reply speaks, and later chats went unheard.
@@ -227,28 +227,31 @@ public sealed class ChatNewsTests : IDisposable
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "the tests pass. It asks to merge").ShouldBe("Chat W finished: the tests pass.");
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.NeedsYou, "Claude is waiting.\nPlease answer."), null).ShouldBe("Chat W needs you: Claude is waiting.");
         RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "v1.2 is out and 3.5x faster").ShouldBe("Chat W finished: v1.2 is out and 3.5x faster.");
+        // Review round 2 of #303: the voice ends a sentence after a closing quote or bracket too.
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it says \"Done.\" and stops").ShouldBe("Chat W finished: it says \"Done.\"");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "it asks (why not?) and waits").ShouldBe("Chat W finished: it asks (why not?)");
     }
 
     // Review round 1 of #303: a version at the start lost its "0.", and an echoed "finished:" was said twice.
     [Fact]
     public void Only_a_list_number_and_an_echoed_status_are_taken_off_a_summary()
     {
-        RavenPanelViewModel.SummaryOf("0.1.0.24 is published").ShouldBe("0.1.0.24 is published");
-        RavenPanelViewModel.SummaryOf("10:30 build passed").ShouldBe("10:30 build passed");
-        RavenPanelViewModel.SummaryOf("1. finished: the tests pass").ShouldBe("the tests pass");
-        RavenPanelViewModel.SummaryOf("Failed: the build broke").ShouldBe("the build broke");
+        RavenPanelViewModel.Summed("0.1.0.24 is published").Summary.ShouldBe("0.1.0.24 is published");
+        RavenPanelViewModel.Summed("10:30 build passed").Summary.ShouldBe("10:30 build passed");
+        RavenPanelViewModel.Summed("1. finished: the tests pass").Summary.ShouldBe("the tests pass");
+        RavenPanelViewModel.Summed("Failed: the build broke").Summary.ShouldBe("the build broke");
     }
 
     // #301: Haiku keeps to "at most ten words" for several chats, not always for one: a long summary keeps its first clauses.
     [Fact]
     public void A_summary_past_sixteen_words_keeps_the_clauses_that_fit()
     {
-        RavenPanelViewModel.SummaryOf("the 3 HotkeyServiceTests fail the same way on main, probably because the running stable build holds the hotkeys, "
-            + "and the migration keeps 482 of 580 chats' last use").ShouldBe("the 3 HotkeyServiceTests fail the same way on main");
-        RavenPanelViewModel.SummaryOf("the ingest, conductor and ui tests pass, but three hotkey tests are blocked, and it waits for your call on skipped findings")
-            .ShouldBe("the ingest, conductor and ui tests pass, but three hotkey tests are blocked");
+        RavenPanelViewModel.Summed("the 3 HotkeyServiceTests fail the same way on main, probably because the running stable build holds the hotkeys, "
+            + "and the migration keeps 482 of 580 chats' last use").Summary.ShouldBe("the 3 HotkeyServiceTests fail the same way on main");
+        RavenPanelViewModel.Summed("the ingest, conductor and ui tests pass, but three hotkey tests are blocked, and it waits for your call on skipped findings")
+            .Summary.ShouldBe("the ingest, conductor and ui tests pass, but three hotkey tests are blocked");
         const string noBreak = "the stable build script wants your go-ahead to publish 0.1.0.24 and push the version bump to main";
-        RavenPanelViewModel.SummaryOf(noBreak).ShouldBe(noBreak, "with no clause to end at it is kept whole, not cut in a phrase");
+        RavenPanelViewModel.Summed(noBreak).Summary.ShouldBe(noBreak, "with no clause to end at it is kept whole, not cut in a phrase");
     }
 
     [Fact]
