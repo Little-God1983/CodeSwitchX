@@ -379,6 +379,43 @@ public sealed partial class RavenPanelViewModelTests
         asked.ShouldNotContain("Task a", customMessage: "the title is not said, so the teller is not given it");
     }
 
+    // Review round 1 of #303: summaries went to chats by their place, so a line before them gave each chat another's.
+    [Fact]
+    public async Task The_tellers_lines_go_to_their_chats_by_number_past_a_lead_in()
+    {
+        var vm = await AwayFromChatTwoAsync();
+        _teller.Answer = _ => [new BrainText("Here are the summaries:\n2. the tests pass\n1. the build broke")];
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe(
+            "Chat ContentAutomatorX failed: the build broke. Chat ContentAutomatorX finished: the tests pass.");
+    }
+
+    // Review round 1 of #303: a chat in two news cards was told twice.
+    [Fact]
+    public async Task A_chat_that_finished_twice_while_away_is_told_once()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _teller.Answer = _ => [];
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        Changes("a", SessionState.Idle, SessionState.Working);
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.News) == 2);
+        _time.Advance(TrafficWatcher.DefaultCooldown);
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("Chat ContentAutomatorX finished.");
+    }
+
     [Fact]
     public async Task More_chats_than_a_reply_says_are_counted_and_stay_unread()
     {

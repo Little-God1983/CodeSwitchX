@@ -218,6 +218,27 @@ public sealed class ChatNewsTests : IDisposable
         RavenPanelViewModel.SummaryOf("v1.2 is out").ShouldBe("v1.2 is out");
     }
 
+    // Review round 1 of #303: a line of two sentences took two of the three a reply speaks, and later chats went unheard.
+    [Fact]
+    public void Each_line_is_one_sentence()
+    {
+        ChatNewsLine Line(ChatNewsKind kind, string? detail = null) => new("a", Guid.Empty, "W", "T", kind, detail, null, false);
+
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "the tests pass. It asks to merge").ShouldBe("Chat W finished: the tests pass.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.NeedsYou, "Claude is waiting.\nPlease answer."), null).ShouldBe("Chat W needs you: Claude is waiting.");
+        RavenPanelViewModel.NewsSentence(Line(ChatNewsKind.Finished), "v1.2 is out and 3.5x faster").ShouldBe("Chat W finished: v1.2 is out and 3.5x faster.");
+    }
+
+    // Review round 1 of #303: a version at the start lost its "0.", and an echoed "finished:" was said twice.
+    [Fact]
+    public void Only_a_list_number_and_an_echoed_status_are_taken_off_a_summary()
+    {
+        RavenPanelViewModel.SummaryOf("0.1.0.24 is published").ShouldBe("0.1.0.24 is published");
+        RavenPanelViewModel.SummaryOf("10:30 build passed").ShouldBe("10:30 build passed");
+        RavenPanelViewModel.SummaryOf("1. finished: the tests pass").ShouldBe("the tests pass");
+        RavenPanelViewModel.SummaryOf("Failed: the build broke").ShouldBe("the build broke");
+    }
+
     // #301: Haiku keeps to "at most ten words" for several chats, not always for one: a long summary keeps its first clauses.
     [Fact]
     public void A_summary_past_sixteen_words_keeps_the_clauses_that_fit()
