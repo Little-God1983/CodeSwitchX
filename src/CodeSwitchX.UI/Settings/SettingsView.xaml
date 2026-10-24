@@ -772,7 +772,7 @@
                 <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
                         Value="{Binding RavenSoundVolume}" AutomationProperties.Name="Sounds volume" Tag="{Binding PlaySoundLevelCommand}"
                         PreviewMouseLeftButtonDown="OnLevelPressed" PreviewKeyDown="OnLevelPressed"
-                        PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
+                        PreviewMouseLeftButtonUp="OnLevelLetGo" LostMouseCapture="OnLevelCaptureLost" KeyUp="OnLevelKeyUp" />
               </DockPanel>
               <DockPanel Margin="0,14,0,0">
                 <TextBlock DockPanel.Dock="Left" Text="Raven's voice" FontSize="14.5" FontWeight="SemiBold" Width="130" VerticalAlignment="Center" />
@@ -781,7 +781,7 @@
                 <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
                         Value="{Binding RavenVoiceVolume}" AutomationProperties.Name="Raven's voice volume" Tag="{Binding PlayVoiceLevelCommand}"
                         PreviewMouseLeftButtonDown="OnLevelPressed" PreviewKeyDown="OnLevelPressed"
-                        PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
+                        PreviewMouseLeftButtonUp="OnLevelLetGo" LostMouseCapture="OnLevelCaptureLost" KeyUp="OnLevelKeyUp" />
               </DockPanel>
             </StackPanel>
           </Border>

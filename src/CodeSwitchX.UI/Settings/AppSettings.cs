@@ -96,9 +96,8 @@ public sealed class AppSettings : IAppSettings
     internal static SettingsPage PageNamed(string said)
     {
         var words = PageWords(said);
-        // What was said is a setting's very name first, before a title's word: "voice volume" is on Sounds, not Voice, and
-        // "sound" is the Sounds page though Voice has "sound for other chats".
-        var found = SettingsPageItem.All.Where(p => p.Keywords.Any(k => Words(k).SequenceEqual(words))).ToList();
+        // A setting's name of two words or more first, before a title's word: "voice volume" is on Sounds, not Voice.
+        List<SettingsPageItem> found = words.Count > 1 ? [.. SettingsPageItem.All.Where(p => p.Keywords.Any(k => Words(k).SequenceEqual(words)))] : [];
         if (found.Count == 0)
         {
             found = [.. SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains))];
@@ -107,6 +106,12 @@ public sealed class AppSettings : IAppSettings
         if (found.Count == 0)
         {
             found = [.. SettingsPageItem.All.Where(p => words.Any(w => w.Length > 2 && p.Keywords.Any(k => Words(k).Contains(w))))];
+            // Of the pages holding the word, the one with a setting named just that: "sound" is the Sounds page, though Voice
+            // has "sound for other chats".
+            if (found.Count > 1 && found.Where(p => words.Any(w => p.Keywords.Any(k => Normal(k) == w))).ToList() is [var named])
+            {
+                found = [named];
+            }
         }
 
         return found switch
@@ -123,27 +128,29 @@ public sealed class AppSettings : IAppSettings
     internal static int PercentOf(string name, string said)
     {
         var words = Words(said);
-        var hasNumber = said.Any(char.IsAsciiDigit);
-        // "up to 80" names the level; "up by 10", "20 % louder" or "+10" only a change of it.
-        var toLevel = Array.IndexOf(words, "to") is >= 0 and var to && to + 1 < words.Length && words[to + 1].Any(char.IsAsciiDigit);
-        if (!toLevel && (said.TrimStart().StartsWith('+') || words.Any(w => w is "louder" or "quieter" or "softer" or "up" or "down" or "by"
-                or "more" or "less" or "raise" or "lower" or "increase" or "decrease")))
+        // "up to 80" or "from 60 to 40" names the level after "to"; "up by 10", "20 % louder", "+10" or "-10" only a change.
+        var to = Array.LastIndexOf(words, "to");
+        var level = to >= 0 && to + 1 < words.Length ? string.Join(' ', words[(to + 1)..]) : null;
+        if (level is null && (said.TrimStart() is ['+' or '-', ..] || words.Any(w => w is "louder" or "quieter" or "softer" or "up" or "down"
+                or "by" or "more" or "less" or "raise" or "lower" or "increase" or "decrease")))
         {
             throw new YardActionException($"{Capital(name)} takes a level, not a change: '{said.Trim()}'. Read it, work the new level out "
                 + "and set that. Nothing was changed.");
         }
 
-        if (!hasNumber && words.Any(w => w is "off" or "mute" or "muted" or "silent" or "none" or "zero"))
+        level ??= said;
+        var hasNumber = level.Any(char.IsAsciiDigit);
+        if (!hasNumber && Words(level).Any(w => w is "off" or "mute" or "muted" or "silent" or "none" or "zero"))
         {
             return 0;
         }
 
-        if (!hasNumber && words.Any(w => w is "full" or "max" or "maximum" or "loudest"))
+        if (!hasNumber && Words(level).Any(w => w is "full" or "max" or "maximum" or "loudest"))
         {
             return 100;
         }
 
-        return !System.Text.RegularExpressions.Regex.IsMatch(said, @"\d[.,]\d") && Number(said) is { } n and >= 0 and <= 100 ? (int)n
+        return !System.Text.RegularExpressions.Regex.IsMatch(said, @"\d[.,]\d") && Number(level) is { } n and >= 0 and <= 100 ? (int)n
             : throw new YardActionException($"{Capital(name)} is a whole number from 0 to 100 %, not '{said.Trim()}'. Nothing was changed.");
     }
 

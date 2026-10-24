@@ -27,6 +27,9 @@ public partial class SettingsView : UserControl
     /// <summary>A volume slider let go, its thumb or a click on its track (#305): it plays at the level just set.</summary>
     private void OnLevelLetGo(object sender, MouseButtonEventArgs e) => PlayLevel(sender);
 
+    /// <summary>A drag that lost the mouse before it was let go (Alt+Tab, a dialog): the level it got to plays all the same.</summary>
+    private void OnLevelCaptureLost(object sender, MouseEventArgs e) => PlayLevel(sender);
+
     /// <summary>The keys that move a slider play it too, once each.</summary>
     private void OnLevelKeyUp(object sender, KeyEventArgs e)
     {

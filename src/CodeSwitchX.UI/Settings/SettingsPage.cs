@@ -30,7 +30,7 @@ public sealed record SettingsPageItem(SettingsPage Page, string Group, string Ti
     public static IReadOnlyList<SettingsPageItem> All { get; } =
     [
         new(SettingsPage.Voice, "Raven", "Voice", "", "How Raven speaks. Pick an engine, hear its voices and install it right here, and the speaker it talks on.",
-            ["engine", "Kokoro", "Qwen3-TTS", "voice", "install", "sample", "speaker", "speakers", "headphones", "audio output", "output", "speak chat news", "text only", "sound for other chats",
+            ["engine", "Kokoro", "Qwen3-TTS", "voice", "install", "sample", "speaker", "speakers", "headphones", "audio output", "output", "speak chat news", "text only", "sound for other chats", "chime",
                 "pause between messages", "gap", "cooldown", "the chat I'm in also waits", "catch-up", "catch up", "switch chats"]),
         new(SettingsPage.Sounds, "Raven", "Sounds", "\uE8D6", "The short sounds chats make, and how loud they and Raven's voice are.",
             ["sound", "sounds", "chime", "volume", "loud", "how loud", "louder", "quiet", "quieter", "softer", "beep", "sound volume", "voice volume"]),
