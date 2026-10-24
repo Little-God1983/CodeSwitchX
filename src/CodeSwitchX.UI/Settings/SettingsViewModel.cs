@@ -31,6 +31,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ChatSettings _chats;
     private readonly IUiDispatcher _ui;
     private readonly ILogger<SettingsViewModel> _logger;
+    private readonly IChatChime? _chime;
+    private readonly AudioLevels _levels;
     private bool _loading;
     private readonly Lock _saveGate = new();
     private readonly Dictionary<string, Func<CancellationToken, Task>> _pendingSaves = [];
@@ -114,6 +116,14 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>Whether Raven says what came in a chat while the user was away when they switch to it (#127). On by default (#143).</summary>
     [ObservableProperty] private bool _ravenCatchUp = true;
+
+    /// <summary>How loud the chats' sounds play, 0..100 % (#305); the Sounds page's slider.</summary>
+    [ObservableProperty] private int _ravenSoundVolume = DefaultSoundVolume;
+
+    /// <summary>How loud Raven's voice plays, 0..100 % (#305): answers, news, the samples. Full is as before there was a slider.</summary>
+    [ObservableProperty] private int _ravenVoiceVolume = DefaultVoiceVolume;
+
+    public const int DefaultSoundVolume = 60, DefaultVoiceVolume = 100;
 
     /// <summary>How long, in minutes, a chat stays on its tile after its tab was closed (#164): one of <see cref="KeepClosedChoices"/>, 0 for not at all.</summary>
     [ObservableProperty] private int _yardKeepClosedMinutes;
@@ -218,8 +228,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
-        ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null)
+        ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null,
+        IChatChime? chime = null, AudioLevels? levels = null)
     {
+        _chime = chime;
+        _levels = levels ?? new AudioLevels();
+        ShowLevels();
         Shortcuts = shortcuts ?? new ChatHotkeys(settings);
         _installer = installer;
         _settings = settings;
@@ -466,6 +480,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
             RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? true;
+            RavenSoundVolume = await LoadOrDefaultAsync<int?>(SettingKeys.RavenSoundVolume, "the sounds' volume", ct) is { } sounds and >= 0 and <= 100
+                ? sounds : DefaultSoundVolume;
+            RavenVoiceVolume = await LoadOrDefaultAsync<int?>(SettingKeys.RavenVoiceVolume, "the voice's volume", ct) is { } voiceVolume and >= 0 and <= 100
+                ? voiceVolume : DefaultVoiceVolume;
             _speech.QwenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultQwenVoice;
             RavenQwenVoice = _speech.QwenVoice; // the setter keeps a known voice, or the default
             _speech.KokoroVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenKokoroVoice, "Raven's Kokoro voice", ct) ?? SpeechSettings.DefaultKokoroVoice;
@@ -616,6 +634,33 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
 
     partial void OnRavenPauseSecondsChanged(int value) => Persist(SettingKeys.RavenPauseSeconds, value);
+
+    partial void OnRavenSoundVolumeChanged(int value)
+    {
+        ShowLevels();
+        Persist(SettingKeys.RavenSoundVolume, value);
+    }
+
+    partial void OnRavenVoiceVolumeChanged(int value)
+    {
+        ShowLevels();
+        Persist(SettingKeys.RavenVoiceVolume, value);
+    }
+
+    /// <summary>The audio plays at the sliders' levels, from the first moment: what plays meanwhile is heard at once.</summary>
+    private void ShowLevels()
+    {
+        _levels.Sounds = AudioLevels.GainOf(RavenSoundVolume);
+        _levels.Voice = AudioLevels.GainOf(RavenVoiceVolume);
+    }
+
+    /// <summary>Letting go of the sounds' slider plays the chats' sound at the level just set.</summary>
+    [RelayCommand]
+    private void PlaySoundLevel() => _chime?.Play();
+
+    /// <summary>Letting go of the voice's slider has the voice picked say its sample at the level just set.</summary>
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private Task PlayVoiceLevelAsync() => VoicePage.PlayVoiceLevelAsync();
 
     partial void OnYardKeepClosedMinutesChanged(int value) => Persist(SettingKeys.YardKeepClosedMinutes, value);
 

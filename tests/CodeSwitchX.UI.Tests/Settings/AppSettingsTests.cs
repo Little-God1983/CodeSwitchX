@@ -44,6 +44,45 @@ public sealed class AppSettingsTests
         shown.ShouldBe(SettingsPageItem.All.Single(p => p.Page == page).Title);
     }
 
+    [Theory]
+    [InlineData("40")]
+    [InlineData("40 %")]
+    [InlineData("40%")]
+    [InlineData("40 percent")]
+    public async Task The_voice_volume_is_set_by_voice(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("voice volume", said, Ct);
+
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(40);
+        _h.Levels.Voice.ShouldBe(AudioLevels.GainOf(40));
+    }
+
+    [Fact]
+    public async Task The_sound_volume_is_read_and_set_by_voice()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.GetAsync("chime volume", Ct)).Value.ShouldBe("60 %");
+        await _settings.SetAsync("sound volume", "0", Ct);
+
+        _h.Shell.Settings.RavenSoundVolume.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("150")]
+    [InlineData("loud")]
+    public async Task A_volume_not_from_0_to_100_is_refused_and_nothing_changes(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
+
+        error.Message.ShouldContain("0 to 100");
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(100);
+    }
+
     [Fact]
     public async Task A_page_settings_does_not_have_is_refused_with_the_pages()
     {

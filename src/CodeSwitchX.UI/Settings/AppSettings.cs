@@ -247,6 +247,16 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
+        // A level the Sounds page offers on a slider (#305): "40", "40 %", "40 percent".
+        Entry Percent(string name, string description, string[] aliases, Func<int> get, Action<int> set) =>
+            new(new(name, Title(SettingsPage.Sounds), description, [.. Enumerable.Range(0, 11).Select(i => $"{i * 10} %")]), SettingsPage.Sounds, aliases,
+                () => $"{get()} %", v =>
+                {
+                    set(Number(v) is { } n and >= 0 and <= 100 ? (int)n
+                        : throw new YardActionException($"{Capital(name)} is a whole number from 0 to 100 %, not '{v}'. Nothing was changed."));
+                    return null;
+                });
+
         // A time the Yard page offers in a box, worded as there, or none: "10", "10 minutes", "off", "0". Said with a
         // unit, it is that long: "1 hour" is no "1 minute", and 60 minutes are one hour.
         Entry Time(string name, string description, string[] aliases, Func<int, string> worded, int unitMinutes, IReadOnlyList<int> choices, Func<int> get,
@@ -336,6 +346,11 @@ public sealed class AppSettings : IAppSettings
                     + "last spoke or a chat made its sound; a chat's sound inside it is left out. Raven's answers to the user never wait.",
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
                 TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
+            Percent("sound volume", "How loud the chats' sounds play, from 0 to 100 %; CodeSwitchX's own, Windows' volume stays as it is.",
+                ["sounds volume", "volume of the sounds", "chime volume", "how loud the sounds are"], () => S.RavenSoundVolume, v => S.RavenSoundVolume = v),
+            Percent("voice volume", "How loud Raven's voice plays, from 0 to 100 %: answers, news and the samples; CodeSwitchX's own, Windows' volume "
+                + "stays as it is.", ["Raven's voice volume", "volume of the voice", "how loud Raven speaks", "speech volume"], () => S.RavenVoiceVolume,
+                v => S.RavenVoiceVolume = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown; the catch-up on switching is still said.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),

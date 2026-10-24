@@ -1,3 +1,4 @@
+using CodeSwitchX.UI.Tests.Raven;
 using System.Text.Json.Nodes;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
@@ -32,6 +33,8 @@ public class SettingsViewModelTests : IDisposable
     private readonly IWhisperModelStore _whisper = Substitute.For<IWhisperModelStore>();
     private readonly IDictationService _dictation = Substitute.For<IDictationService>();
     private readonly VoiceStatusViewModel _voice;
+    private readonly AudioLevels _levels = new();
+    private readonly FakeChime _chime = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -42,7 +45,8 @@ public class SettingsViewModelTests : IDisposable
         var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
-            _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance);
+            _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
+            chime: _chime, levels: _levels);
     }
 
     public void Dispose()
@@ -275,6 +279,61 @@ public class SettingsViewModelTests : IDisposable
         await FlushAsync();
 
         await _store.Received().SetAsync(SettingKeys.RavenPauseSeconds, 5, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>#305: the sounds play at 60 % and Raven's voice at full until changed, and the audio follows from the start.</summary>
+    [Fact]
+    public async Task Volumes_default_to_60_and_100_and_reach_the_audio_levels()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenSoundVolume, _vm.RavenVoiceVolume).ShouldBe((60, 100));
+        (_levels.Sounds, _levels.Voice).ShouldBe((AudioLevels.GainOf(60), 1f));
+    }
+
+    [Fact]
+    public async Task A_volume_set_is_stored_and_heard_at_once()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenVoiceVolume = 50;
+        _vm.RavenSoundVolume = 20;
+        await FlushAsync();
+
+        (_levels.Voice, _levels.Sounds).ShouldBe((0.25f, AudioLevels.GainOf(20)));
+        await _store.Received().SetAsync(SettingKeys.RavenVoiceVolume, 50, Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenSoundVolume, 20, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(250)]
+    [InlineData(-5)]
+    public async Task A_stored_volume_out_of_range_loads_as_the_default(int stored)
+    {
+        _store.GetAsync<int?>(SettingKeys.RavenSoundVolume, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(stored));
+        _store.GetAsync<int?>(SettingKeys.RavenVoiceVolume, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenSoundVolume, _vm.RavenVoiceVolume).ShouldBe((60, 100));
+    }
+
+    [Fact]
+    public async Task A_stored_volume_that_cannot_be_read_loads_as_the_default()
+    {
+        _store.GetAsync<int?>(SettingKeys.RavenVoiceVolume, Arg.Any<CancellationToken>()).Returns(Task.FromException<int?>(new FormatException("not a number")));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenVoiceVolume.ShouldBe(100);
+    }
+
+    [Fact]
+    public void Playing_the_sound_level_plays_the_chime_once()
+    {
+        _vm.PlaySoundLevelCommand.Execute(null);
+
+        _chime.Plays.ShouldBe(1);
     }
 
     /// <summary>#164: a closed chat is not kept and an idle one never hidden until the user says so; a stored time the page does not offer is neither.</summary>
