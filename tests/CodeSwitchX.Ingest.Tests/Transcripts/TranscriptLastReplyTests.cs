@@ -83,6 +83,15 @@ public sealed class TranscriptLastReplyTests : IDisposable
         TranscriptLastReply.Read(_path).ShouldBe("Summary. Fixed login. Fixed logout. All green");
     }
 
+    // Review round 3 of #301: a quote indented past one space kept it, and its fence and bullet went unseen.
+    [Fact]
+    public void An_indented_quote_is_read_as_a_quote()
+    {
+        File.WriteAllLines(_path, [Assistant(">  ```cs\\n>  x();\\n>  ```\\n>   - Fixed login\\n\\nAll green.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Fixed login. All green.");
+    }
+
     [Fact]
     public void A_reply_that_is_only_a_table_says_nothing_rather_than_an_earlier_reply()
     {

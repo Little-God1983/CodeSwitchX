@@ -104,7 +104,7 @@ public static partial class TranscriptLastReply
         string? fence = null; // the open code block's fence ("```", "````", "~~~"): only a run as long, alone, closes it
         foreach (var raw in text.Split('\n'))
         {
-            var line = Quote().Replace(raw.Trim(), ""); // quoted code or a quoted table is left out as well
+            var line = Quote().Replace(raw.Trim(), "").TrimStart(); // quoted code or a quoted table is left out as well
             if (fence is not null)
             {
                 if (line.Length >= fence.Length && line.All(c => c == fence[0]))
