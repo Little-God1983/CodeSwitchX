@@ -87,6 +87,19 @@ public sealed class AudioOutputTests
         ((double)peak).ShouldBe(made.Max(s => Math.Abs((int)s)) * 0.25, 1);
     }
 
+    /// <summary>At 0 % nothing is heard, so no device is opened for it: a sleeping headset is not woken by a silent chime.</summary>
+    [Fact]
+    public async Task The_chime_at_zero_opens_no_device()
+    {
+        var devices = new Devices();
+        var chime = new ChatChime(devices.Output, NullLogger<ChatChime>.Instance, new AudioLevels { Sounds = 0f });
+
+        chime.Play();
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        devices.Players.ShouldBeEmpty();
+    }
+
     [Fact]
     public void The_orb_s_level_comes_about_twenty_times_a_second_however_often_the_output_reads()
     {

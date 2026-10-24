@@ -18,8 +18,9 @@ public sealed class ChatChime : IChatChime
 {
     private const int SampleRate = 24000;
 
-    // Before Made: the tones are made with it.
-    private static readonly double Peak = 0.33 / AudioLevels.GainOf(AudioLevels.DefaultSoundsPercent);
+    // Made this loud, the sounds' default of 60 % (a gain of 0.36) plays the tones at a third of full loudness, as before
+    // there was a level; fixed, so a level never makes them louder than full scale.
+    private const double Peak = 0.92;
 
     private static readonly byte[] Made = Make();
 
@@ -37,7 +38,14 @@ public sealed class ChatChime : IChatChime
     /// <summary>The tones as made, before the sounds' level: the tests measure them.</summary>
     internal static ReadOnlyMemory<byte> Pcm => Made;
 
-    public void Play() => _ = Task.Run(PlayNow);
+    /// <summary>At 0 % nothing would be heard: no device is opened, so a sleeping headset is not woken for it.</summary>
+    public void Play()
+    {
+        if (_levels.Sounds > 0f)
+        {
+            _ = Task.Run(PlayNow);
+        }
+    }
 
     private void PlayNow()
     {

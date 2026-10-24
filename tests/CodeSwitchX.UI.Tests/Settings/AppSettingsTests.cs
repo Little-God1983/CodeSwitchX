@@ -76,6 +76,10 @@ public sealed class AppSettingsTests
     [InlineData("mute", 0)]
     [InlineData("full", 100)]
     [InlineData("max", 100)]
+    [InlineData("turn it off", 0)]
+    [InlineData("zero", 0)]
+    [InlineData("turn it up to 80", 80)]
+    [InlineData("down to 30 %", 30)]
     public async Task A_volume_said_in_words_is_set(string said, int volume)
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
@@ -564,6 +568,7 @@ public sealed class AppSettingsTests
     [InlineData("how loud", SettingsPage.Sounds)]
     [InlineData("the sound settings", SettingsPage.Sounds)]
     [InlineData("chime", SettingsPage.Sounds)]
+    [InlineData("the voice volume settings", SettingsPage.Sounds)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
     [Theory]

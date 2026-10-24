@@ -12,8 +12,11 @@ public sealed class AudioLevels
     /// <summary>The sounds' slider before it is moved: as loud as the chime was before there was a slider.</summary>
     public const int DefaultSoundsPercent = 60;
 
+    /// <summary>The voice's slider before it is moved: full, as loud as Raven spoke before there was a slider.</summary>
+    public const int DefaultVoicePercent = 100;
+
     private float _sounds = GainOf(DefaultSoundsPercent);
-    private float _voice = 1f;
+    private float _voice = GainOf(DefaultVoicePercent);
 
     /// <summary>The gain of the chats' sounds.</summary>
     public float Sounds
@@ -22,7 +25,7 @@ public sealed class AudioLevels
         set => Volatile.Write(ref _sounds, value);
     }
 
-    /// <summary>The gain of everything said in Raven's voice: answers, news, the samples. Full by default, as before.</summary>
+    /// <summary>The gain of everything said in Raven's voice: answers, news, the samples.</summary>
     public float Voice
     {
         get => Volatile.Read(ref _voice);

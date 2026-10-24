@@ -771,6 +771,7 @@
                            Width="48" TextAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
                 <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
                         Value="{Binding RavenSoundVolume}" AutomationProperties.Name="Sounds volume" Tag="{Binding PlaySoundLevelCommand}"
+                        PreviewMouseLeftButtonDown="OnLevelPressed" PreviewKeyDown="OnLevelPressed"
                         PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
               </DockPanel>
               <DockPanel Margin="0,14,0,0">
@@ -779,6 +780,7 @@
                            Width="48" TextAlignment="Right" VerticalAlignment="Center" Foreground="{StaticResource Muted}" />
                 <Slider Minimum="0" Maximum="100" TickFrequency="5" IsSnapToTickEnabled="True" SmallChange="5" LargeChange="10" VerticalAlignment="Center"
                         Value="{Binding RavenVoiceVolume}" AutomationProperties.Name="Raven's voice volume" Tag="{Binding PlayVoiceLevelCommand}"
+                        PreviewMouseLeftButtonDown="OnLevelPressed" PreviewKeyDown="OnLevelPressed"
                         PreviewMouseLeftButtonUp="OnLevelLetGo" KeyUp="OnLevelKeyUp" />
               </DockPanel>
             </StackPanel>

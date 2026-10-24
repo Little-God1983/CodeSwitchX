@@ -96,12 +96,12 @@ public sealed class AppSettings : IAppSettings
     internal static SettingsPage PageNamed(string said)
     {
         var words = PageWords(said);
-        var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains)).ToList();
+        // What was said is a setting's very name first, before a title's word: "voice volume" is on Sounds, not Voice, and
+        // "sound" is the Sounds page though Voice has "sound for other chats".
+        var found = SettingsPageItem.All.Where(p => p.Keywords.Any(k => Words(k).SequenceEqual(words))).ToList();
         if (found.Count == 0)
         {
-            // A setting named by the word itself before one that only holds it: "sound" is the Sounds page, though Voice
-            // has "sound for other chats".
-            found = [.. SettingsPageItem.All.Where(p => words.Any(w => p.Keywords.Any(k => Normal(k) == w)))];
+            found = [.. SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains))];
         }
 
         if (found.Count == 0)
@@ -123,19 +123,22 @@ public sealed class AppSettings : IAppSettings
     internal static int PercentOf(string name, string said)
     {
         var words = Words(said);
-        if (said.TrimStart().StartsWith('+') || words.Any(w => w is "louder" or "quieter" or "softer" or "up" or "down" or "by" or "more" or "less"
-                or "raise" or "lower" or "increase" or "decrease"))
+        var hasNumber = said.Any(char.IsAsciiDigit);
+        // "up to 80" names the level; "up by 10", "20 % louder" or "+10" only a change of it.
+        var toLevel = Array.IndexOf(words, "to") is >= 0 and var to && to + 1 < words.Length && words[to + 1].Any(char.IsAsciiDigit);
+        if (!toLevel && (said.TrimStart().StartsWith('+') || words.Any(w => w is "louder" or "quieter" or "softer" or "up" or "down" or "by"
+                or "more" or "less" or "raise" or "lower" or "increase" or "decrease")))
         {
             throw new YardActionException($"{Capital(name)} takes a level, not a change: '{said.Trim()}'. Read it, work the new level out "
                 + "and set that. Nothing was changed.");
         }
 
-        if (words is ["off" or "mute" or "muted" or "silent" or "none"])
+        if (!hasNumber && words.Any(w => w is "off" or "mute" or "muted" or "silent" or "none" or "zero"))
         {
             return 0;
         }
 
-        if (words is ["full" or "max" or "maximum" or "loudest"])
+        if (!hasNumber && words.Any(w => w is "full" or "max" or "maximum" or "loudest"))
         {
             return 100;
         }
