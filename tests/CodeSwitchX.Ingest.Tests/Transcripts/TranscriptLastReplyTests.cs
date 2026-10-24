@@ -34,6 +34,25 @@ public sealed class TranscriptLastReplyTests : IDisposable
         TranscriptLastReply.Read(_path, maxChars: 15).ShouldBe("…delta epsilon");
     }
 
+    // #301: a reply that ended in a table gave the teller "| Skipped | 580 rows, no measurable cost. |" to word.
+    [Fact]
+    public void A_reply_is_read_as_prose_without_its_tables_code_and_markdown()
+    {
+        File.WriteAllLines(_path, [Assistant(
+            "## Review\\n\\n| # | Finding | Verdict |\\n|---|---|---|\\n| 1 | Capped list | Skipped |\\n\\n```powershell\\n.\\\\build.ps1\\n```\\n\\n"
+            + "- All tests pass.\\n\\nTell me **which** to fix in `TileView.cs`, or say merge.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("Review All tests pass. Tell me which to fix in TileView.cs, or say merge.");
+    }
+
+    [Fact]
+    public void A_reply_that_is_only_a_table_says_nothing_rather_than_an_earlier_reply()
+    {
+        File.WriteAllLines(_path, [Assistant("Now the tests."), ToolUse, ToolResult, Assistant("| a | b |\\n|---|---|\\n| 1 | 2 |")]);
+
+        TranscriptLastReply.Read(_path).ShouldBeNull();
+    }
+
     [Fact]
     public void No_file_and_no_reply_are_null()
     {

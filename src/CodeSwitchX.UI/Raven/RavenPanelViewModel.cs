@@ -3731,8 +3731,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return "News of the chats:\n" + string.Join("\n", DigestLines(lines));
     }
 
-    /// <summary>One line a chat: "- Workspace, chat "Title": finished. It last said: "…"".</summary>
-    internal static IEnumerable<string> DigestLines(IReadOnlyList<ChatNewsLine> lines)
+    /// <summary>
+    /// One line a chat: "- Workspace, chat "Title": finished. It last said: "…"". Without <paramref name="workspace"/>, for a
+    /// catch-up in the window's own chat, "- chat "Title": …" (#301): named, the teller said the window the user is in.
+    /// </summary>
+    internal static IEnumerable<string> DigestLines(IReadOnlyList<ChatNewsLine> lines, bool workspace = true)
     {
         // Chats that share a workspace and title are numbered, or the teller takes them for one ("Weather discussion" twice).
         var same = lines.GroupBy(l => (l.Workspace, l.Title)).Where(g => g.Count() > 1).ToDictionary(g => g.Key, g => g.ToList());
@@ -3741,7 +3744,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var title = same.TryGetValue((line.Workspace, line.Title), out var twins)
                 ? $"\"{line.Title}\" ({twins.IndexOf(line) + 1} of {twins.Count})"
                 : $"\"{line.Title}\"";
-            var text = new System.Text.StringBuilder($"- {line.Workspace}, chat {title}: {line.What}");
+            var text = new System.Text.StringBuilder(workspace ? $"- {line.Workspace}, chat {title}: {line.What}" : $"- chat {title}: {line.What}");
             if (line.Detail is { Length: > 0 } detail)
             {
                 text.Append($": \"{detail}\"");
@@ -4645,8 +4648,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Speaks a short catch-up on switching to a chat (#127): what came there while the user was away, in one or two
-    /// sentences worded by the teller. The shell keeps it in step with Settings, where it is on by default (#143). It is a
+    /// Speaks a short catch-up on switching to a chat (#127): what came there while the user was away, a short
+    /// sentence for each Claude Code chat, worded by the teller (#301). The shell keeps it in step with Settings, where it is on by default (#143). It is a
     /// switch of its own: with chat news only written, it is still said.
     /// </summary>
     [ObservableProperty]
@@ -4737,15 +4740,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The lines a catch-up is worded from, the news in the order it came, then the warnings. Raven's answers were spoken as they
-    /// came, wherever the user was, and the cards are read out on their own.
+    /// came, wherever the user was, and the cards are read out on their own. In a window's chat the window is not named (#301);
+    /// in the Yard, which holds the news of the windows with no chat of their own, it is.
     /// </summary>
-    internal static List<string> CatchUpLines(IReadOnlyList<RavenLogEntry> away) => CatchUpLines(CatchUpCovers(away));
+    internal static List<string> CatchUpLines(IReadOnlyList<RavenLogEntry> away, bool inWindow = true) => CatchUpLines(CatchUpCovers(away), inWindow);
 
     /// <summary>The lines worded from what the catch-up covers, so that what is read is what was said.</summary>
-    private static List<string> CatchUpLines(IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> covered) =>
+    private static List<string> CatchUpLines(IReadOnlyList<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> covered, bool inWindow) =>
     [
         // The news of all its cards at once, so two chats of one title in two cards are numbered apart.
-        .. DigestLines([.. covered.SelectMany(c => c.Lines ?? [])]),
+        .. DigestLines([.. covered.SelectMany(c => c.Lines ?? [])], workspace: !inWindow),
         .. covered.Where(c => c.Lines is null).Select(c => $"- A warning: {c.Entry.Text}"),
     ];
 
@@ -4770,17 +4774,26 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// (a digest heard meanwhile said it all). Seen is not told: opened, the switch itself has seen the chat.
     /// </summary>
     private static (List<string> Lines, List<(RavenLogEntry Entry, IReadOnlyList<ChatNewsLine>? Lines)> Covered)? CatchUpLeft(
-        IReadOnlyList<RavenLogEntry> away)
+        IReadOnlyList<RavenLogEntry> away, bool inWindow)
     {
         var covered = CatchUpCovers(away);
-        return covered.Count == 0 ? null : (CatchUpLines(covered), covered);
+        return covered.Count == 0 ? null : (CatchUpLines(covered, inWindow), covered);
     }
 
-    /// <summary>What the teller is given for a catch-up: the lines, and how to begin.</summary>
-    internal static string CatchUpPrompt(IReadOnlyList<string> lines) =>
-        "Catch-up: what happened in the chat the user just switched to, while they were away, in the order it came:\n"
+    /// <summary>
+    /// What the teller is given for a catch-up: the lines, and how to tell them. Straight to the news, a short sentence a chat
+    /// (#301): begun with "While you were away" and the window's name, it took two long sentences to get there. In the Yard the
+    /// windows are named: its news is of several.
+    /// </summary>
+    internal static string CatchUpPrompt(IReadOnlyList<string> lines, bool inWindow = true) =>
+        (inWindow
+            ? "Catch-up: the user just switched to this window's chat. What happened there meanwhile, in the order it came:\n"
+            : "Catch-up: the user just switched to the Yard, the overview of all windows. What happened meanwhile, in the order it came:\n")
         + string.Join("\n", lines)
-        + "\nTell it in one or two short sentences that begin with \"While you were away\", the most pressing first.";
+        + "\nTell it as a quick heads-up: one short sentence per chat, at most about fifteen words, the most pressing first. Say what "
+        + "came of it, or what it wants from the user; the details stay in the chat, where the user reads them. Begin with the news "
+        + "itself: no lead-in such as \"While you were away\" or \"Here's what happened\""
+        + (inWindow ? ", and no window name, the user is in it." : ".");
 
     /// <summary>
     /// Says the catch-up in the chat switched to, once the floor is free; a press, a question or another switch stops it.
@@ -4795,7 +4808,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             // Worded now, once what was heard before (a digest, a catch-up hushed at its last sentence) is noted: none of it
             // is told again.
             await _pendingReads.Done;
-            if (stop.IsCancellationRequested || CatchUpLeft(away) is not var (lines, covered))
+            if (stop.IsCancellationRequested || CatchUpLeft(away, chat.WorkspaceId is not null) is not var (lines, covered))
             {
                 return;
             }
@@ -4803,7 +4816,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
             var whole = new StrongBox<bool>();
-            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines), spoken, stop, chat, quiet: true, whole: whole);
+            var said = await StreamAnswerAsync(_teller!, CatchUpPrompt(lines, chat.WorkspaceId is not null), spoken, stop, chat, quiet: true, whole: whole);
             if (said && whole.Value)
             {
                 // Collapsed, the catch-up is how the user learns what came (#173): heard to its end, what it said no longer
@@ -4815,7 +4828,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (!said && !stop.IsCancellationRequested)
             {
                 // The teller failed or said nothing: the user still hears that something came, and reads it in the chat.
-                var sentence = lines.Count == 1 ? "While you were away, one thing came in here." : $"While you were away, {lines.Count} things came in here.";
+                var sentence = lines.Count == 1 ? "One thing came in here." : $"{lines.Count} things came in here.";
                 AddSaid(sentence, chat, spoken);
                 spoken.Add(sentence);
             }
