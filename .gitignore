@@ -9,3 +9,4 @@ artifacts/
 node_modules/
 design-time.db*
 __pycache__/
+.superpowers/

@@ -33,6 +33,7 @@ public sealed class AppSettingsTests
     [InlineData("Brain & chats", SettingsPage.Brain)]
     [InlineData("privacy", SettingsPage.Privacy)]
     [InlineData("claude code", SettingsPage.ClaudeCode)]
+    [InlineData("sounds", SettingsPage.Sounds)]
     public async Task Open_the_voice_settings_opens_settings_at_that_page(string said, SettingsPage page)
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
@@ -42,6 +43,87 @@ public sealed class AppSettingsTests
         _h.Shell.Mode.ShouldBe(ShellMode.Settings);
         _h.Shell.Settings.Page.ShouldBe(page);
         shown.ShouldBe(SettingsPageItem.All.Single(p => p.Page == page).Title);
+    }
+
+    [Theory]
+    [InlineData("40")]
+    [InlineData("40 %")]
+    [InlineData("40%")]
+    [InlineData("40 percent")]
+    public async Task The_voice_volume_is_set_by_voice(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        await _settings.SetAsync("voice volume", said, Ct);
+
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(40);
+        _h.Levels.Voice.ShouldBe(AudioLevels.GainOf(40));
+    }
+
+    [Fact]
+    public async Task The_sound_volume_is_read_and_set_by_voice()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.GetAsync("chime volume", Ct)).Value.ShouldBe("60 %");
+        await _settings.SetAsync("sound volume", "0", Ct);
+
+        _h.Shell.Settings.RavenSoundVolume.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData("off", 0)]
+    [InlineData("mute", 0)]
+    [InlineData("full", 100)]
+    [InlineData("max", 100)]
+    [InlineData("turn it off", 0)]
+    [InlineData("zero", 0)]
+    [InlineData("turn it up to 80", 80)]
+    [InlineData("down to 30 %", 30)]
+    [InlineData("from 40 to 60", 60)]
+    [InlineData("down from 60 to 40", 40)]
+    [InlineData("turn it down to zero", 0)]
+    [InlineData("up to full", 100)]
+    public async Task A_volume_said_in_words_is_set(string said, int volume)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.Shell.Settings.RavenVoiceVolume = 50;
+
+        await _settings.SetAsync("voice volume", said, Ct);
+
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(volume);
+    }
+
+    /// <summary>A step up or down is not a level: "20 % louder" must not set the voice to 20 %.</summary>
+    [Theory]
+    [InlineData("20 % louder")]
+    [InlineData("down by 10")]
+    [InlineData("10 percent quieter")]
+    [InlineData("+10")]
+    [InlineData("-10")]
+    public async Task A_volume_said_as_a_change_is_refused_and_nothing_changes(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
+
+        error.Message.ShouldContain("level");
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(100);
+    }
+
+    [Theory]
+    [InlineData("150")]
+    [InlineData("loud")]
+    [InlineData("40.5")]
+    [InlineData("40,5")]
+    public async Task A_volume_not_from_0_to_100_is_refused_and_nothing_changes(string said)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("voice volume", said, Ct));
+
+        error.Message.ShouldContain("0 to 100");
+        _h.Shell.Settings.RavenVoiceVolume.ShouldBe(100);
     }
 
     [Fact]
@@ -446,6 +528,16 @@ public sealed class AppSettingsTests
         (await _settings.GetAsync("open mic", Ct)).Value.ShouldStartWith("off");
     }
 
+    /// <summary>#305: the Sounds page sits right after Voice, under Raven.</summary>
+    [Fact]
+    public void The_sidebar_lists_Sounds_right_after_Voice_under_Raven()
+    {
+        var pages = SettingsPageItem.All.ToList();
+        var sounds = pages[pages.FindIndex(p => p.Page == SettingsPage.Voice) + 1];
+
+        (sounds.Page, sounds.Group).ShouldBe((SettingsPage.Sounds, "Raven"));
+    }
+
     [Fact]
     public async Task Every_setting_has_a_page_the_sidebar_lists_and_a_description()
     {
@@ -477,6 +569,11 @@ public sealed class AppSettingsTests
     [InlineData("budget", SettingsPage.Usage)]
     [InlineData("idle", SettingsPage.Yard)]
     [InlineData("the yard settings", SettingsPage.Yard)]
+    [InlineData("volume", SettingsPage.Sounds)]
+    [InlineData("how loud", SettingsPage.Sounds)]
+    [InlineData("the sound settings", SettingsPage.Sounds)]
+    [InlineData("chats", SettingsPage.Brain)]
+    [InlineData("the voice volume settings", SettingsPage.Sounds)]
     public void A_page_is_also_found_by_a_setting_on_it(string said, SettingsPage page) => AppSettings.PageNamed(said).ShouldBe(page);
 
     [Theory]

@@ -203,6 +203,47 @@ public sealed class VoicePageViewModelTests
         _shell.Samples.Played.Count.ShouldBe(1, "the second press stops it");
     }
 
+    /// <summary>#305: letting go of the voice slider has the voice picked say its sample, at the level just set.</summary>
+    [Fact]
+    public async Task Playing_the_voice_level_plays_the_picked_voice()
+    {
+        var vm = await OpenAsync();
+        vm.SelectedCard = Card(vm, SpeechEngine.Kokoro);
+        vm.SelectedVoice = vm.Voices.Single(v => v.Voice.Id == "bm_george");
+
+        var playing = vm.PlayVoiceLevelAsync();
+
+        _shell.Samples.Played.ShouldBe([(SpeechEngine.Kokoro, "bm_george")]);
+        vm.StopSample();
+        await playing;
+    }
+
+    [Fact]
+    public async Task Playing_the_voice_level_without_an_engine_plays_nothing()
+    {
+        var vm = await OpenAsync();
+
+        await vm.PlayVoiceLevelAsync();
+
+        _shell.Samples.Played.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Playing_the_voice_level_twice_stops_the_first_and_plays_again()
+    {
+        var vm = await OpenAsync();
+        vm.SelectedCard = Card(vm, SpeechEngine.Kokoro);
+
+        var first = vm.PlayVoiceLevelAsync();
+        var second = vm.PlayVoiceLevelAsync();
+        await first;
+
+        _shell.Samples.Played.Count.ShouldBe(2, "the second plays it again rather than stopping it");
+        vm.SelectedVoice!.IsPlaying.ShouldBeTrue();
+        vm.StopSample();
+        await second;
+    }
+
     [Fact]
     public async Task Closing_Settings_stops_a_sample_and_the_welcome_line()
     {

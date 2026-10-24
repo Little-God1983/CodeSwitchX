@@ -4,6 +4,7 @@ using CodeSwitchX.Ingest.Api;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Settings;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -58,6 +59,23 @@ public class AppHostTests
             "telemetry's start loads seven days of usage; a hook fired while the pipe waits for that is lost");
         StartsBefore<TelemetryService, TranscriptIndexer>(order,
             "telemetry must listen before the first scan, or the usage that scan finds is in neither the database it loaded nor its memory until the next start");
+    }
+
+    /// <summary>#305: the sliders on the Sounds page set the levels the chime and the voice play at, not a copy of their own.</summary>
+    [Fact]
+    public async Task The_settings_sliders_set_the_levels_the_audio_plays_at()
+    {
+        var builder = Builder();
+        builder.Services.Replace(ServiceDescriptor.Singleton(NSubstitute.Substitute.For<CodeSwitchX.Core.Persistence.ISettingsStore>()));
+        using var host = builder.Build();
+        var settings = host.Services.GetRequiredService<SettingsViewModel>();
+
+        settings.RavenVoiceVolume = 50;
+        settings.RavenSoundVolume = 0;
+        await settings.FlushSavesAsync(TestContext.Current.CancellationToken);
+
+        var levels = host.Services.GetRequiredService<CodeSwitchX.Voice.Audio.AudioLevels>();
+        (levels.Voice, levels.Sounds).ShouldBe((0.25f, 0f));
     }
 
     /// <summary>A constructor parameter without a registration otherwise shows up only as "CodeSwitchX failed to start" at the next manual run.</summary>

@@ -218,12 +218,30 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
     {
         var wasPlaying = row.IsPlaying;
         StopSample();
-        if (wasPlaying || SelectedCard.Engine is not { } engine)
+        if (!wasPlaying)
+        {
+            SelectedVoice = row;
+            await PlaySampleAsync(row);
+        }
+    }
+
+    /// <summary>
+    /// The voice picked says its sample, after one playing is stopped (#305): the voice slider let go plays it at the level
+    /// just set, again on each let-go rather than stopping it. Nothing in text only.
+    /// </summary>
+    public Task PlayVoiceLevelAsync()
+    {
+        StopSample();
+        return SelectedVoice is { } row ? PlaySampleAsync(row) : Task.CompletedTask;
+    }
+
+    private async Task PlaySampleAsync(VoiceRow row)
+    {
+        if (SelectedCard.Engine is not { } engine)
         {
             return;
         }
 
-        SelectedVoice = row;
         using var playing = new CancellationTokenSource();
         _playing = playing;
         row.IsPlaying = true;
@@ -237,9 +255,10 @@ public sealed partial class VoicePageViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            row.IsPlaying = false;
+            // Ended by itself; a stop has cleared the row already, and a sample played again over it keeps it playing.
             if (_playing == playing)
             {
+                row.IsPlaying = false;
                 _playing = null;
             }
         }

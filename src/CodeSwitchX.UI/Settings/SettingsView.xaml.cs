@@ -13,6 +13,43 @@ public partial class SettingsView : UserControl
         InitializeComponent();
     }
 
+    private double? _levelPressedAt; // a volume slider's value when the mouse or a key went down on it
+
+    /// <summary>A press on a volume slider, by the mouse or a key: what it is let go at is compared with this.</summary>
+    private void OnLevelPressed(object sender, RoutedEventArgs e)
+    {
+        if (e is not KeyEventArgs { IsRepeat: true }) // a key held: its first press counts
+        {
+            _levelPressedAt = (sender as Slider)?.Value;
+        }
+    }
+
+    /// <summary>A volume slider let go, its thumb or a click on its track (#305): it plays at the level just set.</summary>
+    private void OnLevelLetGo(object sender, MouseButtonEventArgs e) => PlayLevel(sender);
+
+    /// <summary>A drag that lost the mouse before it was let go (Alt+Tab, a dialog): the level it got to plays all the same.</summary>
+    private void OnLevelCaptureLost(object sender, MouseEventArgs e) => PlayLevel(sender);
+
+    /// <summary>The keys that move a slider play it too, once each.</summary>
+    private void OnLevelKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)
+        {
+            PlayLevel(sender);
+        }
+    }
+
+    /// <summary>Only a level that changed is played: a click on the thumb, or End at 100 %, plays nothing.</summary>
+    private void PlayLevel(object sender)
+    {
+        var pressedAt = _levelPressedAt;
+        _levelPressedAt = null;
+        if (sender is Slider { Tag: ICommand play } slider && pressedAt is { } before && slider.Value != before && play.CanExecute(null))
+        {
+            play.Execute(null);
+        }
+    }
+
     /// <summary>
     /// The search box folded away with the sidebar (#162) while it had the keyboard: the pages' list takes it, so the next
     /// key is not lost.

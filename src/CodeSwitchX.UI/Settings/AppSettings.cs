@@ -96,10 +96,22 @@ public sealed class AppSettings : IAppSettings
     internal static SettingsPage PageNamed(string said)
     {
         var words = PageWords(said);
-        var found = SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains)).ToList();
+        // A setting's name of two words or more first, before a title's word: "voice volume" is on Sounds, not Voice.
+        List<SettingsPageItem> found = words.Count > 1 ? [.. SettingsPageItem.All.Where(p => p.Keywords.Any(k => Words(k).SequenceEqual(words)))] : [];
+        if (found.Count == 0)
+        {
+            found = [.. SettingsPageItem.All.Where(p => Words(p.Title).Any(words.Contains))];
+        }
+
         if (found.Count == 0)
         {
             found = [.. SettingsPageItem.All.Where(p => words.Any(w => w.Length > 2 && p.Keywords.Any(k => Words(k).Contains(w))))];
+            // Of the pages holding the word, the one with a setting named just that: "sound" is the Sounds page, though Voice
+            // has "sound for other chats".
+            if (found.Count > 1 && found.Where(p => words.Any(w => p.Keywords.Any(k => Normal(k) == w))).ToList() is [var named])
+            {
+                found = [named];
+            }
         }
 
         return found switch
@@ -110,6 +122,36 @@ public sealed class AppSettings : IAppSettings
             _ => throw new YardActionException($"'{said.Trim()}' could be the {string.Join(" or the ", found.Select(p => p.Title))} page: "
                 + "ask the user which."),
         };
+    }
+
+    /// <summary>A level of 0..100 % as said for <paramref name="name"/>: "40", "40 %", "40 percent", "off", "full".</summary>
+    internal static int PercentOf(string name, string said)
+    {
+        var words = Words(said);
+        // "up to 80" or "from 60 to 40" names the level after "to"; "up by 10", "20 % louder", "+10" or "-10" only a change.
+        var to = Array.LastIndexOf(words, "to");
+        var level = to >= 0 && to + 1 < words.Length ? string.Join(' ', words[(to + 1)..]) : null;
+        if (level is null && (said.TrimStart() is ['+' or '-', ..] || words.Any(w => w is "louder" or "quieter" or "softer" or "up" or "down"
+                or "by" or "more" or "less" or "raise" or "lower" or "increase" or "decrease")))
+        {
+            throw new YardActionException($"{Capital(name)} takes a level, not a change: '{said.Trim()}'. Read it, work the new level out "
+                + "and set that. Nothing was changed.");
+        }
+
+        level ??= said;
+        var hasNumber = level.Any(char.IsAsciiDigit);
+        if (!hasNumber && Words(level).Any(w => w is "off" or "mute" or "muted" or "silent" or "none" or "zero"))
+        {
+            return 0;
+        }
+
+        if (!hasNumber && Words(level).Any(w => w is "full" or "max" or "maximum" or "loudest"))
+        {
+            return 100;
+        }
+
+        return !System.Text.RegularExpressions.Regex.IsMatch(said, @"\d[.,]\d") && Number(level) is { } n and >= 0 and <= 100 ? (int)n
+            : throw new YardActionException($"{Capital(name)} is a whole number from 0 to 100 %, not '{said.Trim()}'. Nothing was changed.");
     }
 
     /// <summary>The words of a page as said, without "open", "the", "settings" and the like.</summary>
@@ -247,6 +289,17 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
+        // A level the Sounds page offers on a slider (#305): "40", "40 %", "40 percent".
+        // The slider's steps are offered; any whole number between is taken too, and "off" or "full". A change ("20 % louder")
+        // is no level: the brain works the level out from the one it reads.
+        Entry Percent(string name, string description, string[] aliases, Func<int> get, Action<int> set) =>
+            new(new(name, Title(SettingsPage.Sounds), description, [.. Enumerable.Range(0, 21).Select(i => $"{i * 5} %")]), SettingsPage.Sounds, aliases,
+                () => $"{get()} %", v =>
+                {
+                    set(PercentOf(name, v));
+                    return null;
+                });
+
         // A time the Yard page offers in a box, worded as there, or none: "10", "10 minutes", "off", "0". Said with a
         // unit, it is that long: "1 hour" is no "1 minute", and 60 minutes are one hour.
         Entry Time(string name, string description, string[] aliases, Func<int, string> worded, int unitMinutes, IReadOnlyList<int> choices, Func<int> get,
@@ -336,6 +389,11 @@ public sealed class AppSettings : IAppSettings
                     + "last spoke or a chat made its sound; a chat's sound inside it is left out. Raven's answers to the user never wait.",
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
                 TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
+            Percent("sound volume", "How loud the chats' sounds play, from 0 to 100 %; CodeSwitchX's own, Windows' volume stays as it is.",
+                ["sounds volume", "volume of the sounds", "chime volume", "how loud the sounds are"], () => S.RavenSoundVolume, v => S.RavenSoundVolume = v),
+            Percent("voice volume", "How loud Raven's voice plays, from 0 to 100 %: answers, news and the samples; CodeSwitchX's own, Windows' volume "
+                + "stays as it is.", ["Raven's voice volume", "volume of the voice", "how loud Raven speaks", "speech volume"], () => S.RavenVoiceVolume,
+                v => S.RavenVoiceVolume = v),
             Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
                 + "if Raven spoke or a chat made its sound within the cooldown; the catch-up on switching is still said.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
                 "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
