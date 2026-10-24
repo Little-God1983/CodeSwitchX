@@ -11,23 +11,30 @@ public interface IChatChime
 }
 
 /// <summary>
-/// Two soft rising tones, a quarter of a second in all, made here rather than shipped as a file. Each play opens the
+/// Two soft rising tones, a quarter of a second in all, made here rather than shipped as a file, played at the sounds' level (#305). Each play opens the
 /// output chosen, or the default device of the moment, and closes it when done, on the thread pool: opening a waking device can take a while.
 /// </summary>
 public sealed class ChatChime : IChatChime
 {
     private const int SampleRate = 24000;
 
-    private static readonly byte[] Pcm = Make();
+    private static readonly double Peak = 0.33 / AudioLevels.GainOf(60);
+
+    private static readonly byte[] Made = Make();
 
     private readonly IAudioOutput _audioOutput;
     private readonly ILogger<ChatChime> _logger;
+    private readonly AudioLevels _levels;
 
-    public ChatChime(IAudioOutput audioOutput, ILogger<ChatChime> logger)
+    public ChatChime(IAudioOutput audioOutput, ILogger<ChatChime> logger, AudioLevels levels)
     {
         _audioOutput = audioOutput;
         _logger = logger;
+        _levels = levels;
     }
+
+    /// <summary>The tones as made, before the sounds' level: the tests measure them.</summary>
+    internal static ReadOnlyMemory<byte> Pcm => Made;
 
     public void Play() => _ = Task.Run(PlayNow);
 
@@ -36,7 +43,7 @@ public sealed class ChatChime : IChatChime
         IWavePlayer? output = null;
         try
         {
-            output = _audioOutput.Open(new RawSourceWaveStream(Pcm, 0, Pcm.Length, new WaveFormat(SampleRate, 16, 1)), 120);
+            output = _audioOutput.Open(new Loudness(new RawSourceWaveStream(Made, 0, Made.Length, new WaveFormat(SampleRate, 16, 1)), () => _levels.Sounds), 120);
             var playing = output;
             output.PlaybackStopped += (_, _) => playing.Dispose();
             output.Play();
@@ -48,7 +55,10 @@ public sealed class ChatChime : IChatChime
         }
     }
 
-    /// <summary>880 Hz then 1320 Hz, each faded in and out so neither clicks, at a third of full loudness.</summary>
+    /// <summary>
+    /// 880 Hz then 1320 Hz, each faded in and out so neither clicks; made loud enough that the sounds' default level plays
+    /// them at a third of full loudness, as before there was a level.
+    /// </summary>
     private static byte[] Make()
     {
         (double Hz, double Seconds)[] tones = [(880, 0.11), (1320, 0.14)];
@@ -59,7 +69,7 @@ public sealed class ChatChime : IChatChime
             for (var i = 0; i < count; i++)
             {
                 var fade = Math.Min(1, Math.Min(i, count - i) / (SampleRate * 0.012));
-                samples.Add((short)(Math.Sin(2 * Math.PI * hz * i / SampleRate) * fade * 0.33 * short.MaxValue));
+                samples.Add((short)(Math.Sin(2 * Math.PI * hz * i / SampleRate) * fade * Peak * short.MaxValue));
             }
         }
 

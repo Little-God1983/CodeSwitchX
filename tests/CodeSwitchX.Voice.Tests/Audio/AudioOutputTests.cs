@@ -358,7 +358,7 @@ public sealed class AudioOutputTests
         devices.Output.DeviceId = "id-tv";
         using var cancel = new CancellationTokenSource();
 
-        var playing = new VoiceSamples(devices.Output).PlayAsync(SpeechEngine.Kokoro, "af_heart", cancel.Token);
+        var playing = new VoiceSamples(devices.Output, new AudioLevels()).PlayAsync(SpeechEngine.Kokoro, "af_heart", cancel.Token);
         await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await cancel.CancelAsync();
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -396,7 +396,7 @@ public sealed class AudioOutputTests
     {
         using var waking = new ManualResetEventSlim(); // disposed after the player, whose move may still wait on it
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels());
         speech.Enqueue(MarkedSpeech());
         var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         devices.WhileOpening = () =>
@@ -506,7 +506,7 @@ public sealed class AudioOutputTests
     {
         using var waking = new ManualResetEventSlim(); // disposed after the player, whose move may still wait on it
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels());
         speech.Enqueue(MarkedSpeech());
         devices.WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(5)); // a Bluetooth headset waking
         var opened = devices.Opened("id-headphones");
@@ -532,7 +532,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         var moves = new List<Action>();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), moves.Add);
         speech.Enqueue(MarkedSpeech());
         devices.Players[0].Source!.Read(new byte[2000], 0, 2000);
 
@@ -553,7 +553,7 @@ public sealed class AudioOutputTests
     {
         var devices = new Devices();
         var moves = new List<Action>();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), moves.Add);
         speech.Enqueue(MarkedSpeech());
         devices.Output.DeviceId = "id-tv";
         devices.WhileOpening = () =>
@@ -609,7 +609,7 @@ public sealed class AudioOutputTests
     {
         using var waking = new ManualResetEventSlim();
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels());
         speech.Enqueue(MarkedSpeech());
         var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         devices.WhileOpening = () =>
@@ -640,7 +640,7 @@ public sealed class AudioOutputTests
     {
         using var waking = new ManualResetEventSlim();
         var devices = new Devices();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels());
         speech.Enqueue(MarkedSpeech());
         var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         devices.WhileOpening = () =>
@@ -810,7 +810,7 @@ public sealed class AudioOutputTests
         using var waking = new ManualResetEventSlim();
         var devices = new Devices();
         var moves = new List<Action>();
-        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        using var speech = new WaveOutSpeechPlayer(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), moves.Add);
         devices.Output.DeviceId = "id-headphones"; // the pick: its move waits on the thread pool
         var opening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         devices.WhileOpening = () =>
@@ -870,7 +870,7 @@ public sealed class AudioOutputTests
     {
         var output = new PickedWhileOpening { DeviceId = "id-x" };
         var moves = new List<Action>();
-        using var speech = new WaveOutSpeechPlayer(output, NullLogger<WaveOutSpeechPlayer>.Instance, moves.Add);
+        using var speech = new WaveOutSpeechPlayer(output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), moves.Add);
         output.BeforeRead = () => output.DeviceId = "id-y"; // picked away: one move queued
         output.AfterRead = () =>
         {
@@ -939,7 +939,7 @@ public sealed class AudioOutputTests
 
     /// <summary>The speech player with its moves run inline, so a test sees them done when the pick returns.</summary>
     private static WaveOutSpeechPlayer Speech(Devices devices) =>
-        new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, move => move());
+        new(devices.Output, NullLogger<WaveOutSpeechPlayer>.Instance, new AudioLevels(), move => move());
 
     /// <summary>A tenth of a second of silence with one loud byte at 4000, to find where the rest of it plays.</summary>
     private static SpeechChunk MarkedSpeech()

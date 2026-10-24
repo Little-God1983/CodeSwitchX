@@ -53,9 +53,10 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     private Func<bool>? _hushed; // whether the reply queued last is hushed: a device opening for its queue is let go then
     private int _movePending; // a move queued and not yet started: picks in a row (arrowing through the list) queue one
     private readonly Action<Action> _offThread;
+    private readonly AudioLevels _levels;
 
-    public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger)
-        : this(audioOutput, logger, move => ThreadPool.QueueUserWorkItem(_ => move()))
+    public WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger, AudioLevels levels)
+        : this(audioOutput, logger, levels, move => ThreadPool.QueueUserWorkItem(_ => move()))
     {
     }
 
@@ -63,10 +64,11 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
     /// Runs a move away from the thread that picked the output, the UI thread: opening a device takes tens of milliseconds,
     /// a waking Bluetooth one longer (#177). Inline in the tests.
     /// </param>
-    internal WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger, Action<Action> offThread)
+    internal WaveOutSpeechPlayer(IAudioOutput audioOutput, ILogger<WaveOutSpeechPlayer> logger, AudioLevels levels, Action<Action> offThread)
     {
         _audioOutput = audioOutput;
         _logger = logger;
+        _levels = levels;
         _offThread = offThread;
         _audioOutput.Changed += (_, _) => MoveSoon();
     }
@@ -193,7 +195,8 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         string? playsOn;
         try
         {
-            output = _audioOutput.Open(new Meter(buffer, this), 120, out playsOn);
+            // At the voice's level, measured before it: the orb moves as much however quietly Raven speaks (#305).
+            output = _audioOutput.Open(new Loudness(new Meter(buffer, this), () => _levels.Voice), 120, out playsOn);
         }
         catch (Exception ex)
         {
