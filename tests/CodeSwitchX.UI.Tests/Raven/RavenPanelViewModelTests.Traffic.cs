@@ -279,6 +279,30 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Plays.ShouldBe(0);
     }
 
+    /// <summary>Review round 3 of #306: a line stopped before its first audio gives its sound back, which then plays on its own.</summary>
+    [Fact]
+    public async Task A_line_hushed_before_its_audio_gives_its_sound_back()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var (vm, _) = await TrafficVmAsync();
+        _speech.Gate = new TaskCompletionSource(); // the voice is still making the line's first audio
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _speech.Spoken.Count == 1);
+
+        vm.PressMic(TalkInput.MicButton); // the user talks over it
+        _speech.Gate.SetResult();
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+        _sounds.Plays.ShouldBe(0, "nothing of the line was heard");
+        await SoundGraceAsync(vm);
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+    }
+
     /// <summary>Review round 2 of #306: a card put back because the floor was taken while its line was worded keeps its sound.</summary>
     [Fact]
     public async Task A_card_put_back_before_its_line_keeps_its_sound()

@@ -168,6 +168,27 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Ids.ShouldBe(["marimba-rise"]);
     }
 
+    /// <summary>Review round 3 of #306: the catch-up opens with its news's sound; a card caught up keeps its own for its reading.</summary>
+    [Fact]
+    public async Task The_catch_up_leaves_a_card_its_own_sound()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2 finished while the user is in chat 1
+        await GraceAsync(vm);
+        _ = asks.HoldAsync(PermittingIn("a2", "p1"), CancellationToken.None); // and another of its chats asks
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _sounds.Ids.ShouldBe(["marimba-rise", "bell-pair"]);
+    }
+
     /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>
     [Fact]
     public async Task With_chat_news_only_written_the_catch_up_is_still_said()

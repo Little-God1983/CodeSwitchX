@@ -109,6 +109,16 @@ public sealed class SoundQueue
         return [.. taken.Where(c => c.StillTrue())];
     }
 
+    /// <summary>A cue taken for a line that was never heard comes back, unless its chat has a newer one queued by now.</summary>
+    public void GiveBack(SoundCue cue)
+    {
+        if (_queue.All(c => c.SessionId != cue.SessionId) && _picks.For(cue.Slot) is not null)
+        {
+            _queue.Add(cue);
+            Kick();
+        }
+    }
+
     /// <summary>Drops every cue, and stops the sound playing: Raven's panel was muted.</summary>
     public void Clear()
     {
@@ -137,9 +147,18 @@ public sealed class SoundQueue
         }
 
         _timing = false;
-        if (!IsPlaying && _mayPlay())
+        if (IsPlaying)
+        {
+            return;
+        }
+
+        if (_mayPlay())
         {
             PlayNext();
+        }
+        else
+        {
+            Kick(); // taken meanwhile with no change of state told: the floor taken by time alone is looked at again after
         }
     }
 

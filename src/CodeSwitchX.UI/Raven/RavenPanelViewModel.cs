@@ -2973,6 +2973,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void ScheduleNews()
     {
+        _soundQueue?.Kick(); // every change of the floor comes here: a sound may play, or must wait (#306)
         if (HasSomethingToTell && FloorIsFree)
         {
             // What was asked for waits for no pause (#233); for the grace, when the user may go on after a breath (#252).
@@ -3064,25 +3065,33 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         };
 
     /// <summary>
-    /// The sound of the newest cue a line speaks for, to play right before it (#306); null when none waits for it. With no
-    /// voice to say the line, its sound is left to the queue: taken, it would never be heard.
+    /// Makes the sound of the newest cue a line speaks for the reply's prelude, played right before its first audio (#306). With
+    /// no voice to say the line, its sound is left to the queue: taken, it would never be heard. A reply that ends without
+    /// reaching its first audio (hushed, muted, dropped) gives the sound back to the queue, where it plays on its own if still true.
     /// </summary>
-    private Func<CancellationToken, Task>? PreludeFor(IEnumerable<string> sessionIds)
+    private void SoundBefore(ReplyVoice.SpokenReply spoken, IEnumerable<string> sessionIds)
     {
         var ids = sessionIds.ToHashSet(StringComparer.Ordinal);
-        return PreludeFor(c => ids.Contains(c.SessionId));
+        SoundBefore(spoken, c => ids.Contains(c.SessionId));
     }
 
-    /// <inheritdoc cref="PreludeFor(IEnumerable{string})"/>
-    private Func<CancellationToken, Task>? PreludeFor(Func<SoundCue, bool> which)
+    /// <inheritdoc cref="SoundBefore(ReplyVoice.SpokenReply, IEnumerable{string})"/>
+    private void SoundBefore(ReplyVoice.SpokenReply spoken, Func<SoundCue, bool> which)
     {
-        if (_tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off))
+        if (_tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off) || _soundQueue is not { } queue
+            || queue.TakeForLine(which).MaxBy(c => c.At) is not { } cue || _sounds is not { } sounds || _picks.For(cue.Slot) is not { } sound)
         {
-            return null;
+            return;
         }
 
-        var cue = _soundQueue?.TakeForLine(which).MaxBy(c => c.At);
-        return cue is not null && _sounds is { } sounds && _picks.For(cue.Slot) is { } sound ? ct => sounds.PlayAsync(sound, ct) : null;
+        spoken.Prelude = ct => sounds.PlayAsync(sound, ct);
+        _ = spoken.Played.ContinueWith(_ => _dispatcher.Post(() =>
+        {
+            if (spoken.Prelude is not null && !IsMuted && !ChatOf(cue.WorkspaceId).IsMuted)
+            {
+                queue.GiveBack(cue); // never taken by the voice: nothing of the line was heard
+            }
+        }), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     /// <summary>Raven heard its name alone (#306): its sound plays at once, past the queue, the floor and every mute.</summary>
@@ -3684,7 +3693,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             if (!floor.IsCancellationRequested && card.IsOpen)
             {
                 // Its sound, straight before it is read (#306): taken only now, so a card put back keeps it for its reading.
-                spoken.Prelude = PreludeFor([card.Ask.SessionId]);
+                SoundBefore(spoken, [card.Ask.SessionId]);
                 spoken.Add(line);
                 card = null; // read
             }
@@ -3877,7 +3886,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             spoken = _newsReply = _voice.Begin(heard => _logger.LogInformation(
                 "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
-            spoken.Prelude = PreludeFor(own.Select(l => l.SessionId)); // its sound, straight before its line (#306)
+            SoundBefore(spoken, own.Select(l => l.SessionId)); // its sound, straight before its line (#306)
             asking = _time.GetUtcNow();
             // Spoken, the selected chat's news is the announcement: other chats' news is only marked.
             var chat = CurrentChat;
@@ -5106,8 +5115,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
-            // What it sums up sounds once, right before it (#306); a turn begun since keeps its own sound.
-            spoken.Prelude = PreludeFor(c => ChatOf(c.WorkspaceId) == chat && c.Line != SoundLine.None);
+            // What it sums up sounds once, right before it (#306): its news written while the user was away. A turn begun since, a
+            // card (read after it), and news not told yet keep their own sounds.
+            SoundBefore(spoken, c => ChatOf(c.WorkspaceId) == chat && c.Line == SoundLine.News && c.WorkspaceId is { } workspace
+                && _news?.HasNewsFor(id => id == workspace) != true);
             var (lines, warnings) = CatchUpItems(covered);
             var (said, whole, _, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
             if (said && whole)

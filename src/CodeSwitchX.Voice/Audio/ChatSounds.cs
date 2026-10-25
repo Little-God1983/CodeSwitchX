@@ -23,6 +23,12 @@ public interface IChatSounds
 /// </summary>
 public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProvider time, ILogger<ChatSounds> logger) : IChatSounds
 {
+    /// <summary>
+    /// How much longer than the sound a play may take, for a waking device to open: past it the play is stopped, so a device
+    /// that never says it stopped does not hold the floor, and Raven's speech after it, for good.
+    /// </summary>
+    public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(5);
+
     public TimeSpan LengthOf(string soundId)
     {
         if (!ShippedSounds.Has(soundId))
@@ -35,6 +41,13 @@ public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProv
     }
 
     public async Task PlayAsync(string soundId, CancellationToken ct)
+    {
+        using var capped = new CancellationTokenSource(LengthOf(soundId) + PlayMargin, time);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct, capped.Token);
+        await PlayUntilAsync(soundId, stop.Token).ConfigureAwait(false);
+    }
+
+    private async Task PlayUntilAsync(string soundId, CancellationToken ct)
     {
         if (!ShippedSounds.Has(soundId))
         {

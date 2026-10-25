@@ -162,6 +162,23 @@ public sealed class AudioOutputTests
         player.PlayedEver.ShouldBeFalse();
     }
 
+    /// <summary>Review round 3 of #306: a device that never says it stopped does not hold the floor, and Raven's speech, for good.</summary>
+    [Fact]
+    public async Task A_play_that_never_ends_is_stopped_after_its_length_and_a_margin()
+    {
+        var devices = new Devices();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var sounds = Sounds(devices, 1f, time);
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = sounds.PlayAsync("wood-knock", ct);
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        time.Advance(sounds.LengthOf("wood-knock") + ChatSounds.PlayMargin);
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        devices.Players.Single().Disposed.ShouldBeTrue();
+    }
+
     [Fact]
     public void A_sound_stopped_before_it_began_opens_no_device()
     {

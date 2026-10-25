@@ -93,6 +93,40 @@ public sealed class SoundQueueTests
         _sounds.Ids.ShouldBe(["marimba-rise"]);
     }
 
+    /// <summary>Review round 3 of #306: a grace that ends while the floor is taken by time alone hands over to the recheck.</summary>
+    [Fact]
+    public void A_grace_that_ends_on_a_floor_taken_by_time_alone_looks_again_after()
+    {
+        _queue.Add(Cue("a")); // the grace runs
+        _free = false; // Raven heard its name alone: no change of state says so to the queue
+        _busyFor = TimeSpan.FromSeconds(10);
+        Grace();
+        _sounds.Plays.ShouldBeEmpty();
+
+        _time.Advance(TimeSpan.FromSeconds(8));
+        _free = true;
+        _busyFor = TimeSpan.Zero;
+        _time.Advance(TimeSpan.FromSeconds(2)); // the window is over: the queue looks again
+        Grace();
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+    }
+
+    /// <summary>Review round 3 of #306: a cue given back from a line never heard does not push out a newer one of its chat.</summary>
+    [Fact]
+    public void A_cue_given_back_leaves_a_newer_one_of_its_chat()
+    {
+        var old = Cue("a");
+        _queue.Add(Cue("a", SoundSlot.Fails));
+
+        _queue.GiveBack(old);
+        Grace();
+        _sounds.Finish();
+        Advance(SoundQueue.Gap.TotalMilliseconds);
+
+        _sounds.Ids.ShouldBe(["marimba-fall"], "one sound a chat: the newer one");
+    }
+
     [Fact]
     public void A_newer_cue_of_the_same_chat_replaces_the_older()
     {
