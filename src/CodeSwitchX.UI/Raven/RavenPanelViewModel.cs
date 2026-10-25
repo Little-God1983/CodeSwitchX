@@ -2811,17 +2811,20 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// chats by number (#303). Those are spoken together, as a reply is (#290), once the teller is done or the voice's group is
     /// full. A teller that fails or gives too few lines leaves its chats said without a summary. More than a reply speaks
     /// (<see cref="ReplyVoice.MaximumSentences"/>), the last ones are counted instead ("And 2 more.") and stay unread.
-    /// Never faults.
+    /// With <paramref name="others"/> waiting, the teller words a remark about them too, said last in a sentence kept for it
+    /// (#308); a teller that gives none leaves it unsaid. Never faults.
     /// </summary>
     /// <param name="kind">What it is for, as the teller is told: "Catch-up", "News of the chats".</param>
-    /// <returns>Whether any of it was said, and the lines and warnings told one by one; with <c>Whole</c> unless it was stopped.</returns>
-    private async Task<(bool Said, bool Whole, bool Asked, HashSet<ChatNewsLine> Lines, HashSet<RavenLogEntry> Warnings)> TellLinesAsync(string kind,
-        IReadOnlyList<ChatNewsLine> lines, IReadOnlyList<RavenLogEntry> warnings, ReplyVoice.SpokenReply spoken, CancellationToken floor,
-        RavenChat chat)
+    /// <returns>Whether any of it was said, and the lines and warnings told one by one; with <c>Whole</c> unless it was stopped; the remark said, if any.</returns>
+    private async Task<(bool Said, bool Whole, bool Asked, HashSet<ChatNewsLine> Lines, HashSet<RavenLogEntry> Warnings, string? Remark)> TellLinesAsync(
+        string kind, IReadOnlyList<ChatNewsLine> lines, IReadOnlyList<RavenLogEntry> warnings, ReplyVoice.SpokenReply spoken, CancellationToken floor,
+        RavenChat chat, IReadOnlyList<WaitingChat>? others = null)
     {
+        others = _teller is null ? [] : others ?? [];
         var order = Pressing(lines);
         var total = order.Count + warnings.Count;
-        var each = total > ReplyVoice.MaximumSentences ? ReplyVoice.MaximumSentences - 1 : total;
+        var room = ReplyVoice.MaximumSentences - (others.Count > 0 ? 1 : 0); // the remark's sentence
+        var each = total > room ? room - 1 : total;
         var told = order.Take(each).ToList();
         var toldWarnings = warnings.Take(each - told.Count).ToList();
         var summed = told.Where(NeedsSummary).ToList();
@@ -2829,6 +2832,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var loose = new List<string>(); // its lines with no number: theirs in order only if none had one
         var numbered = false;
         var next = 0;
+        string? remark = null;
         RavenLogEntry? reply = null;
 
         void Say(string sentence)
@@ -2866,7 +2870,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         try
         {
             SayReady(all: _teller is null || summed.Count == 0);
-            if (next < told.Count)
+            if (next < told.Count || others.Count > 0)
             {
                 if (reply is not null)
                 {
@@ -2877,6 +2881,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 var cut = false;
                 void Take(string line)
                 {
+                    if (others.Count > 0 && Remarked(line) is { } said)
+                    {
+                        remark ??= said;
+                        return;
+                    }
+
                     var (number, summary) = Summed(line);
                     if (number is { } n && n >= 1 && n <= summaries.Length)
                     {
@@ -2890,7 +2900,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 }
 
                 asked = true;
-                await foreach (var e in _teller!.AskAsync(SummaryPrompt(kind, summed), floor))
+                await foreach (var e in _teller!.AskAsync(SummaryPrompt(kind, summed, others), floor))
                 {
                     switch (e)
                     {
@@ -2931,6 +2941,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         summaries[i] = loose[i]; // a teller that numbered none: its lines in order
                     }
                 }
+
+                if (others.Count > 0 && remark is null && summed.Count == 0 && loose.Count > 0)
+                {
+                    remark = loose[0]; // asked for the remark alone, it left the mark off
+                }
             }
         }
         catch (OperationCanceledException) when (floor.IsCancellationRequested)
@@ -2949,7 +2964,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 reply.Text = reply.Text.TrimEnd() + " (interrupted)";
             }
 
-            return (reply is not null, false, asked, [.. told.Take(next)], []);
+            return (reply is not null, false, asked, [.. told.Take(next)], [], null);
         }
 
         SayReady(all: true);
@@ -2963,7 +2978,13 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Say($"And {total - each} more.");
         }
 
-        return (reply is not null, true, asked, [.. told], [.. toldWarnings]);
+        remark = FirstSentence(remark);
+        if (remark.Length > 0)
+        {
+            Say(Sentence(remark)); // after the chat's own news: never on its own (#308)
+        }
+
+        return (reply is not null, true, asked, [.. told], [.. toldWarnings], remark.Length > 0 ? remark : null);
     }
 
     /// <summary>
@@ -3854,6 +3875,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         ReplyVoice.SpokenReply? spoken = null;
         var asked = false;
+        List<WaitingChat> others = [];
+        IReadOnlyList<SoundCue> held = [];
+        string? remark = null;
         _newsChat = null; // the chat of the news before is done with: it is not stopped for this one
         try
         {
@@ -3873,6 +3897,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var taken = _time.GetUtcNow();
             var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
+            if (_teller is not null && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
+            {
+                others = await WaitingElsewhereAsync(); // what the other chats' news just written adds too (#308)
+            }
+
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
             // A muted chat's news is only written (#153); other chats' news makes only their sounds, through the queue (#306).
             if (own.Count == 0 || CurrentChat.IsMuted || !SpeakNews || IsMuted || floor.IsCancellationRequested)
@@ -3887,11 +3916,19 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
             SoundBefore(spoken, own.Select(l => l.SessionId)); // its sound, straight before its line (#306)
+            if (others.Count > 0 && _soundQueue is not null)
+            {
+                // Their sounds wait out the remark: dropped once it is heard, given back if not; one that comes meanwhile is newer.
+                var mentioned = others.Select(o => o.SessionId).ToHashSet(StringComparer.Ordinal);
+                held = _soundQueue.TakeForLine(c => mentioned.Contains(c.SessionId));
+            }
+
             asking = _time.GetUtcNow();
-            // Spoken, the selected chat's news is the announcement: other chats' news is only marked.
+            // Spoken, the selected chat's news is the announcement: other chats' news is only marked, and mentioned (#308).
             var chat = CurrentChat;
-            var (said, whole, used, toldLines, _) = await TellLinesAsync("News of the chats", own, [], spoken, floor, chat);
-            asked = used; // only a chat with last words to sum up asks the teller (#303)
+            var (said, whole, used, toldLines, _, remarked) = await TellLinesAsync("News of the chats", own, [], spoken, floor, chat, others);
+            remark = remarked;
+            asked = used; // only a chat with last words to sum up, or others waiting, asks the teller (#303, #308)
             if (said && whole && appended.TryGetValue(chat, out var told))
             {
                 // Collapsed, the card of the chat talked to is told: once heard to its end its fresh lines no longer count,
@@ -3915,8 +3952,99 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _newsTelling = null; // its reply is kept: it may still be heard
             spoken?.Complete();
+            if (remark is not null && spoken is not null)
+            {
+                _pendingReads.Add(MentionOnceHeardAsync(spoken, others, held));
+            }
+            else
+            {
+                GiveBack(held); // no remark said: the sounds are theirs again
+            }
+
             _telling = false;
             UpdateState();
+        }
+    }
+
+    /// <summary>The waiting lines and cards a remark heard has mentioned (#308), by reference: each is mentioned once.</summary>
+    private readonly HashSet<object> _mentioned = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// The chats other than the one the user is in that wait for the user (#308), as whats_new tells them (#243): a news line
+    /// not heard, while its chat is still where the news left it, and an open card. One per session: its card, else its newest
+    /// line. None of a muted chat, and none a heard remark has mentioned. UI thread.
+    /// </summary>
+    private async Task<List<WaitingChat>> WaitingElsewhereAsync()
+    {
+        var waiting = new Dictionary<string, (WaitingChat Chat, RavenChat In)>(StringComparer.Ordinal);
+        foreach (var entry in Log.Where(e => e.IsUnread && e.Kind == RavenLogKind.News))
+        {
+            foreach (var line in (entry.Lines ?? []).Where(l => !entry.WasHeard(l)))
+            {
+                waiting[line.SessionId] = (new WaitingChat(line.SessionId, line.Workspace, line.What, line), entry.Chat); // the newest last
+            }
+        }
+
+        if (waiting.Count > 0 && _yard is not null)
+        {
+            try
+            {
+                var chats = (await _yard.ChatsAsync(CancellationToken.None)).ToDictionary(c => c.Id, StringComparer.Ordinal);
+                foreach (var (id, (chat, _)) in waiting.ToList())
+                {
+                    if (!chats.TryGetValue(id, out var now) || !ChatNews.StillHolds(((ChatNewsLine)chat.Item).Kind, now))
+                    {
+                        waiting.Remove(id); // worked on again, or gone: it waits no more
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Reading the Yard for the other waiting chats failed; their news is mentioned as it stands");
+            }
+        }
+
+        foreach (var card in OpenCards())
+        {
+            waiting[card.Ask.SessionId] = (new WaitingChat(card.Ask.SessionId, card.Workspace ?? NameOf(card.ShownIn!),
+                card.Permission is not null ? "asks for permission" : "asks a question", card), card.ShownIn!);
+        }
+
+        _mentioned.IntersectWith(waiting.Values.Select(w => w.Chat.Item)); // what waits no more is forgotten
+        // The chat the user is in now: switched while the Yard was read, it is that one's news that is told.
+        return [.. waiting.Values.Where(w => w.In != CurrentChat && !w.In.IsMuted && !w.In.IsActivity && !_mentioned.Contains(w.Chat.Item))
+            .Select(w => w.Chat)];
+    }
+
+    /// <summary>
+    /// Once the reply with the remark is heard to its end, its chats count as mentioned and their sounds taken for it are
+    /// dropped (#308); cut off before, the sounds are given back. UI thread at the end.
+    /// </summary>
+    private async Task MentionOnceHeardAsync(ReplyVoice.SpokenReply spoken, IReadOnlyList<WaitingChat> mentioned, IReadOnlyList<SoundCue> held)
+    {
+        var heard = await spoken.HeardWholeAsync().ConfigureAwait(false);
+        _dispatcher.Post(() =>
+        {
+            if (heard)
+            {
+                _mentioned.UnionWith(mentioned.Select(m => m.Item));
+            }
+            else
+            {
+                GiveBack(held);
+            }
+        });
+    }
+
+    /// <summary>Sound cues taken for a line that was not heard go back to the queue, unless their chat is muted by now (#306).</summary>
+    private void GiveBack(IReadOnlyList<SoundCue> cues)
+    {
+        foreach (var cue in cues)
+        {
+            if (_soundQueue is not null && !IsMuted && !ChatOf(cue.WorkspaceId).IsMuted)
+            {
+                _soundQueue.GiveBack(cue);
+            }
         }
     }
 
@@ -5157,7 +5285,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             SoundBefore(spoken, c => ChatOf(c.WorkspaceId) == chat && c.Line == SoundLine.News && c.WorkspaceId is { } workspace
                 && _news?.HasNewsFor(id => id == workspace) != true);
             var (lines, warnings) = CatchUpItems(covered);
-            var (said, whole, _, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
+            var (said, whole, _, toldLines, toldWarnings, _) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
             if (said && whole)
             {
                 // Collapsed, the catch-up is how the user learns what came (#173): heard to its end, what it told no longer
