@@ -140,11 +140,20 @@ public sealed partial class RavenPanelViewModelTests
         _teller.Asked[1].ShouldNotContain("\"R. \"", customMessage: "the same chats wait as were just mentioned");
     }
 
-    [Fact]
-    public async Task A_chat_that_needs_you_gets_the_remark_from_the_teller_alone()
+    /// <summary>
+    /// Review round 1 of #308: asked for the remark alone, the teller may leave the mark off, put a lead-in first, number the
+    /// line or mark it as a list; and a remark it starts lower case is said as a sentence.
+    /// </summary>
+    [Theory]
+    [InlineData("ContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
+    [InlineData("Sure, here it is:\nContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
+    [InlineData("1. ContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
+    [InlineData("- **R.** ContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
+    [InlineData("R. contentAutomatorX finished too", "ContentAutomatorX finished too.")]
+    public async Task A_chat_that_needs_you_gets_the_remark_from_the_teller_alone(string answer, string said)
     {
         var (vm, _) = await TrafficVmAsync();
-        _teller.Answer = _ => [new BrainText("ContentAutomatorX finished too.")];
+        _teller.Answer = _ => [new BrainText(answer)];
         Changes("a", SessionState.Working, SessionState.Idle);
 
         Changes("b", SessionState.Working, SessionState.Waiting, "Claude needs your input");
@@ -155,7 +164,51 @@ public sealed partial class RavenPanelViewModelTests
         var prompt = _teller.Asked.ShouldHaveSingleItem();
         prompt.ShouldNotContain("sum up");
         prompt.ShouldContain("- ContentAutomatorX: finished");
-        string.Join(" ", _speech.Spoken).Trim().ShouldBe("Chat CodeSwitchX needs you: Claude needs your input. ContentAutomatorX finished too.");
+        string.Join(" ", _speech.Spoken).Trim().ShouldBe($"Chat CodeSwitchX needs you: Claude needs your input. {said}");
+    }
+
+    /// <summary>Review round 1 of #308: a remark of two sentences is said whole, not cut to its first while both chats count as mentioned.</summary>
+    [Fact]
+    public async Task A_remark_of_two_sentences_is_said_whole()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("1. the tests pass\nR. ContentAutomatorX finished. RawCutX asks for permission.")];
+        _ = asks.HoldAsync(PermittingIn("d", "p1"), CancellationToken.None);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        string.Join(" ", _speech.Spoken).Trim()
+            .ShouldBe("Chat CodeSwitchX finished: the tests pass. ContentAutomatorX finished. RawCutX asks for permission.");
+    }
+
+    /// <summary>
+    /// Review round 1 of #308: the user talks once the chat's line is heard, while the teller still words the remark: the line
+    /// was heard whole, so it is not marked interrupted, and only the remark is dropped.
+    /// </summary>
+    [Fact]
+    public async Task A_press_while_the_remark_is_worded_leaves_the_chat_s_line_heard()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("R. ContentAutomatorX finished too.")];
+        _teller.Gate = new TaskCompletionSource(); // the teller is still at the remark
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Waiting, "Claude needs your input");
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _speech.Spoken.Count == 1);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.First(e => e.Kind == RavenLogKind.Raven).Text.ShouldBe("Chat CodeSwitchX needs you: Claude needs your input.");
     }
 
     [Fact]

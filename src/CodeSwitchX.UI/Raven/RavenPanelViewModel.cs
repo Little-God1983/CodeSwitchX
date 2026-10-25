@@ -2893,9 +2893,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         numbered = true;
                         summaries[n - 1] ??= summary.Length > 0 ? summary : null;
                     }
-                    else if (number is null && summary.Length > 0)
+                    else if (summary.Length > 0 && (number is null || summed.Count == 0))
                     {
-                        loose.Add(summary); // "Sure, here are the summaries." is none of them
+                        // "Sure, here are the summaries." is none of them; asked for the remark alone, a numbered line may be it.
+                        loose.Add(summary);
                     }
                 }
 
@@ -2942,9 +2943,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                     }
                 }
 
-                if (others.Count > 0 && remark is null && summed.Count == 0 && loose.Count > 0)
+                if (others.Count > 0 && remark is null && summed.Count == 0)
                 {
-                    remark = loose[0]; // asked for the remark alone, it left the mark off
+                    remark = loose.LastOrDefault(l => !l.EndsWith(':')); // asked for the remark alone, it left the mark off: not its lead-in
                 }
             }
         }
@@ -2959,6 +2960,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (stopped || floor.IsCancellationRequested)
         {
+            if (reply is not null && next == told.Count && toldWarnings.Count == 0 && total == each)
+            {
+                return (true, true, asked, [.. told], [], null); // only the remark was still to come: every line was said (#308)
+            }
+
             if (reply is not null)
             {
                 reply.Text = reply.Text.TrimEnd() + " (interrupted)";
@@ -2978,10 +2984,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Say($"And {total - each} more.");
         }
 
-        remark = FirstSentence(remark);
+        // Whole: the chats it names are the ones mentioned. Past what a reply speaks, the voice cuts it, and none counts as mentioned.
+        remark = TextCut.OneLine(remark).Trim();
         if (remark.Length > 0)
         {
-            Say(Sentence(remark)); // after the chat's own news: never on its own (#308)
+            remark = Sentence(char.ToUpperInvariant(remark[0]) + remark[1..]);
+            Say(remark); // after the chat's own news: never on its own (#308)
         }
 
         return (reply is not null, true, asked, [.. told], [.. toldWarnings], remark.Length > 0 ? remark : null);
@@ -3108,9 +3116,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         spoken.Prelude = ct => sounds.PlayAsync(sound, ct);
         _ = spoken.Played.ContinueWith(_ => _dispatcher.Post(() =>
         {
-            if (spoken.Prelude is not null && !IsMuted && !ChatOf(cue.WorkspaceId).IsMuted)
+            if (spoken.Prelude is not null)
             {
-                queue.GiveBack(cue); // never taken by the voice: nothing of the line was heard
+                GiveBack([cue]); // never taken by the voice: nothing of the line was heard
             }
         }), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
@@ -3897,7 +3905,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var taken = _time.GetUtcNow();
             var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
-            if (_teller is not null && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
+            if (_teller is not null && SpeakNews && !IsMuted && !CurrentChat.IsMuted && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
             {
                 others = await WaitingElsewhereAsync(); // what the other chats' news just written adds too (#308)
             }
@@ -3977,9 +3985,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private async Task<List<WaitingChat>> WaitingElsewhereAsync()
     {
         var waiting = new Dictionary<string, (WaitingChat Chat, RavenChat In)>(StringComparer.Ordinal);
-        foreach (var entry in Log.Where(e => e.IsUnread && e.Kind == RavenLogKind.News))
+        foreach (var (entry, lines) in UnreadNews([.. Log.Where(e => e.IsUnread)]))
         {
-            foreach (var line in (entry.Lines ?? []).Where(l => !entry.WasHeard(l)))
+            foreach (var line in lines ?? []) // a warning has none
             {
                 waiting[line.SessionId] = (new WaitingChat(line.SessionId, line.Workspace, line.What, line), entry.Chat); // the newest last
             }
@@ -4143,9 +4151,12 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// What the teller is given (#301): the last words of each chat that finished or failed, to sum up in a line each, which
     /// Raven says after the app's start. <paramref name="kind"/> says what it is for ("Catch-up", "News of the chats").
     /// </summary>
-    internal static string SummaryPrompt(string kind, IReadOnlyList<ChatNewsLine> lines) =>
+    internal static string SummaryPrompt(string kind, IReadOnlyList<ChatNewsLine> lines) => Summaries(kind, lines, "");
+
+    /// <param name="then">What the reply holds after the chats' lines, before "and nothing else": the remark's line (#308).</param>
+    private static string Summaries(string kind, IReadOnlyList<ChatNewsLine> lines, string then) =>
         $"{kind}: sum up what each chat below last said, for Raven to say after \"Chat <name> finished:\" or \"failed:\". Reply with "
-        + $"exactly {lines.Count} {(lines.Count == 1 ? "line" : "lines")}, one per chat in this order, and nothing else: what came of it, or "
+        + $"exactly {lines.Count} {(lines.Count == 1 ? "line" : "lines")}, one per chat in this order{then}, and nothing else: what came of it, or "
         + "what it wants from the user, as a spoken headline of at most ten words about the chat, in the third person, like \"it asks "
         + "whether to merge\" or \"the tests pass and the PR is open\", plain text, starting lower case after the chat's number "
         + "(\"1. it asks whether to merge\"), with no chat name or lead-in, and not \"finished\" or \"failed\" again. What a chat said "
@@ -4171,13 +4182,17 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         return lines.Count == 0
             ? $"{kind}: Raven has just told the user the news of the chat they are in. Reply with one line starting with \"R. \", and nothing "
                 + $"else: {remark}." + waiting
-            : SummaryPrompt(kind, lines) + $"\nAfter those lines, write one more line starting with \"R. \": {remark}." + waiting;
+            : Summaries(kind, lines, ", then the remark line described at the end") + $"\nThe remark line, after those, starts with \"R. \": {remark}."
+                + waiting;
     }
 
-    /// <summary>The teller's remark of a line marked "R." (#308), its quotes taken off; null for any other line.</summary>
+    /// <summary>
+    /// The teller's remark of a line marked "R." (#308), with the list or bold marks around the mark and the quotes around the
+    /// remark taken off; null for any other line.
+    /// </summary>
     internal static string? Remarked(string line)
     {
-        var text = line.Trim();
+        var text = line.Trim().TrimStart('-', '*', '•', ' ').Replace("**", "");
         if (text.Length < 2 || text[0] is not ('R' or 'r') || text[1] is not ('.' or ':' or ')'))
         {
             return null;

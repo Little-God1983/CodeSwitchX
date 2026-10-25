@@ -229,6 +229,8 @@ public sealed class ChatNewsTests : IDisposable
 
         prompt.ShouldStartWith("News of the chats:");
         prompt.ShouldContain("exactly 1 line");
+        prompt.ShouldContain("in this order, then the remark line described at the end, and nothing else",
+            customMessage: "review round 1 of #308: \"exactly 1 line, and nothing else\" left no room for the remark");
         prompt.ShouldContain("\"R. \"");
         prompt.ShouldContain("1. finished: \"All green.\"");
         prompt.ShouldEndWith("\n- DiffusionNexus: finished\n- RawCutX: asks for permission");
@@ -252,6 +254,8 @@ public sealed class ChatNewsTests : IDisposable
     [InlineData("R. Two more chats finished.", "Two more chats finished.")]
     [InlineData(" r: \"RawCutX asks for permission too.\" ", "RawCutX asks for permission too.")]
     [InlineData("R) And DiffusionNexus is done", "And DiffusionNexus is done")]
+    [InlineData("- R. Two more chats finished.", "Two more chats finished.")]
+    [InlineData("**R.** Two more chats finished.", "Two more chats finished.")]
     [InlineData("1. the tests pass", null)]
     [InlineData("R. ", null)]
     [InlineData("Right, the tests pass", null)]
