@@ -602,6 +602,8 @@ public sealed partial class RavenPanelViewModelTests
         await SoundGraceAsync(vm);
         Gap();
         _sounds.Ids.ShouldBe(["marimba-rise", "marimba-rise"], "chat 1's sound waits for no line that is never said");
+        // Review round 2 of #308: no remark is worded with no voice to say it, and chat 2's sound is not held for one.
+        _teller.Asked.ShouldAllBe(q => !q.Contains("\"R. \""));
 
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }

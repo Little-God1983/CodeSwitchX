@@ -218,6 +218,49 @@ public sealed class ChatNewsTests : IDisposable
         RavenPanelViewModel.Summed("v1.2 is out").Summary.ShouldBe("v1.2 is out");
     }
 
+    /// <summary>#308: with other chats waiting, the teller is given each by its workspace and what it waits for, and asked for a remark after the lines.</summary>
+    [Fact]
+    public void The_teller_is_given_the_other_waiting_chats_for_a_remark_after_the_lines()
+    {
+        ChatNewsLine Line(ChatNewsKind kind, string lastSaid) => new("a", Guid.Empty, "W", "Secret title", kind, null, lastSaid, false);
+        WaitingChat[] others = [new("c", "DiffusionNexus", "finished", new object()), new("d", "RawCutX", "asks for permission", new object())];
+
+        var prompt = RavenPanelViewModel.SummaryPrompt("News of the chats", [Line(ChatNewsKind.Finished, "All green.")], others);
+
+        prompt.ShouldStartWith("News of the chats:");
+        prompt.ShouldContain("exactly 1 line");
+        prompt.ShouldContain("in this order, then the remark line described at the end, and nothing else",
+            customMessage: "review round 1 of #308: \"exactly 1 line, and nothing else\" left no room for the remark");
+        prompt.ShouldContain("\"R. \"");
+        prompt.ShouldContain("1. finished: \"All green.\"");
+        prompt.ShouldEndWith("\n- DiffusionNexus: finished\n- RawCutX: asks for permission");
+        RavenPanelViewModel.SummaryPrompt("News of the chats", [Line(ChatNewsKind.Finished, "All green.")], [])
+            .ShouldBe(RavenPanelViewModel.SummaryPrompt("News of the chats", [Line(ChatNewsKind.Finished, "All green.")]), "nothing else waits: as before");
+    }
+
+    /// <summary>#308: a chat with nothing to sum up asks the teller for the remark alone.</summary>
+    [Fact]
+    public void With_nothing_to_sum_up_the_teller_is_asked_for_the_remark_alone()
+    {
+        var prompt = RavenPanelViewModel.SummaryPrompt("News of the chats", [], [new("c", "DiffusionNexus", "needs you", new object())]);
+
+        prompt.ShouldStartWith("News of the chats:");
+        prompt.ShouldContain("one line");
+        prompt.ShouldNotContain("sum up");
+        prompt.ShouldEndWith("\n- DiffusionNexus: needs you");
+    }
+
+    [Theory]
+    [InlineData("R. Two more chats finished.", "Two more chats finished.")]
+    [InlineData(" r: \"RawCutX asks for permission too.\" ", "RawCutX asks for permission too.")]
+    [InlineData("R) And DiffusionNexus is done", "And DiffusionNexus is done")]
+    [InlineData("- R. Two more chats finished.", "Two more chats finished.")]
+    [InlineData("**R.** Two more chats finished.", "Two more chats finished.")]
+    [InlineData("1. the tests pass", null)]
+    [InlineData("R. ", "")]
+    [InlineData("Right, the tests pass", null)]
+    public void The_remark_is_the_line_marked_r(string line, string? remark) => RavenPanelViewModel.Remarked(line).ShouldBe(remark);
+
     // Review round 1 of #303: a line of two sentences took two of the three a reply speaks, and later chats went unheard.
     [Fact]
     public void Each_line_is_one_sentence()
