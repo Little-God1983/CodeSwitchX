@@ -388,7 +388,15 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             _soundQueue = new SoundQueue(sounds, _picks, time, dispatcher, MaySound, WaitsForLine, CallListening);
             _soundQueue.Played += (_, _) => Traffic.Announced(); // what Raven says on its own waits the pause after it
-            _soundQueue.PlayingChanged += (_, _) => UpdateState();
+            _soundQueue.PlayingChanged += (_, _) =>
+            {
+                if (!_soundQueue.IsPlaying)
+                {
+                    Traffic.Announced(); // as after speech, the pause runs from the sound's end
+                }
+
+                UpdateState();
+            };
         }
 
         if (cues is not null)
@@ -3090,6 +3098,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     {
         if (!HasSomethingToTell || !FloorIsFree)
         {
+            _soundQueue?.Kick(); // nothing of Raven's own holds the chats' sounds back any more (#306)
             return; // the next change of state schedules it again
         }
 
@@ -3114,6 +3123,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             DropCatchUp(); // a digest heard since the switch said it all
             if (!HasSomethingToTell)
             {
+                _soundQueue?.Kick(); // the catch-up held the chats' sounds back: they may come now (#306)
                 return;
             }
         }
@@ -3286,6 +3296,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _untold.Remove(card);
+        _soundQueue?.Kick(); // a card that held the floor for its reading is gone: other chats' sounds may come (#306)
         if (card == _requested)
         {
             _requested = null;
@@ -3659,7 +3670,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect(evenMuted: askedAloud);
             spoken = _voice.Begin(evenMuted: askedAloud);
-            spoken.Prelude = PreludeFor([card.Ask.SessionId]); // its sound, straight before it is read (#306)
             string line;
             if (PermissionLine.NeedsTeller(card) && _teller is not null)
             {
@@ -3673,6 +3683,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             if (!floor.IsCancellationRequested && card.IsOpen)
             {
+                // Its sound, straight before it is read (#306): taken only now, so a card put back keeps it for its reading.
+                spoken.Prelude = PreludeFor([card.Ask.SessionId]);
                 spoken.Add(line);
                 card = null; // read
             }

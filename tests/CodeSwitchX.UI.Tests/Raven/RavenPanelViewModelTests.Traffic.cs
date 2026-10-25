@@ -279,6 +279,71 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Plays.ShouldBe(0);
     }
 
+    /// <summary>Review round 2 of #306: a card put back because the floor was taken while its line was worded keeps its sound.</summary>
+    [Fact]
+    public async Task A_card_put_back_before_its_line_keeps_its_sound()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var (vm, asks) = await TrafficVmAsync();
+        _teller.Gate = new TaskCompletionSource();
+        _ = asks.HoldAsync(LongCommandIn("b", "p1"), CancellationToken.None); // chat 1's, worded by the teller
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => _teller.Sent.Count == 1);
+
+        vm.PressMic(TalkInput.MicButton); // the floor is taken while the line is worded
+        _teller.Gate.SetResult();
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingAnswers);
+        await WithinAsync(_voice.WhenQuietAsync());
+        _sounds.Plays.ShouldBe(0, "the card was not read yet");
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _sounds.Ids.ShouldBe(["bell-pair"], "played before the card's line, now read");
+    }
+
+    /// <summary>Review round 2 of #306: a card answered in VS Code before it was read frees the floor for other chats' sounds.</summary>
+    [Fact]
+    public async Task A_card_closed_before_it_is_read_lets_other_sounds_play()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        using var hook = new CancellationTokenSource();
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), hook.Token); // chat 1's, waiting to be read
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        var turn = _time.GetUtcNow();
+        var workspace = _yard.WorkspaceIdOf("a");
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("a", SessionState.Idle, turn) with { WorkspaceId = workspace },
+            ChatNewsTests.Chat("a", SessionState.Working, turn) with { WorkspaceId = workspace, TurnStartedAt = turn })); // chat 2 starts
+
+        await hook.CancelAsync(); // answered in VS Code
+        await Until(() => vm.OpenQuestions == 0);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await WithinAsync(vm.PendingAnswers);
+        await SoundGraceAsync(vm);
+
+        _sounds.Ids.ShouldBe(["wood-knock"]);
+    }
+
+    /// <summary>Review round 2 of #306: what Raven says on its own waits the pause after a sound has ended, as after speech.</summary>
+    [Fact]
+    public async Task The_pause_runs_from_the_end_of_a_sound()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _sounds.Hold = new TaskCompletionSource();
+        Changes("a", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
+
+        _time.Advance(TimeSpan.FromSeconds(2)); // the sound plays on
+        _sounds.Hold.SetResult(); // it ends, on the player's thread
+
+        await Until(() => vm.Traffic.PauseLeft == TrafficWatcher.DefaultPause);
+    }
+
     /// <summary>Review round 1 of #306: a window the list does not number is on the Yard all the same: its sounds play.</summary>
     [Fact]
     public async Task A_window_the_list_does_not_number_still_sounds()
@@ -584,6 +649,9 @@ internal sealed class FakeSounds : IChatSounds
         }
     }
 
+    /// <summary>When set, each play lasts until it completes (or the play is cancelled).</summary>
+    public TaskCompletionSource? Hold { get; set; }
+
     public Task PlayAsync(string soundId, CancellationToken ct)
     {
         lock (_ids)
@@ -591,7 +659,7 @@ internal sealed class FakeSounds : IChatSounds
             _ids.Add(soundId);
         }
 
-        return Task.CompletedTask;
+        return Hold is { } hold ? hold.Task.WaitAsync(ct).ContinueWith(_ => { }, TaskScheduler.Default) : Task.CompletedTask;
     }
 
     public TimeSpan LengthOf(string soundId) => TimeSpan.Zero;
