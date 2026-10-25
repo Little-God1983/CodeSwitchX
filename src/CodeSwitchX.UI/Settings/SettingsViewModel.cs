@@ -100,20 +100,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <see cref="FollowUpChoices"/>, 0 for none.</summary>
     [ObservableProperty] private int _ravenFollowUpSeconds = Raven.RavenPanelViewModel.DefaultFollowUpSeconds;
 
-    /// <summary>How long, in seconds, other chats stay silent after an announcement or a sound (#125): one of <see cref="CooldownChoices"/>.</summary>
-    [ObservableProperty] private int _ravenCooldownSeconds = (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
-
     /// <summary>How long, in seconds, whatever Raven says on its own waits after it last spoke or made a sound (#152): one of <see cref="PauseChoices"/>.</summary>
     [ObservableProperty] private int _ravenPauseSeconds = (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
 
-    /// <summary>Whether other chats make their short sound; off, they are only marked in the list.</summary>
-    [ObservableProperty] private bool _ravenChatSound = true;
-
     /// <summary>The windows whose Raven chat is muted (#153), by workspace id; the panel owns it, Settings stores it.</summary>
     [ObservableProperty] private IReadOnlyList<Guid> _ravenMutedWindows = [];
-
-    /// <summary>Whether the selected chat's own news waits for the cooldown too.</summary>
-    [ObservableProperty] private bool _ravenOwnNewsWaits;
 
     /// <summary>Whether Raven says what came in a chat while the user was away when they switch to it (#127). On by default (#143).</summary>
     [ObservableProperty] private bool _ravenCatchUp = true;
@@ -125,6 +116,33 @@ public sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private int _ravenVoiceVolume = DefaultVoiceVolume;
 
     public const int DefaultSoundVolume = AudioLevels.DefaultSoundsPercent, DefaultVoiceVolume = AudioLevels.DefaultVoicePercent;
+
+    /// <summary>A slot with no sound (#306), as stored and as its picker holds it: a picker cannot select an item whose value is null.</summary>
+    public const string NoSound = "none";
+
+    /// <summary>A sound a slot's picker offers: a shipped sound, or None.</summary>
+    public sealed record SoundChoice(string Id, string Name);
+
+    /// <summary>What each slot's picker offers: None, then the shipped sounds.</summary>
+    public IReadOnlyList<SoundChoice> SoundChoices { get; } = [new(NoSound, "None"), .. ShippedSounds.All.Select(s => new SoundChoice(s.Id, s.Name))];
+
+    /// <summary>The sound a chat makes when it starts working (#306): a shipped sound's id, or <see cref="NoSound"/>.</summary>
+    [ObservableProperty] private string _ravenSoundStart = ShippedSounds.DefaultFor(SoundSlot.StartsWorking);
+
+    /// <summary>The sound a chat makes when its turn ends (#306).</summary>
+    [ObservableProperty] private string _ravenSoundFinish = ShippedSounds.DefaultFor(SoundSlot.Finishes);
+
+    /// <summary>The sound a chat makes when it asks a question, or waits for the user without a card (#306).</summary>
+    [ObservableProperty] private string _ravenSoundQuestion = ShippedSounds.DefaultFor(SoundSlot.AsksQuestion);
+
+    /// <summary>The sound a chat makes when it asks permission (#306).</summary>
+    [ObservableProperty] private string _ravenSoundPermission = ShippedSounds.DefaultFor(SoundSlot.AsksPermission);
+
+    /// <summary>The sound a chat makes when its turn fails (#306).</summary>
+    [ObservableProperty] private string _ravenSoundFail = ShippedSounds.DefaultFor(SoundSlot.Fails);
+
+    /// <summary>The sound Raven makes when Open mic hears its name (#306): at once, past the queue.</summary>
+    [ObservableProperty] private string _ravenSoundName = ShippedSounds.DefaultFor(SoundSlot.HearsName);
 
     /// <summary>How long, in minutes, a chat stays on its tile after its tab was closed (#164): one of <see cref="KeepClosedChoices"/>, 0 for not at all.</summary>
     [ObservableProperty] private int _yardKeepClosedMinutes;
@@ -186,7 +204,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
-    public IReadOnlyList<int> CooldownChoices => Raven.TrafficWatcher.CooldownChoices;
 
     /// <summary>The pauses between messages the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> PauseChoices => Raven.TrafficWatcher.PauseChoices;
@@ -468,8 +485,6 @@ public sealed partial class SettingsViewModel : ObservableObject
             RavenBargeIn = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenBargeIn, "whether talking over Raven stops it", ct) ?? true;
             RavenFollowUpSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenFollowUpSeconds, "Open mic's follow-up", ct) is { } followUp
                 && FollowUpChoices.Contains(followUp) ? followUp : Raven.RavenPanelViewModel.DefaultFollowUpSeconds;
-            RavenCooldownSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenCooldownSeconds, "the chats' cooldown", ct) is { } cooldown
-                && CooldownChoices.Contains(cooldown) ? cooldown : (int)Raven.TrafficWatcher.DefaultCooldown.TotalSeconds;
             RavenMutedWindows = await LoadOrDefaultAsync<List<Guid>>(SettingKeys.RavenMutedWindows, "the muted Raven chats", ct) ?? [];
             RavenPauseSeconds = await LoadOrDefaultAsync<int?>(SettingKeys.RavenPauseSeconds, "the pause between messages", ct) is { } pause
                 && PauseChoices.Contains(pause) ? pause : (int)Raven.TrafficWatcher.DefaultPause.TotalSeconds;
@@ -479,13 +494,17 @@ public sealed partial class SettingsViewModel : ObservableObject
                 && Yard.YardViewModel.HideIdleHoursChoices.Contains(hide) ? hide : 0;
             YardMaxChats = await LoadOrDefaultAsync<int?>(SettingKeys.YardMaxChats, "the most chats on a tile", ct) is { } most
                 && Yard.YardViewModel.MaxChatsChoices.Contains(most) ? most : Yard.YardViewModel.DefaultMaxChats;
-            RavenChatSound = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenChatSound, "whether other chats make a sound", ct) ?? true;
-            RavenOwnNewsWaits = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenOwnNewsWaits, "whether the chat's own news waits for the cooldown", ct) ?? false;
             RavenCatchUp = await LoadOrDefaultAsync<bool?>(SettingKeys.RavenCatchUp, "whether Raven catches up on switching chats", ct) ?? true;
             RavenSoundVolume = await LoadOrDefaultAsync<int?>(SettingKeys.RavenSoundVolume, "the sounds' volume", ct) is { } sounds and >= 0 and <= 100
                 ? sounds : DefaultSoundVolume;
             RavenVoiceVolume = await LoadOrDefaultAsync<int?>(SettingKeys.RavenVoiceVolume, "the voice's volume", ct) is { } voiceVolume and >= 0 and <= 100
                 ? voiceVolume : DefaultVoiceVolume;
+            RavenSoundStart = await LoadSoundAsync(SettingKeys.RavenSoundStart, SoundSlot.StartsWorking, ct);
+            RavenSoundFinish = await LoadSoundAsync(SettingKeys.RavenSoundFinish, SoundSlot.Finishes, ct);
+            RavenSoundQuestion = await LoadSoundAsync(SettingKeys.RavenSoundQuestion, SoundSlot.AsksQuestion, ct);
+            RavenSoundPermission = await LoadSoundAsync(SettingKeys.RavenSoundPermission, SoundSlot.AsksPermission, ct);
+            RavenSoundFail = await LoadSoundAsync(SettingKeys.RavenSoundFail, SoundSlot.Fails, ct);
+            RavenSoundName = await LoadSoundAsync(SettingKeys.RavenSoundName, SoundSlot.HearsName, ct);
             _speech.QwenVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenVoice, "Raven's voice", ct) ?? SpeechSettings.DefaultQwenVoice;
             RavenQwenVoice = _speech.QwenVoice; // the setter keeps a known voice, or the default
             _speech.KokoroVoice = await LoadOrDefaultAsync<string>(SettingKeys.RavenKokoroVoice, "Raven's Kokoro voice", ct) ?? SpeechSettings.DefaultKokoroVoice;
@@ -633,8 +652,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnRavenFollowUpSecondsChanged(int value) => Persist(SettingKeys.RavenFollowUpSeconds, value);
 
-    partial void OnRavenCooldownSecondsChanged(int value) => Persist(SettingKeys.RavenCooldownSeconds, value);
-
     partial void OnRavenPauseSecondsChanged(int value) => Persist(SettingKeys.RavenPauseSeconds, value);
 
     partial void OnRavenSoundVolumeChanged(int value)
@@ -656,9 +673,53 @@ public sealed partial class SettingsViewModel : ObservableObject
         _levels.Voice = AudioLevels.GainOf(RavenVoiceVolume);
     }
 
-    /// <summary>Letting go of the sounds' slider plays the chats' sound at the level just set.</summary>
+    /// <summary>Letting go of the sounds' slider plays the finished sound, or the old chime with none, at the level just set.</summary>
     [RelayCommand]
-    private void PlaySoundLevel() => _sounds?.PlayAsync(_picks.For(SoundSlot.Finishes) ?? "two-tones", CancellationToken.None);
+    private void PlaySoundLevel() => Play(_picks.For(SoundSlot.Finishes) ?? "two-tones");
+
+    /// <summary>A slot's play button: its sound as picked, nothing for None.</summary>
+    [RelayCommand]
+    private void PlaySlotSound(SoundSlot slot)
+    {
+        if (_picks.For(slot) is { } sound)
+        {
+            Play(sound);
+        }
+    }
+
+    private CancellationTokenSource? _playing;
+
+    /// <summary>Plays a sound of the page, stopping the one it played before: buttons pressed in a row are not heard over each other.</summary>
+    private void Play(string sound)
+    {
+        _playing?.Cancel();
+        _playing = new CancellationTokenSource();
+        _ = _sounds?.PlayAsync(sound, _playing.Token);
+    }
+
+    /// <summary>A slot's sound as stored (#306): <see cref="NoSound"/> for none; nothing stored, or a sound no longer shipped, is the slot's default.</summary>
+    private async Task<string> LoadSoundAsync(string key, SoundSlot slot, CancellationToken ct) =>
+        await LoadOrDefaultAsync<string>(key, $"the sound of {slot}", ct) is { } stored && (stored == NoSound || ShippedSounds.Has(stored))
+            ? stored : ShippedSounds.DefaultFor(slot);
+
+    /// <summary>The chats' sounds follow the slot's pick at once; it is stored too, once loaded.</summary>
+    private void PickSound(SoundSlot slot, string key, string sound)
+    {
+        _picks.Set(slot, sound == NoSound ? null : sound);
+        Persist(key, sound);
+    }
+
+    partial void OnRavenSoundStartChanged(string value) => PickSound(SoundSlot.StartsWorking, SettingKeys.RavenSoundStart, value);
+
+    partial void OnRavenSoundFinishChanged(string value) => PickSound(SoundSlot.Finishes, SettingKeys.RavenSoundFinish, value);
+
+    partial void OnRavenSoundQuestionChanged(string value) => PickSound(SoundSlot.AsksQuestion, SettingKeys.RavenSoundQuestion, value);
+
+    partial void OnRavenSoundPermissionChanged(string value) => PickSound(SoundSlot.AsksPermission, SettingKeys.RavenSoundPermission, value);
+
+    partial void OnRavenSoundFailChanged(string value) => PickSound(SoundSlot.Fails, SettingKeys.RavenSoundFail, value);
+
+    partial void OnRavenSoundNameChanged(string value) => PickSound(SoundSlot.HearsName, SettingKeys.RavenSoundName, value);
 
     /// <summary>Letting go of the voice's slider has the voice picked say its sample at the level just set.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]
@@ -671,10 +732,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     partial void OnYardMaxChatsChanged(int value) => Persist(SettingKeys.YardMaxChats, value);
 
     partial void OnRavenMutedWindowsChanged(IReadOnlyList<Guid> value) => Persist(SettingKeys.RavenMutedWindows, value);
-
-    partial void OnRavenChatSoundChanged(bool value) => Persist(SettingKeys.RavenChatSound, value);
-
-    partial void OnRavenOwnNewsWaitsChanged(bool value) => Persist(SettingKeys.RavenOwnNewsWaits, value);
 
     partial void OnRavenCatchUpChanged(bool value) => Persist(SettingKeys.RavenCatchUp, value);
 

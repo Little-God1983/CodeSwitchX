@@ -5,6 +5,7 @@ using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.UI.Voice;
+using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Speech;
 
@@ -300,6 +301,17 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
+        // A slot's sound the Sounds page picks (#306): by the name its picker shows, or None.
+        IReadOnlyList<string> soundNames = ["None", .. ShippedSounds.All.Select(s => s.Name)];
+        Entry Sound(string name, string description, string[] aliases, Func<string> get, Action<string> set) =>
+            new(new(name, Title(SettingsPage.Sounds), description, soundNames), SettingsPage.Sounds, aliases,
+                () => ShippedSounds.All.FirstOrDefault(s => s.Id == get())?.Name ?? "None", v =>
+                {
+                    var picked = OneOf(name, v, soundNames);
+                    set(ShippedSounds.All.FirstOrDefault(s => s.Name == picked)?.Id ?? SettingsViewModel.NoSound);
+                    return null;
+                });
+
         // A time the Yard page offers in a box, worded as there, or none: "10", "10 minutes", "off", "0". Said with a
         // unit, it is that long: "1 hour" is no "1 minute", and 60 minutes are one hour.
         Entry Time(string name, string description, string[] aliases, Func<int, string> worded, int unitMinutes, IReadOnlyList<int> choices, Func<int> get,
@@ -381,12 +393,8 @@ public sealed class AppSettings : IAppSettings
                 }),
             Toggle("speak chat news", SettingsPage.Voice, "Raven says when the chat the user is in finishes, fails or needs them; off, it is "
                 + "only written.", () => S.RavenSpeakNews, v => S.RavenSpeakNews = v, "chat news", "news"),
-            Toggle("sound for other chats", SettingsPage.Voice, "Other chats make a short sound, when it is quiet, instead of being spoken; "
-                + "off, they are only marked in the list.", () => S.RavenChatSound, v => S.RavenChatSound = v, "chime", "sound", "other chats"),
-            Seconds("cooldown", "Seconds other chats stay silent after Raven speaks or a chat makes its sound.", ["cool down", "quiet time"],
-                TrafficWatcher.CooldownChoices, () => S.RavenCooldownSeconds, v => S.RavenCooldownSeconds = v),
             Seconds("pause between messages", "Seconds what Raven says on its own (news, a catch-up, a question read out) waits after Raven "
-                    + "last spoke or a chat made its sound; a chat's sound inside it is left out. Raven's answers to the user never wait.",
+                    + "last spoke or a chat made its sound. The chats' sounds never wait for it, and Raven's answers to the user never do.",
                 ["pause", "gap", "gap between messages", "pause between news", "time between messages"],
                 TrafficWatcher.PauseChoices, () => S.RavenPauseSeconds, v => S.RavenPauseSeconds = v),
             Percent("sound volume", "How loud the chats' sounds play, from 0 to 100 %; CodeSwitchX's own, Windows' volume stays as it is.",
@@ -394,9 +402,18 @@ public sealed class AppSettings : IAppSettings
             Percent("voice volume", "How loud Raven's voice plays, from 0 to 100 %: answers, news and the samples; CodeSwitchX's own, Windows' volume "
                 + "stays as it is.", ["Raven's voice volume", "volume of the voice", "how loud Raven speaks", "speech volume"], () => S.RavenVoiceVolume,
                 v => S.RavenVoiceVolume = v),
-            Toggle("the chat I'm in also waits for the cooldown", SettingsPage.Voice, "On, the news of the chat the user is in is only shown "
-                + "if Raven spoke or a chat made its sound within the cooldown; the catch-up on switching is still said.", () => S.RavenOwnNewsWaits, v => S.RavenOwnNewsWaits = v,
-                "own news waits", "my chat waits", "chat I'm in waits", "chat I'm in waits for the cooldown"),
+            Sound("sound when a chat starts working", "The sound a chat makes when a turn of it begins.", ["start sound", "starting sound", "working sound"],
+                () => S.RavenSoundStart, v => S.RavenSoundStart = v),
+            Sound("sound when a chat finishes", "The sound a chat makes when its turn ends.", ["finish sound", "finished sound", "done sound"],
+                () => S.RavenSoundFinish, v => S.RavenSoundFinish = v),
+            Sound("sound when a chat asks a question", "The sound a chat makes when it asks a question, or waits for the user.",
+                ["question sound", "waiting sound"], () => S.RavenSoundQuestion, v => S.RavenSoundQuestion = v),
+            Sound("sound when a chat asks permission", "The sound a chat makes when it asks permission.", ["permission sound"],
+                () => S.RavenSoundPermission, v => S.RavenSoundPermission = v),
+            Sound("sound when a chat fails", "The sound a chat makes when its turn fails.", ["fail sound", "failed sound", "failure sound", "error sound"],
+                () => S.RavenSoundFail, v => S.RavenSoundFail = v),
+            Sound("sound when Raven hears its name", "The sound Open mic plays at once when it hears \"Raven\" and listens for the rest.",
+                ["name sound", "wake sound", "Raven's name sound"], () => S.RavenSoundName, v => S.RavenSoundName = v),
             Toggle("catch-up when I switch chats", SettingsPage.Voice, "On, switching to a chat with something new makes Raven say in a "
                 + "short sentence for each Claude Code chat what happened there while the user was away, a pause after Raven last spoke or a chat made its sound. "
                 + "Its own switch: it is said with chat news only written too.", () => S.RavenCatchUp, v => S.RavenCatchUp = v,

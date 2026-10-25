@@ -217,8 +217,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
             {
                 ShowYardRules();
             }
-            else if (e.PropertyName is nameof(SettingsViewModel.RavenCooldownSeconds) or nameof(SettingsViewModel.RavenChatSound)
-                or nameof(SettingsViewModel.RavenOwnNewsWaits) or nameof(SettingsViewModel.RavenPauseSeconds))
+            else if (e.PropertyName == nameof(SettingsViewModel.RavenPauseSeconds))
             {
                 ShowTraffic();
             }

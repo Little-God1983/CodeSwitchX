@@ -10,12 +10,6 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>How long Raven and the user must both have been quiet before news is told: it must not step on the user's next sentence.</summary>
     public static readonly TimeSpan NewsGrace = TimeSpan.FromSeconds(1.5);
 
-    /// <summary>The cooldown Settings still offers until its row goes (#306).</summary>
-    public static readonly TimeSpan DefaultCooldown = TimeSpan.FromSeconds(10);
-
-    /// <summary>The cooldowns Settings still offers until its row goes (#306), in seconds.</summary>
-    public static readonly IReadOnlyList<int> CooldownChoices = [5, 10, 15, 20, 30, 60];
-
     /// <summary>The pause between messages before Settings changes it (#152).</summary>
     public static readonly TimeSpan DefaultPause = TimeSpan.FromSeconds(3);
 
