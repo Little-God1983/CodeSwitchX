@@ -29,6 +29,16 @@ public interface IAudioOutput
     /// chosen could not be used). <see cref="DeviceId"/> is read once, so a pick meanwhile cannot make it say another.
     /// </summary>
     IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn);
+
+    /// <summary>
+    /// The same, playing 16-bit PCM at <paramref name="gain"/>, read as it plays (<see cref="AudioLevels"/>): every playback path
+    /// opens through here, so none forgets its slider (#305 review).
+    /// </summary>
+    IWavePlayer Open(IWaveProvider source, Func<float> gain, int latencyMs) => Open(new Loudness(source, gain), latencyMs, out _);
+
+    /// <inheritdoc cref="Open(IWaveProvider, Func{float}, int)"/>
+    IWavePlayer Open(IWaveProvider source, Func<float> gain, int latencyMs, out string? playsOn) =>
+        Open(new Loudness(source, gain), latencyMs, out playsOn);
 }
 
 /// <summary>

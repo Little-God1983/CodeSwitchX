@@ -68,10 +68,10 @@ public sealed class AudioLevelsTests
     }
 
     [Fact]
-    public void The_chime_at_the_default_level_is_as_loud_as_before()
+    public void The_old_chime_at_the_default_level_is_as_loud_as_before()
     {
-        var pcm = ChatChime.Pcm.ToArray();
-        var loudness = new Loudness(new RawSourceWaveStream(pcm, 0, pcm.Length, new WaveFormat(24000, 16, 1)), () => AudioLevels.GainOf(AudioLevels.DefaultSoundsPercent));
+        var (pcm, format) = ShippedSounds.Load("two-tones");
+        var loudness = new Loudness(new RawSourceWaveStream(pcm, 0, pcm.Length, format), () => AudioLevels.GainOf(AudioLevels.DefaultSoundsPercent));
 
         var peak = Read(loudness, pcm.Length / 2).Max(s => Math.Abs((int)s));
 

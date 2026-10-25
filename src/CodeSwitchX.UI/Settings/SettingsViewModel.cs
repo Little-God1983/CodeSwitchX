@@ -31,7 +31,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ChatSettings _chats;
     private readonly IUiDispatcher _ui;
     private readonly ILogger<SettingsViewModel> _logger;
-    private readonly IChatChime? _chime;
+    private readonly IChatSounds? _sounds;
+    private readonly SoundPicks _picks;
     private readonly AudioLevels _levels;
     private bool _loading;
     private readonly Lock _saveGate = new();
@@ -229,9 +230,10 @@ public sealed partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
         ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null,
-        IChatChime? chime = null, AudioLevels? levels = null)
+        IChatSounds? sounds = null, AudioLevels? levels = null, SoundPicks? picks = null)
     {
-        _chime = chime;
+        _sounds = sounds;
+        _picks = picks ?? new SoundPicks();
         _levels = levels ?? new AudioLevels();
         ShowLevels();
         Shortcuts = shortcuts ?? new ChatHotkeys(settings);
@@ -656,7 +658,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>Letting go of the sounds' slider plays the chats' sound at the level just set.</summary>
     [RelayCommand]
-    private void PlaySoundLevel() => _chime?.Play();
+    private void PlaySoundLevel() => _sounds?.PlayAsync(_picks.For(SoundSlot.Finishes) ?? "two-tones", CancellationToken.None);
 
     /// <summary>Letting go of the voice's slider has the voice picked say its sample at the level just set.</summary>
     [RelayCommand(AllowConcurrentExecutions = true)]

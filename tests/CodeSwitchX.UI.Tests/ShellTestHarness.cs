@@ -97,7 +97,7 @@ public sealed class ShellTestHarness
         Engines = new SpeechEngines(Speech, [Kokoro, Qwen]);
         VoiceStatus = new VoiceStatusViewModel(Engines, Speech, Dictation, dispatcher);
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
-            Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, chime: Chime, levels: Levels);
+            Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, sounds: Chime, levels: Levels);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
         Speakers.List().Returns([]);

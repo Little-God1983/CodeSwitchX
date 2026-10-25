@@ -46,7 +46,7 @@ public class SettingsViewModelTests : IDisposable
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
-            chime: _chime, levels: _levels);
+            sounds: _chime, levels: _levels);
     }
 
     public void Dispose()

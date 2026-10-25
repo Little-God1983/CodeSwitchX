@@ -72,7 +72,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly PushToTalkGesture _gesture;
 
     /// <summary>The sound another chat makes instead of speaking; none in tests that do not watch for it.</summary>
-    private readonly IChatChime? _chime;
+    private readonly IChatSounds? _sounds;
+    private readonly SoundPicks _picks;
 
     /// <summary>The inputs holding push to talk now: the gesture sees one hold, which ends when the last of them is let go.</summary>
     private readonly HashSet<TalkInput> _heldInputs = [];
@@ -359,7 +360,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IWhisperModelStore models, IDictationVocabularyProvider vocabulary, IConductorBrain brain, ReplyVoice voice, ITextToSpeech speech,
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
-        IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatChime? chime = null,
+        IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatSounds? sounds = null, SoundPicks? picks = null,
         SpeakerChoice? speakers = null, UnaskedTurns? unasked = null)
     {
         Speakers = speakers;
@@ -377,7 +378,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _time = time;
         _logger = logger;
         _gesture = new PushToTalkGesture(time);
-        _chime = chime;
+        _sounds = sounds;
+        _picks = picks ?? new SoundPicks();
         Traffic = new TrafficWatcher(time);
         Chats = [YardChat, ActivityChat];
         _selectedChat = YardChat;
@@ -3000,10 +3002,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void SoundForOtherChat(bool floorFree)
     {
-        if (_chime is not null && !IsMuted && Traffic.TrySound(floorFree && CallListening() <= TimeSpan.Zero))
+        if (_sounds is not null && _picks.For(SoundSlot.Finishes) is { } sound && !IsMuted && Traffic.TrySound(floorFree && CallListening() <= TimeSpan.Zero))
         {
             _logger.LogInformation("Raven chimes for another chat's news or card");
-            _chime.Play();
+            _ = _sounds.PlayAsync(sound, CancellationToken.None);
         }
     }
 

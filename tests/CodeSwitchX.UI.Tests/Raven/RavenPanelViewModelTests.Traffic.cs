@@ -29,7 +29,7 @@ public sealed partial class RavenPanelViewModelTests
         var news = new ChatNews(_bus, _yard, _time, _ => "Done.");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, brains: brains, chime: _chime);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, brains: brains, sounds: _chime);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -470,12 +470,18 @@ public sealed partial class RavenPanelViewModelTests
     }
 }
 
-/// <summary>Counts the chimes instead of playing them.</summary>
-internal sealed class FakeChime : IChatChime
+/// <summary>Counts the sounds instead of playing them.</summary>
+internal sealed class FakeChime : IChatSounds
 {
     private int _plays;
 
     public int Plays => Volatile.Read(ref _plays);
 
-    public void Play() => Interlocked.Increment(ref _plays);
+    public Task PlayAsync(string soundId, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _plays);
+        return Task.CompletedTask;
+    }
+
+    public TimeSpan LengthOf(string soundId) => TimeSpan.Zero;
 }

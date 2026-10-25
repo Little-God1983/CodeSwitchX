@@ -196,7 +196,7 @@ public sealed class WaveOutSpeechPlayer : ISpeechPlayer
         try
         {
             // At the voice's level, measured before it: the orb moves as much however quietly Raven speaks (#305).
-            output = _audioOutput.Open(new Loudness(new Meter(buffer, this), () => _levels.Voice), 120, out playsOn);
+            output = _audioOutput.Open(new Meter(buffer, this), () => _levels.Voice, 120, out playsOn);
         }
         catch (Exception ex)
         {
