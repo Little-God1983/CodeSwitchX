@@ -49,7 +49,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
@@ -71,7 +71,8 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await TrafficVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: it makes the sound
         await GraceAsync(vm);
-        await Until(() => _chime.Plays == 1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
 
         Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
         await OnlyTheGracePassesAsync(vm);
@@ -92,7 +93,8 @@ public sealed partial class RavenPanelViewModelTests
         vm.Traffic.Pause = TimeSpan.FromSeconds(30);
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => _chime.Plays == 1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
         Changes("b", SessionState.Working, SessionState.Idle); // waits the 30 s
 
         vm.Traffic.Pause = TimeSpan.FromSeconds(2);
@@ -111,7 +113,8 @@ public sealed partial class RavenPanelViewModelTests
         var (vm, _) = await TrafficVmAsync();
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => _chime.Plays == 1); // the pause runs from it
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1); // the pause runs from it
 
         vm.PressMic(TalkInput.MicButton);
         Speak();

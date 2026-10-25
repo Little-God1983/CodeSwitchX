@@ -616,6 +616,98 @@ public sealed class ReplyVoiceTests : IDisposable
         (await reply.HeardWholeAsync()).ShouldBeFalse();
     }
 
+    /// <summary>#306: the chat's sound plays right before Raven's line for it, once the line is ready to be heard.</summary>
+    [Fact]
+    public async Task The_prelude_plays_out_before_the_first_audio_is_queued()
+    {
+        var sound = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Prelude = _ => sound.Task;
+        reply.Add("Chat App finished.");
+        reply.Complete();
+        await Until(() => _tts.Spoken.Count == 1);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        _player.Played.ShouldBe(0, "the line waits for its sound");
+
+        sound.SetResult();
+        await _voice.WhenQuietAsync();
+
+        _player.Played.ShouldBe(1);
+    }
+
+    /// <summary>Review of #306: a sound slow to play (a headset waking) is no hung voice: the line is not dropped, the voice not restarted.</summary>
+    [Fact]
+    public async Task A_slow_prelude_does_not_count_as_a_hung_voice()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        using var voice = new ReplyVoice(_tts, _player, _keepAlive, time, NullLogger<ReplyVoice>.Instance);
+        _tts.ThrowsWhenCancelledAfterChunk = true;
+        var sound = new TaskCompletionSource();
+        var reply = voice.Begin();
+        reply.Prelude = _ => sound.Task;
+        reply.Add("Chat App finished.");
+        reply.Complete();
+        await Until(() => _tts.Spoken.Count == 1);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        time.Advance(ReplyVoice.ChunkTimeout + TimeSpan.FromSeconds(1));
+        sound.SetResult();
+        await Until(() => _player.Played == 1);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _tts.Recoveries.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task The_prelude_runs_once_per_reply()
+    {
+        var plays = 0;
+        var reply = _voice.Begin(whole: true);
+        reply.Prelude = _ =>
+        {
+            Interlocked.Increment(ref plays);
+            return Task.CompletedTask;
+        };
+        reply.Add("One. Two. Three. Four.");
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+
+        _tts.Spoken.Count.ShouldBe(2);
+        plays.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_hush_during_the_prelude_queues_nothing()
+    {
+        var began = new TaskCompletionSource();
+        var reply = _voice.Begin();
+        reply.Prelude = async ct =>
+        {
+            began.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        };
+        reply.Add("Chat App finished.");
+        reply.Complete();
+        await began.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        _voice.Hush();
+        await _voice.WhenQuietAsync();
+
+        _player.Played.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_failing_prelude_still_speaks_the_line()
+    {
+        var reply = _voice.Begin();
+        reply.Prelude = _ => Task.FromException(new IOException("the sound's device went"));
+        reply.Add("Chat App finished.");
+        reply.Complete();
+        await _voice.WhenQuietAsync();
+
+        _player.Played.ShouldBe(1);
+    }
+
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
@@ -689,7 +781,14 @@ public sealed class ReplyVoiceTests : IDisposable
 
             ct.ThrowIfCancellationRequested();
             yield return new SpeechChunk(new byte[480], 24000);
+            if (ThrowsWhenCancelledAfterChunk)
+            {
+                ct.ThrowIfCancellationRequested(); // as the sidecar's stream does, read on after the chunk
+            }
         }
+
+        /// <summary>The enumeration looks at the token once more after its chunk, as the real voice's stream does.</summary>
+        public bool ThrowsWhenCancelledAfterChunk { get; set; }
     }
 
     private sealed class FakeKeepAlive : IAudioKeepAlive

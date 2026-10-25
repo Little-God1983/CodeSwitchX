@@ -34,17 +34,32 @@ public sealed partial class RavenPanelViewModelTests
 
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
         await GraceAsync(vm);
-        _chime.Plays.ShouldBe(0);
+        _sounds.Plays.ShouldBe(0);
         ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0, "it is still marked in the list");
 
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         Changes("c", SessionState.Working, SessionState.Idle); // chat 3's
         await GraceAsync(vm);
-        _chime.Plays.ShouldBe(1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
+    }
+
+    /// <summary>Review round 1 of #306: a chat muted while its sound waits makes it no more: muted is "no sound".</summary>
+    [Fact]
+    public async Task A_chat_muted_while_its_sound_waits_makes_none()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+
+        vm.MuteChat(2, true);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Plays.ShouldBe(0);
     }
 
     [Fact]
-    public async Task A_muted_chat_s_cards_are_still_read_out_and_still_sound_from_elsewhere()
+    public async Task A_muted_chat_s_cards_are_still_read_out_but_make_no_sound()
     {
         var (vm, asks) = await TrafficVmAsync();
         vm.MuteChat(1, true);
@@ -54,10 +69,13 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
         _speech.Spoken.ShouldHaveSingleItem().ShouldContain("npm test");
+        _sounds.Plays.ShouldBe(0, "a muted chat puts nothing in the queue, nor before its line (#306)");
 
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         _ = asks.HoldAsync(PermittingIn("a", "p2"), CancellationToken.None); // chat 2's: the chat waits on it
-        await Until(() => _chime.Plays == 1);
+        await Until(() => vm.OpenQuestions == 2);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(0);
     }
 
     [Fact]

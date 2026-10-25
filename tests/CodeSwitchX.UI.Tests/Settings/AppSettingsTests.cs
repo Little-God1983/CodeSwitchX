@@ -153,18 +153,31 @@ public sealed class AppSettingsTests
         (await _settings.SetAsync("mic mode", "open mic", Ct)).Value.ShouldBe("on");
     }
 
+    /// <summary>#306: Raven picks a slot's sound by the name the picker shows, or None.</summary>
     [Fact]
-    public async Task The_cooldown_is_set_from_what_is_said_and_a_value_not_offered_is_refused()
+    public async Task Raven_sets_a_slot_s_sound_by_its_name()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
 
-        (await _settings.SetAsync("cooldown", "20 seconds", Ct)).Value.ShouldBe("20 seconds");
-        _h.Shell.Settings.RavenCooldownSeconds.ShouldBe(20);
-        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(20));
+        (await _settings.SetAsync("sound when a chat fails", "soft bell", Ct)).Value.ShouldBe("Soft bell");
+        (await _settings.SetAsync("start sound", "none", Ct)).Value.ShouldBe("None");
 
-        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("cooldown", "7", Ct));
+        _h.Shell.Settings.RavenSoundFail.ShouldBe("bell-soft");
+        _h.Shell.Settings.RavenSoundStart.ShouldBe(SettingsViewModel.NoSound);
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("finish sound", "trumpet", Ct));
         error.Message.ShouldContain("Nothing was changed");
-        _h.Shell.Settings.RavenCooldownSeconds.ShouldBe(20);
+    }
+
+    /// <summary>#306: the chime, its cooldown and the own news's wait for it are gone.</summary>
+    [Theory]
+    [InlineData("cooldown")]
+    [InlineData("sound for other chats")]
+    [InlineData("the chat I'm in also waits for the cooldown")]
+    public async Task The_removed_settings_are_not_known_any_more(string name)
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync(name, "on", Ct))).Message.ShouldContain("There is no setting");
     }
 
     // #217: the box reads 0 as "Off"
@@ -197,15 +210,12 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
-    public async Task Turn_the_chime_off_and_speak_news_off_set_the_switches_of_the_voice_page()
+    public async Task Speak_news_off_sets_the_switch_of_the_voice_page()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);
 
-        await _settings.SetAsync("sound for other chats", "off", Ct);
         await _settings.SetAsync("speak chat news", "no", Ct);
 
-        _h.Shell.Settings.RavenChatSound.ShouldBeFalse();
-        _h.Shell.Raven.Traffic.SoundOn.ShouldBeFalse();
         _h.Shell.Settings.RavenSpeakNews.ShouldBeFalse();
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("speak chat news", "maybe", Ct))).Message.ShouldContain("on or off");
     }
@@ -460,18 +470,6 @@ public sealed class AppSettingsTests
 
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync(said, "4", Ct))).Message.ShouldContain("Nothing was changed");
         _h.Shell.Settings.RavenPauseSeconds.ShouldBe(5);
-    }
-
-    [Theory]
-    [InlineData("the chat I'm in waits for the cooldown")]
-    [InlineData("chat I'm in waits")]
-    public async Task The_chat_I_m_in_waits_is_found_by_how_it_is_said_not_taken_for_the_cooldown(string said)
-    {
-        await _h.Shell.InitializeAsync(CancellationToken.None);
-
-        (await _settings.SetAsync(said, "on", Ct)).Name.ShouldBe("the chat I'm in also waits for the cooldown");
-
-        _h.Shell.Settings.RavenOwnNewsWaits.ShouldBeTrue();
     }
 
     [Theory]

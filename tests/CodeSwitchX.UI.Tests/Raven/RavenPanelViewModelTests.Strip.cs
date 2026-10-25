@@ -553,7 +553,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a2", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
         await Until(() => two.Unread == 3);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         _teller.Answer = _ => [new BrainText("While you were away, Task a2 finished.")];
 
         vm.SelectedChat = two;
@@ -683,7 +683,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await DigestHeardWithAStaleLineAsync("Task a2 finished.");
         var two = ChatNumbered(vm, 2);
         two.Unread.ShouldBe(1);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 3);
         vm.SelectedChat = two;

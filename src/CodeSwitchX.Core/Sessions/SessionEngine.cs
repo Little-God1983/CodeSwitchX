@@ -213,6 +213,7 @@ public sealed class SessionEngine : IDisposable
                     "Stop" or "UserPromptSubmit" or "SessionStart" => false,
                     _ => s.TurnFailed,
                 },
+                TurnStartedAt = e.EventName == "UserPromptSubmit" ? e.At : s.TurnStartedAt,
             });
         }
     }

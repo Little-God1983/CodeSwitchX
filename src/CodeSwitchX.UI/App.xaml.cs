@@ -306,6 +306,7 @@ public partial class App : Application
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
             sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,
             sp.GetRequiredService<ChatAsks>().Explains));
+        services.AddSingleton<ChatSoundCues>();
         services.AddSingleton<SpeakerChoice>();
         services.AddSingleton<RavenPanelViewModel>();
         services.AddSingleton<ShellViewModel>();

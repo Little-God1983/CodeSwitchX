@@ -20,7 +20,7 @@ public sealed partial class RavenPanelViewModelTests
     private async Task<RavenPanelViewModel> NewOpenMicVmAsync(ReplyVoice? voice = null, IUiDispatcher? dispatcher = null)
     {
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, voice ?? _voice, _speech,
-            dispatcher ?? new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic);
+            dispatcher ?? new ImmediateDispatcher(), _time, NullLogger<RavenPanelViewModel>.Instance, openMic: _openMic, sounds: _sounds, picks: _picks);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         return vm;
     }
@@ -439,6 +439,33 @@ public sealed partial class RavenPanelViewModelTests
         await Task.Delay(100, TestContext.Current.CancellationToken); // heard
 
         vm.TakesTurnsWithoutName.ShouldBeFalse();
+    }
+
+    /// <summary>#306: Raven hearing its name alone plays its sound at once, past the queue and the floor, and even muted.</summary>
+    [Fact]
+    public async Task Ravens_name_alone_plays_its_sound_at_once_even_muted()
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult("Raven?", TimeSpan.FromSeconds(1))));
+        var vm = await InOpenMicAsync();
+        vm.IsMuted = true;
+
+        await TurnAsync(vm, answered: false);
+
+        _sounds.Ids.ShouldBe([ShippedSounds.DefaultFor(SoundSlot.HearsName)]);
+    }
+
+    [Fact]
+    public async Task Ravens_name_with_its_sound_picked_none_plays_nothing()
+    {
+        _dictation.TranscribeAsync(Arg.Any<ReadOnlyMemory<float>>(), Arg.Any<DictationVocabulary>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(new DictationResult("Raven?", TimeSpan.FromSeconds(1))));
+        _picks.Set(SoundSlot.HearsName, null);
+        var vm = await InOpenMicAsync();
+
+        await TurnAsync(vm, answered: false);
+
+        _sounds.Plays.ShouldBe(0);
     }
 
     // Second review of #217: the name alone hushed the answer on its way, which was then only written

@@ -358,6 +358,13 @@ public sealed class ReplyVoice : IDisposable
             await foreach (var chunk in _tts.SpeakAsync(request.Text, stalled.Token).ConfigureAwait(false))
             {
                 watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan);
+                if (reply.TakePrelude() is { } prelude)
+                {
+                    watchdog.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); // a headset waking for the sound is no hung voice
+                    await PlayPreludeAsync(prelude, hush).ConfigureAwait(false);
+                    watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan); // the sound's time is not the voice's
+                }
+
                 await _playerGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
                 try
                 {
@@ -408,6 +415,23 @@ public sealed class ReplyVoice : IDisposable
         {
             _logger.LogWarning(ex, "Raven could not speak \"{Request}\"", request.Text);
             Drop(reply, $"Raven could not speak: {ex.Message}");
+        }
+    }
+
+    /// <summary>The reply's prelude, to its end or the hush; one that fails is logged, and the line is spoken all the same.</summary>
+    private async Task PlayPreludeAsync(Func<CancellationToken, Task> prelude, CancellationToken hush)
+    {
+        try
+        {
+            await prelude(hush).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (hush.IsCancellationRequested)
+        {
+            // Hushed: the caller sees it and queues nothing.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The sound before a reply failed");
         }
     }
 
@@ -629,6 +653,21 @@ public sealed class ReplyVoice : IDisposable
         public bool IsCut => Volatile.Read(ref _cut) == 1;
 
         internal bool Dropped => Volatile.Read(ref _dropped) == 1;
+
+        private Func<CancellationToken, Task>? _prelude;
+
+        /// <summary>
+        /// Played out right before the reply's first audio, once that is ready (#306): the chat's sound, then its line with no
+        /// pause between. Set before the first <see cref="Add"/>; given the hush, which stops it.
+        /// </summary>
+        public Func<CancellationToken, Task>? Prelude
+        {
+            get => Volatile.Read(ref _prelude);
+            set => Volatile.Write(ref _prelude, value);
+        }
+
+        /// <summary>The prelude, once: the reply's later sentences follow without it.</summary>
+        internal Func<CancellationToken, Task>? TakePrelude() => Interlocked.Exchange(ref _prelude, null);
 
         /// <summary>
         /// Whether all of it was heard: true once it is complete and every sentence of it has been spoken and played out,

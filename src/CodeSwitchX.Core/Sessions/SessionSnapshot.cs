@@ -38,6 +38,12 @@ public sealed record SessionSnapshot
     /// </summary>
     public bool TurnFailed { get; init; }
 
+    /// <summary>
+    /// When the chat's current turn began: its latest prompt (#306). A chat that waited on the user and works again goes on
+    /// with the same turn. Null while no prompt was seen in this process. Not persisted.
+    /// </summary>
+    public DateTimeOffset? TurnStartedAt { get; init; }
+
     /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
     public long Version { get; init; }
     public int? ClaudePid { get; init; }

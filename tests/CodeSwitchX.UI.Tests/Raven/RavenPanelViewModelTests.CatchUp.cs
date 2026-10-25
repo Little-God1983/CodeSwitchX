@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using Shouldly;
@@ -22,7 +23,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a2", SessionState.Working, SessionState.Errored);
         await GraceAsync(vm);
         await Until(() => ChatNumbered(vm, 2).Unread == 2);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         return vm;
     }
 
@@ -85,9 +86,10 @@ public sealed partial class RavenPanelViewModelTests
         vm.CatchUp = true;
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: told as a sound
         await GraceAsync(vm);
-        await Until(() => _chime.Plays == 1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
         _time.Advance(TimeSpan.FromSeconds(1)); // heard, and clicked
-        vm.Traffic.CooledDown.ShouldBeFalse();
+        vm.Traffic.PauseLeft.ShouldBeGreaterThan(TimeSpan.Zero);
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await Until(() => vm.State == RavenState.Idle);
@@ -119,21 +121,72 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     /// <summary>
-    /// #143: "the chat I'm in also waits for the cooldown" does not hold the catch-up: the switch asked for it, and dropped it
-    /// would never be said (the switch marked its lines seen).
+    /// #306: the catch-up goes before other chats' sounds: a stream of them never holds it back.
     /// </summary>
     [Fact]
-    public async Task With_own_news_waiting_for_the_cooldown_a_switch_inside_it_is_still_caught_up()
+    public async Task The_catch_up_goes_before_other_chats_sounds()
     {
-        var vm = await AwayFromChatTwoAsync();
-        vm.Traffic.OwnNewsWaits = true;
-        vm.Traffic.Announced(); // Raven just spoke
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's, while the user is in chat 1
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+        _time.Advance(TimeSpan.FromSeconds(10));
+
+        Changes("c", SessionState.Working, SessionState.Errored); // chat 3's: its sound waits
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldContain(q => q.StartsWith("Catch-up:"));
+        _sounds.Ids.ShouldBe(["marimba-rise"], "chat 3's sound waits for the catch-up");
+        await GraceAsync(vm); // chat 3's news is written, then its sound plays
+        await SoundGraceAsync(vm);
+        _sounds.Ids.ShouldBe(["marimba-rise", "marimba-fall"]);
+    }
+
+    /// <summary>Review round 1 of #306: the catch-up sums up what happened, so it opens with that sound, not another session's start.</summary>
+    [Fact]
+    public async Task The_catch_up_opens_with_what_it_sums_up_not_a_start()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: written while the user is in chat 1
+        await GraceAsync(vm);
+        var turn = _time.GetUtcNow();
+        var workspace = _yard.WorkspaceIdOf("a2");
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("a2", SessionState.Idle, turn) with { WorkspaceId = workspace },
+            ChatNewsTests.Chat("a2", SessionState.Working, turn) with { WorkspaceId = workspace, TurnStartedAt = turn })); // then a2 starts
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
 
-        _teller.Asked.ShouldHaveSingleItem().ShouldStartWith("Catch-up:");
+        _teller.Asked.ShouldContain(q => q.StartsWith("Catch-up:"));
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+    }
+
+    /// <summary>Review round 3 of #306: the catch-up opens with its news's sound; a card caught up keeps its own for its reading.</summary>
+    [Fact]
+    public async Task The_catch_up_leaves_a_card_its_own_sound()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2 finished while the user is in chat 1
+        await GraceAsync(vm);
+        _ = asks.HoldAsync(PermittingIn("a2", "p1"), CancellationToken.None); // and another of its chats asks
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _sounds.Ids.ShouldBe(["marimba-rise", "bell-pair"]);
     }
 
     /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>
@@ -172,7 +225,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
@@ -255,7 +308,7 @@ public sealed partial class RavenPanelViewModelTests
         var vm = await AwayFromChatTwoAsync();
         Changes("c", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         _teller.Gate = new TaskCompletionSource();
         vm.SelectedChat = ChatNumbered(vm, 2);
         await PassGraceAsync(vm);
@@ -282,7 +335,7 @@ public sealed partial class RavenPanelViewModelTests
         _yard.Show("a2", "ContentAutomatorX", "Task a2");
         Changes("a2", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         var proposal = asks.Propose("p1");
         await Until(() => asks.IsHeard(proposal));
 
@@ -436,7 +489,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
         await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.News) == 2);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
@@ -463,7 +516,7 @@ public sealed partial class RavenPanelViewModelTests
 
         await GraceAsync(vm);
         await Until(() => ChatNumbered(vm, 2).Unread == 4);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         await GraceAsync(vm);
@@ -482,7 +535,7 @@ public sealed partial class RavenPanelViewModelTests
         Changes("z", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
         await Until(() => vm.YardChat.Unread == 1);
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         _teller.Answer = _ => [new BrainText("the tests pass")];
 
         vm.SelectedChat = vm.YardChat;
@@ -536,7 +589,7 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         _ = asks.HoldAsync(PermittingIn("a", "p1"), CancellationToken.None);
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
 
         vm.SelectedChat = ChatNumbered(vm, 2);
         vm.CatchUp = false;

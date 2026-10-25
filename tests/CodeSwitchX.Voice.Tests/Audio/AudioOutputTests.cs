@@ -67,37 +67,155 @@ public sealed class AudioOutputTests
         after.ShouldAllBe(s => s == 2000);
     }
 
-    /// <summary>#305: the chats' sound plays at the sounds' level.</summary>
+    /// <summary>#305 review: an output opened with a gain plays at it, so a new playback path cannot forget the slider.</summary>
     [Fact]
-    public async Task The_chime_plays_at_the_sounds_level()
+    public void The_open_with_a_gain_scales_what_plays()
     {
         var devices = new Devices();
-        var chime = new ChatChime(devices.Output, NullLogger<ChatChime>.Instance, new AudioLevels { Sounds = 0.25f });
 
-        chime.Play();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (devices.Players.Count == 0 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        devices.Output.Open(Source(1000, -1000), () => 0.5f, 120);
 
-        var peak = ReadSamples(devices.Players.Single(), ChatChime.Pcm.Length / 2).Max(s => Math.Abs((int)s));
-        var made = new short[ChatChime.Pcm.Length / 2];
-        Buffer.BlockCopy(ChatChime.Pcm.ToArray(), 0, made, 0, ChatChime.Pcm.Length);
-        ((double)peak).ShouldBe(made.Max(s => Math.Abs((int)s)) * 0.25, 1);
+        ReadSamples(devices.Players.Single(), 2).ShouldBe([(short)500, (short)-500]);
     }
 
-    /// <summary>At 0 % nothing is heard, so no device is opened for it: a sleeping headset is not woken by a silent chime.</summary>
+    private static ChatSounds Sounds(Devices devices, float level, TimeProvider? time = null) =>
+        new(devices.Output, new AudioLevels { Sounds = level }, time ?? TimeProvider.System, NullLogger<ChatSounds>.Instance);
+
+    /// <summary>#306: a chat's sound plays at the sounds' level, and its play is done once the output stopped.</summary>
     [Fact]
-    public async Task The_chime_at_zero_opens_no_device()
+    public async Task Playing_opens_the_output_at_the_sounds_level_and_completes_when_it_stopped()
     {
         var devices = new Devices();
-        var chime = new ChatChime(devices.Output, NullLogger<ChatChime>.Instance, new AudioLevels { Sounds = 0f });
+        var ct = TestContext.Current.CancellationToken;
 
-        chime.Play();
-        await Task.Delay(300, TestContext.Current.CancellationToken);
+        var playing = Sounds(devices, 0.25f).PlayAsync("marimba-rise", ct);
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+        var player = devices.Players.Single();
+        var (pcm, _) = ShippedSounds.Load("marimba-rise");
+        var made = new short[pcm.Length / 2];
+        Buffer.BlockCopy(pcm, 0, made, 0, pcm.Length);
+        var peak = ReadSamples(player, made.Length).Max(s => Math.Abs((int)s));
+        ((double)peak).ShouldBe(made.Max(s => Math.Abs((int)s)) * 0.25, 1);
+        playing.IsCompleted.ShouldBeFalse();
+        player.Stop();
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        player.Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Cancelling_stops_and_disposes_the_player()
+    {
+        var devices = new Devices();
+        using var cancel = new CancellationTokenSource();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = Sounds(devices, 1f).PlayAsync("bell-soft", cancel.Token);
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        await cancel.CancelAsync();
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        devices.Players.Single().Disposed.ShouldBeTrue();
+    }
+
+    /// <summary>At 0 % nothing is heard, so no device is opened (a sleeping headset is not woken), but the sound still takes its time.</summary>
+    [Fact]
+    public async Task At_level_zero_no_device_opens_and_it_takes_the_sound_s_length()
+    {
+        var devices = new Devices();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var sounds = Sounds(devices, 0f, time);
+
+        var playing = sounds.PlayAsync("marimba-rise", TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        playing.IsCompleted.ShouldBeFalse();
+        devices.Players.ShouldBeEmpty();
+        time.Advance(sounds.LengthOf("marimba-rise"));
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Review round 1 of #306: a hush while a headset wakes for the sound does not wait for it; the device opened late is let go.</summary>
+    [Fact]
+    public async Task Cancelling_while_the_device_opens_completes_at_once_and_closes_it_once_open()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices { WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(10)) };
+        devices.Output.DeviceId = "headset";
+        using var cancel = new CancellationTokenSource();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = Sounds(devices, 1f).PlayAsync("bell-soft", cancel.Token);
+        var opened = devices.Opened("headset");
+        await Task.Delay(100, ct);
+        await cancel.CancelAsync();
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(2), ct);
+        waking.Set();
+        var player = await opened.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        for (var i = 0; i < 100 && !player.Disposed; i++)
+        {
+            await Task.Delay(20, ct);
+        }
+
+        player.Disposed.ShouldBeTrue();
+        player.PlayedEver.ShouldBeFalse();
+    }
+
+    /// <summary>Review round 3 of #306: a device that never says it stopped does not hold the floor, and Raven's speech, for good.</summary>
+    [Fact]
+    public async Task A_play_that_never_ends_is_stopped_after_its_length_and_a_margin()
+    {
+        var devices = new Devices();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var sounds = Sounds(devices, 1f, time);
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = sounds.PlayAsync("wood-knock", ct);
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        time.Advance(sounds.LengthOf("wood-knock") + ChatSounds.PlayMargin);
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        devices.Players.Single().Disposed.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_sound_stopped_before_it_began_opens_no_device()
+    {
+        var devices = new Devices();
+
+        Sounds(devices, 1f).PlayAsync("wood-knock", new CancellationToken(canceled: true)).IsCompleted.ShouldBeTrue();
 
         devices.Players.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_failing_device_completes_without_throwing()
+    {
+        var devices = new Devices { DefaultFailsInInit = true };
+
+        await Sounds(devices, 1f).PlayAsync("wood-knock", TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public void An_unknown_sound_completes_at_once()
+    {
+        var devices = new Devices();
+
+        Sounds(devices, 1f).PlayAsync("no-such-sound", TestContext.Current.CancellationToken).IsCompletedSuccessfully.ShouldBeTrue();
+        devices.Players.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Picks_start_on_the_slots_defaults_and_none_is_null()
+    {
+        var picks = new SoundPicks();
+
+        picks.For(SoundSlot.Finishes).ShouldBe(ShippedSounds.DefaultFor(SoundSlot.Finishes));
+        picks.Set(SoundSlot.Finishes, null);
+        picks.For(SoundSlot.Finishes).ShouldBeNull();
+        picks.For(SoundSlot.Fails).ShouldBe(ShippedSounds.DefaultFor(SoundSlot.Fails));
     }
 
     [Fact]
@@ -1013,6 +1131,13 @@ public sealed class AudioOutputTests
         var pcm = new byte[count * 2];
         Buffer.BlockCopy(samples, 0, pcm, 0, pcm.Length);
         return new SpeechChunk(pcm, 24000);
+    }
+
+    private static IWaveProvider Source(params short[] samples)
+    {
+        var bytes = new byte[samples.Length * 2];
+        Buffer.BlockCopy(samples, 0, bytes, 0, bytes.Length);
+        return new RawSourceWaveStream(bytes, 0, bytes.Length, new WaveFormat(24000, 16, 1));
     }
 
     private static short[] ReadSamples(FakePlayer player, int count)

@@ -5,7 +5,7 @@ using NAudio.Wave;
 
 namespace CodeSwitchX.Voice.Audio;
 
-/// <summary>Where Raven's sound goes: its speech, the chat chime, the voice samples and the keep-alive.</summary>
+/// <summary>Where Raven's sound goes: its speech, the chats' sounds, the voice samples and the keep-alive.</summary>
 public interface IAudioOutput
 {
     /// <summary>The output device chosen, by its id; null follows the Windows default. Any thread.</summary>
@@ -29,6 +29,16 @@ public interface IAudioOutput
     /// chosen could not be used). <see cref="DeviceId"/> is read once, so a pick meanwhile cannot make it say another.
     /// </summary>
     IWavePlayer Open(IWaveProvider source, int latencyMs, out string? playsOn);
+
+    /// <summary>
+    /// The same, playing 16-bit PCM at <paramref name="gain"/>, read as it plays (<see cref="AudioLevels"/>): every playback path
+    /// opens through here, so none forgets its slider (#305 review).
+    /// </summary>
+    IWavePlayer Open(IWaveProvider source, Func<float> gain, int latencyMs) => Open(new Loudness(source, gain), latencyMs, out _);
+
+    /// <inheritdoc cref="Open(IWaveProvider, Func{float}, int)"/>
+    IWavePlayer Open(IWaveProvider source, Func<float> gain, int latencyMs, out string? playsOn) =>
+        Open(new Loudness(source, gain), latencyMs, out playsOn);
 }
 
 /// <summary>
@@ -96,7 +106,7 @@ public sealed class AudioOutput : IAudioOutput
             chosen = _openChosen(id, latencyMs);
             if (chosen is null)
             {
-                // A headset asleep or unplugged: an ordinary state, not worth a warning on every chime.
+                // A headset asleep or unplugged: an ordinary state, not worth a warning on every sound.
                 _logger.LogInformation("The output chosen is not active; playing on the Windows default");
                 return null;
             }

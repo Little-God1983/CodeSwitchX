@@ -24,14 +24,18 @@ public static class SettingKeys
     public const string RavenMicMode = "raven.micMode";
     public const string RavenBargeIn = "raven.bargeIn";
     public const string RavenFollowUpSeconds = "raven.followUpSeconds";
-    public const string RavenCooldownSeconds = "raven.cooldownSeconds";
     public const string RavenPauseSeconds = "raven.pauseSeconds";
     public const string RavenMutedWindows = "raven.mutedWindows";
-    public const string RavenChatSound = "raven.chatSound";
-    public const string RavenOwnNewsWaits = "raven.ownNewsWaits";
     public const string RavenCatchUp = "raven.catchUp";
     public const string RavenSoundVolume = "raven.soundVolume";
     public const string RavenVoiceVolume = "raven.voiceVolume";
+    /// <summary>Each slot's sound (#306): a shipped sound's id, or "none".</summary>
+    public const string RavenSoundStart = "raven.sound.start";
+    public const string RavenSoundFinish = "raven.sound.finish";
+    public const string RavenSoundQuestion = "raven.sound.question";
+    public const string RavenSoundPermission = "raven.sound.permission";
+    public const string RavenSoundFail = "raven.sound.fail";
+    public const string RavenSoundName = "raven.sound.name";
     /// <summary>Qwen3-TTS's voice: the key is older than the second engine.</summary>
     public const string RavenVoice = "raven.voice";
     public const string RavenKokoroVoice = "raven.kokoroVoice";

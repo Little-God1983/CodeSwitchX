@@ -34,7 +34,8 @@ public class SettingsViewModelTests : IDisposable
     private readonly IDictationService _dictation = Substitute.For<IDictationService>();
     private readonly VoiceStatusViewModel _voice;
     private readonly AudioLevels _levels = new();
-    private readonly FakeChime _chime = new();
+    private readonly FakeSounds _sounds = new();
+    private readonly SoundPicks _picks = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -46,7 +47,7 @@ public class SettingsViewModelTests : IDisposable
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
-            chime: _chime, levels: _levels);
+            sounds: _sounds, levels: _levels, picks: _picks);
     }
 
     public void Dispose()
@@ -229,25 +230,85 @@ public class SettingsViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task The_traffic_settings_default_to_a_10_s_cooldown_with_the_sound_on_and_are_saved()
+    public async Task The_catch_up_is_on_by_default_and_saved()
     {
         await _vm.LoadAsync(CancellationToken.None);
-        _vm.RavenCooldownSeconds.ShouldBe(10);
-        _vm.RavenChatSound.ShouldBeTrue();
-        _vm.RavenOwnNewsWaits.ShouldBeFalse();
-
-        _vm.RavenCooldownSeconds = 20;
-        _vm.RavenChatSound = false;
-        _vm.RavenOwnNewsWaits = true;
         _vm.RavenCatchUp.ShouldBeTrue("the catch-up is on by default (#143)");
+
         _vm.RavenCatchUp = false;
         await FlushAsync();
 
         await _store.Received().SetAsync(SettingKeys.RavenCatchUp, false, Arg.Any<CancellationToken>());
+    }
 
-        await _store.Received().SetAsync(SettingKeys.RavenCooldownSeconds, 20, Arg.Any<CancellationToken>());
-        await _store.Received().SetAsync(SettingKeys.RavenChatSound, false, Arg.Any<CancellationToken>());
-        await _store.Received().SetAsync(SettingKeys.RavenOwnNewsWaits, true, Arg.Any<CancellationToken>());
+    /// <summary>#306: each slot plays its own shipped sound until the user picks another, and the chats' sounds follow it.</summary>
+    [Fact]
+    public async Task Each_slot_loads_its_default_when_nothing_is_stored()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        (_vm.RavenSoundStart, _vm.RavenSoundFinish, _vm.RavenSoundQuestion, _vm.RavenSoundPermission, _vm.RavenSoundFail, _vm.RavenSoundName)
+            .ShouldBe(("wood-knock", "marimba-rise", "kalimba-up", "bell-pair", "marimba-fall", "pluck-high"));
+        _picks.For(SoundSlot.Finishes).ShouldBe("marimba-rise");
+    }
+
+    /// <summary>#306 review focus: a sound the pool no longer has (renamed, hand-edited) plays the slot's default, not nothing.</summary>
+    [Theory]
+    [InlineData("no-such-sound")]
+    [InlineData("")]
+    public async Task A_stored_sound_that_no_longer_exists_loads_the_slot_s_default(string stored)
+    {
+        _store.GetAsync<string>(SettingKeys.RavenSoundFinish, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(stored));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenSoundFinish.ShouldBe("marimba-rise");
+        _picks.For(SoundSlot.Finishes).ShouldBe("marimba-rise");
+    }
+
+    [Fact]
+    public async Task A_stored_none_loads_as_none()
+    {
+        _store.GetAsync<string>(SettingKeys.RavenSoundStart, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>("none"));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenSoundStart.ShouldBe(SettingsViewModel.NoSound);
+        _picks.For(SoundSlot.StartsWorking).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Picking_a_sound_persists_it_and_tells_the_picks()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenSoundFail = "bell-soft";
+        _vm.RavenSoundStart = SettingsViewModel.NoSound;
+        await FlushAsync();
+
+        _picks.For(SoundSlot.Fails).ShouldBe("bell-soft");
+        _picks.For(SoundSlot.StartsWorking).ShouldBeNull();
+        await _store.Received().SetAsync(SettingKeys.RavenSoundFail, "bell-soft", Arg.Any<CancellationToken>());
+        await _store.Received().SetAsync(SettingKeys.RavenSoundStart, "none", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task The_play_button_plays_the_slot_s_pick_and_none_plays_nothing()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _vm.RavenSoundStart = SettingsViewModel.NoSound;
+
+        _vm.PlaySlotSoundCommand.Execute(SoundSlot.Fails);
+        _vm.PlaySlotSoundCommand.Execute(SoundSlot.StartsWorking);
+
+        _sounds.Ids.ShouldBe(["marimba-fall"]);
+    }
+
+    [Fact]
+    public void The_pickers_offer_none_then_the_pool()
+    {
+        _vm.SoundChoices.First().ShouldBe(new SettingsViewModel.SoundChoice(SettingsViewModel.NoSound, "None"));
+        _vm.SoundChoices.Skip(1).Select(c => c.Id).ShouldBe(ShippedSounds.All.Select(s => s.Id));
     }
 
     /// <summary>#143: the catch-up is on unless the user stored it off; a stored "off" stays off.</summary>
@@ -333,7 +394,7 @@ public class SettingsViewModelTests : IDisposable
     {
         _vm.PlaySoundLevelCommand.Execute(null);
 
-        _chime.Plays.ShouldBe(1);
+        _sounds.Plays.ShouldBe(1);
     }
 
     /// <summary>#164: a closed chat is not kept and an idle one never hidden until the user says so; a stored time the page does not offer is neither.</summary>
@@ -443,18 +504,6 @@ public class SettingsViewModelTests : IDisposable
     {
         _vm.KeepClosedChoices.Select(c => c.Label).ShouldBe(["Off", "1 minute", "5 minutes", "10 minutes", "30 minutes"]);
         _vm.HideIdleChoices.Select(c => c.Label).ShouldBe(["Never", "1 hour", "4 hours", "12 hours", "24 hours"]);
-    }
-
-    [Theory]
-    [InlineData(20, 20)]
-    [InlineData(7, 10)]
-    public async Task A_stored_cooldown_the_page_does_not_offer_falls_back_to_10_s(int stored, int loaded)
-    {
-        _store.GetAsync<int?>(SettingKeys.RavenCooldownSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(stored));
-
-        await _vm.LoadAsync(CancellationToken.None);
-
-        _vm.RavenCooldownSeconds.ShouldBe(loaded);
     }
 
     [Fact]
@@ -874,8 +923,8 @@ public class SettingsViewModelTests : IDisposable
         _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Listening]);
         _vm.Page.ShouldBe(SettingsPage.Listening, "the page shown is one found");
 
-        _vm.Search = "cooldown";
-        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Voice]);
+        _vm.Search = "marimba";
+        _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Sounds]);
 
         _vm.Search = "pause";
         _vm.Pages.Select(p => p.Page).ShouldBe([SettingsPage.Voice]);

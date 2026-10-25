@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.UI.Raven;
@@ -14,7 +15,8 @@ namespace CodeSwitchX.UI.Tests.Raven;
 public sealed partial class RavenPanelViewModelTests
 {
     /// <summary>Three windows: ContentAutomatorX (1, chat "a"), DiffusionNexus (2, chat "c"), RawCutX (3, chat "d"); the user is in chat 1.</summary>
-    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false, IChatBrains? brains = null)
+    private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> NextQuestionVmAsync(ChatNews? news = null, bool openMic = false, IChatBrains? brains = null,
+        bool sounds = false)
     {
         string[] workspaces = ["ContentAutomatorX", "DiffusionNexus", "RawCutX"];
         string[] ids = ["a", "c", "d"];
@@ -25,7 +27,8 @@ public sealed partial class RavenPanelViewModelTests
 
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard, brains: brains);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, openMic ? _openMic : null, asks: asks, yard: _yard, brains: brains,
+            sounds: sounds ? _sounds : null, picks: _picks, cues: sounds && news is not null ? new ChatSoundCues(_bus, news, _time) : null);
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -128,6 +131,36 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(RavenPanelViewModel.NextOfferLifetime);
         await GraceAsync(vm);
         await Until(() => _speech.Spoken.Any(s => s.Contains("Task a is done.")));
+    }
+
+    /// <summary>Review round 3 of #306: a chat's sound held while "Next?" stood plays once the offer lapses.</summary>
+    [Fact]
+    public async Task A_sound_held_by_the_offer_plays_once_it_lapsed()
+    {
+        var (vm, asks) = await NextQuestionVmAsync(new ChatNews(_bus, _yard, _time, _ => "Done."), sounds: true);
+        var first = await AsksFruitAsync(vm, asks, "a");
+        _ = await AsksFruitAsync(vm, asks, "d");
+        vm.ChooseOptionCommand.Execute(CardOf(vm, "a").Questions[0].Options[1]);
+        await WithinAsync(first);
+        await GraceAsync(vm);
+        await Until(() => vm.OffersNext); // heard to its end
+        await Until(() => vm.State == RavenState.Idle);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        var before = _sounds.Ids;
+
+        var turn = _time.GetUtcNow();
+        var workspace = _yard.WorkspaceIdOf("c");
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("c", SessionState.Idle, turn) with { WorkspaceId = workspace },
+            ChatNewsTests.Chat("c", SessionState.Working, turn) with { WorkspaceId = workspace, TurnStartedAt = turn })); // chat 2 starts
+        _time.Advance(TrafficWatcher.NewsGrace);
+        _sounds.Ids.ShouldBe(before, "the offer stands");
+
+        _time.Advance(RavenPanelViewModel.NextOfferLifetime);
+        await WithinAsync(vm.PendingAnswers);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        _time.Advance(SoundQueue.Gap);
+
+        _sounds.Ids.ShouldBe([.. before, "kalimba-up", "wood-knock"], "chat 3's question and chat 2's start, both held by the offer");
     }
 
     [Fact]

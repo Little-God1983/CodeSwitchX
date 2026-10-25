@@ -10,44 +10,6 @@ public sealed class TrafficWatcherTests
 
     private static readonly TrafficWatcher.Floor Free = new(false, false, 0, 0, false, false, false, false, false);
 
-    [Fact]
-    public void The_first_sound_is_allowed_and_one_inside_the_cooldown_is_not()
-    {
-        var watcher = new TrafficWatcher(_time);
-
-        watcher.TrySound(floorFree: true).ShouldBeTrue();
-        _time.Advance(TimeSpan.FromSeconds(9));
-        watcher.TrySound(floorFree: true).ShouldBeFalse("inside the 10 s cooldown");
-        _time.Advance(TimeSpan.FromSeconds(1));
-        watcher.TrySound(floorFree: true).ShouldBeTrue("the cooldown is over");
-    }
-
-    [Fact]
-    public void A_refused_sound_does_not_start_the_cooldown_again()
-    {
-        var watcher = new TrafficWatcher(_time);
-        watcher.TrySound(floorFree: true);
-
-        _time.Advance(TimeSpan.FromSeconds(5));
-        watcher.TrySound(floorFree: true).ShouldBeFalse();
-        _time.Advance(TimeSpan.FromSeconds(5));
-
-        watcher.TrySound(floorFree: true).ShouldBeTrue("nothing was saved up, and the silent one did not count");
-    }
-
-    [Fact]
-    public void An_announcement_starts_the_cooldown()
-    {
-        var watcher = new TrafficWatcher(_time) { Cooldown = TimeSpan.FromSeconds(20) };
-
-        watcher.Announced();
-        _time.Advance(TimeSpan.FromSeconds(15));
-
-        watcher.TrySound(floorFree: true).ShouldBeFalse();
-        _time.Advance(TimeSpan.FromSeconds(5));
-        watcher.TrySound(floorFree: true).ShouldBeTrue();
-    }
-
     /// <summary>#152: the pause runs from the last thing Raven said or played; nothing said yet, none is left.</summary>
     [Fact]
     public void The_pause_runs_from_the_last_announcement()
@@ -77,51 +39,6 @@ public sealed class TrafficWatcherTests
         changes.ShouldBe(1);
     }
 
-    /// <summary>#152: a pause longer than the cooldown holds a chat's sound back too.</summary>
-    [Fact]
-    public void A_sound_waits_for_a_pause_longer_than_the_cooldown()
-    {
-        var watcher = new TrafficWatcher(_time) { Cooldown = TimeSpan.FromSeconds(5), Pause = TimeSpan.FromSeconds(10) };
-        watcher.Announced();
-
-        _time.Advance(TimeSpan.FromSeconds(6));
-        watcher.TrySound(floorFree: true).ShouldBeFalse("the cooldown is over, the pause is not");
-        _time.Advance(TimeSpan.FromSeconds(4));
-
-        watcher.TrySound(floorFree: true).ShouldBeTrue();
-    }
-
-    [Fact]
-    public void A_busy_floor_means_silent()
-    {
-        var watcher = new TrafficWatcher(_time);
-
-        watcher.TrySound(floorFree: false).ShouldBeFalse();
-        watcher.CooledDown.ShouldBeTrue("a sound not made starts no cooldown");
-    }
-
-    [Fact]
-    public void With_the_sound_off_no_chat_makes_one()
-    {
-        var watcher = new TrafficWatcher(_time) { SoundOn = false };
-
-        watcher.TrySound(floorFree: true).ShouldBeFalse();
-    }
-
-    [Fact]
-    public void The_chat_s_own_news_waits_for_the_cooldown_only_when_asked_to()
-    {
-        var watcher = new TrafficWatcher(_time);
-        watcher.Announced();
-        _time.Advance(TimeSpan.FromSeconds(5));
-
-        watcher.MaySpeakOwnNews.ShouldBeTrue("off by default");
-        watcher.OwnNewsWaits = true;
-        watcher.MaySpeakOwnNews.ShouldBeFalse();
-        _time.Advance(TimeSpan.FromSeconds(5));
-        watcher.MaySpeakOwnNews.ShouldBeTrue();
-    }
-
     [Fact]
     public void The_floor_is_free_only_when_nobody_talks_and_no_yes_is_awaited()
     {
@@ -135,5 +52,6 @@ public sealed class TrafficWatcherTests
         TrafficWatcher.IsFree(Free with { OpenSpeech = true }).ShouldBeFalse();
         TrafficWatcher.IsFree(Free with { AwaitingYes = true }).ShouldBeFalse();
         TrafficWatcher.IsFree(Free with { Due = true }).ShouldBeFalse();
+        TrafficWatcher.IsFree(Free with { Sounding = true }).ShouldBeFalse("a chat's sound plays (#306)");
     }
 }
