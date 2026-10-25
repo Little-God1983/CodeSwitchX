@@ -447,8 +447,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <summary>Raised when the user clicks a chat's line on a digest card: the shell opens that chat (#275).</summary>
     public event EventHandler<ChatNewsLine>? ChatRequested;
 
-    /// <summary>"Open chat three": the shell shows the chat's window in the Cab (switching alone never does).</summary>
+    /// <summary>
+    /// "Open chat three" or a click on a window's chat: the shell shows the chat's window in the Cab (switching alone,
+    /// by hotkey or as Raven follows the work, never does).
+    /// </summary>
     public event EventHandler<Guid>? CabRequested;
+
+    /// <summary>A click on chat 0: the shell goes back to the Yard, as a click on a window's chat opens that window (#311).</summary>
+    public event EventHandler? YardRequested;
 
     [ObservableProperty]
     private bool _isOpen = true;
@@ -832,12 +838,29 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     [RelayCommand]
     private void TogglePanel() => IsOpen = !IsOpen;
 
-    /// <summary>A number on the collapsed strip (#173): Raven opens on that chat, which is seen then.</summary>
+    /// <summary>A number on the collapsed strip (#173): Raven opens on that chat, which is seen then, and its window as a click in the list does.</summary>
     [RelayCommand]
     private void OpenChat(RavenChat chat)
     {
-        SelectedChat = chat; // chosen first: opening must not count the chat shown before as seen
+        PickChat(chat); // chosen first: opening must not count the chat shown before as seen
         IsOpen = true;
+    }
+
+    /// <summary>
+    /// The user clicked a chat (the list, the strip): it is shown, and the Cab follows the choice, a window's chat opens its
+    /// window and chat 0 goes back to the Yard (#311). Activity shows no window, so nothing else moves.
+    /// </summary>
+    public void PickChat(RavenChat chat)
+    {
+        SelectedChat = chat;
+        if (chat.WorkspaceId is { } workspace)
+        {
+            CabRequested?.Invoke(this, workspace);
+        }
+        else if (chat == YardChat)
+        {
+            YardRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>Opened: the chat shown is seen. Collapsed, no chat is: what comes is counted on the strip's numbers.</summary>
@@ -5824,7 +5847,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>The Cab opened a workspace: its chat is shown. The list never opens a workspace itself.</summary>
+    /// <summary>The Cab opened a workspace: its chat is shown. Only a click in the list opens a workspace (<see cref="PickChat"/>).</summary>
     public void ShowChatOf(Guid workspaceId)
     {
         if (Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat)

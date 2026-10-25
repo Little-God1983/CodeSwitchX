@@ -836,6 +836,49 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
+    public async Task A_click_on_a_window_s_chat_shows_it_and_asks_for_its_window_in_the_cab()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        Guid? opened = null;
+        vm.CabRequested += (_, id) => opened = id;
+
+        vm.PickChat(ChatNumbered(vm, 3));
+
+        vm.SelectedChat.Label.ShouldBe("3 ContentAutomatorX");
+        opened.ShouldBe(ContentAutomatorX);
+    }
+
+    [Fact]
+    public async Task A_click_on_chat_0_asks_for_the_yard_and_on_activity_for_nothing()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        var (opened, yard) = (false, 0);
+        vm.CabRequested += (_, _) => opened = true;
+        vm.YardRequested += (_, _) => yard++;
+        vm.SelectedChat = ChatNumbered(vm, 1);
+
+        vm.PickChat(vm.YardChat);
+        vm.PickChat(vm.ActivityChat);
+
+        vm.SelectedChat.ShouldBe(vm.ActivityChat);
+        (opened, yard).ShouldBe((false, 1));
+    }
+
+    [Fact]
+    public async Task Stepping_through_the_chats_opens_no_window()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        var (opened, yard) = (false, false);
+        vm.CabRequested += (_, _) => opened = true;
+        vm.YardRequested += (_, _) => yard = true;
+
+        vm.StepChat(1);
+        vm.StepChat(-1);
+
+        (opened, yard).ShouldBe((false, false));
+    }
+
+    [Fact]
     public async Task A_chat_number_no_window_has_is_said_and_nothing_switches()
     {
         var (vm, _) = await ChatsVmAsync();

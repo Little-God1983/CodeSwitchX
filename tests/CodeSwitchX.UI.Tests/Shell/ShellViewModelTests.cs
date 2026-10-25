@@ -685,6 +685,23 @@ public class ShellViewModelTests
         _h.Launcher.ReceivedCalls().ShouldBeEmpty();
     }
 
+    /// <summary>A click on a window's chat in Raven's list opens that window; a click on chat 0 goes back to the Yard (#311).</summary>
+    [Fact]
+    public async Task Clicking_a_raven_chat_opens_its_window_and_chat_0_goes_back_to_the_yard()
+    {
+        _h.App.Number = 2;
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        _h.VsCodeWindowAppears();
+
+        _h.Shell.Raven.PickChat(_h.Shell.Raven.Chats[1]);
+
+        _h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        _h.Shell.ActiveWorkspaceId.ShouldBe(_h.App.Id);
+        _h.Shell.Raven.PickChat(_h.Shell.Raven.YardChat);
+        _h.Shell.Mode.ShouldBe(ShellMode.Yard);
+        _h.Shell.Raven.SelectedChat.ShouldBe(_h.Shell.Raven.YardChat);
+    }
+
     [Fact]
     public async Task Going_back_to_the_yard_while_a_new_window_waits_in_the_cab_puts_it_back_and_hides_it_once_known()
     {

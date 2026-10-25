@@ -21,6 +21,8 @@ public partial class RavenPanelView : UserControl
         _modeSwitch = new MicModeSwitch(() => _viewModel);
         InitializeComponent();
         DataContextChanged += (_, _) => Bind(DataContext as RavenPanelViewModel);
+        // Every release in the list ends the press, a handled one too (the mute button's), after the row had its say.
+        ChatList.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler((_, _) => _chatClick.Forget()), handledEventsToo: true);
     }
 
     private void Bind(RavenPanelViewModel? viewModel)
@@ -36,6 +38,20 @@ public partial class RavenPanelView : UserControl
         {
             _viewModel.Shown.CollectionChanged += OnLogChanged;
             _viewModel.PropertyChanged += OnViewModelChanged;
+        }
+    }
+
+    private readonly ChatClick _chatClick = new();
+
+    private void OnChatListPress(object sender, MouseButtonEventArgs e) =>
+        _chatClick.Press(e.OriginalSource is DependencyObject source ? ItemsControl.ContainerFromElement(ChatList, source) : null);
+
+    /// <summary>A click on a chat in the list: its window comes up in the Cab too (#311). Arrow keys select without this.</summary>
+    private void OnChatClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_chatClick.Release(sender) && sender is ListBoxItem { DataContext: RavenChat chat })
+        {
+            _viewModel?.PickChat(chat);
         }
     }
 
