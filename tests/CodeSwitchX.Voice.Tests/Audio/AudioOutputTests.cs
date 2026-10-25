@@ -193,14 +193,22 @@ public sealed class AudioOutputTests
     public async Task A_sample_stopped_while_the_headset_wakes_ends_at_once_and_lets_the_device_go()
     {
         using var waking = new ManualResetEventSlim();
-        var devices = new Devices { WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(10)) };
+        using var opening = new ManualResetEventSlim();
+        var devices = new Devices
+        {
+            WhileOpening = () =>
+            {
+                opening.Set();
+                waking.Wait(TimeSpan.FromSeconds(10));
+            },
+        };
         devices.Output.DeviceId = "headset";
         using var cancel = new CancellationTokenSource();
         var ct = TestContext.Current.CancellationToken;
 
         var playing = new VoiceSamples(devices.Output, new AudioLevels(), TimeProvider.System).PlayAsync(SpeechEngine.Kokoro, SampleVoice, cancel.Token);
         var opened = devices.Opened("headset");
-        await Task.Delay(100, ct);
+        opening.Wait(TimeSpan.FromSeconds(5), ct).ShouldBeTrue(); // review round 1 of #318: stopped while it opens, not before it began
         await cancel.CancelAsync();
 
         await playing.WaitAsync(TimeSpan.FromSeconds(2), ct);
@@ -215,6 +223,36 @@ public sealed class AudioOutputTests
         player.PlayedEver.ShouldBeFalse();
     }
 
+    /// <summary>
+    /// Review round 1 of #318: the margin is counted from when the device is open, so a headset slow to wake still plays the
+    /// whole sample, however long it took.
+    /// </summary>
+    [Fact]
+    public async Task A_headset_slow_to_wake_still_plays_the_sample()
+    {
+        using var waking = new ManualResetEventSlim();
+        using var opening = new ManualResetEventSlim();
+        var devices = new Devices
+        {
+            WhileOpening = () =>
+            {
+                opening.Set();
+                waking.Wait(TimeSpan.FromSeconds(10));
+            },
+        };
+        devices.Output.DeviceId = "headset";
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = new VoiceSamples(devices.Output, new AudioLevels(), time).PlayAsync(SpeechEngine.Kokoro, SampleVoice, ct);
+        opening.Wait(TimeSpan.FromSeconds(5), ct).ShouldBeTrue();
+        time.Advance(VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + VoiceSamples.PlayMargin + TimeSpan.FromSeconds(1));
+        waking.Set();
+
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        playing.IsCompleted.ShouldBeFalse("it plays now, and the margin runs from here");
+    }
+
     /// <summary>#318: a sample whose device never says it stopped ends after its length and a margin: its row stops "playing".</summary>
     [Fact]
     public async Task A_sample_that_never_ends_is_stopped_after_its_length_and_a_margin()
@@ -225,7 +263,7 @@ public sealed class AudioOutputTests
 
         var playing = new VoiceSamples(devices.Output, new AudioLevels(), time).PlayAsync(SpeechEngine.Kokoro, SampleVoice, ct);
         await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
-        time.Advance(VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + ChatSounds.PlayMargin);
+        time.Advance(VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + VoiceSamples.PlayMargin);
 
         await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
         devices.Players.Single().Disposed.ShouldBeTrue();

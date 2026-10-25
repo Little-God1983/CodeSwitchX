@@ -25,6 +25,12 @@ public interface IVoiceSamples
 /// </summary>
 public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, TimeProvider time) : IVoiceSamples
 {
+    /// <summary>
+    /// How much longer than its clip a sample may play once its device is open (#318): past it the play is stopped, so a device
+    /// that never says it stopped does not leave the row "playing" for good. A headset's wake comes before it, and is not counted.
+    /// </summary>
+    public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(2);
+
     private static string ResourceName(SpeechEngine engine, string voice) => $"CodeSwitchX.Voice.Samples.{engine}.{voice}.wav";
 
     /// <summary>Whether the voice has a clip; the tests walk every voice offered.</summary>
@@ -53,10 +59,6 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
             return;
         }
 
-        // A device that never says it stopped does not leave the sample playing for good (#318), as the chats' sounds.
-        using var capped = new CancellationTokenSource(length + ChatSounds.PlayMargin, time);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, capped.Token);
-        var stop = linked.Token;
         var opening = Task.Run(() =>
         {
             var clip = Clip(engine, voice);
@@ -76,9 +78,9 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
         try
         {
             // A headset waking can hold the open for seconds (#318): a stop does not wait for it, and the device is let go once open.
-            opened = await opening.WaitAsync(stop).ConfigureAwait(false);
+            opened = await opening.WaitAsync(ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             _ = opening.ContinueWith(t =>
             {
@@ -94,15 +96,20 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
 
         try
         {
-            if (stop.IsCancellationRequested)
+            if (ct.IsCancellationRequested)
             {
                 return; // stopped just as the device opened: closed unheard
             }
 
+            // A device that never says it stopped does not leave the sample playing for good (#318); counted from here, so a
+            // headset's wake takes none of it.
+            using var capped = new CancellationTokenSource(length + PlayMargin, time);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, capped.Token);
+
             var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             opened.Player.PlaybackStopped += (_, _) => ended.TrySetResult();
             opened.Player.Play();
-            await using (stop.Register(() => ended.TrySetResult()))
+            await using (linked.Token.Register(() => ended.TrySetResult()))
             {
                 await ended.Task.ConfigureAwait(false);
             }
