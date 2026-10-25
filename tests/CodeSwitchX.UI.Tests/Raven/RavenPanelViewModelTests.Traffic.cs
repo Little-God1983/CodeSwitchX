@@ -279,6 +279,21 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Plays.ShouldBe(0);
     }
 
+    /// <summary>Review round 4 of #306: switching away from a chat whose card waited to be read lets the sounds come a grace later.</summary>
+    [Fact]
+    public async Task Leaving_a_chat_whose_card_waited_lets_the_sounds_come_a_grace_later()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        _ = asks.HoldAsync(PermittingIn("b", "p1"), CancellationToken.None); // chat 1's card waits for the grace to be read
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        vm.SelectedChat = ChatNumbered(vm, 3); // nothing unread there
+        _time.Advance(TrafficWatcher.NewsGrace);
+
+        _sounds.Ids.ShouldBe(["bell-pair"], "chat 1's card is another chat's now: it sounds");
+    }
+
     /// <summary>Review round 3 of #306: a line stopped before its first audio gives its sound back, which then plays on its own.</summary>
     [Fact]
     public async Task A_line_hushed_before_its_audio_gives_its_sound_back()

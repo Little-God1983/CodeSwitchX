@@ -4930,7 +4930,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _brainAsked = false; // moved to another chat: the user moved on from what Raven asked
-        _soundQueue?.Kick(); // the chat left is another chat now: its sounds no longer wait for its lines (#306)
         DropOffer(); // and from "Next?": a yes now is for something in the chat shown
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
@@ -4970,6 +4969,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         {
             RestTellerIfIdle(); // warmed for the chat left: nothing waits for it here
         }
+
+        // Last, once its cards and catch-up are settled: the chat left is another chat now, its sounds no longer wait (#306).
+        _soundQueue?.Kick();
     }
 
     /// <summary>
