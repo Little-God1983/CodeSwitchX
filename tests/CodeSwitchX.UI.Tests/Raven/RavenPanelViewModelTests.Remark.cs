@@ -227,6 +227,30 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     /// <summary>
+    /// Review round 3 of #308: with no other chat waiting, a stop while the teller ends its turn marks the reply interrupted,
+    /// as before #308; only a remark still to come is dropped without that mark.
+    /// </summary>
+    [Fact]
+    public async Task With_no_remark_to_come_a_stop_while_the_teller_ends_its_turn_marks_the_reply_interrupted()
+    {
+        _brain.Answer = _ => [new BrainText("Okay.")];
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("1. the tests pass\n")];
+        _teller.Ending = new TaskCompletionSource(); // the teller's bookkeeping after its last line
+        Changes("b", SessionState.Working, SessionState.Idle);
+        _time.Advance(vm.Traffic.WaitBeforeTelling);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+
+        vm.PressMic(TalkInput.MicButton);
+        Speak();
+        _time.Advance(Hold);
+        await vm.ReleaseMicAsync(TalkInput.MicButton);
+        await WithinAsync(vm.PendingAnswers);
+
+        vm.Log.First(e => e.Kind == RavenLogKind.Raven).Text.ShouldEndWith("(interrupted)");
+    }
+
+    /// <summary>
     /// Review round 1 of #308: the user talks once the chat's line is heard, while the teller still words the remark: the line
     /// was heard whole, so it is not marked interrupted, and only the remark is dropped.
     /// </summary>

@@ -2977,7 +2977,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
         if (stopped || floor.IsCancellationRequested)
         {
-            if (reply is not null && next == told.Count && toldWarnings.Count == 0 && total == each)
+            if (others.Count > 0 && reply is not null && next == told.Count && toldWarnings.Count == 0 && total == each)
             {
                 return (true, true, asked, [.. told], [], null); // only the remark was still to come: every line was said (#308)
             }
@@ -3110,7 +3110,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// card not read). A start has no line; a sound whose line went by without it plays from the queue.
     /// </summary>
     private bool WaitsForLine(SoundCue cue) =>
-        ChatOf(cue.WorkspaceId) == CurrentChat && SpeakNews && !IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off
+        ChatOf(cue.WorkspaceId) == CurrentChat && SpeakNews && !IsMuted && HasVoice
         && cue.Line switch
         {
             SoundLine.News => cue.WorkspaceId is { } workspace && _news?.HasNewsFor(id => id == workspace) == true,
@@ -3132,7 +3132,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// <inheritdoc cref="SoundBefore(ReplyVoice.SpokenReply, IEnumerable{string})"/>
     private void SoundBefore(ReplyVoice.SpokenReply spoken, Func<SoundCue, bool> which)
     {
-        if (_tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off) || _soundQueue is not { } queue
+        if (!HasVoice || _soundQueue is not { } queue
             || queue.TakeForLine(which).MaxBy(c => c.At) is not { } cue || _sounds is not { } sounds || _picks.For(cue.Slot) is not { } sound)
         {
             return;
@@ -3147,6 +3147,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             }
         }), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
+
+    /// <summary>A voice is there to say Raven's lines: the engine is ready, or installed and not started yet (it starts to speak).</summary>
+    private bool HasVoice => _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off;
 
     /// <summary>Raven heard its name alone (#306): its sound plays at once, past the queue, the floor and every mute.</summary>
     private void PlayNameSound()
@@ -3931,7 +3934,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
             // Only for news said aloud, by a voice there to say it: a remark only written mentions nothing (#308).
-            if (_teller is not null && SpeakNews && !IsMuted && !CurrentChat.IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off
+            if (_teller is not null && SpeakNews && !IsMuted && !CurrentChat.IsMuted && HasVoice
                 && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
             {
                 others = await WaitingElsewhereAsync(); // what the other chats' news just written adds too (#308)
