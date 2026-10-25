@@ -64,7 +64,7 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
         ?? throw new InvalidOperationException($"No sample of {engine}'s voice {voice}.");
 
     /// <summary>How long the clip plays; read and let go before a silent sample waits it out.</summary>
-    private static TimeSpan LengthOf(SpeechEngine engine, string voice)
+    internal static TimeSpan LengthOf(SpeechEngine engine, string voice)
     {
         using var clip = Clip(engine, voice);
         using var reader = new WaveFileReader(clip);

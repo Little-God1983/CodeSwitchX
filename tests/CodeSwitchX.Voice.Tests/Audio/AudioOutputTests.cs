@@ -146,9 +146,14 @@ public sealed class AudioOutputTests
         var playing = samples.PlayAsync(SpeechEngine.Kokoro, SampleVoice, TestContext.Current.CancellationToken);
         await time.Created.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        playing.IsCompleted.ShouldBeFalse("it takes the sample's length, as if it played");
         devices.Players.ShouldBeEmpty();
-        time.Advance(TimeSpan.FromMinutes(1));
+        // Review round 2 of #310: the clip's own length, not any length.
+        var length = VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice);
+        length.ShouldBeGreaterThan(TimeSpan.FromMilliseconds(500));
+        time.Advance(length - TimeSpan.FromMilliseconds(1));
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        playing.IsCompleted.ShouldBeFalse("it takes the sample's length, as if it played");
+        time.Advance(TimeSpan.FromMilliseconds(1));
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
