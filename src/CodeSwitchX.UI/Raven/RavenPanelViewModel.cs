@@ -5847,7 +5847,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>The Cab opened a workspace: its chat is shown. The list never opens a workspace itself.</summary>
+    /// <summary>The Cab opened a workspace: its chat is shown. Only a click in the list opens a workspace (<see cref="PickChat"/>).</summary>
     public void ShowChatOf(Guid workspaceId)
     {
         if (Chats.FirstOrDefault(c => c.WorkspaceId == workspaceId) is { } chat)

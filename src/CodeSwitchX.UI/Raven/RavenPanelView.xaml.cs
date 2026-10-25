@@ -39,10 +39,15 @@ public partial class RavenPanelView : UserControl
         }
     }
 
+    private readonly ChatClick _chatClick = new();
+
+    private void OnChatListPress(object sender, MouseButtonEventArgs e) =>
+        _chatClick.Press(e.OriginalSource is DependencyObject source ? ItemsControl.ContainerFromElement(ChatList, source) : null);
+
     /// <summary>A click on a chat in the list: its window comes up in the Cab too (#311). Arrow keys select without this.</summary>
     private void OnChatClick(object sender, MouseButtonEventArgs e)
     {
-        if (sender is ListBoxItem { DataContext: RavenChat chat })
+        if (_chatClick.Release(sender) && sender is ListBoxItem { DataContext: RavenChat chat })
         {
             _viewModel?.PickChat(chat);
         }

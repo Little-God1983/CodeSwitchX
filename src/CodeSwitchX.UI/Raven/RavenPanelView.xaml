@@ -916,6 +916,7 @@
 
             <!-- The chats: a click shows one and opens its window (#311); keys only show it. -->
             <ListBox x:Name="ChatList" Grid.Row="1" ItemsSource="{Binding Chats}" SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
+                     PreviewMouseLeftButtonDown="OnChatListPress"
                      Background="Transparent" BorderBrush="#1F2937" BorderThickness="0,1,0,0" Padding="6,10,6,10"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      AutomationProperties.Name="Raven chats" ItemContainerStyle="{StaticResource ChatListItem}">
@@ -1114,7 +1115,8 @@
                   PreviewKeyDown="OnMicKey" />
         </StackPanel>
 
-        <!-- Each chat's number with its marks; a click opens Raven on that chat. More than fit scroll under the mic. -->
+        <!-- Each chat's number with its marks; a click opens Raven on that chat and the Cab on its window, 0 on the Yard (#311).
+             More than fit scroll under the mic. -->
         <ScrollViewer Grid.Row="1" Margin="0,14,0,10" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                       Focusable="False">
           <ItemsControl ItemsSource="{Binding Chats}" Focusable="False" AutomationProperties.Name="Raven chats, collapsed">
@@ -1122,7 +1124,7 @@
               <DataTemplate DataType="{x:Type raven:RavenChat}">
                 <Button Command="{Binding DataContext.OpenChatCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                         CommandParameter="{Binding}" Cursor="Hand" HorizontalAlignment="Center" Margin="0,3"
-                        ToolTip="{Binding Tip}" AutomationProperties.Name="{Binding Tip, StringFormat='Show Raven chat {0}'}"
+                        ToolTip="{Binding Tip}" AutomationProperties.Name="{Binding Tip, StringFormat='Open Raven chat {0}'}"
                         FocusVisualStyle="{StaticResource RoundFocusRing}">
                   <Button.Template>
                     <ControlTemplate TargetType="Button">
