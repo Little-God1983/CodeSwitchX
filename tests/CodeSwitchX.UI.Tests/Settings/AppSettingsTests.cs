@@ -168,6 +168,19 @@ public sealed class AppSettingsTests
         error.Message.ShouldContain("Nothing was changed");
     }
 
+    /// <summary>#307: a sound the user added is picked by its name too.</summary>
+    [Fact]
+    public async Task Raven_sets_a_slot_to_a_sound_of_the_user_s_by_name()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+        var picked = TestSounds.Tone(Path.Combine(Path.GetTempPath(), "csx-picked-" + Guid.NewGuid().ToString("N")), "Doorbell.wav", 0.5);
+        var id = _h.Library.Add(picked).Sound.Id;
+
+        (await _settings.SetAsync("fail sound", "doorbell", Ct)).Value.ShouldBe("Doorbell");
+
+        _h.Shell.Settings.RavenSoundFail.ShouldBe(id);
+    }
+
     /// <summary>#306: the chime, its cooldown and the own news's wait for it are gone.</summary>
     [Theory]
     [InlineData("cooldown")]

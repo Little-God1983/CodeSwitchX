@@ -35,7 +35,7 @@ public sealed record SettingsPageItem(SettingsPage Page, string Group, string Ti
         new(SettingsPage.Sounds, "Raven", "Sounds", "\uE8D6", "The short sounds chats make, and how loud they and Raven's voice are.",
             ["sound", "sounds", "chime", "volume", "loud", "how loud", "louder", "quiet", "quieter", "softer", "beep", "sound volume", "voice volume",
                 "start sound", "finish sound", "question sound", "permission sound", "fail sound", "name sound", "marimba", "kalimba", "bell",
-                "knock", "pluck"]),
+                "knock", "pluck", "add sound", "own sound", "my sounds", "your sounds", "wav", "mp3"]),
         new(SettingsPage.Listening, "Raven", "Listening", "", "How Raven hears you: the microphone and the speech-to-text model.",
             ["microphone", "mic", "level", "speech to text", "Whisper", "download", "talk over", "barge in"]),
         new(SettingsPage.Brain, "Raven", "Brain & chats", "", "The model Raven thinks with, and what the chats it starts run with.",

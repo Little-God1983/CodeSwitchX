@@ -57,6 +57,9 @@ public sealed class ShellTestHarness
     internal Raven.FakeSounds Sounds { get; } = new();
 
     internal CodeSwitchX.Voice.Audio.AudioLevels Levels { get; } = new();
+
+    /// <summary>The sounds' pool, with a folder of its own for the user's (#307).</summary>
+    internal CodeSwitchX.Voice.Audio.SoundLibrary Library { get; private set; } = null!;
     public WorkspaceResolver Resolver { get; } = new();
     public SessionEngine Engine { get; }
     public HostManager Host { get; }
@@ -94,10 +97,12 @@ public sealed class ShellTestHarness
         var cab = new CabViewModel();
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));
+        Library = new CodeSwitchX.Voice.Audio.SoundLibrary(paths.SoundsDirectory);
         Engines = new SpeechEngines(Speech, [Kokoro, Qwen]);
         VoiceStatus = new VoiceStatusViewModel(Engines, Speech, Dictation, dispatcher);
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
-            Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, sounds: Sounds, levels: Levels);
+            Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, sounds: Sounds, levels: Levels,
+            library: Library);
         var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
         Microphones.List().Returns([]);
         Speakers.List().Returns([]);

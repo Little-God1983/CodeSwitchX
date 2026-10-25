@@ -35,19 +35,23 @@ public class SettingsViewModelTests : IDisposable
     private readonly VoiceStatusViewModel _voice;
     private readonly AudioLevels _levels = new();
     private readonly FakeSounds _sounds = new();
-    private readonly SoundPicks _picks = new();
+    private readonly SoundLibrary _library;
+    private readonly SoundPicks _picks;
+    private readonly FakeSoundFiles _files = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
     {
         _claude = new ClaudeCodePaths(Path.Combine(_paths.Root, "home"));
+        _library = new SoundLibrary(_paths.SoundsDirectory);
+        _picks = new SoundPicks(_library);
         _store.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, Arg.Any<CancellationToken>()).Returns(Task.FromResult<long?>(5_000_000));
         _store.GetAsync<string>(SettingKeys.RelayExecutable, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(null));
         var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
-            sounds: _sounds, levels: _levels, picks: _picks);
+            sounds: _sounds, levels: _levels, picks: _picks, library: _library, soundFiles: _files);
     }
 
     public void Dispose()
@@ -302,6 +306,107 @@ public class SettingsViewModelTests : IDisposable
         _vm.PlaySlotSoundCommand.Execute(SoundSlot.StartsWorking);
 
         _sounds.Ids.ShouldBe(["marimba-fall"]);
+    }
+
+    private string Picked(string name, double seconds = 1) => TestSounds.Tone(Path.Combine(_paths.Root, "picked"), name, seconds);
+
+    /// <summary>#307: a sound the user adds is listed, and every slot's picker offers it.</summary>
+    [Fact]
+    public async Task Adding_a_sound_lists_it_and_offers_it_to_every_slot()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+
+        _vm.AddSoundCommand.Execute(null);
+
+        var row = _vm.UserSounds.ShouldHaveSingleItem();
+        (row.Name, row.Length).ShouldBe(("Ding", "1.0 s"));
+        _vm.SoundChoices.Last().ShouldBe(new SettingsViewModel.SoundChoice(row.Id, "Ding"));
+        _vm.SoundNotice.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_long_sound_is_added_with_the_notice()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Long.wav", 12);
+
+        _vm.AddSoundCommand.Execute(null);
+
+        _vm.SoundNotice.ShouldBe("This sound is 12 s long. Only the first 3 s will be used.");
+        _vm.UserSounds.ShouldHaveSingleItem().Length.ShouldBe("3.0 s");
+    }
+
+    [Fact]
+    public async Task An_unreadable_file_shows_why_and_adds_nothing()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        var bad = Path.Combine(Directory.CreateDirectory(_paths.Root).FullName, "bad.mp3");
+        File.WriteAllText(bad, "no sound");
+        _files.Next = bad;
+
+        _vm.AddSoundCommand.Execute(null);
+
+        _vm.SoundNotice.ShouldNotBeNull().ShouldStartWith("This file can't be used as a sound: ");
+        _vm.UserSounds.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Cancelling_the_picker_adds_nothing()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.AddSoundCommand.Execute(null);
+
+        _vm.UserSounds.ShouldBeEmpty();
+        _vm.SoundNotice.ShouldBeNull();
+    }
+
+    /// <summary>#307 review focus 5: removing the sound three slots use sets those back to their defaults, the others keep theirs.</summary>
+    [Fact]
+    public async Task Removing_a_sound_in_use_sets_its_slots_back_to_their_defaults()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+        _vm.AddSoundCommand.Execute(null);
+        var id = _vm.UserSounds.Single().Id;
+        (_vm.RavenSoundStart, _vm.RavenSoundFinish, _vm.RavenSoundFail) = (id, id, id);
+        _vm.RavenSoundQuestion = "bell-soft";
+
+        _vm.RemoveSoundCommand.Execute(id);
+        await FlushAsync();
+
+        (_vm.RavenSoundStart, _vm.RavenSoundFinish, _vm.RavenSoundFail, _vm.RavenSoundQuestion)
+            .ShouldBe(("wood-knock", "marimba-rise", "marimba-fall", "bell-soft"));
+        _vm.UserSounds.ShouldBeEmpty();
+        _vm.SoundChoices.ShouldNotContain(c => c.Id == id);
+        _picks.For(SoundSlot.Finishes).ShouldBe("marimba-rise");
+        await _store.Received().SetAsync(SettingKeys.RavenSoundFinish, "marimba-rise", Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_stored_pick_of_a_user_sound_loads()
+    {
+        var id = _library.Add(Picked("Ding.wav")).Sound.Id;
+        _store.GetAsync<string>(SettingKeys.RavenSoundFail, Arg.Any<CancellationToken>()).Returns(Task.FromResult<string?>(id));
+
+        await _vm.LoadAsync(CancellationToken.None);
+
+        _vm.RavenSoundFail.ShouldBe(id);
+        _vm.UserSounds.ShouldHaveSingleItem().Id.ShouldBe(id);
+    }
+
+    [Fact]
+    public async Task A_user_sound_plays_from_its_row()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+        _vm.AddSoundCommand.Execute(null);
+        var id = _vm.UserSounds.Single().Id;
+
+        _vm.PlayUserSoundCommand.Execute(id);
+
+        _sounds.Ids.ShouldBe([id]);
     }
 
     [Fact]

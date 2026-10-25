@@ -302,6 +302,7 @@ public partial class App : Application
             (Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>)(ct =>
                 sp.GetRequiredService<ISessionStore>().GetLastUseByWorkspaceAsync(ct))));
         services.AddSingleton<CabViewModel>();
+        services.AddSingleton<ISoundFilePicker, SoundFilePicker>(); // "Add sound…" on the Sounds page (#307)
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();

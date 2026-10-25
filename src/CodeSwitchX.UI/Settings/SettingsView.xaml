@@ -736,6 +736,36 @@
 
         <!-- Sounds (#305): how loud the chats' sounds and Raven's voice play; letting go of a slider plays it at that level. -->
         <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Sounds}">
+          <StackPanel.Resources>
+            <!-- A sound's play button: a ring with the play glyph, as the voice samples have. -->
+            <Style x:Key="PlaySound" TargetType="Button">
+              <Setter Property="Width" Value="34" />
+              <Setter Property="Height" Value="34" />
+              <Setter Property="Cursor" Value="Hand" />
+              <Setter Property="ToolTip" Value="Hear it" />
+              <Setter Property="Foreground" Value="{StaticResource Text}" />
+              <Setter Property="Tag" Value="&#xE768;" />
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="Button">
+                    <Border x:Name="Circle" CornerRadius="17" BorderThickness="1.5" BorderBrush="#64748B" Background="Transparent">
+                      <TextBlock FontFamily="{StaticResource Icons}" Text="{TemplateBinding Tag}" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Circle" Property="BorderBrush" Value="{StaticResource Accent}" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+            <!-- A sound of the user's remove button (#307): the same ring with the bin glyph. -->
+            <Style x:Key="RemoveSound" TargetType="Button" BasedOn="{StaticResource PlaySound}">
+              <Setter Property="ToolTip" Value="Remove it" />
+              <Setter Property="Tag" Value="&#xE74D;" />
+            </Style>
+          </StackPanel.Resources>
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="Volume" />
@@ -762,30 +792,6 @@
           </Border>
           <Border Style="{StaticResource Card}">
             <StackPanel>
-              <StackPanel.Resources>
-                <!-- A slot's play button: a ring with the play glyph, as the voice samples have. -->
-                <Style x:Key="PlaySound" TargetType="Button">
-                  <Setter Property="Width" Value="34" />
-                  <Setter Property="Height" Value="34" />
-                  <Setter Property="Cursor" Value="Hand" />
-                  <Setter Property="ToolTip" Value="Hear it" />
-                  <Setter Property="Foreground" Value="{StaticResource Text}" />
-                  <Setter Property="Template">
-                    <Setter.Value>
-                      <ControlTemplate TargetType="Button">
-                        <Border x:Name="Circle" CornerRadius="17" BorderThickness="1.5" BorderBrush="#64748B" Background="Transparent">
-                          <TextBlock FontFamily="{StaticResource Icons}" Text="&#xE768;" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                          <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Circle" Property="BorderBrush" Value="{StaticResource Accent}" />
-                          </Trigger>
-                        </ControlTemplate.Triggers>
-                      </ControlTemplate>
-                    </Setter.Value>
-                  </Setter>
-                </Style>
-              </StackPanel.Resources>
               <TextBlock Style="{StaticResource H3}" Text="When a chat…" />
               <TextBlock Style="{StaticResource Help}" Text="The sound each event makes, for every chat, the one you're in too. Sounds play one after another once nobody is talking; a muted chat makes none. Pick None for silence." />
               <Grid Margin="0,4,0,0">
@@ -880,6 +886,39 @@
                 <Button Grid.Column="2" Style="{StaticResource PlaySound}" Margin="12,0,0,0" Command="{Binding PlaySlotSoundCommand}"
                         CommandParameter="{x:Static audio:SoundSlot.HearsName}" AutomationProperties.Name="Play sound when Raven hears its name" />
               </Grid>
+            </StackPanel>
+          </Border>
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <TextBlock Style="{StaticResource H3}" Text="Your sounds" />
+              <TextBlock Style="{StaticResource Help}" Text="Add a WAV or MP3 of your own: it is copied into CodeSwitchX, and every slot above can pick it. Files over 3 s are cut at 3 s." />
+              <ItemsControl ItemsSource="{Binding UserSounds}" AutomationProperties.Name="Your sounds">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,8,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Text="{Binding Name}" FontSize="14.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="1" Text="{Binding Length}" FontFamily="{StaticResource Mono}" FontSize="13" Foreground="{StaticResource Muted}"
+                                 VerticalAlignment="Center" Margin="12,0,0,0" />
+                      <Button Grid.Column="2" Style="{StaticResource PlaySound}" Margin="12,0,0,0"
+                              Command="{Binding DataContext.PlayUserSoundCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                              CommandParameter="{Binding Id}" AutomationProperties.Name="{Binding Name, StringFormat='Play {0}'}" />
+                      <Button Grid.Column="3" Style="{StaticResource RemoveSound}" Margin="8,0,0,0"
+                              Command="{Binding DataContext.RemoveSoundCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                              CommandParameter="{Binding Id}" AutomationProperties.Name="{Binding Name, StringFormat='Remove {0}'}" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <Button Style="{StaticResource Secondary}" Content="Add sound…" Command="{Binding AddSoundCommand}" HorizontalAlignment="Left" Margin="0,14,0,0"
+                      AutomationProperties.Name="Add sound" />
+              <TextBlock Style="{StaticResource Help}" Text="{Binding SoundNotice}" Margin="0,10,0,0" Foreground="{StaticResource Accent}"
+                         Visibility="{Binding SoundNotice, Converter={StaticResource NullToCollapsed}}" />
             </StackPanel>
           </Border>
         </StackPanel>
