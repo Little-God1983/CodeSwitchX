@@ -29,6 +29,7 @@ using CodeSwitchX.UI.Voice;
 using CodeSwitchX.UI.Workspaces;
 using CodeSwitchX.UI.Yard;
 using CodeSwitchX.Voice;
+using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Listening;
 using Microsoft.Extensions.DependencyInjection;
@@ -192,6 +193,7 @@ public partial class App : Application
         services.AddCodeSwitchXTranscriptIndexer();
         services.AddCodeSwitchXHosting();
         services.AddCodeSwitchXVoice(paths.ModelsDirectory, paths.VoiceDirectory);
+        services.AddSingleton(new SoundLibrary(paths.SoundsDirectory)); // the shipped sounds and the user's own (#307)
 #if DEBUG
         // The on-screen check of Open mic: nobody but the user can talk into their microphone, so a debug build can play
         // a 16 kHz mono 16-bit PCM file into Open mic instead.
