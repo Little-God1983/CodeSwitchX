@@ -21,6 +21,8 @@ public partial class RavenPanelView : UserControl
         _modeSwitch = new MicModeSwitch(() => _viewModel);
         InitializeComponent();
         DataContextChanged += (_, _) => Bind(DataContext as RavenPanelViewModel);
+        // Every release in the list ends the press, a handled one too (the mute button's), after the row had its say.
+        ChatList.AddHandler(MouseLeftButtonUpEvent, new MouseButtonEventHandler((_, _) => _chatClick.Forget()), handledEventsToo: true);
     }
 
     private void Bind(RavenPanelViewModel? viewModel)

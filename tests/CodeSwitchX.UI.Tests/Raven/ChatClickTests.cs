@@ -48,4 +48,16 @@ public sealed class ChatClickTests
 
         click.Release(_a).ShouldBeFalse("a later release without its own press, at the end of a drag from outside the list");
     }
+
+    // Review round 2 of #311: the mute button handles its release, so the row's press stayed and a later drag onto the row opened it.
+    [Fact]
+    public void A_release_the_row_never_saw_forgets_the_press()
+    {
+        var click = new ChatClick();
+        click.Press(_a);
+
+        click.Forget();
+
+        click.Release(_a).ShouldBeFalse();
+    }
 }

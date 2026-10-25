@@ -11,6 +11,9 @@ internal sealed class ChatClick
     /// <summary>The left button went down on <paramref name="row"/>; null for a press beside the rows.</summary>
     public void Press(object? row) => _pressed = row;
 
+    /// <summary>The left button came up where no row saw it (a button in the row took it, or outside the list).</summary>
+    public void Forget() => _pressed = null;
+
     /// <summary>The left button came up on <paramref name="row"/>: true when that is a click on it.</summary>
     public bool Release(object row)
     {
