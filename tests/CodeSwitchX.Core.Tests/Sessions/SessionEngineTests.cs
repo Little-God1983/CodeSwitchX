@@ -1308,4 +1308,20 @@ public class SessionEngineTests
         _engine.Apply(Hook("Stop", SessionSignal.Stop));
         _engine.Get("s1")!.TurnFailed.ShouldBeFalse();
     }
+
+    /// <summary>#306: a turn's start is its prompt, so a chat that waited and works again has not started a new turn.</summary>
+    [Fact]
+    public void A_prompt_stamps_the_turn_start_and_a_tool_use_keeps_it()
+    {
+        var first = _time.GetUtcNow();
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "do it"));
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, tool: "Bash"));
+
+        _engine.Get("s1")!.TurnStartedAt.ShouldBe(first);
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "again"));
+        _engine.Get("s1")!.TurnStartedAt.ShouldBe(_time.GetUtcNow());
+    }
 }

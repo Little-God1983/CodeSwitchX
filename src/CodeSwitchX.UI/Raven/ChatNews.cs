@@ -82,6 +82,9 @@ public sealed class ChatNews : IDisposable
     /// <summary>Raised on any thread when a chat has news, with the workspace of the chat when it is known.</summary>
     public event EventHandler<Guid?>? Arrived;
 
+    /// <summary>Raised with <see cref="Arrived"/>, saying what the news is and whose: the chats' sounds follow it (#306).</summary>
+    public event EventHandler<(ChatNewsKind Kind, string SessionId, Guid? WorkspaceId)>? Noted;
+
 
     /// <summary>
     /// Whether news waits of a chat whose workspace, as the engine placed it when the news came, is one <paramref name="told"/>
@@ -136,6 +139,7 @@ public sealed class ChatNews : IDisposable
         }
 
         Arrived?.Invoke(this, current.WorkspaceId);
+        Noted?.Invoke(this, (kind, current.SessionId, current.WorkspaceId));
     }
 
     private static ChatNewsKind? KindOf(SessionChanged change)
