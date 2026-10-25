@@ -157,7 +157,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         // The mode is stored as the user chose it: a fall back to push to talk after a failure is not their choice.
         Raven.PreferredMicMode = Enum.TryParse<MicMode>(Settings.RavenMicMode, out var mode) && Enum.IsDefined(mode) ? mode : MicMode.PushToTalk;
         Raven.ChatRequested += (_, line) => OpenNewsChat(line);
-        // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised.
+        // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised. A click on a window's
+        // chat in Raven's list or on the strip comes here too (#311), and a click on chat 0 goes back to the Yard.
         Raven.CabRequested += (_, workspaceId) => _ = ((IRavenShell)this).OpenInCabAsync(workspaceId);
         Raven.YardRequested += (_, _) => BackToYard();
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
@@ -708,7 +709,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     void IRavenShell.FollowWork(string askedIn, Guid? workspaceId, string tool) => Raven.FollowWork(askedIn, workspaceId, tool);
 
     /// <summary>
-    /// The user goes back to the Yard (Back, its key or mouse button, the tray): the Yard is shown, and Raven's panel shows
+    /// The user goes back to the Yard (Back, its key or mouse button, the tray, a click on chat 0): the Yard is shown, and Raven's panel shows
     /// chat 0, as opening a window shows that window's chat (#289).
     /// </summary>
     [RelayCommand]
