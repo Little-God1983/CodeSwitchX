@@ -44,6 +44,20 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Plays.ShouldBe(1);
     }
 
+    /// <summary>Review round 1 of #306: a chat muted while its sound waits makes it no more: muted is "no sound".</summary>
+    [Fact]
+    public async Task A_chat_muted_while_its_sound_waits_makes_none()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
+
+        vm.MuteChat(2, true);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Plays.ShouldBe(0);
+    }
+
     [Fact]
     public async Task A_muted_chat_s_cards_are_still_read_out_but_make_no_sound()
     {

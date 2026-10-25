@@ -3021,7 +3021,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void Queue(SoundCue cue)
     {
         var chat = ChatOf(cue.WorkspaceId);
-        if (_soundQueue is not null && !IsMuted && !chat.IsMuted && (cue.Line == SoundLine.Card || chat.WorkspaceId is not null))
+        if (_soundQueue is not null && !IsMuted && !chat.IsMuted && (cue.Line == SoundLine.Card || cue.WorkspaceId is not null))
         {
             _soundQueue.Add(cue);
         }
@@ -5094,7 +5094,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
-            spoken.Prelude = PreludeFor(c => ChatOf(c.WorkspaceId) == chat); // what it sums up sounds once, right before it (#306)
+            // What it sums up sounds once, right before it (#306); a turn begun since keeps its own sound.
+            spoken.Prelude = PreludeFor(c => ChatOf(c.WorkspaceId) == chat && c.Line != SoundLine.None);
             var (lines, warnings) = CatchUpItems(covered);
             var (said, whole, _, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
             if (said && whole)
@@ -5277,6 +5278,11 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (chat.IsMuted && chat == _newsChat)
         {
             StopNews(); // wherever the user is now
+        }
+
+        if (chat.IsMuted)
+        {
+            _soundQueue?.TakeForLine(c => ChatOf(c.WorkspaceId) == chat); // muted means no sound, the ones waiting too (#306)
         }
 
         if (chat == CurrentChat && chat.IsMuted)

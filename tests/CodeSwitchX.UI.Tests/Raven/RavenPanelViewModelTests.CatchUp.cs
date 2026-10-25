@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using Shouldly;
@@ -143,6 +144,28 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm); // chat 3's news is written, then its sound plays
         await SoundGraceAsync(vm);
         _sounds.Ids.ShouldBe(["marimba-rise", "marimba-fall"]);
+    }
+
+    /// <summary>Review round 1 of #306: the catch-up sums up what happened, so it opens with that sound, not another session's start.</summary>
+    [Fact]
+    public async Task The_catch_up_opens_with_what_it_sums_up_not_a_start()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        vm.CatchUp = true;
+        _yard.Show("a2", "ContentAutomatorX", "Task a2");
+        Changes("a", SessionState.Working, SessionState.Idle); // chat 2's: written while the user is in chat 1
+        await GraceAsync(vm);
+        var turn = _time.GetUtcNow();
+        var workspace = _yard.WorkspaceIdOf("a2");
+        _bus.Publish(new SessionChanged(ChatNewsTests.Chat("a2", SessionState.Idle, turn) with { WorkspaceId = workspace },
+            ChatNewsTests.Chat("a2", SessionState.Working, turn) with { WorkspaceId = workspace, TurnStartedAt = turn })); // then a2 starts
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        _teller.Asked.ShouldContain(q => q.StartsWith("Catch-up:"));
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
     }
 
     /// <summary>#143: the catch-up is a switch of its own: with chat news only written, it is still said.</summary>

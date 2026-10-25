@@ -135,6 +135,43 @@ public sealed class AudioOutputTests
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
+    /// <summary>Review round 1 of #306: a hush while a headset wakes for the sound does not wait for it; the device opened late is let go.</summary>
+    [Fact]
+    public async Task Cancelling_while_the_device_opens_completes_at_once_and_closes_it_once_open()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices { WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(10)) };
+        devices.Output.DeviceId = "headset";
+        using var cancel = new CancellationTokenSource();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = Sounds(devices, 1f).PlayAsync("bell-soft", cancel.Token);
+        var opened = devices.Opened("headset");
+        await Task.Delay(100, ct);
+        await cancel.CancelAsync();
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(2), ct);
+        waking.Set();
+        var player = await opened.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        for (var i = 0; i < 100 && !player.Disposed; i++)
+        {
+            await Task.Delay(20, ct);
+        }
+
+        player.Disposed.ShouldBeTrue();
+        player.PlayedEver.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_sound_stopped_before_it_began_opens_no_device()
+    {
+        var devices = new Devices();
+
+        Sounds(devices, 1f).PlayAsync("wood-knock", new CancellationToken(canceled: true)).IsCompleted.ShouldBeTrue();
+
+        devices.Players.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task A_failing_device_completes_without_throwing()
     {

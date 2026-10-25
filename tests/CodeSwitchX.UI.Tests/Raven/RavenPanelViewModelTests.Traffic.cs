@@ -279,6 +279,21 @@ public sealed partial class RavenPanelViewModelTests
         _sounds.Plays.ShouldBe(0);
     }
 
+    /// <summary>Review round 1 of #306: a window the list does not number is on the Yard all the same: its sounds play.</summary>
+    [Fact]
+    public async Task A_window_the_list_does_not_number_still_sounds()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        string[] workspaces = ["CodeSwitchX", "ContentAutomatorX", "DiffusionNexus", "RawCutX", "VideoX"];
+        vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), w == "VideoX" ? 0 : i + 1, w))]);
+
+        Changes("e", SessionState.Working, SessionState.Idle); // VideoX's, a window with no number
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+    }
+
     /// <summary>#306: the sounds are how to follow chats without speech: chat news only written still plays them.</summary>
     [Fact]
     public async Task Speak_chat_news_off_still_plays_the_chat_s_sounds()

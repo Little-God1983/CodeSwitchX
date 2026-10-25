@@ -57,18 +57,44 @@ public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProv
             return;
         }
 
+        if (ct.IsCancellationRequested)
+        {
+            return; // stopped before it began: no device is woken for it
+        }
+
         IWavePlayer? player = null;
         try
         {
             var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            player = await Task.Run(() =>
+            var opening = Task.Run(() =>
             {
                 var (pcm, format) = ShippedSounds.Load(soundId);
                 return output.Open(new RawSourceWaveStream(pcm, 0, pcm.Length, format), () => levels.Sounds, 120);
-            }, CancellationToken.None).ConfigureAwait(false);
+            }, CancellationToken.None);
+            try
+            {
+                // A headset waking can hold the open for seconds: a stop does not wait for it, and the device is let go once open.
+                player = await opening.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                _ = opening.ContinueWith(t =>
+                {
+                    if (t.IsCompletedSuccessfully)
+                    {
+                        AudioOutput.DisposeQuietly(t.Result);
+                    }
+                    else
+                    {
+                        logger.LogInformation(t.Exception?.GetBaseException(), "A sound stopped while its device opened; the open failed");
+                    }
+                }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+                return;
+            }
+
             if (ct.IsCancellationRequested)
             {
-                return; // stopped while the device opened: closed unheard
+                return; // stopped just as the device opened: closed unheard
             }
 
             player.PlaybackStopped += (_, _) => ended.TrySetResult();
