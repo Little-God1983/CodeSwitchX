@@ -188,6 +188,49 @@ public sealed class AudioOutputTests
         devices.Players.ShouldBeEmpty();
     }
 
+    /// <summary>#318: a sample stopped while a headset wakes for it ends at once; the device opened late is let go unplayed.</summary>
+    [Fact]
+    public async Task A_sample_stopped_while_the_headset_wakes_ends_at_once_and_lets_the_device_go()
+    {
+        using var waking = new ManualResetEventSlim();
+        var devices = new Devices { WhileOpening = () => waking.Wait(TimeSpan.FromSeconds(10)) };
+        devices.Output.DeviceId = "headset";
+        using var cancel = new CancellationTokenSource();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = new VoiceSamples(devices.Output, new AudioLevels(), TimeProvider.System).PlayAsync(SpeechEngine.Kokoro, SampleVoice, cancel.Token);
+        var opened = devices.Opened("headset");
+        await Task.Delay(100, ct);
+        await cancel.CancelAsync();
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(2), ct);
+        waking.Set();
+        var player = await opened.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        for (var i = 0; i < 100 && !player.Disposed; i++)
+        {
+            await Task.Delay(20, ct);
+        }
+
+        player.Disposed.ShouldBeTrue();
+        player.PlayedEver.ShouldBeFalse();
+    }
+
+    /// <summary>#318: a sample whose device never says it stopped ends after its length and a margin: its row stops "playing".</summary>
+    [Fact]
+    public async Task A_sample_that_never_ends_is_stopped_after_its_length_and_a_margin()
+    {
+        var devices = new Devices();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var ct = TestContext.Current.CancellationToken;
+
+        var playing = new VoiceSamples(devices.Output, new AudioLevels(), time).PlayAsync(SpeechEngine.Kokoro, SampleVoice, ct);
+        await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        time.Advance(VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + ChatSounds.PlayMargin);
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        devices.Players.Single().Disposed.ShouldBeTrue();
+    }
+
     private static string SampleVoice => SpeechSettings.VoicesOf(SpeechEngine.Kokoro).First().Id;
 
     /// <summary>A fake clock that says when a timer is made: a delay is waiting on it from then on, so advancing it ends the delay.</summary>
