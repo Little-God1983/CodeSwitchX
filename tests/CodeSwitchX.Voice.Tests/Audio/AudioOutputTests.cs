@@ -246,11 +246,18 @@ public sealed class AudioOutputTests
 
         var playing = new VoiceSamples(devices.Output, new AudioLevels(), time).PlayAsync(SpeechEngine.Kokoro, SampleVoice, ct);
         opening.Wait(TimeSpan.FromSeconds(5), ct).ShouldBeTrue();
-        time.Advance(VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + VoiceSamples.PlayMargin + TimeSpan.FromSeconds(1));
+        var cap = VoiceSamples.LengthOf(SpeechEngine.Kokoro, SampleVoice) + VoiceSamples.PlayMargin;
+        time.Advance(cap + TimeSpan.FromSeconds(1));
         waking.Set();
 
         await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        // Review round 2 of #318: the whole cap still lies ahead once it plays, and it ends there.
+        time.Advance(cap - TimeSpan.FromMilliseconds(1));
+        await Task.Delay(100, ct);
         playing.IsCompleted.ShouldBeFalse("it plays now, and the margin runs from here");
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+        devices.Players.Single().Disposed.ShouldBeTrue();
     }
 
     /// <summary>#318: a sample whose device never says it stopped ends after its length and a margin: its row stops "playing".</summary>

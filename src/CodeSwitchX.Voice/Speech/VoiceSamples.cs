@@ -44,12 +44,11 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
             return; // stopped before it began (the slider let go twice in a row): no device is woken for it
         }
 
-        var length = LengthOf(engine, voice);
         if (levels.Voice <= 0f)
         {
             try
             {
-                await Task.Delay(length, time, ct).ConfigureAwait(false);
+                await Task.Delay(LengthOf(engine, voice), time, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -62,14 +61,15 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
         var opening = Task.Run(() =>
         {
             var clip = Clip(engine, voice);
-            var reader = new WaveFileReader(clip); // which does not close the clip
+            WaveFileReader? reader = null;
             try
             {
+                reader = new WaveFileReader(clip); // which does not close the clip
                 return new Opened(clip, reader, audioOutput.Open(reader, () => levels.Voice, 300));
             }
             catch
             {
-                reader.Dispose();
+                reader?.Dispose();
                 clip.Dispose();
                 throw;
             }
@@ -103,7 +103,7 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
 
             // A device that never says it stopped does not leave the sample playing for good (#318); counted from here, so a
             // headset's wake takes none of it.
-            using var capped = new CancellationTokenSource(length + PlayMargin, time);
+            using var capped = new CancellationTokenSource(opened.Reader.TotalTime + PlayMargin, time);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, capped.Token);
 
             var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -121,14 +121,18 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
     }, CancellationToken.None);
 
     /// <summary>A sample's device, open on its clip.</summary>
-    private sealed record Opened(Stream Clip, WaveFileReader Reader, IWavePlayer Player)
+    private sealed class Opened(Stream clip, WaveFileReader reader, IWavePlayer player)
     {
+        public WaveFileReader Reader => reader;
+
+        public IWavePlayer Player => player;
+
         /// <summary>Stops the device and lets it go, then the clip.</summary>
         public void Close()
         {
-            AudioOutput.DisposeQuietly(Player);
-            Reader.Dispose();
-            Clip.Dispose();
+            AudioOutput.DisposeQuietly(player);
+            reader.Dispose();
+            clip.Dispose();
         }
     }
 
