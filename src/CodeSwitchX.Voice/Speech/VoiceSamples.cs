@@ -9,7 +9,10 @@ namespace CodeSwitchX.Voice.Speech;
 /// </summary>
 public interface IVoiceSamples
 {
-    /// <summary>Plays the clip on the output chosen until it ends or <paramref name="ct"/> is cancelled; then returns. Never on the caller's thread.</summary>
+    /// <summary>
+    /// Plays the clip on the output chosen until it ends or <paramref name="ct"/> is cancelled; then returns. At voice 0 % it opens
+    /// no output and only takes the clip's length (#310); stopped before it began, it opens none either. Never on the caller's thread.
+    /// </summary>
     Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct);
 }
 
