@@ -135,6 +135,41 @@ public sealed class AudioOutputTests
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
+    /// <summary>#310: a voice sample at 0 % opens no device either (a sleeping headset is not woken), and still takes its time.</summary>
+    [Fact]
+    public async Task At_voice_level_zero_a_sample_opens_no_device_and_takes_its_length()
+    {
+        var devices = new Devices();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var samples = new CodeSwitchX.Voice.Speech.VoiceSamples(devices.Output, new AudioLevels { Voice = 0f }, time);
+        var voice = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro).First().Id;
+
+        var playing = samples.PlayAsync(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro, voice, TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        playing.IsCompleted.ShouldBeFalse("it takes the sample's length, as if it played");
+        devices.Players.ShouldBeEmpty();
+        time.Advance(TimeSpan.FromMinutes(1));
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>#310: a silent sample stopped (another one played, the slider let go again) ends at once.</summary>
+    [Fact]
+    public async Task A_silent_sample_stopped_ends_at_once()
+    {
+        var devices = new Devices();
+        var samples = new CodeSwitchX.Voice.Speech.VoiceSamples(devices.Output, new AudioLevels { Voice = 0f },
+            new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
+        var voice = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro).First().Id;
+        using var stop = new CancellationTokenSource();
+
+        var playing = samples.PlayAsync(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro, voice, stop.Token);
+        await stop.CancelAsync();
+
+        await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        devices.Players.ShouldBeEmpty();
+    }
+
     /// <summary>Review round 1 of #306: a hush while a headset wakes for the sound does not wait for it; the device opened late is let go.</summary>
     [Fact]
     public async Task Cancelling_while_the_device_opens_completes_at_once_and_closes_it_once_open()
@@ -567,7 +602,7 @@ public sealed class AudioOutputTests
         devices.Output.DeviceId = "id-tv";
         using var cancel = new CancellationTokenSource();
 
-        var playing = new VoiceSamples(devices.Output, new AudioLevels()).PlayAsync(SpeechEngine.Kokoro, "af_heart", cancel.Token);
+        var playing = new VoiceSamples(devices.Output, new AudioLevels(), TimeProvider.System).PlayAsync(SpeechEngine.Kokoro, "af_heart", cancel.Token);
         await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await cancel.CancelAsync();
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
