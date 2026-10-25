@@ -23,13 +23,17 @@ public sealed class SoundQueue
     private readonly Func<SoundCue, bool> _waitsForLine;
     private readonly List<SoundCue> _queue = [];
     private readonly ITimer _timer;
+    private readonly ITimer _recheck;
+    private readonly Func<TimeSpan> _busyFor;
     private CancellationTokenSource? _playing;
     private bool _timing; // the grace or the gap runs
 
     /// <param name="mayPlay">Whether the floor is free for a sound: nobody talks, and Raven has nothing of its own to say.</param>
     /// <param name="waitsForLine">Whether the cue's sound waits for the line Raven speaks for it, to play straight before it.</param>
+    /// <param name="busyFor">How long the floor stays taken by time alone, which no change of state ends: Raven listening for the
+    /// words after its name. The queue looks again once it is over.</param>
     public SoundQueue(IChatSounds sounds, SoundPicks picks, TimeProvider time, IUiDispatcher dispatcher, Func<bool> mayPlay,
-        Func<SoundCue, bool> waitsForLine)
+        Func<SoundCue, bool> waitsForLine, Func<TimeSpan>? busyFor = null)
     {
         _sounds = sounds;
         _picks = picks;
@@ -37,7 +41,9 @@ public sealed class SoundQueue
         _dispatcher = dispatcher;
         _mayPlay = mayPlay;
         _waitsForLine = waitsForLine;
+        _busyFor = busyFor ?? (() => TimeSpan.Zero);
         _timer = time.CreateTimer(_ => _dispatcher.Post(OnTimer), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _recheck = time.CreateTimer(_ => _dispatcher.Post(Kick), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>A sound plays: the floor is not free for Raven's speech meanwhile.</summary>
@@ -76,6 +82,12 @@ public sealed class SoundQueue
         if (!_mayPlay())
         {
             Stop();
+            if (_busyFor() is var busy && busy > TimeSpan.Zero && Prune().Any(Playable))
+            {
+                // Taken by time alone: no change of state says when it is over, so the queue looks again then.
+                _recheck.Change(busy, Timeout.InfiniteTimeSpan);
+            }
+
             return;
         }
 

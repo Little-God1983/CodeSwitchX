@@ -21,7 +21,7 @@ public interface IAppSettings
     Task<string> OpenAsync(string? page, CancellationToken ct);
 }
 
-/// <param name="Name">What the user calls it: "open mic", "cooldown".</param>
+/// <param name="Name">What the user calls it: "open mic", "pause".</param>
 /// <param name="Page">The Settings page it is on.</param>
 /// <param name="Description">What it does, for the brain.</param>
 /// <param name="Values">The values it may take; null when free (a model id, a number in a range).</param>

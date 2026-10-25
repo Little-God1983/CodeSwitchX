@@ -1,4 +1,5 @@
 using CodeSwitchX.Conductor;
+using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.Voice.Audio;
@@ -258,6 +259,24 @@ public sealed partial class RavenPanelViewModelTests
         await SoundGraceAsync(vm);
 
         _sounds.Plays.ShouldBe(1, "chat 3's sound was dropped, chat 4's never queued");
+    }
+
+    /// <summary>Review of #306: a chat on no Yard workspace (a terminal claude, a script) is in no Raven chat: it makes no sound.</summary>
+    [Fact]
+    public async Task A_chat_on_no_workspace_makes_no_sound()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        var turn = _time.GetUtcNow();
+        var idle = ChatNewsTests.Chat("x", SessionState.Idle, turn) with { TurnStartedAt = turn };
+        var working = ChatNewsTests.Chat("x", SessionState.Working, turn) with { TurnStartedAt = turn };
+
+        _bus.Publish(new SessionChanged(idle with { TurnStartedAt = null }, working));
+        _bus.Publish(new SessionChanged(working, idle));
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+        Gap();
+
+        _sounds.Plays.ShouldBe(0);
     }
 
     /// <summary>#306: the sounds are how to follow chats without speech: chat news only written still plays them.</summary>

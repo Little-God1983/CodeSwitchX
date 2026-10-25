@@ -12,10 +12,11 @@ public sealed class SoundQueueTests
     private readonly SoundPicks _picks = new();
     private bool _free = true;
     private Func<SoundCue, bool> _waitsForLine = _ => false;
+    private TimeSpan _busyFor = TimeSpan.Zero;
     private readonly SoundQueue _queue;
 
     public SoundQueueTests() =>
-        _queue = new SoundQueue(_sounds, _picks, _time, new ImmediateDispatcher(), () => _free, cue => _waitsForLine(cue));
+        _queue = new SoundQueue(_sounds, _picks, _time, new ImmediateDispatcher(), () => _free, cue => _waitsForLine(cue), () => _busyFor);
 
     private SoundCue Cue(string session, SoundSlot slot = SoundSlot.Finishes, Func<bool>? stillTrue = null) =>
         new(slot, session, null, _time.GetUtcNow(), SoundLine.News, stillTrue ?? (() => true));
@@ -72,6 +73,24 @@ public sealed class SoundQueueTests
         Advance(100);
 
         _sounds.Ids.ShouldBe(["marimba-rise", "marimba-fall"]);
+    }
+
+    /// <summary>Review of #306: Raven listening for the words after its name holds the floor by time alone, which no state change ends.</summary>
+    [Fact]
+    public void A_floor_busy_by_time_alone_is_looked_at_again_when_that_time_ends()
+    {
+        _free = false;
+        _busyFor = TimeSpan.FromSeconds(10);
+        _queue.Add(Cue("a"));
+
+        _time.Advance(TimeSpan.FromSeconds(9));
+        _free = true;
+        _busyFor = TimeSpan.Zero;
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _sounds.Plays.ShouldBeEmpty("the grace starts when the floor is free");
+        Grace();
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
     }
 
     [Fact]

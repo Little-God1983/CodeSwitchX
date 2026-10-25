@@ -635,6 +635,29 @@ public sealed class ReplyVoiceTests : IDisposable
         _player.Played.ShouldBe(1);
     }
 
+    /// <summary>Review of #306: a sound slow to play (a headset waking) is no hung voice: the line is not dropped, the voice not restarted.</summary>
+    [Fact]
+    public async Task A_slow_prelude_does_not_count_as_a_hung_voice()
+    {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        using var voice = new ReplyVoice(_tts, _player, _keepAlive, time, NullLogger<ReplyVoice>.Instance);
+        _tts.ThrowsWhenCancelledAfterChunk = true;
+        var sound = new TaskCompletionSource();
+        var reply = voice.Begin();
+        reply.Prelude = _ => sound.Task;
+        reply.Add("Chat App finished.");
+        reply.Complete();
+        await Until(() => _tts.Spoken.Count == 1);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        time.Advance(ReplyVoice.ChunkTimeout + TimeSpan.FromSeconds(1));
+        sound.SetResult();
+        await Until(() => _player.Played == 1);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        _tts.Recoveries.ShouldBe(0);
+    }
+
     [Fact]
     public async Task The_prelude_runs_once_per_reply()
     {
@@ -758,7 +781,14 @@ public sealed class ReplyVoiceTests : IDisposable
 
             ct.ThrowIfCancellationRequested();
             yield return new SpeechChunk(new byte[480], 24000);
+            if (ThrowsWhenCancelledAfterChunk)
+            {
+                ct.ThrowIfCancellationRequested(); // as the sidecar's stream does, read on after the chunk
+            }
         }
+
+        /// <summary>The enumeration looks at the token once more after its chunk, as the real voice's stream does.</summary>
+        public bool ThrowsWhenCancelledAfterChunk { get; set; }
     }
 
     private sealed class FakeKeepAlive : IAudioKeepAlive

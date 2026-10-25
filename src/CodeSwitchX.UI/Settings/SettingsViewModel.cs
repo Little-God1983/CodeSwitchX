@@ -203,8 +203,6 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>The cooldowns the Voice page offers, in seconds.</summary>
-
     /// <summary>The pauses between messages the Voice page offers, in seconds.</summary>
     public IReadOnlyList<int> PauseChoices => Raven.TrafficWatcher.PauseChoices;
 

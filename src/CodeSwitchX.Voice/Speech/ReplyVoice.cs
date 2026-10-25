@@ -360,6 +360,7 @@ public sealed class ReplyVoice : IDisposable
                 watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan);
                 if (reply.TakePrelude() is { } prelude)
                 {
+                    watchdog.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); // a headset waking for the sound is no hung voice
                     await PlayPreludeAsync(prelude, hush).ConfigureAwait(false);
                     watchdog.Change(ChunkTimeout, Timeout.InfiniteTimeSpan); // the sound's time is not the voice's
                 }

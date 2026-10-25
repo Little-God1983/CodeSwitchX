@@ -101,4 +101,17 @@ public sealed class SettingsToolsTests
             Directory.Delete(paths.Root, recursive: true);
         }
     }
+
+    /// <summary>Review of #306: the examples the brain reads name only settings that still exist; the cooldown is gone.</summary>
+    [Fact]
+    public void The_tools_give_no_example_of_a_removed_setting()
+    {
+        var described = typeof(SettingsTools).GetMethods()
+            .SelectMany(m => m.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false)
+                .Concat(m.GetParameters().SelectMany(p => p.GetCustomAttributes(typeof(System.ComponentModel.DescriptionAttribute), false))))
+            .Cast<System.ComponentModel.DescriptionAttribute>()
+            .Select(d => d.Description);
+
+        described.ShouldNotContain(d => d.Contains("cooldown", StringComparison.OrdinalIgnoreCase));
+    }
 }

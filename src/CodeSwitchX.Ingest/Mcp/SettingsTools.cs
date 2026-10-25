@@ -24,12 +24,12 @@ public sealed class SettingsTools(IAppSettings settings)
     [Description("Says what one of CodeSwitchX's settings is set to now (\"is open mic on?\", \"what voice are you using?\", \"what model "
         + "do new chats use?\"). Answer with the value in a few words.")]
     public Task<AppSettingValue> GetSetting(
-        [Description("The setting's name from list_settings, as the user said it: \"open mic\", \"voice\", \"cooldown\".")] string name,
+        [Description("The setting's name from list_settings, as the user said it: \"open mic\", \"voice\", \"pause\".")] string name,
         CancellationToken cancellationToken = default) => Act(() => settings.GetAsync(name, cancellationToken));
 
     [McpServerTool(Name = "set_setting", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Changes one of CodeSwitchX's settings as the Settings page would (\"turn open mic off\", \"use the Kokoro voice\", \"set the "
-        + "cooldown to 20 seconds\"). Only when the user asked for the change. Returns the new value: say what you set, in a few words, and "
+        + "pause to 5 seconds\"). Only when the user asked for the change. Returns the new value: say what you set, in a few words, and "
         + "its note when it has one (a download, the voice restarting). A setting that is not changed by voice comes back as an error "
         + "saying why, with Settings opened at its page: tell the user that.")]
     public Task<AppSettingValue> SetSetting(

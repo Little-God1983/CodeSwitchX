@@ -386,7 +386,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         Traffic = new TrafficWatcher(time);
         if (sounds is not null)
         {
-            _soundQueue = new SoundQueue(sounds, _picks, time, dispatcher, MaySound, WaitsForLine);
+            _soundQueue = new SoundQueue(sounds, _picks, time, dispatcher, MaySound, WaitsForLine, CallListening);
             _soundQueue.Played += (_, _) => Traffic.Announced(); // what Raven says on its own waits the pause after it
             _soundQueue.PlayingChanged += (_, _) => UpdateState();
         }
@@ -3014,11 +3014,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// A chat did something with a sound (#306): it joins the queue, unless Raven's panel or the chat is muted, which puts
-    /// nothing in it. The chat the user is in plays its sound too, right before its line when Raven speaks one.
+    /// nothing in it. The chat the user is in plays its sound too, right before its line when Raven speaks one. A chat on no
+    /// window of the Yard (a terminal claude, a script) is in no Raven chat, as its news is told in none: it makes none; a
+    /// card shows in chat 0 and sounds there.
     /// </summary>
     private void Queue(SoundCue cue)
     {
-        if (_soundQueue is not null && !IsMuted && !ChatOf(cue.WorkspaceId).IsMuted)
+        var chat = ChatOf(cue.WorkspaceId);
+        if (_soundQueue is not null && !IsMuted && !chat.IsMuted && (cue.Line == SoundLine.Card || chat.WorkspaceId is not null))
         {
             _soundQueue.Add(cue);
         }
