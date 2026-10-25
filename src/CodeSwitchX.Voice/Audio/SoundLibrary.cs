@@ -97,10 +97,13 @@ public sealed class SoundLibrary
             using var reader = new WaveFileReader(path);
             length = reader.TotalTime > TimeSpan.Zero ? reader.TotalTime : null;
         }
-        catch (Exception ex) when (ex is FormatException or IOException or ArgumentException or UnauthorizedAccessException
-            or InvalidDataException)
+        catch (Exception ex) when (ex is UnauthorizedAccessException || (ex is IOException && ex is not EndOfStreamException))
         {
-            length = null;
+            return null; // held for a moment (a scanner on a new file): looked at again next time, not remembered as no sound
+        }
+        catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentException or InvalidDataException)
+        {
+            length = null; // damaged or replaced: no sound until the file changes
         }
 
         _lengths[id] = (written, length);
@@ -133,16 +136,10 @@ public sealed class SoundLibrary
         var id = UserPrefix + Guid.NewGuid().ToString("N")[..8];
         var length = SoundImport.Import(source, PathOf(id));
         // Never as None, nor as another sound once case and punctuation are set aside: Raven picks them by name too.
-        var taken = All.Select(s => NameKey(s.Name)).Append(NameKey("None")).ToHashSet(StringComparer.Ordinal);
         SoundEntry sound;
         lock (_lock)
         {
-            taken.UnionWith(_user.Select(u => NameKey(u.Name))); // added meanwhile
-            var name = Path.GetFileNameWithoutExtension(source);
-            for (var n = 2; taken.Contains(NameKey(name)); n++)
-            {
-                name = $"{Path.GetFileNameWithoutExtension(source)} ({n})";
-            }
+            var name = UniqueName(Path.GetFileNameWithoutExtension(source), TakenNames(_user));
 
             try
             {
@@ -193,8 +190,30 @@ public sealed class SoundLibrary
     }
 
     /// <summary>A name as Raven matches it: lower case, letters and digits, one space between words.</summary>
-    private static string NameKey(string name) =>
-        string.Join(' ', System.Text.RegularExpressions.Regex.Split(name.ToLowerInvariant(), @"[^\p{L}\p{Nd}]+").Where(w => w.Length > 0));
+    private static string NameKey(string name) => string.Join(' ',
+        System.Text.RegularExpressions.Regex.Split(name.Replace("'", "").Replace("\u2019", "").ToLowerInvariant(), @"[^\p{L}\p{Nd}]+")
+            .Where(w => w.Length > 0));
+
+    /// <summary>The names no sound of the user's may take: None, the shipped sounds' and the user's own, as Raven matches them.</summary>
+    private static HashSet<string> TakenNames(IEnumerable<UserSound> user) =>
+        [.. ShippedSounds.All.Select(s => NameKey(s.Name)), NameKey("None"), .. user.Select(u => NameKey(u.Name))];
+
+    /// <summary>
+    /// <paramref name="stem"/> ("Sound" when it has no letters or digits), with " (2)", " (3)"… until no name taken is like it;
+    /// the name is taken then.
+    /// </summary>
+    private static string UniqueName(string? stem, HashSet<string> taken)
+    {
+        stem = stem is { } s && NameKey(s).Length > 0 ? s : "Sound";
+        var name = stem;
+        for (var n = 2; taken.Contains(NameKey(name)); n++)
+        {
+            name = $"{stem} ({n})";
+        }
+
+        taken.Add(NameKey(name));
+        return name;
+    }
 
     private static bool IsUser(string id) => id.StartsWith(UserPrefix, StringComparison.Ordinal) && id.Length > UserPrefix.Length
         && id[UserPrefix.Length..].All(char.IsAsciiHexDigit);
@@ -206,14 +225,45 @@ public sealed class SoundLibrary
     /// <summary>The user's sounds as the index names them; none without a folder, or with an index that cannot be read.</summary>
     private List<UserSound> ReadIndex()
     {
-        try
-        {
-            return _directory is null || !File.Exists(IndexFile) ? []
-                : JsonSerializer.Deserialize<List<UserSound>>(File.ReadAllText(IndexFile))?.Where(u => IsUser(u.Id)).ToList() ?? [];
-        }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        if (_directory is null)
         {
             return [];
+        }
+
+        // An index that cannot be read loses no sound: the files are the user's sounds, though their names are gone ("Sound").
+        var listed = TryReadIndex() ?? [.. (Directory.Exists(_directory) ? Directory.GetFiles(_directory, UserPrefix + "*.wav") : [])
+            .Select(Path.GetFileNameWithoutExtension).Order(StringComparer.Ordinal).Select(id => new UserSound(id!, null!))];
+        var taken = TakenNames([]);
+        return [.. listed.Where(u => u?.Id is { } id && IsUser(id)).Select(u => new UserSound(u!.Id, UniqueName(u.Name, taken)))];
+    }
+
+    /// <summary>The index's entries, none for no index; null when it cannot be read: damaged, or held past a few tries.</summary>
+    private List<UserSound?>? TryReadIndex()
+    {
+        if (!File.Exists(IndexFile))
+        {
+            return [];
+        }
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<List<UserSound?>>(File.ReadAllText(IndexFile)) ?? [];
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 5)
+                {
+                    return null;
+                }
+
+                Thread.Sleep(100); // a scanner or a backup holds it for a moment
+            }
         }
     }
 

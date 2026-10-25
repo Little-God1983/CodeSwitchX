@@ -186,6 +186,53 @@ public sealed class SoundLibraryTests : IDisposable
 
         none.Name.ShouldBe("none (2)");
         spaced.Name.ShouldBe("Ding 2 (2)");
+        library.Add(Picked("Don't.wav"));
+        library.Add(Picked("Dont.wav")).Sound.Name.ShouldBe("Dont (2)", "Raven hears the two alike");
+        library.Add(Picked(".wav")).Sound.Name.ShouldBe("Sound");
+    }
+
+    /// <summary>Review round 2 of #307: an index that cannot be read loses no sound: the files tell the pool, and an add keeps them.</summary>
+    [Fact]
+    public void An_unreadable_index_is_rebuilt_from_the_sound_files()
+    {
+        var first = new SoundLibrary(Folder);
+        var ding = first.Add(Picked("Ding.wav")).Sound;
+        var dong = first.Add(Picked("Dong.wav")).Sound;
+        File.WriteAllText(Path.Combine(Folder, "index.json"), "{ damaged");
+
+        var library = new SoundLibrary(Folder);
+        library.Add(Picked("Bell.wav"));
+
+        new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Id).ShouldBe([ding.Id, dong.Id, .. library.All.Where(s => s.Name == "Bell").Select(s => s.Id)], ignoreOrder: true);
+    }
+
+    /// <summary>Review round 2 of #307: an index with empty entries is read without them, and nothing throws.</summary>
+    [Fact]
+    public void An_index_with_empty_entries_is_read_without_them()
+    {
+        var ding = new SoundLibrary(Folder).Add(Picked("Ding.wav")).Sound;
+        File.WriteAllText(Path.Combine(Folder, "index.json"), $"[null, {{\"Name\":\"x\"}}, {{\"Id\":\"{ding.Id}\"}}]");
+
+        var library = new SoundLibrary(Folder);
+
+        library.All.Where(s => !s.Shipped).ShouldHaveSingleItem().Id.ShouldBe(ding.Id, "its file is there: named after the file again");
+    }
+
+    /// <summary>Review round 2 of #307: a file a scanner holds for a moment is back in the pool once it lets go.</summary>
+    [Fact]
+    public void A_sound_held_for_a_moment_is_back_once_it_is_let_go()
+    {
+        var library = new SoundLibrary(Folder);
+        var sound = library.Add(Picked("Ding.wav")).Sound;
+        var held = new SoundLibrary(Folder); // reads the file for the first time while it is held
+
+        using (File.Open(Path.Combine(Folder, sound.Id + ".wav"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            held.Has(sound.Id).ShouldBeFalse("it cannot be read just now");
+        }
+
+        held.Has(sound.Id).ShouldBeTrue();
+        held.All.ShouldContain(s => s.Id == sound.Id);
     }
 
     [Fact]

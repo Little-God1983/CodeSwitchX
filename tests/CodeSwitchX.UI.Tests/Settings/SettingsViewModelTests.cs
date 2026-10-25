@@ -402,6 +402,31 @@ public class SettingsViewModelTests : IDisposable
         _vm.SoundChoices.ShouldNotContain(c => c.Id == id);
     }
 
+    /// <summary>Review round 2 of #307: a sound that cannot be removed keeps its slots and says why.</summary>
+    [Fact]
+    public async Task A_sound_that_cannot_be_removed_keeps_its_slots_and_says_why()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+        _vm.AddSoundCommand.Execute(null);
+        var id = _vm.UserSounds.Single().Id;
+        _vm.RavenSoundFail = id;
+        var index = Path.Combine(_paths.SoundsDirectory, "index.json");
+        File.SetAttributes(index, FileAttributes.ReadOnly);
+        try
+        {
+            _vm.RemoveSoundCommand.Execute(id);
+        }
+        finally
+        {
+            File.SetAttributes(index, FileAttributes.Normal);
+        }
+
+        _vm.RavenSoundFail.ShouldBe(id);
+        _vm.UserSounds.ShouldHaveSingleItem();
+        _vm.SoundNotice.ShouldNotBeNull().ShouldStartWith("This sound could not be removed: ");
+    }
+
     [Fact]
     public async Task A_stored_pick_of_a_user_sound_loads()
     {

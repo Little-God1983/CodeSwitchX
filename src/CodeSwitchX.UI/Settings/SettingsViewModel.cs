@@ -741,25 +741,26 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void PlayUserSound(string id) => Play(id);
 
-    /// <summary>Removes a sound of the user's; the slots that used it go back to their defaults first.</summary>
+    /// <summary>Removes a sound of the user's; the slots that used it go back to their defaults. One that cannot be removed says why.</summary>
     [RelayCommand]
     private void RemoveSound(string id)
     {
-        string Kept(string pick, SoundSlot slot) => pick == id ? ShippedSounds.DefaultFor(slot) : pick;
-        RavenSoundStart = Kept(RavenSoundStart, SoundSlot.StartsWorking);
-        RavenSoundFinish = Kept(RavenSoundFinish, SoundSlot.Finishes);
-        RavenSoundQuestion = Kept(RavenSoundQuestion, SoundSlot.AsksQuestion);
-        RavenSoundPermission = Kept(RavenSoundPermission, SoundSlot.AsksPermission);
-        RavenSoundFail = Kept(RavenSoundFail, SoundSlot.Fails);
-        RavenSoundName = Kept(RavenSoundName, SoundSlot.HearsName);
-        _library.Remove(id);
-        SoundNotice = null;
+        try
+        {
+            _library.Remove(id); // its slots go back to their defaults as the pool changes (ShowSounds)
+            SoundNotice = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SoundNotice = $"This sound could not be removed: {ex.Message.TrimEnd('.')}.";
+        }
     }
 
     /// <summary>The pickers and the list follow the pool, item by item.</summary>
     private void ShowSounds()
     {
-        List<SoundChoice> wanted = [new(NoSound, "None"), .. _library.All.Select(s => new SoundChoice(s.Id, s.Name))];
+        var pool = _library.All;
+        List<SoundChoice> wanted = [new(NoSound, "None"), .. pool.Select(s => new SoundChoice(s.Id, s.Name))];
         // A slot whose sound left the pool (its file deleted outside the app) goes back to its default first: taken out of the
         // pickers while picked, its picker would write an empty pick back into it.
         string Kept(string pick, SoundSlot slot) => wanted.Any(c => c.Id == pick) ? pick : ShippedSounds.DefaultFor(slot);
@@ -770,7 +771,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         RavenSoundFail = Kept(RavenSoundFail, SoundSlot.Fails);
         RavenSoundName = Kept(RavenSoundName, SoundSlot.HearsName);
         Follow(SoundChoices, wanted);
-        Follow(UserSounds, [.. _library.All.Where(s => !s.Shipped).Select(s => new UserSoundRow(s.Id, s.Name,
+        Follow(UserSounds, [.. pool.Where(s => !s.Shipped).Select(s => new UserSoundRow(s.Id, s.Name,
             s.Length.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s"))]);
     }
 
