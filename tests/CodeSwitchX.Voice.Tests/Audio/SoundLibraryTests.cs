@@ -235,6 +235,71 @@ public sealed class SoundLibraryTests : IDisposable
         held.All.ShouldContain(s => s.Id == sound.Id);
     }
 
+    /// <summary>Review round 3 of #307: an index held at the start is read again before anything is written over it: no name is lost.</summary>
+    [Fact]
+    public void A_held_index_is_read_again_before_it_is_written()
+    {
+        var first = new SoundLibrary(Folder);
+        first.Add(Picked("Ding.wav"));
+        first.Add(Picked("Dong.wav"));
+
+        SoundLibrary library;
+        using (File.Open(Path.Combine(Folder, "index.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            library = new SoundLibrary(Folder);
+        }
+
+        library.Add(Picked("Bell.wav"));
+
+        new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(["Ding", "Dong", "Bell"]);
+    }
+
+    /// <summary>Review round 3 of #307: a file cut off in its data is no sound, though its header is whole.</summary>
+    [Fact]
+    public void A_cut_off_sound_file_is_left_out()
+    {
+        var sound = new SoundLibrary(Folder).Add(Picked("Ding.wav")).Sound;
+        var file = Path.Combine(Folder, sound.Id + ".wav");
+        var bytes = File.ReadAllBytes(file);
+        File.WriteAllBytes(file, bytes[..(bytes.Length / 2)]);
+
+        var library = new SoundLibrary(Folder);
+
+        library.Has(sound.Id).ShouldBeFalse();
+        library.Keeps(sound.Id).ShouldBeTrue("its file is there: its pick is kept, the default plays");
+    }
+
+    /// <summary>Review round 3 of #307: a file a failed remove left behind is deleted at the next start, and no length is said for it.</summary>
+    [Fact]
+    public void A_file_left_by_a_failed_remove_is_deleted_at_the_next_start()
+    {
+        var library = new SoundLibrary(Folder);
+        var sound = library.Add(Picked("Held.wav")).Sound;
+        var file = Path.Combine(Folder, sound.Id + ".wav");
+        using (File.Open(file, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            library.Remove(sound.Id);
+        }
+
+        library.LengthOf(sound.Id).ShouldBe(TimeSpan.Zero);
+        File.Exists(file).ShouldBeTrue();
+        _ = new SoundLibrary(Folder);
+        File.Exists(file).ShouldBeFalse();
+    }
+
+    /// <summary>Review round 3 of #307: a file held for a moment is kept as picked, though it cannot be played just then.</summary>
+    [Fact]
+    public void A_held_sound_is_kept_though_it_cannot_play_just_then()
+    {
+        var sound = new SoundLibrary(Folder).Add(Picked("Ding.wav")).Sound;
+        var library = new SoundLibrary(Folder);
+
+        using (File.Open(Path.Combine(Folder, sound.Id + ".wav"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            (library.Has(sound.Id), library.Keeps(sound.Id)).ShouldBe((false, true));
+        }
+    }
+
     [Fact]
     public void A_broken_index_starts_empty()
     {

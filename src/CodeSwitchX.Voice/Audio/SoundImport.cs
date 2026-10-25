@@ -53,15 +53,32 @@ public static class SoundImport
         }
 
         var part = target + ".part";
-        using (var writer = new WaveFileWriter(part, new WaveFormat(Rate, 16, 1)))
+        try
         {
-            foreach (var sample in samples)
+            using (var writer = new WaveFileWriter(part, new WaveFormat(Rate, 16, 1)))
             {
-                writer.WriteSample(Math.Clamp(sample, -1f, 1f));
+                foreach (var sample in samples)
+                {
+                    writer.WriteSample(Math.Clamp(sample, -1f, 1f));
+                }
             }
+
+            File.Move(part, target, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            try
+            {
+                File.Delete(part);
+            }
+            catch (Exception left) when (left is IOException or UnauthorizedAccessException)
+            {
+                // Best effort.
+            }
+
+            throw new SoundImportException($"it could not be written ({ex.Message.TrimEnd('.')}).", ex);
         }
 
-        File.Move(part, target, overwrite: true);
         return length;
     }
 
@@ -80,6 +97,9 @@ public static class SoundImport
     }
 
     private static bool IsLong(TimeSpan length) => length > MaximumLength + Slack;
+
+    /// <summary>How long the sound made of a file that long plays: cut at <see cref="MaximumLength"/>, or whole within the slack.</summary>
+    internal static TimeSpan StoredLength(TimeSpan length) => IsLong(length) ? MaximumLength : length;
 
     /// <summary>
     /// A plain PCM or float WAV is read as it is; any other (the extensible header editors write for 24-bit, float and

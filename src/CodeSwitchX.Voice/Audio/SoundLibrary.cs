@@ -19,12 +19,17 @@ public sealed class SoundLibrary
     private readonly string? _directory;
     private readonly Lock _lock = new();
     private readonly List<UserSound> _user;
+    private bool _indexHeld; // held at the start past the tries: read again before anything is written over it
     private readonly ConcurrentDictionary<string, (DateTime Written, TimeSpan? Length)> _lengths = new(StringComparer.Ordinal);
 
     public SoundLibrary(string? directory)
     {
         _directory = directory;
-        _user = ReadIndex();
+        (_user, _indexHeld) = ReadIndex();
+        if (_directory is not null && !_indexHeld)
+        {
+            DeleteLeftovers();
+        }
     }
 
     /// <summary>A sound was added or removed. Raised on the thread that did it.</summary>
@@ -52,6 +57,12 @@ public sealed class SoundLibrary
 
     public bool Has(string id) => ShippedSounds.Has(id) || (Listed(id) && UserLength(id) is not null);
 
+    /// <summary>
+    /// Whether a pick of the sound is kept: in the pool, or of the user's with its file there though it cannot be played just
+    /// now (held for a moment, or damaged: its slot plays the default meanwhile). A sound removed, or whose file is gone, is not.
+    /// </summary>
+    public bool Keeps(string id) => ShippedSounds.Has(id) || (Listed(id) && File.Exists(PathOf(id)));
+
     /// <summary>Whether the index names the sound: one removed whose file could not be deleted is not in the pool.</summary>
     private bool Listed(string id)
     {
@@ -70,7 +81,7 @@ public sealed class SoundLibrary
             return TimeSpan.FromSeconds((double)pcm.Length / format.AverageBytesPerSecond);
         }
 
-        return UserLength(id) ?? TimeSpan.Zero;
+        return Listed(id) ? UserLength(id) ?? TimeSpan.Zero : TimeSpan.Zero;
     }
 
     /// <summary>
@@ -95,6 +106,7 @@ public sealed class SoundLibrary
         try
         {
             using var reader = new WaveFileReader(path);
+            reader.ReadExactly(new byte[reader.Length]); // all of it: a file cut off in its data is no sound, though its header is whole
             length = reader.TotalTime > TimeSpan.Zero ? reader.TotalTime : null;
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException || (ex is IOException && ex is not EndOfStreamException))
@@ -139,20 +151,22 @@ public sealed class SoundLibrary
         SoundEntry sound;
         lock (_lock)
         {
-            var name = UniqueName(Path.GetFileNameWithoutExtension(source), TakenNames(_user));
-
             try
             {
+                ReadAgainIfHeld();
+                var name = UniqueName(Path.GetFileNameWithoutExtension(source), TakenNames(_user));
                 WriteIndex([.. _user, new UserSound(id, name)]);
+                _user.Add(new UserSound(id, name));
+                // Known from the import: a scanner opening the new file just now does not keep it out of the pool.
+                var stored = SoundImport.StoredLength(length);
+                _lengths[id] = (File.GetLastWriteTimeUtc(PathOf(id)), stored);
+                sound = new SoundEntry(id, name, stored, Shipped: false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 TryDelete(PathOf(id)); // not kept: nothing of it stays
                 throw new SoundImportException($"it could not be kept ({ex.Message.TrimEnd('.')}).", ex);
             }
-
-            _user.Add(new UserSound(id, name));
-            sound = new SoundEntry(id, name, LengthOf(id), Shipped: false);
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
@@ -169,6 +183,7 @@ public sealed class SoundLibrary
                 return;
             }
 
+            ReadAgainIfHeld();
             WriteIndex([.. _user.Where(u => u.Id != id)]);
             _user.RemoveAll(u => u.Id == id);
         }
@@ -222,48 +237,87 @@ public sealed class SoundLibrary
 
     private string IndexFile => Path.Combine(_directory ?? "", "index.json");
 
-    /// <summary>The user's sounds as the index names them; none without a folder, or with an index that cannot be read.</summary>
-    private List<UserSound> ReadIndex()
+    /// <summary>
+    /// The user's sounds as the index names them; none without a folder. An index that cannot be read loses no sound: the
+    /// files are the user's sounds, though their names are gone ("Sound"). Held says it was only held, not damaged: it is
+    /// read again before anything is written over it.
+    /// </summary>
+    private (List<UserSound> Sounds, bool Held) ReadIndex()
     {
         if (_directory is null)
         {
-            return [];
+            return ([], false);
         }
 
-        // An index that cannot be read loses no sound: the files are the user's sounds, though their names are gone ("Sound").
-        var listed = TryReadIndex() ?? [.. (Directory.Exists(_directory) ? Directory.GetFiles(_directory, UserPrefix + "*.wav") : [])
+        var (entries, held) = TryReadIndex();
+        var listed = entries ?? [.. (Directory.Exists(_directory) ? Directory.GetFiles(_directory, UserPrefix + "*.wav") : [])
             .Select(Path.GetFileNameWithoutExtension).Order(StringComparer.Ordinal).Select(id => new UserSound(id!, null!))];
         var taken = TakenNames([]);
-        return [.. listed.Where(u => u?.Id is { } id && IsUser(id)).Select(u => new UserSound(u!.Id, UniqueName(u.Name, taken)))];
+        return ([.. listed.Where(u => u?.Id is { } id && IsUser(id)).Select(u => new UserSound(u!.Id, UniqueName(u.Name, taken)))], held);
     }
 
-    /// <summary>The index's entries, none for no index; null when it cannot be read: damaged, or held past a few tries.</summary>
-    private List<UserSound?>? TryReadIndex()
+    /// <summary>The index's entries, none for no index; null when it cannot be read, with whether it was only held past a few tries.</summary>
+    private (List<UserSound?>? Entries, bool Held) TryReadIndex()
     {
         if (!File.Exists(IndexFile))
         {
-            return [];
+            return ([], false);
         }
 
         for (var attempt = 1; ; attempt++)
         {
             try
             {
-                return JsonSerializer.Deserialize<List<UserSound?>>(File.ReadAllText(IndexFile)) ?? [];
+                return (JsonSerializer.Deserialize<List<UserSound?>>(File.ReadAllText(IndexFile)) ?? [], false);
             }
             catch (JsonException)
             {
-                return null;
+                return (null, false);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (attempt == 5)
                 {
-                    return null;
+                    return (null, true);
                 }
 
                 Thread.Sleep(100); // a scanner or a backup holds it for a moment
             }
+        }
+    }
+
+    /// <summary>The index held at the start is read now (under the lock), before it is written over; still held, this throws.</summary>
+    private void ReadAgainIfHeld()
+    {
+        if (!_indexHeld)
+        {
+            return;
+        }
+
+        var (sounds, held) = ReadIndex();
+        if (held)
+        {
+            throw new IOException("the list of your sounds is in use by another program");
+        }
+
+        _user.Clear();
+        _user.AddRange(sounds);
+        _indexHeld = false;
+    }
+
+    /// <summary>Files a failed remove or write left behind, deleted at the start, when the index tells which sounds are the user's.</summary>
+    private void DeleteLeftovers()
+    {
+        if (!Directory.Exists(_directory))
+        {
+            return;
+        }
+
+        var listed = _user.Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var file in Directory.GetFiles(_directory, UserPrefix + "*.wav").Where(f => !listed.Contains(Path.GetFileNameWithoutExtension(f)))
+            .Concat(Directory.GetFiles(_directory, "*.part")))
+        {
+            TryDelete(file);
         }
     }
 

@@ -160,6 +160,25 @@ public sealed class SoundImportTests : IDisposable
         File.Exists(Target).ShouldBeFalse();
     }
 
+    /// <summary>Review round 3 of #307: a sound that cannot be written leaves nothing behind and says why.</summary>
+    [Fact]
+    public void A_target_that_cannot_be_written_leaves_nothing()
+    {
+        var source = Tone("ding.wav", new WaveFormat(44100, 16, 1), 0.5);
+        File.WriteAllText(Target, "in the way");
+        File.SetAttributes(Target, FileAttributes.ReadOnly);
+        try
+        {
+            Should.Throw<SoundImportException>(() => SoundImport.Import(source, Target));
+        }
+        finally
+        {
+            File.SetAttributes(Target, FileAttributes.Normal);
+        }
+
+        File.Exists(Target + ".part").ShouldBeFalse();
+    }
+
     [Fact]
     public void The_notice_says_the_length()
     {

@@ -427,6 +427,36 @@ public class SettingsViewModelTests : IDisposable
         _vm.SoundNotice.ShouldNotBeNull().ShouldStartWith("This sound could not be removed: ");
     }
 
+    /// <summary>Review round 3 of #307: opening Settings shows a sound whose file was deleted outside the app as gone.</summary>
+    [Fact]
+    public async Task Opening_settings_shows_a_sound_deleted_outside_as_gone()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+        _vm.AddSoundCommand.Execute(null);
+        var id = _vm.UserSounds.Single().Id;
+        File.Delete(Path.Combine(_paths.SoundsDirectory, id + ".wav"));
+
+        _vm.Refresh();
+
+        _vm.UserSounds.ShouldBeEmpty();
+        _vm.SoundChoices.ShouldNotContain(c => c.Id == id);
+    }
+
+    /// <summary>Review round 3 of #307: the lists follow the pool when its order changes too, with no item twice.</summary>
+    [Theory]
+    [InlineData("AB", "BA")]
+    [InlineData("ABC", "CA")]
+    [InlineData("A", "BAC")]
+    public void The_lists_follow_the_pool_in_its_order(string shown, string wanted)
+    {
+        var list = new System.Collections.ObjectModel.ObservableCollection<char>(shown);
+
+        SettingsViewModel.Follow(list, [.. wanted]);
+
+        new string([.. list]).ShouldBe(wanted);
+    }
+
     [Fact]
     public async Task A_stored_pick_of_a_user_sound_loads()
     {
