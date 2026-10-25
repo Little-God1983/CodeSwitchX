@@ -140,12 +140,11 @@ public sealed class AudioOutputTests
     public async Task At_voice_level_zero_a_sample_opens_no_device_and_takes_its_length()
     {
         var devices = new Devices();
-        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
-        var samples = new CodeSwitchX.Voice.Speech.VoiceSamples(devices.Output, new AudioLevels { Voice = 0f }, time);
-        var voice = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro).First().Id;
+        var time = new TimerWatch();
+        var samples = new VoiceSamples(devices.Output, new AudioLevels { Voice = 0f }, time);
 
-        var playing = samples.PlayAsync(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro, voice, TestContext.Current.CancellationToken);
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        var playing = samples.PlayAsync(SpeechEngine.Kokoro, SampleVoice, TestContext.Current.CancellationToken);
+        await time.Created.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         playing.IsCompleted.ShouldBeFalse("it takes the sample's length, as if it played");
         devices.Players.ShouldBeEmpty();
@@ -153,21 +152,50 @@ public sealed class AudioOutputTests
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
-    /// <summary>#310: a silent sample stopped (another one played, the slider let go again) ends at once.</summary>
+    /// <summary>#310: a silent sample stopped while it waits (another one played, the slider let go again) ends at once.</summary>
     [Fact]
     public async Task A_silent_sample_stopped_ends_at_once()
     {
         var devices = new Devices();
-        var samples = new CodeSwitchX.Voice.Speech.VoiceSamples(devices.Output, new AudioLevels { Voice = 0f },
-            new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
-        var voice = CodeSwitchX.Voice.Speech.SpeechSettings.VoicesOf(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro).First().Id;
+        var time = new TimerWatch();
+        var samples = new VoiceSamples(devices.Output, new AudioLevels { Voice = 0f }, time);
         using var stop = new CancellationTokenSource();
 
-        var playing = samples.PlayAsync(CodeSwitchX.Voice.Speech.SpeechEngine.Kokoro, voice, stop.Token);
+        var playing = samples.PlayAsync(SpeechEngine.Kokoro, SampleVoice, stop.Token);
+        await time.Created.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await stop.CancelAsync();
 
         await playing.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         devices.Players.ShouldBeEmpty();
+    }
+
+    /// <summary>Review round 1 of #310: a sample stopped before it began (the slider let go twice in a row) wakes no device.</summary>
+    [Fact]
+    public async Task A_sample_stopped_before_it_began_opens_no_device()
+    {
+        var devices = new Devices();
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+
+        await new VoiceSamples(devices.Output, new AudioLevels(), TimeProvider.System).PlayAsync(SpeechEngine.Kokoro, SampleVoice, stop.Token)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        devices.Players.ShouldBeEmpty();
+    }
+
+    private static string SampleVoice => SpeechSettings.VoicesOf(SpeechEngine.Kokoro).First().Id;
+
+    /// <summary>A fake clock that says when a timer is made: a delay is waiting on it from then on, so advancing it ends the delay.</summary>
+    private sealed class TimerWatch : Microsoft.Extensions.Time.Testing.FakeTimeProvider
+    {
+        public TaskCompletionSource Created { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Created.TrySetResult();
+            return timer;
+        }
     }
 
     /// <summary>Review round 1 of #306: a hush while a headset wakes for the sound does not wait for it; the device opened late is let go.</summary>

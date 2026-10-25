@@ -28,14 +28,16 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
 
     public Task PlayAsync(SpeechEngine engine, string voice, CancellationToken ct) => Task.Run(async () =>
     {
-        await using var clip = typeof(VoiceSamples).Assembly.GetManifestResourceStream(ResourceName(engine, voice))
-            ?? throw new InvalidOperationException($"No sample of {engine}'s voice {voice}.");
-        await using var reader = new WaveFileReader(clip);
+        if (ct.IsCancellationRequested)
+        {
+            return; // stopped before it began (the slider let go twice in a row): no device is woken for it
+        }
+
         if (levels.Voice <= 0f)
         {
             try
             {
-                await Task.Delay(reader.TotalTime, time, ct).ConfigureAwait(false);
+                await Task.Delay(LengthOf(engine, voice), time, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -45,6 +47,8 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
             return;
         }
 
+        await using var clip = Clip(engine, voice);
+        await using var reader = new WaveFileReader(clip);
         using var output = audioOutput.Open(reader, () => levels.Voice, 300);
         var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         output.PlaybackStopped += (_, _) => ended.TrySetResult();
@@ -54,4 +58,16 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
             await ended.Task.ConfigureAwait(false);
         }
     }, CancellationToken.None);
+
+    private static Stream Clip(SpeechEngine engine, string voice) =>
+        typeof(VoiceSamples).Assembly.GetManifestResourceStream(ResourceName(engine, voice))
+        ?? throw new InvalidOperationException($"No sample of {engine}'s voice {voice}.");
+
+    /// <summary>How long the clip plays; read and let go before a silent sample waits it out.</summary>
+    private static TimeSpan LengthOf(SpeechEngine engine, string voice)
+    {
+        using var clip = Clip(engine, voice);
+        using var reader = new WaveFileReader(clip);
+        return reader.TotalTime;
+    }
 }
