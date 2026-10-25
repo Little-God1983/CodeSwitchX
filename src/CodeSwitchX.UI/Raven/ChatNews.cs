@@ -41,6 +41,15 @@ public sealed record ChatNewsLine(string SessionId, Guid WorkspaceId, string Wor
 }
 
 /// <summary>
+/// Another chat that waits for the user while Raven tells the news of the chat they are in (#308): the teller words a remark
+/// about all of them after that chat's line.
+/// </summary>
+/// <param name="Workspace">The chat's workspace, as the teller names it.</param>
+/// <param name="What">What it waits for, as the teller is told it: "finished", "needs you", "asks for permission".</param>
+/// <param name="Item">What it is the news of: its news line or its card, mentioned once (by reference).</param>
+public sealed record WaitingChat(string SessionId, string Workspace, string What, object Item);
+
+/// <summary>
 /// What the chats did since Raven last told it: one slot per chat, so a chat that changed twice before Raven got to it
 /// is told once, with its latest news. A chat's news is: its turn ended (Working to Idle), it waits for the user, or it
 /// failed (its claude went, or its turn ended on an API error). Only for the chats the Yard shows, and only for changes seen while the app runs: a chat restored at startup
@@ -214,7 +223,7 @@ public sealed class ChatNews : IDisposable
     }
 
     /// <summary>Whether the chat, as the Yard shows it now, is still where its news left it.</summary>
-    private static bool StillHolds(ChatNewsKind kind, YardChat chat) => kind switch
+    internal static bool StillHolds(ChatNewsKind kind, YardChat chat) => kind switch
     {
         ChatNewsKind.NeedsYou => chat.NeedsYou,
         _ => chat.State != SessionState.Working, // finished or failed, until it works again
