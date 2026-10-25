@@ -27,9 +27,10 @@ public sealed class VoiceSamples(IAudioOutput audioOutput, AudioLevels levels, T
 {
     /// <summary>
     /// How much longer than its clip a sample may play once its device is open (#318): past it the play is stopped, so a device
-    /// that never says it stopped does not leave the row "playing" for good. A headset's wake comes before it, and is not counted.
+    /// that never says it stopped does not leave the row "playing" for good. A headset's wake in the open comes before it, and is not
+    /// counted; one that only starts to sound a moment after the play has the margin for it.
     /// </summary>
-    public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(5);
 
     private static string ResourceName(SpeechEngine engine, string voice) => $"CodeSwitchX.Voice.Samples.{engine}.{voice}.wav";
 
