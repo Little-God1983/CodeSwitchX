@@ -160,7 +160,6 @@ public sealed class AppSettingsTests
 
         (await _settings.SetAsync("cooldown", "20 seconds", Ct)).Value.ShouldBe("20 seconds");
         _h.Shell.Settings.RavenCooldownSeconds.ShouldBe(20);
-        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(20));
 
         var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("cooldown", "7", Ct));
         error.Message.ShouldContain("Nothing was changed");
@@ -205,7 +204,6 @@ public sealed class AppSettingsTests
         await _settings.SetAsync("speak chat news", "no", Ct);
 
         _h.Shell.Settings.RavenChatSound.ShouldBeFalse();
-        _h.Shell.Raven.Traffic.SoundOn.ShouldBeFalse();
         _h.Shell.Settings.RavenSpeakNews.ShouldBeFalse();
         (await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("speak chat news", "maybe", Ct))).Message.ShouldContain("on or off");
     }

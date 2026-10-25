@@ -1267,26 +1267,14 @@ public class ShellViewModelTests
     [Fact]
     public async Task The_traffic_watcher_follows_the_voice_settings()
     {
-        _h.Settings.GetAsync<int?>(SettingKeys.RavenCooldownSeconds, Arg.Any<CancellationToken>()).Returns(Task.FromResult<int?>(20));
-        _h.Settings.GetAsync<bool?>(SettingKeys.RavenChatSound, Arg.Any<CancellationToken>()).Returns(Task.FromResult<bool?>(false));
-
         await _h.Shell.InitializeAsync(CancellationToken.None);
-        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(20));
-        _h.Shell.Raven.Traffic.SoundOn.ShouldBeFalse();
-        _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeFalse();
         _h.Shell.Raven.Traffic.Pause.ShouldBe(TrafficWatcher.DefaultPause);
 
-        _h.Shell.Settings.RavenCooldownSeconds = 30;
-        _h.Shell.Settings.RavenChatSound = true;
-        _h.Shell.Settings.RavenOwnNewsWaits = true;
         _h.Shell.Settings.RavenPauseSeconds = 10;
         _h.Shell.Raven.CatchUp.ShouldBeTrue("on by default (#143)");
         _h.Shell.Settings.RavenCatchUp = false;
 
         _h.Shell.Raven.CatchUp.ShouldBeFalse();
-        _h.Shell.Raven.Traffic.Cooldown.ShouldBe(TimeSpan.FromSeconds(30));
-        _h.Shell.Raven.Traffic.SoundOn.ShouldBeTrue();
-        _h.Shell.Raven.Traffic.OwnNewsWaits.ShouldBeTrue();
         _h.Shell.Raven.Traffic.Pause.ShouldBe(TimeSpan.FromSeconds(10));
     }
 

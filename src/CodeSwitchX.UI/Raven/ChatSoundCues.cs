@@ -58,6 +58,8 @@ public sealed class ChatSoundCues : IDisposable
     private void OnNoted(object? sender, (ChatNewsKind Kind, string SessionId, Guid? WorkspaceId) news)
     {
         var (kind, id, workspace) = news;
+        // The news comes while the bus still tells its change, maybe before this hears it: it says where the chat stands.
+        _states[id] = kind == ChatNewsKind.NeedsYou ? SessionState.Waiting : SessionState.Idle;
         switch (kind)
         {
             case ChatNewsKind.Finished:

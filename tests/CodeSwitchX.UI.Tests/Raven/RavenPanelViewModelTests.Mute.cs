@@ -34,17 +34,18 @@ public sealed partial class RavenPanelViewModelTests
 
         Changes("a", SessionState.Working, SessionState.Idle); // chat 2's
         await GraceAsync(vm);
-        _chime.Plays.ShouldBe(0);
+        _sounds.Plays.ShouldBe(0);
         ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0, "it is still marked in the list");
 
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         Changes("c", SessionState.Working, SessionState.Idle); // chat 3's
         await GraceAsync(vm);
-        _chime.Plays.ShouldBe(1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
     }
 
     [Fact]
-    public async Task A_muted_chat_s_cards_are_still_read_out_and_still_sound_from_elsewhere()
+    public async Task A_muted_chat_s_cards_are_still_read_out_but_make_no_sound()
     {
         var (vm, asks) = await TrafficVmAsync();
         vm.MuteChat(1, true);
@@ -54,10 +55,13 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
         _speech.Spoken.ShouldHaveSingleItem().ShouldContain("npm test");
+        _sounds.Plays.ShouldBe(0, "a muted chat puts nothing in the queue, nor before its line (#306)");
 
-        _time.Advance(TrafficWatcher.DefaultCooldown);
+        _time.Advance(TimeSpan.FromSeconds(10));
         _ = asks.HoldAsync(PermittingIn("a", "p2"), CancellationToken.None); // chat 2's: the chat waits on it
-        await Until(() => _chime.Plays == 1);
+        await Until(() => vm.OpenQuestions == 2);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(0);
     }
 
     [Fact]

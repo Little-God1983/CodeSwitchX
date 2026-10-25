@@ -34,7 +34,7 @@ public class SettingsViewModelTests : IDisposable
     private readonly IDictationService _dictation = Substitute.For<IDictationService>();
     private readonly VoiceStatusViewModel _voice;
     private readonly AudioLevels _levels = new();
-    private readonly FakeChime _chime = new();
+    private readonly FakeSounds _sounds = new();
     private readonly SettingsViewModel _vm;
 
     public SettingsViewModelTests()
@@ -46,7 +46,7 @@ public class SettingsViewModelTests : IDisposable
         _voice = new VoiceStatusViewModel(engines, _speech, _dictation, new ImmediateDispatcher());
         _vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
             _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
-            sounds: _chime, levels: _levels);
+            sounds: _sounds, levels: _levels);
     }
 
     public void Dispose()
@@ -333,7 +333,7 @@ public class SettingsViewModelTests : IDisposable
     {
         _vm.PlaySoundLevelCommand.Execute(null);
 
-        _chime.Plays.ShouldBe(1);
+        _sounds.Plays.ShouldBe(1);
     }
 
     /// <summary>#164: a closed chat is not kept and an idle one never hidden until the user says so; a stored time the page does not offer is neither.</summary>

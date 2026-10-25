@@ -9,12 +9,24 @@ using Shouldly;
 namespace CodeSwitchX.UI.Tests.Raven;
 
 /// <summary>
-/// The traffic watcher (#125): the chat the user is in speaks, other chats are never spoken and make a short sound at
-/// most, only when it is quiet and the cooldown is over. Nothing is saved up to be said later.
+/// The traffic watcher (#125): the chat the user is in speaks, other chats are never spoken. Every chat's sound plays
+/// through one queue once the floor is free (#306); the chat the user is in plays its sound right before its line.
 /// </summary>
 public sealed partial class RavenPanelViewModelTests
 {
-    private readonly FakeChime _chime = new();
+    private readonly FakeSounds _sounds = new();
+    private readonly SoundPicks _picks = new();
+
+    /// <summary>Lets the queue's grace pass once the panel is idle, so a sound waiting for the floor plays (#306).</summary>
+    private async Task SoundGraceAsync(RavenPanelViewModel vm)
+    {
+        await Until(() => vm.State is RavenState.Idle or RavenState.Attending);
+        _time.Advance(TrafficWatcher.NewsGrace);
+        await WithinAsync(vm.PendingAnswers);
+    }
+
+    /// <summary>Lets the gap pass to the next sound of the run.</summary>
+    private void Gap() => _time.Advance(SoundQueue.Gap);
 
     /// <summary>Five windows, each with a chat; the user is in chat 1, CodeSwitchX's, where "b" runs.</summary>
     private async Task<(RavenPanelViewModel Vm, ChatAsks Asks)> TrafficVmAsync(IChatBrains? brains = null)
@@ -29,7 +41,8 @@ public sealed partial class RavenPanelViewModelTests
         var news = new ChatNews(_bus, _yard, _time, _ => "Done.");
         var asks = new ChatAsks(_bus, _time) { Takes = _ => true };
         var vm = new RavenPanelViewModel(_catalog, _recorder, _dictation, _models, _vocabulary, _brain, _voice, _speech, new ImmediateDispatcher(), _time,
-            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, brains: brains, sounds: _chime);
+            NullLogger<RavenPanelViewModel>.Instance, news, _teller, asks: asks, yard: _yard, brains: brains, sounds: _sounds, picks: _picks,
+            cues: new ChatSoundCues(_bus, news, _time));
         await WithinAsync(vm.RefreshMicrophonesAsync());
         _time.Advance(TimeSpan.FromSeconds(1)); // the chats' changes come after the app started
         vm.SetWorkspaces([.. workspaces.Select((w, i) => (FakeYardDirectory.WorkspaceOf(w), i + 1, w))]);
@@ -56,7 +69,7 @@ public sealed partial class RavenPanelViewModelTests
         digest.ShouldContain("exactly 1 line", customMessage: "chat 1's news only");
         string.Join(" ", _speech.Spoken).ShouldStartWith("Chat CodeSwitchX finished:");
         string.Join(" ", _speech.Spoken).ShouldNotContain("ContentAutomatorX");
-        _chime.Plays.ShouldBe(0, "chat 1's news is spoken: that is the announcement, the others are only marked");
+        _sounds.Ids.ShouldBe(["marimba-rise"], "chat 1's sound opened its line; the others' sounds wait for the floor after it");
         vm.Chats.Where(c => c.Number is >= 2 and <= 5).ShouldAllBe(c => c.Unread > 0);
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }
@@ -134,7 +147,7 @@ public sealed partial class RavenPanelViewModelTests
     }
 
     [Fact]
-    public async Task Other_chats_returning_while_the_user_s_chat_is_quiet_make_one_sound()
+    public async Task Other_chats_returning_while_the_user_s_chat_is_quiet_each_sound_in_turn()
     {
         var (vm, _) = await TrafficVmAsync();
 
@@ -143,35 +156,31 @@ public sealed partial class RavenPanelViewModelTests
         Changes("d", SessionState.Working, SessionState.Errored);
         await GraceAsync(vm);
         await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.News) == 3);
+        await SoundGraceAsync(vm);
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+        Gap();
+        Gap();
 
-        _chime.Plays.ShouldBe(1);
+        _sounds.Ids.ShouldBe(["marimba-rise", "marimba-rise", "marimba-fall"]);
         _teller.Asked.ShouldBeEmpty("other chats are never spoken");
         _speech.Spoken.ShouldBeEmpty();
         ChatNumbered(vm, 4).HasFailed.ShouldBeTrue("the list carries it");
     }
 
+    /// <summary>#306: a sound holds what Raven says on its own for the pause, but the next sound follows after the gap.</summary>
     [Fact]
-    public async Task A_chat_finishing_inside_the_cooldown_after_an_announcement_makes_no_sound()
+    public async Task A_sound_restarts_the_pause_for_raven_s_own_speech_but_not_for_the_next_sound()
     {
-        _brain.Answer = _ => [new BrainText("Sure.")];
         var (vm, _) = await TrafficVmAsync();
-        vm.Traffic.Cooldown = TimeSpan.FromSeconds(20);
-        Type(vm, "hello");
-        await WithinAsync(vm.PendingAnswers);
-        await WithinAsync(_voice.WhenQuietAsync());
-        await Until(() => vm.State == RavenState.Idle);
-
-        _time.Advance(TimeSpan.FromSeconds(15) - TrafficWatcher.NewsGrace);
         Changes("a", SessionState.Working, SessionState.Idle);
-        await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
-        _chime.Plays.ShouldBe(0, "15 s after Raven spoke, inside the 20 s cooldown");
-
-        _time.Advance(TimeSpan.FromSeconds(5));
         Changes("c", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Count(e => e.Kind == RavenLogKind.News) == 2);
-        _chime.Plays.ShouldBe(1, "the cooldown is over");
+        await SoundGraceAsync(vm);
+
+        _sounds.Plays.ShouldBe(1);
+        vm.Traffic.PauseLeft.ShouldBe(TrafficWatcher.DefaultPause);
+        Gap();
+        _sounds.Plays.ShouldBe(2);
     }
 
     /// <summary>#292: an answer sent to the voice holds the floor before its first audio: no chime lands just before it.</summary>
@@ -189,7 +198,7 @@ public sealed partial class RavenPanelViewModelTests
         _time.Advance(vm.Traffic.WaitBeforeTelling);
         await WithinAsync(vm.PendingAnswers);
 
-        _chime.Plays.ShouldBe(0);
+        _sounds.Plays.ShouldBe(0);
         vm.Log.ShouldNotContain(e => e.Kind == RavenLogKind.News, "told once the answer was heard");
 
         _speech.Gate.SetResult();
@@ -213,55 +222,105 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
 
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
-        _chime.Plays.ShouldBe(1);
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
     }
 
     [Fact]
-    public async Task With_the_sound_off_other_chats_are_only_marked()
+    public async Task A_slot_picked_none_plays_nothing_and_the_chat_is_still_marked()
     {
         var (vm, _) = await TrafficVmAsync();
-        vm.Traffic.SoundOn = false;
+        _picks.Set(SoundSlot.Finishes, null);
 
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+        await SoundGraceAsync(vm);
 
-        _chime.Plays.ShouldBe(0);
+        _sounds.Plays.ShouldBe(0);
         ChatNumbered(vm, 2).Unread.ShouldBeGreaterThan(0);
     }
 
     [Fact]
-    public async Task Muted_other_chats_make_no_sound()
+    public async Task The_panel_mute_clears_the_queue_and_queues_nothing()
     {
         var (vm, _) = await TrafficVmAsync();
-        vm.IsMuted = true;
-
         Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("c", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+        await SoundGraceAsync(vm);
+        _sounds.Plays.ShouldBe(1);
 
-        _chime.Plays.ShouldBe(0);
+        vm.IsMuted = true;
+        _time.Advance(TimeSpan.FromSeconds(5));
+        Changes("d", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Plays.ShouldBe(1, "chat 3's sound was dropped, chat 4's never queued");
     }
 
+    /// <summary>#306: the sounds are how to follow chats without speech: chat news only written still plays them.</summary>
     [Fact]
-    public async Task With_the_own_chat_waiting_too_its_news_inside_the_cooldown_is_shown_not_spoken()
+    public async Task Speak_chat_news_off_still_plays_the_chat_s_sounds()
     {
-        _brain.Answer = _ => [new BrainText("Sure.")];
         var (vm, _) = await TrafficVmAsync();
-        vm.Traffic.OwnNewsWaits = true;
-        Type(vm, "hello");
-        await WithinAsync(vm.PendingAnswers);
-        await WithinAsync(_voice.WhenQuietAsync());
-        await Until(() => vm.State == RavenState.Idle);
+        vm.SpeakNews = false;
 
-        _time.Advance(TimeSpan.FromSeconds(5) - TrafficWatcher.NewsGrace);
+        Changes("b", SessionState.Working, SessionState.Idle); // chat 1's, where the user is
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+        _speech.Spoken.ShouldBeEmpty();
+    }
+
+    /// <summary>#306: the chat the user is in plays its sound as its line's prelude, never from the queue as well.</summary>
+    [Fact]
+    public async Task The_chat_i_am_in_plays_its_sound_right_before_its_news_line()
+    {
+        var (vm, _) = await TrafficVmAsync();
+
         Changes("b", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.News));
+        await WithinAsync(_voice.WhenQuietAsync());
+        await SoundGraceAsync(vm);
 
-        vm.Log.Single(e => e.Kind == RavenLogKind.News).Chat.Number.ShouldBe(1);
-        _teller.Asked.ShouldBeEmpty();
-        _speech.Spoken.ShouldBe(["Sure."]);
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+        string.Join(" ", _speech.Spoken).ShouldStartWith("Chat CodeSwitchX finished:");
+    }
+
+    /// <summary>#306 review focus: switched away before its line, the chat's sound plays as another chat's, once.</summary>
+    [Fact]
+    public async Task Switching_away_releases_a_sound_held_for_its_line()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        Changes("b", SessionState.Working, SessionState.Idle);
+
+        vm.SelectedChat = ChatNumbered(vm, 2);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+        Gap();
+
+        _sounds.Ids.ShouldBe(["marimba-rise"]);
+        _teller.Asked.ShouldBeEmpty("chat 1's news is another chat's now: only written");
+    }
+
+    /// <summary>#306 review focus: a question answered in VS Code before its sound's turn is not sounded late.</summary>
+    [Fact]
+    public async Task A_question_answered_in_vs_code_drops_its_waiting_sound()
+    {
+        var (vm, asks) = await TrafficVmAsync();
+        using var hook = new CancellationTokenSource();
+        _ = asks.HoldAsync(PermittingIn("a", "p1"), hook.Token);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
+
+        await hook.CancelAsync(); // answered in its tab: the hook gave up
+        await Until(() => vm.OpenQuestions == 0);
+        await GraceAsync(vm);
+        await SoundGraceAsync(vm);
+
+        _sounds.Plays.ShouldBe(0);
     }
 
     [Fact]
@@ -274,7 +333,7 @@ public sealed partial class RavenPanelViewModelTests
         await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Permission));
         await GraceAsync(vm);
 
-        _chime.Plays.ShouldBe(1);
+        _sounds.Ids.ShouldBe(["bell-pair"]);
         _speech.Spoken.ShouldBeEmpty();
         Type(vm, "allow it");
         await WithinAsync(vm.PendingAnswers);
@@ -296,11 +355,11 @@ public sealed partial class RavenPanelViewModelTests
         await GraceAsync(vm);
         await WithinAsync(_voice.WhenQuietAsync());
         _speech.Spoken.Count.ShouldBe(2);
-        _chime.Plays.ShouldBe(0);
+        _sounds.Ids.ShouldBe(["bell-pair"], "one sound for the chat's prompts, right before the first is read");
     }
 
     [Fact]
-    public async Task A_card_that_comes_while_the_user_talks_makes_no_sound_later()
+    public async Task A_card_that_comes_while_the_user_talks_sounds_once_the_floor_is_free()
     {
         _brain.Answer = _ => [new BrainText("Okay.")];
         var (vm, asks) = await TrafficVmAsync();
@@ -313,8 +372,9 @@ public sealed partial class RavenPanelViewModelTests
         await vm.ReleaseMicAsync(TalkInput.MicButton);
         await WithinAsync(vm.PendingAnswers);
         await GraceAsync(vm);
+        await SoundGraceAsync(vm);
 
-        _chime.Plays.ShouldBe(0, "busy means silent, and nothing is saved up");
+        _sounds.Ids.ShouldBe(["bell-pair"], "the queue keeps it while the floor is busy (#306)");
     }
 
     [Fact]
@@ -398,10 +458,12 @@ public sealed partial class RavenPanelViewModelTests
         Changes("b", SessionState.Working, SessionState.Idle);
         Changes("a", SessionState.Working, SessionState.Idle);
         await GraceAsync(vm);
-        await Until(() => _chime.Plays == 1); // nothing was heard of chat 1's news
         // #256: the log is read once the telling and the voice are done with it; read while they wrote, it failed once.
         await WithinAsync(vm.PendingAnswers);
         await WithinAsync(_voice.WhenQuietAsync());
+        await SoundGraceAsync(vm);
+        Gap();
+        _sounds.Ids.ShouldBe(["marimba-rise", "marimba-rise"], "chat 1's sound waits for no line that is never said");
 
         vm.Log.Single(e => e.Kind == RavenLogKind.Raven).Chat.Number.ShouldBe(1);
     }
@@ -470,16 +532,31 @@ public sealed partial class RavenPanelViewModelTests
     }
 }
 
-/// <summary>Counts the sounds instead of playing them.</summary>
-internal sealed class FakeChime : IChatSounds
+/// <summary>Counts the sounds instead of playing them; each play is done at once.</summary>
+internal sealed class FakeSounds : IChatSounds
 {
-    private int _plays;
+    private readonly List<string> _ids = [];
 
-    public int Plays => Volatile.Read(ref _plays);
+    public int Plays => Ids.Count;
+
+    public List<string> Ids
+    {
+        get
+        {
+            lock (_ids)
+            {
+                return [.. _ids];
+            }
+        }
+    }
 
     public Task PlayAsync(string soundId, CancellationToken ct)
     {
-        Interlocked.Increment(ref _plays);
+        lock (_ids)
+        {
+            _ids.Add(soundId);
+        }
+
         return Task.CompletedTask;
     }
 

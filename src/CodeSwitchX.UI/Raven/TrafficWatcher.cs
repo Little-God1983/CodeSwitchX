@@ -1,20 +1,19 @@
 namespace CodeSwitchX.UI.Raven;
 
 /// <summary>
-/// Who may make a sound (#125): the chat the user is in speaks, other chats get a short sound at most, and only when it is
-/// quiet. A sound or announcement starts the cooldown, and what other chats bring inside it is only marked in the list:
-/// nothing is saved up to be said later. The catch-up of a chat the user switches to is theirs, asked for by the switch:
-/// the cooldown does not hold it (#143), the pause does (#152).
+/// When Raven may speak on its own (#125): the chat the user is in speaks, other chats are only marked in the list and make
+/// their sound through the queue (<see cref="SoundQueue"/>, #306). What Raven says on its own waits for a free floor and
+/// the pause after it last spoke or a sound played (#152); the catch-up of a chat the user switches to too.
 /// </summary>
 public sealed class TrafficWatcher(TimeProvider time)
 {
     /// <summary>How long Raven and the user must both have been quiet before news is told: it must not step on the user's next sentence.</summary>
     public static readonly TimeSpan NewsGrace = TimeSpan.FromSeconds(1.5);
 
-    /// <summary>The cooldown before Settings changes it.</summary>
+    /// <summary>The cooldown Settings still offers until its row goes (#306).</summary>
     public static readonly TimeSpan DefaultCooldown = TimeSpan.FromSeconds(10);
 
-    /// <summary>The cooldowns Settings offers, in seconds.</summary>
+    /// <summary>The cooldowns Settings still offers until its row goes (#306), in seconds.</summary>
     public static readonly IReadOnlyList<int> CooldownChoices = [5, 10, 15, 20, 30, 60];
 
     /// <summary>The pause between messages before Settings changes it (#152).</summary>
@@ -23,16 +22,13 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>The pauses Settings offers, in seconds.</summary>
     public static readonly IReadOnlyList<int> PauseChoices = [2, 3, 5, 10, 15, 20, 30];
 
-    /// <summary>When the last sound or announcement was, as a timestamp: the system clock set back does not stretch the cooldown.</summary>
+    /// <summary>When Raven last spoke or a sound played, as a timestamp: the system clock set back does not stretch the pause.</summary>
     private long? _lastSound;
 
-    /// <summary>How long after an announcement or sound another chat stays silent.</summary>
-    public TimeSpan Cooldown { get; set; } = DefaultCooldown;
-
     /// <summary>
-    /// How long after Raven last spoke or made a sound whatever it says on its own waits (#152): news, a catch-up, a card read
-    /// out. A chat's sound inside it is left out, as inside the cooldown. Its answers to the user never wait: the user waits
-    /// for them.
+    /// How long after Raven last spoke or a chat's sound played whatever it says on its own waits (#152): news, a catch-up, a
+    /// card read out. The sounds themselves never wait for it (#306), nor do Raven's answers to the user: the user waits for
+    /// them.
     /// </summary>
     public TimeSpan Pause
     {
@@ -60,15 +56,6 @@ public sealed class TrafficWatcher(TimeProvider time)
     /// <summary>How long what Raven says on its own waits once the floor is free: the grace, or what is left of the pause if longer.</summary>
     public TimeSpan WaitBeforeTelling => PauseLeft is var left && left > NewsGrace ? left : NewsGrace;
 
-    /// <summary>Other chats get their short sound; off, they are only marked in the list.</summary>
-    public bool SoundOn { get; set; } = true;
-
-    /// <summary>
-    /// The selected chat's own news waits for the cooldown too; its cards, Raven's answers and the catch-up on switching to it
-    /// never do (the catch-up dropped would never be said: the switch marked its lines seen, #143).
-    /// </summary>
-    public bool OwnNewsWaits { get; set; }
-
     /// <summary>
     /// Nobody talks: no recording, no clip or question unanswered, nothing being said or sent to be said, and no allow waiting for the user's
     /// yes. The user's next words answer the read-back, so nothing else is said or written to them in between: a yes or
@@ -77,35 +64,15 @@ public sealed class TrafficWatcher(TimeProvider time)
     public static bool IsFree(Floor floor) => floor is
     {
         Capturing: false, Holding: false, Pending: 0, Asking: 0, Telling: false, Speaking: false, OpenSpeech: false, AwaitingYes: false,
-        Due: false,
+        Due: false, Sounding: false,
     };
 
-    /// <summary>Raven said something, or stopped saying it: the cooldown runs from now.</summary>
+    /// <summary>Raven said something, stopped saying it, or a chat's sound began: the pause runs from now.</summary>
     public void Announced() => _lastSound = time.GetTimestamp();
-
-    /// <summary>No announcement or sound within the cooldown.</summary>
-    public bool CooledDown => _lastSound is not { } last || time.GetElapsedTime(last) >= Cooldown;
-
-    /// <summary>
-    /// Whether another chat's news or card makes its sound now: the sound is on, the floor free, and the cooldown and the
-    /// pause over. The sound made starts them again.
-    /// </summary>
-    public bool TrySound(bool floorFree)
-    {
-        if (!SoundOn || !floorFree || !CooledDown || PauseLeft > TimeSpan.Zero)
-        {
-            return false;
-        }
-
-        Announced();
-        return true;
-    }
-
-    /// <summary>Whether the selected chat's own news is spoken, rather than only shown.</summary>
-    public bool MaySpeakOwnNews => !OwnNewsWaits || CooledDown;
 
     /// <summary>What the floor is made of, from the panel's state.</summary>
     /// <param name="Due">The voice has something to say not heard yet: a reply sent, before its first audio (#292).</param>
+    /// <param name="Sounding">A chat's sound plays (#306).</param>
     public readonly record struct Floor(bool Capturing, bool Holding, int Pending, int Asking, bool Telling, bool Speaking, bool OpenSpeech,
-        bool AwaitingYes, bool Due);
+        bool AwaitingYes, bool Due, bool Sounding = false);
 }

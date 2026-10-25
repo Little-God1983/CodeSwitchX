@@ -75,6 +75,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private readonly IChatSounds? _sounds;
     private readonly SoundPicks _picks;
 
+    /// <summary>The chats' sounds, one after another once the floor is free (#306); none without a player.</summary>
+    private readonly SoundQueue? _soundQueue;
+
     /// <summary>The inputs holding push to talk now: the gesture sees one hold, which ends when the last of them is let go.</summary>
     private readonly HashSet<TalkInput> _heldInputs = [];
     private readonly SilentMicWatch _silence = new();
@@ -361,7 +364,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         IUiDispatcher dispatcher, TimeProvider time, ILogger<RavenPanelViewModel> logger, ChatNews? news = null,
         [FromKeyedServices(TellerKey)] IConductorBrain? teller = null, IOpenMic? openMic = null, ChatAsks? asks = null, IYardDirectory? yard = null,
         IChatBrains? brains = null, [FromKeyedServices(SummarizerKey)] IConductorBrain? summarizer = null, IChatSounds? sounds = null, SoundPicks? picks = null,
-        SpeakerChoice? speakers = null, UnaskedTurns? unasked = null)
+        SpeakerChoice? speakers = null, UnaskedTurns? unasked = null, ChatSoundCues? cues = null)
     {
         Speakers = speakers;
         _catalog = catalog;
@@ -381,6 +384,18 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         _sounds = sounds;
         _picks = picks ?? new SoundPicks();
         Traffic = new TrafficWatcher(time);
+        if (sounds is not null)
+        {
+            _soundQueue = new SoundQueue(sounds, _picks, time, dispatcher, MaySound, WaitsForLine);
+            _soundQueue.Played += (_, _) => Traffic.Announced(); // what Raven says on its own waits the pause after it
+            _soundQueue.PlayingChanged += (_, _) => UpdateState();
+        }
+
+        if (cues is not null)
+        {
+            cues.Cue += (_, cue) => _dispatcher.Post(() => Queue(cue));
+        }
+
         Chats = [YardChat, ActivityChat];
         _selectedChat = YardChat;
         if (unasked is not null)
@@ -897,6 +912,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (value)
         {
             StopCatchUp();
+            _soundQueue?.Clear(); // muted, no chat's sound plays (#306)
             _requestedAloud = false; // a card asked for aloud and not read yet: muted now, it is only shown
         }
         else
@@ -1191,7 +1207,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     private void OnSpeakingChanged(bool speaking)
     {
         _speaking = speaking;
-        Traffic.Announced(); // begun or ended, the cooldown runs from the last of it
+        Traffic.Announced(); // begun or ended, the pause runs from the last of it
         UpdateIgnoreSpeech();
         UpdateState();
     }
@@ -2001,6 +2017,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _calledAt = turn.SpokeTill;
             StopForName();
+            PlayNameSound();
             _logger.LogInformation("Open mic heard Raven's name alone: the next turn needs no name");
             return false;
         }
@@ -2951,7 +2968,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         if (HasSomethingToTell && FloorIsFree)
         {
             // What was asked for waits for no pause (#233); for the grace, when the user may go on after a breath (#252).
-            var wait = !AskedForFirst ? Traffic.WaitBeforeTelling : _requestGrace && MicMode == MicMode.OpenMic ? TrafficWatcher.NewsGrace : TimeSpan.Zero;
+            // Only what is said aloud waits the pause: other chats' news, only written, comes with their sounds (#306).
+            var wait = !AskedForFirst ? (HasSomethingToSay ? Traffic.WaitBeforeTelling : TrafficWatcher.NewsGrace)
+                : _requestGrace && MicMode == MicMode.OpenMic ? TrafficWatcher.NewsGrace : TimeSpan.Zero;
             _newsTimer.Change(wait, Timeout.InfiniteTimeSpan);
         }
     }
@@ -2983,7 +3002,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
     }
 
-    /// <summary>Decides when other chats may make a sound, and whether the selected chat's news waits for the cooldown.</summary>
+    /// <summary>When what Raven says on its own may come: the floor, and the pause after it last spoke or a sound played.</summary>
     public TrafficWatcher Traffic { get; }
 
     /// <summary>See <see cref="TrafficWatcher.IsFree"/>.</summary>
@@ -2991,20 +3010,75 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     private TrafficWatcher.Floor Floor => new(Capturing: _capturing, Holding: _heldInputs.Count > 0, Pending: _pending, Asking: _asking,
         Telling: _telling, Speaking: _speaking, OpenSpeech: _openSpeech, AwaitingYes: _asks?.Proposed is not null || _offerStands,
-        Due: _voice.IsBusy);
-
-    /// <summary>The floor as a telling sees it: free but for the telling itself, and what it sent the voice.</summary>
-    private bool FloorIsFreeButTelling => TrafficWatcher.IsFree(Floor with { Telling = false, Due = false });
+        Due: _voice.IsBusy, Sounding: _soundQueue?.IsPlaying == true);
 
     /// <summary>
-    /// Another chat has news or a card: never spoken, it makes the short sound if the watcher lets it, and is marked in the
-    /// list either way. Muted, it makes none.
+    /// A chat did something with a sound (#306): it joins the queue, unless Raven's panel or the chat is muted, which puts
+    /// nothing in it. The chat the user is in plays its sound too, right before its line when Raven speaks one.
     /// </summary>
-    private void SoundForOtherChat(bool floorFree)
+    private void Queue(SoundCue cue)
     {
-        if (_sounds is not null && _picks.For(SoundSlot.Finishes) is { } sound && !IsMuted && Traffic.TrySound(floorFree && CallListening() <= TimeSpan.Zero))
+        if (_soundQueue is not null && !IsMuted && !ChatOf(cue.WorkspaceId).IsMuted)
         {
-            _logger.LogInformation("Raven chimes for another chat's news or card");
+            _soundQueue.Add(cue);
+        }
+    }
+
+    /// <summary>
+    /// Whether a chat's sound may play: nobody talks, Raven is not waiting for the words after its name, and Raven has nothing
+    /// of its own to tell, so the chat the user is in and the catch-up go before other chats' sounds, and a chat's card is in
+    /// the log before its sound. Other chats' news, only written, waits for the grace alone, as the sounds do.
+    /// </summary>
+    private bool MaySound() => FloorIsFree && CallListening() <= TimeSpan.Zero && !_telling && !HasSomethingToTell;
+
+    /// <summary>
+    /// Raven has something of its own to say aloud once the floor is free: the chat's cards, a catch-up, the offer, what was
+    /// asked for, or the news of the chat the user is in. Other chats' news is only written.
+    /// </summary>
+    private bool HasSomethingToSay =>
+        _untold.Count > 0 || _catchUpDue is not null || _nextOfferDue || _noQuestionsAloud is not null || (SpeakNews && !IsMuted && HasNewsHere);
+
+    /// <summary>
+    /// Whether a sound waits for the line Raven speaks for it, to play straight before it: the chat the user is in, whose news
+    /// and cards are read out, with a voice there to read them, while that line is still to come (its news not taken, its
+    /// card not read). A start has no line; a sound whose line went by without it plays from the queue.
+    /// </summary>
+    private bool WaitsForLine(SoundCue cue) =>
+        ChatOf(cue.WorkspaceId) == CurrentChat && SpeakNews && !IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off
+        && cue.Line switch
+        {
+            SoundLine.News => cue.WorkspaceId is { } workspace && _news?.HasNewsFor(id => id == workspace) == true,
+            SoundLine.Card => _untold.Any(c => c.Ask.SessionId == cue.SessionId),
+            _ => false,
+        };
+
+    /// <summary>
+    /// The sound of the newest cue a line speaks for, to play right before it (#306); null when none waits for it. With no
+    /// voice to say the line, its sound is left to the queue: taken, it would never be heard.
+    /// </summary>
+    private Func<CancellationToken, Task>? PreludeFor(IEnumerable<string> sessionIds)
+    {
+        var ids = sessionIds.ToHashSet(StringComparer.Ordinal);
+        return PreludeFor(c => ids.Contains(c.SessionId));
+    }
+
+    /// <inheritdoc cref="PreludeFor(IEnumerable{string})"/>
+    private Func<CancellationToken, Task>? PreludeFor(Func<SoundCue, bool> which)
+    {
+        if (_tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off))
+        {
+            return null;
+        }
+
+        var cue = _soundQueue?.TakeForLine(which).MaxBy(c => c.At);
+        return cue is not null && _sounds is { } sounds && _picks.For(cue.Slot) is { } sound ? ct => sounds.PlayAsync(sound, ct) : null;
+    }
+
+    /// <summary>Raven heard its name alone (#306): its sound plays at once, past the queue, the floor and every mute.</summary>
+    private void PlayNameSound()
+    {
+        if (_sounds is not null && _picks.For(SoundSlot.HearsName) is { } sound)
+        {
             _ = _sounds.PlayAsync(sound, CancellationToken.None);
         }
     }
@@ -3023,7 +3097,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return;
         }
 
-        if (!AskedForFirst && Traffic.PauseLeft is var left && left > TimeSpan.Zero)
+        if (!AskedForFirst && HasSomethingToSay && Traffic.PauseLeft is var left && left > TimeSpan.Zero)
         {
             // A chat's sound came meanwhile, or the timer, counting coarser than the clock, fired a little early: only what is
             // left of the pause is waited, in whole milliseconds (a timer due in less fires at once).
@@ -3110,9 +3184,10 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         // the card's own chat only (#137): another window's brain would take it for its own window's ("allow it" there).
         var elsewhere = card.ShownIn != CurrentChat;
         Tell(QuestionFact(card), card.ShownIn!);
+        Queue(new SoundCue(card.Ask.Kind == ChatAskKind.Permission ? SoundSlot.AsksPermission : SoundSlot.AsksQuestion, card.Ask.SessionId,
+            card.ShownIn!.WorkspaceId, _time.GetUtcNow(), SoundLine.Card, () => card.IsOpen));
         if (elsewhere)
         {
-            SoundForOtherChat(FloorIsFree);
             return;
         }
 
@@ -3581,6 +3656,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect(evenMuted: askedAloud);
             spoken = _voice.Begin(evenMuted: askedAloud);
+            spoken.Prelude = PreludeFor([card.Ask.SessionId]); // its sound, straight before it is read (#306)
             string line;
             if (PermissionLine.NeedsTeller(card) && _teller is not null)
             {
@@ -3774,15 +3850,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
             var own = fresh.Where(l => ChatOf(l.WorkspaceId) == CurrentChat).ToList();
-            // A muted chat's news is only written, here and as another chat's sound (#153).
-            var others = fresh.Any(l => ChatOf(l.WorkspaceId) is var of && of != CurrentChat && !of.IsMuted);
-            if (own.Count == 0 || CurrentChat.IsMuted || !SpeakNews || IsMuted || floor.IsCancellationRequested || !Traffic.MaySpeakOwnNews)
+            // A muted chat's news is only written (#153); other chats' news makes only their sounds, through the queue (#306).
+            if (own.Count == 0 || CurrentChat.IsMuted || !SpeakNews || IsMuted || floor.IsCancellationRequested)
             {
-                if (others)
-                {
-                    SoundForOtherChat(FloorIsFreeButTelling);
-                }
-
                 return;
             }
 
@@ -3792,6 +3862,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             spoken = _newsReply = _voice.Begin(heard => _logger.LogInformation(
                 "Raven's news: first word {Total:0} ms after it began ({Take:0} ms reading the board, {Teller:0} ms from the teller's question)",
                 (heard - began).TotalMilliseconds, (taken - began).TotalMilliseconds, (heard - asking).TotalMilliseconds));
+            spoken.Prelude = PreludeFor(own.Select(l => l.SessionId)); // its sound, straight before its line (#306)
             asking = _time.GetUtcNow();
             // Spoken, the selected chat's news is the announcement: other chats' news is only marked.
             var chat = CurrentChat;
@@ -3803,13 +3874,6 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 // nor are told again by a catch-up. Its stale lines are shown, never said: they still count, as do the
                 // lines only counted ("And 2 more.").
                 ReadOnceHeard(spoken, [(told, [.. own.Where(toldLines.Contains)])]);
-            }
-
-            // With no voice ready to say it (none picked, failed, installing or loading), the remark is only written: it is
-            // no announcement, and the other chats still sound. One that is off starts and says it.
-            if (others && _tts.Status.State is not (TextToSpeechState.Ready or TextToSpeechState.Off))
-            {
-                SoundForOtherChat(FloorIsFreeButTelling);
             }
 
         }
@@ -4366,6 +4430,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// </summary>
     private void UpdateState()
     {
+        _soundQueue?.Kick(); // the floor changed: a sound may play, or must wait
         RefreshAnswering();
         if (_capturing)
         {
@@ -4841,6 +4906,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         }
 
         _brainAsked = false; // moved to another chat: the user moved on from what Raven asked
+        _soundQueue?.Kick(); // the chat left is another chat now: its sounds no longer wait for its lines (#306)
         DropOffer(); // and from "Next?": a yes now is for something in the chat shown
 
         // Moved away from the chat whose allow waits for a yes (by hotkey, click or the brain): a yes said now is for
@@ -4914,10 +4980,8 @@ public sealed partial class RavenPanelViewModel : ObservableObject
     /// The catch-up of the chat switched to, from its unread lines only: the news and warnings that came while the user
     /// was elsewhere (Raven's answers there were heard as they came). It waits for the floor like news does, so it never
     /// talks over the user or an allow waiting for their yes; its cards that came meanwhile are read after it, one at a
-    /// time. Nothing is said for a chat with nothing new, or muted. The cooldown does not hold it (#143): the user switched,
-    /// most often right after the chat's sound, and asked for it so; it waits the pause after that sound (#152) instead.
-    /// That holds with <see cref="TrafficWatcher.OwnNewsWaits"/> on too: dropped, it would never be said, as the switch has
-    /// marked its lines seen.
+    /// time. Nothing is said for a chat with nothing new, or muted. The user switched, most often right after the chat's
+    /// sound, and asked for it so (#143); it waits the pause after that sound (#152), and goes before other chats' sounds (#306).
     /// </summary>
     private void CatchUpOn(RavenChat chat, List<RavenLogEntry> away)
     {
@@ -5027,6 +5091,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
             _voice.Expect();
             spoken = _catchUpReply = _voice.Begin(); // Raven's own: muted, the voice says none of it (#242)
+            spoken.Prelude = PreludeFor(c => ChatOf(c.WorkspaceId) == chat); // what it sums up sounds once, right before it (#306)
             var (lines, warnings) = CatchUpItems(covered);
             var (said, whole, _, toldLines, toldWarnings) = await TellLinesAsync("Catch-up", lines, warnings, spoken, stop, chat);
             if (said && whole)

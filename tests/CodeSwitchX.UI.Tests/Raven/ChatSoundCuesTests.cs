@@ -87,6 +87,19 @@ public sealed class ChatSoundCuesTests : IDisposable
         _heard.ShouldAllBe(c => c.WorkspaceId == _workspace && c.StillTrue());
     }
 
+    /// <summary>The news is raised while the bus still tells the change: its cue holds from the moment it is raised.</summary>
+    [Fact]
+    public void A_news_cue_is_true_when_it_is_raised()
+    {
+        var trueWhenRaised = new List<bool>();
+        _cues.Cue += (_, cue) => trueWhenRaised.Add(cue.StillTrue());
+
+        Change(Chat("a", SessionState.Working), Chat("a", SessionState.Idle));
+        Change(Chat("b", SessionState.Working), Chat("b", SessionState.Waiting));
+
+        trueWhenRaised.ShouldBe([true, true]);
+    }
+
     [Fact]
     public void A_finish_is_no_longer_true_once_the_chat_works_again()
     {

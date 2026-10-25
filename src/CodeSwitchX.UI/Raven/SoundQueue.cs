@@ -87,9 +87,12 @@ public sealed class SoundQueue
     }
 
     /// <summary>Takes the chat's cues still true out of the queue, for the line Raven speaks for them; the newest is last.</summary>
-    public IReadOnlyList<SoundCue> TakeForLine(string sessionId)
+    public IReadOnlyList<SoundCue> TakeForLine(string sessionId) => TakeForLine(c => c.SessionId == sessionId);
+
+    /// <inheritdoc cref="TakeForLine(string)"/>
+    public IReadOnlyList<SoundCue> TakeForLine(Func<SoundCue, bool> which)
     {
-        var taken = _queue.Where(c => c.SessionId == sessionId).ToList();
+        var taken = _queue.Where(which).ToList();
         _queue.RemoveAll(taken.Contains);
         return [.. taken.Where(c => c.StillTrue())];
     }
