@@ -109,6 +109,23 @@ public sealed class SoundLibraryTests : IDisposable
         (Directory.Exists(Folder) ? Directory.GetFiles(Folder, "*.wav") : []).ShouldBeEmpty();
     }
 
+    /// <summary>Review of #307: a sound file that went bad is no sound: left out, its slot plays the default, and nothing throws.</summary>
+    [Fact]
+    public void A_sound_file_that_went_bad_is_left_out()
+    {
+        var sound = new SoundLibrary(Folder).Add(Picked("Ding.wav")).Sound;
+        File.WriteAllText(Path.Combine(Folder, sound.Id + ".wav"), "garbage");
+
+        var library = new SoundLibrary(Folder);
+        var picks = new SoundPicks(library);
+        picks.Set(SoundSlot.Fails, sound.Id);
+
+        library.All.ShouldNotContain(s => s.Id == sound.Id);
+        library.Has(sound.Id).ShouldBeFalse();
+        library.LengthOf(sound.Id).ShouldBe(TimeSpan.Zero);
+        picks.For(SoundSlot.Fails).ShouldBe(ShippedSounds.DefaultFor(SoundSlot.Fails));
+    }
+
     [Fact]
     public void A_broken_index_starts_empty()
     {

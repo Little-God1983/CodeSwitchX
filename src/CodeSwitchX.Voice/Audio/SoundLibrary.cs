@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using NAudio.Wave;
 
@@ -18,6 +19,7 @@ public sealed class SoundLibrary
     private readonly string? _directory;
     private readonly Lock _lock = new();
     private readonly List<UserSound> _user;
+    private readonly ConcurrentDictionary<string, (DateTime Written, TimeSpan? Length)> _lengths = new(StringComparer.Ordinal);
 
     public SoundLibrary(string? directory)
     {
@@ -42,29 +44,58 @@ public sealed class SoundLibrary
             return
             [
                 .. ShippedSounds.All.Select(s => new SoundEntry(s.Id, s.Name, LengthOf(s.Id), Shipped: true)),
-                .. user.Where(u => File.Exists(PathOf(u.Id))).Select(u => new SoundEntry(u.Id, u.Name, LengthOf(u.Id), Shipped: false)),
+                .. user.Select(u => (Sound: u, Length: UserLength(u.Id))).Where(u => u.Length is not null)
+                    .Select(u => new SoundEntry(u.Sound.Id, u.Sound.Name, u.Length!.Value, Shipped: false)),
             ];
         }
     }
 
-    public bool Has(string id) => ShippedSounds.Has(id) || (IsUser(id) && File.Exists(PathOf(id)));
+    public bool Has(string id) => ShippedSounds.Has(id) || UserLength(id) is not null;
 
     /// <summary>How long the sound plays; zero for one not in the pool.</summary>
     public TimeSpan LengthOf(string id)
     {
-        if (!Has(id))
-        {
-            return TimeSpan.Zero;
-        }
-
         if (ShippedSounds.Has(id))
         {
             var (pcm, format) = ShippedSounds.Load(id);
             return TimeSpan.FromSeconds((double)pcm.Length / format.AverageBytesPerSecond);
         }
 
-        using var reader = new WaveFileReader(PathOf(id));
-        return reader.TotalTime;
+        return UserLength(id) ?? TimeSpan.Zero;
+    }
+
+    /// <summary>
+    /// How long a sound of the user's plays; null when its file is gone or is no sound any more (damaged, replaced), which
+    /// leaves it out of the pool as a missing one is. Read once for each version of the file.
+    /// </summary>
+    private TimeSpan? UserLength(string id)
+    {
+        var path = PathOf(id);
+        if (!IsUser(id) || !File.Exists(path))
+        {
+            return null;
+        }
+
+        var written = File.GetLastWriteTimeUtc(path);
+        if (_lengths.TryGetValue(id, out var known) && known.Written == written)
+        {
+            return known.Length;
+        }
+
+        TimeSpan? length;
+        try
+        {
+            using var reader = new WaveFileReader(path);
+            length = reader.TotalTime > TimeSpan.Zero ? reader.TotalTime : null;
+        }
+        catch (Exception ex) when (ex is FormatException or IOException or ArgumentException or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            length = null;
+        }
+
+        _lengths[id] = (written, length);
+        return length;
     }
 
     /// <summary>The sound's samples and their format; throws for one not in the pool.</summary>

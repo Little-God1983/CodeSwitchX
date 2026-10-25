@@ -18,6 +18,9 @@ public static class SoundImport
 
     public static readonly TimeSpan FadeOut = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>How much over <see cref="MaximumLength"/> a file may read and still fit: an MP3's padding makes 3 s read 3.04 s.</summary>
+    private static readonly TimeSpan Slack = TimeSpan.FromMilliseconds(50);
+
     private const int Rate = 44100;
 
     /// <summary>
@@ -65,7 +68,7 @@ public static class SoundImport
     /// <summary>What the Sounds page says of a sound longer than <see cref="MaximumLength"/>; null for one that fits.</summary>
     public static string? NoticeFor(TimeSpan length)
     {
-        if (length <= MaximumLength)
+        if (!IsLong(length))
         {
             return null;
         }
@@ -76,12 +79,31 @@ public static class SoundImport
         return $"This sound is {seconds} s long. Only the first {MaximumLength.TotalSeconds:0} s will be used.";
     }
 
-    private static WaveStream Open(string source) => Path.GetExtension(source).ToLowerInvariant() switch
+    private static bool IsLong(TimeSpan length) => length > MaximumLength + Slack;
+
+    /// <summary>
+    /// A plain PCM or float WAV is read as it is; any other (the extensible header editors write for 24-bit, float and
+    /// many-channel files, ADPCM, mu-law) and an MP3 through Media Foundation, which decodes them.
+    /// </summary>
+    private static WaveStream Open(string source)
     {
-        ".wav" => new WaveFileReader(source),
-        ".mp3" => new MediaFoundationReader(source),
-        _ => throw new SoundImportException("only WAV and MP3 files can be added."),
-    };
+        switch (Path.GetExtension(source).ToLowerInvariant())
+        {
+            case ".wav":
+                var wav = new WaveFileReader(source);
+                if (wav.WaveFormat.Encoding is WaveFormatEncoding.Pcm or WaveFormatEncoding.IeeeFloat)
+                {
+                    return wav;
+                }
+
+                wav.Dispose();
+                return new MediaFoundationReader(source);
+            case ".mp3":
+                return new MediaFoundationReader(source);
+            default:
+                throw new SoundImportException("only WAV and MP3 files can be added.");
+        }
+    }
 
     /// <summary>Mono at 44.1 kHz, up to <see cref="MaximumLength"/>; cut there, the end fades out.</summary>
     private static float[] Decode(WaveStream reader)
@@ -107,7 +129,7 @@ public static class SoundImport
             count += read;
         }
 
-        if (reader.TotalTime > MaximumLength)
+        if (IsLong(reader.TotalTime))
         {
             var fade = Math.Min(count, (int)(Rate * FadeOut.TotalSeconds));
             for (var i = 0; i < fade; i++)

@@ -54,6 +54,47 @@ public sealed class SoundImportTests : IDisposable
         Peak(samples).ShouldBe(0.5, 0.01, "as loud as it was");
     }
 
+    /// <summary>
+    /// Review of #307: the extensible header many editors write for 24-bit, float and many-channel files, at 48 kHz.
+    /// </summary>
+    [Theory]
+    [InlineData(24, 2)]
+    [InlineData(24, 6)]
+    public void An_extensible_wav_is_read(int bits, int channels)
+    {
+        var source = Path.Combine(_dir, $"extensible-{bits}-{channels}.wav");
+        var format = new WaveFormatExtensible(48000, bits, channels);
+        using (var writer = new WaveFileWriter(source, format))
+        {
+            for (var i = 0; i < 48000 / 2; i++)
+            {
+                var value = (int)(0.5 * Math.Sin(2 * Math.PI * 440 * i / 48000) * 8_388_607);
+                for (var channel = 0; channel < channels; channel++)
+                {
+                    writer.Write([(byte)value, (byte)(value >> 8), (byte)(value >> 16)], 0, 3);
+                }
+            }
+        }
+
+        SoundImport.Import(source, Target).TotalSeconds.ShouldBe(0.5, 0.01);
+
+        var (written, samples) = Read(Target);
+        (written.Channels, written.SampleRate).ShouldBe((1, 44100));
+        Peak(samples).ShouldBe(0.5, 0.02);
+    }
+
+    /// <summary>Review of #307: a sound trimmed to 3 s, which its encoder's padding makes read a little longer, is no long sound.</summary>
+    [Fact]
+    public void A_sound_a_few_milliseconds_over_three_seconds_is_no_long_sound()
+    {
+        var source = Tone("trimmed.wav", new WaveFormat(44100, 16, 1), 3.04);
+
+        var length = SoundImport.Import(source, Target);
+
+        SoundImport.NoticeFor(length).ShouldBeNull();
+        Peak(Read(Target).Samples[^220..]).ShouldBeGreaterThan(0.4, "not faded: nothing of it was cut that the ear would miss");
+    }
+
     [Fact]
     public void A_24_bit_wav_is_read()
     {
