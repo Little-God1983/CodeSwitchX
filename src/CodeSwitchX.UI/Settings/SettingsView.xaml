@@ -769,6 +769,7 @@
                   <Setter Property="Height" Value="34" />
                   <Setter Property="Cursor" Value="Hand" />
                   <Setter Property="ToolTip" Value="Hear it" />
+                  <Setter Property="Foreground" Value="{StaticResource Text}" />
                   <Setter Property="Template">
                     <Setter.Value>
                       <ControlTemplate TargetType="Button">
