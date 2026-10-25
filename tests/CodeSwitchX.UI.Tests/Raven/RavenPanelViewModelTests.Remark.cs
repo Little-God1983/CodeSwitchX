@@ -150,6 +150,9 @@ public sealed partial class RavenPanelViewModelTests
     [InlineData("1. ContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
     [InlineData("- **R.** ContentAutomatorX finished too.", "ContentAutomatorX finished too.")]
     [InlineData("R. contentAutomatorX finished too", "ContentAutomatorX finished too.")]
+    // Review round 2 of #308: an unmarked remark is not cut as a summary is, past sixteen words at a comma.
+    [InlineData("ContentAutomatorX finished its release and posted the notes, so the docs and the build are both ready for you now.",
+        "ContentAutomatorX finished its release and posted the notes, so the docs and the build are both ready for you now.")]
     public async Task A_chat_that_needs_you_gets_the_remark_from_the_teller_alone(string answer, string said)
     {
         var (vm, _) = await TrafficVmAsync();
@@ -183,6 +186,44 @@ public sealed partial class RavenPanelViewModelTests
 
         string.Join(" ", _speech.Spoken).Trim()
             .ShouldBe("Chat CodeSwitchX finished: the tests pass. ContentAutomatorX finished. RawCutX asks for permission.");
+    }
+
+    /// <summary>
+    /// Review round 2 of #308: a remark that does not fit what a reply speaks is not said: cut by the voice, it would leave the
+    /// chat's own lines unheard. The chats it would have mentioned keep their sounds.
+    /// </summary>
+    [Fact]
+    public async Task A_remark_past_what_a_reply_speaks_is_left_out()
+    {
+        _yard.Show("b2", "CodeSwitchX", "Task b2"); // a second chat in the window of chat 1
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("1. the tests pass\n2. the docs build\nR. ContentAutomatorX finished. It asks to merge.")];
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Idle);
+        Changes("b2", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        string.Join(" ", _speech.Spoken).ShouldNotContain("ContentAutomatorX");
+        await SoundGraceAsync(vm);
+        Gap();
+        _sounds.Ids.Count.ShouldBe(2, "chat 1's sound before its lines, then chat 2's: it was not mentioned");
+    }
+
+    /// <summary>Review round 2 of #308: a mark alone on its line puts the remark on the next; it is no chat's summary.</summary>
+    [Fact]
+    public async Task A_remark_on_the_line_after_its_mark_is_found()
+    {
+        var (vm, _) = await TrafficVmAsync();
+        _teller.Answer = _ => [new BrainText("1. the tests pass\nR.\nContentAutomatorX finished too.")];
+        Changes("a", SessionState.Working, SessionState.Idle);
+        Changes("b", SessionState.Working, SessionState.Idle);
+        await GraceAsync(vm);
+        await Until(() => vm.Log.Any(e => e.Kind == RavenLogKind.Raven));
+        await WithinAsync(_voice.WhenQuietAsync());
+
+        string.Join(" ", _speech.Spoken).Trim().ShouldBe("Chat CodeSwitchX finished: the tests pass. ContentAutomatorX finished too.");
     }
 
     /// <summary>

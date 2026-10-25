@@ -2833,10 +2833,14 @@ public sealed partial class RavenPanelViewModel : ObservableObject
         var numbered = false;
         var next = 0;
         string? remark = null;
+        var remarkNext = false; // its mark came alone: the remark is the next line
+        var bare = new List<string>(); // the lines without their marks, for a remark asked alone that came unmarked
+        var sentences = 0;
         RavenLogEntry? reply = null;
 
         void Say(string sentence)
         {
+            sentences++;
             if (reply is null)
             {
                 reply = AddSaid(sentence, chat, spoken);
@@ -2881,9 +2885,23 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                 var cut = false;
                 void Take(string line)
                 {
+                    if (others.Count > 0 && remarkNext && line.Trim().Length > 0)
+                    {
+                        remarkNext = false;
+                        remark ??= Unmarked(line).Text;
+                        return;
+                    }
+
                     if (others.Count > 0 && Remarked(line) is { } said)
                     {
-                        remark ??= said;
+                        remarkNext = said.Length == 0;
+                        remark ??= said.Length > 0 ? said : null;
+                        return;
+                    }
+
+                    if (summed.Count == 0)
+                    {
+                        bare.Add(Unmarked(line).Text); // asked for the remark alone: it may come numbered, or after a lead-in
                         return;
                     }
 
@@ -2893,10 +2911,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
                         numbered = true;
                         summaries[n - 1] ??= summary.Length > 0 ? summary : null;
                     }
-                    else if (summary.Length > 0 && (number is null || summed.Count == 0))
+                    else if (number is null && summary.Length > 0)
                     {
-                        // "Sure, here are the summaries." is none of them; asked for the remark alone, a numbered line may be it.
-                        loose.Add(summary);
+                        loose.Add(summary); // "Sure, here are the summaries." is none of them
                     }
                 }
 
@@ -2945,7 +2962,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
                 if (others.Count > 0 && remark is null && summed.Count == 0)
                 {
-                    remark = loose.LastOrDefault(l => !l.EndsWith(':')); // asked for the remark alone, it left the mark off: not its lead-in
+                    remark = bare.LastOrDefault(l => l.Length > 0 && !l.EndsWith(':')); // asked for the remark alone, it left the mark off: not its lead-in
                 }
             }
         }
@@ -2984,8 +3001,16 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             Say($"And {total - each} more.");
         }
 
-        // Whole: the chats it names are the ones mentioned. Past what a reply speaks, the voice cuts it, and none counts as mentioned.
+        // Whole, so the chats it names are the ones mentioned; one past what a reply speaks is left out, as the voice would cut it
+        // and leave the chat's own lines unheard with it.
         remark = TextCut.OneLine(remark).Trim();
+        var chunker = new SentenceChunker();
+        if (remark.Length > 0 && sentences + chunker.Add(remark + " ").Concat(chunker.Flush()).Count() > ReplyVoice.MaximumSentences)
+        {
+            _logger.LogInformation("Raven's remark on the other waiting chats is left out: it does not fit what a reply speaks");
+            remark = "";
+        }
+
         if (remark.Length > 0)
         {
             remark = Sentence(char.ToUpperInvariant(remark[0]) + remark[1..]);
@@ -3905,7 +3930,9 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             var taken = _time.GetUtcNow();
             var appended = WriteNews(lines, taken);
             var fresh = lines.Where(l => !l.Stale).ToList();
-            if (_teller is not null && SpeakNews && !IsMuted && !CurrentChat.IsMuted && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
+            // Only for news said aloud, by a voice there to say it: a remark only written mentions nothing (#308).
+            if (_teller is not null && SpeakNews && !IsMuted && !CurrentChat.IsMuted && _tts.Status.State is TextToSpeechState.Ready or TextToSpeechState.Off
+                && fresh.Any(l => ChatOf(l.WorkspaceId) == CurrentChat))
             {
                 others = await WaitingElsewhereAsync(); // what the other chats' news just written adds too (#308)
             }
@@ -4188,7 +4215,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
 
     /// <summary>
     /// The teller's remark of a line marked "R." (#308), with the list or bold marks around the mark and the quotes around the
-    /// remark taken off; null for any other line.
+    /// remark taken off; "" for the mark alone (the remark follows on the next line); null for any other line.
     /// </summary>
     internal static string? Remarked(string line)
     {
@@ -4198,8 +4225,7 @@ public sealed partial class RavenPanelViewModel : ObservableObject
             return null;
         }
 
-        var remark = text[2..].Trim().Trim('"').Trim();
-        return remark.Length > 0 ? remark : null;
+        return text[2..].Trim().Trim('"').Trim();
     }
 
     /// <summary>A summary longer than this many words keeps its first clauses that fit (<see cref="Summed"/>).</summary>

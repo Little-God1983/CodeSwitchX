@@ -257,7 +257,7 @@ public sealed class ChatNewsTests : IDisposable
     [InlineData("- R. Two more chats finished.", "Two more chats finished.")]
     [InlineData("**R.** Two more chats finished.", "Two more chats finished.")]
     [InlineData("1. the tests pass", null)]
-    [InlineData("R. ", null)]
+    [InlineData("R. ", "")]
     [InlineData("Right, the tests pass", null)]
     public void The_remark_is_the_line_marked_r(string line, string? remark) => RavenPanelViewModel.Remarked(line).ShouldBe(remark);
 
