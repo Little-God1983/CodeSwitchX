@@ -39,6 +39,15 @@ public partial class RavenPanelView : UserControl
         }
     }
 
+    /// <summary>A click on a chat in the list: its window comes up in the Cab too (#311). Arrow keys select without this.</summary>
+    private void OnChatClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBoxItem { DataContext: RavenChat chat })
+        {
+            _viewModel?.PickChat(chat);
+        }
+    }
+
     /// <summary>Lines added while the panel was collapsed scrolled a log nobody saw: show the newest once it is open again.</summary>
     private void OnViewModelChanged(object? sender, PropertyChangedEventArgs e)
     {

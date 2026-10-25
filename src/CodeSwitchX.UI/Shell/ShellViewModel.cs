@@ -159,6 +159,7 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
         Raven.ChatRequested += (_, line) => OpenNewsChat(line);
         // As the brain opens a workspace: the window comes forward, from behind VS Code or minimised.
         Raven.CabRequested += (_, workspaceId) => _ = ((IRavenShell)this).OpenInCabAsync(workspaceId);
+        Raven.YardRequested += (_, _) => BackToYard();
         _ = Raven.RefreshMicrophonesAsync(); // listed off the UI thread: a slow endpoint must not hold up the first frame
         if (Raven.Speakers is { } speakers)
         {

@@ -528,6 +528,8 @@
       <Setter Property="AutomationProperties.Name" Value="{Binding Label}" />
       <Setter Property="AutomationProperties.ItemStatus" Value="{Binding Status}" />
       <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}" />
+      <!-- A click opens the chat's window too (#311); the mute button handles its own. -->
+      <EventSetter Event="MouseLeftButtonUp" Handler="OnChatClick" />
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
@@ -912,7 +914,7 @@
                       PreviewKeyDown="OnMicKey" />
             </StackPanel>
 
-            <!-- The chats: selecting one only shows it, it never opens its VS Code. -->
+            <!-- The chats: a click shows one and opens its window (#311); keys only show it. -->
             <ListBox x:Name="ChatList" Grid.Row="1" ItemsSource="{Binding Chats}" SelectedItem="{Binding SelectedChat, Mode=TwoWay}"
                      Background="Transparent" BorderBrush="#1F2937" BorderThickness="0,1,0,0" Padding="6,10,6,10"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"

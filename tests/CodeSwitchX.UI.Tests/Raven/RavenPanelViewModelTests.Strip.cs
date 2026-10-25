@@ -135,6 +135,23 @@ public sealed partial class RavenPanelViewModelTests
         vm.SelectedChat.ShouldBe(vm.ActivityChat);
         ChatNumbered(vm, 3).Unread.ShouldBe(1, "Activity opens no chat: its cards are answered in their own");
     }
+
+    [Fact]
+    public async Task A_number_on_the_strip_asks_for_its_window_and_0_for_the_yard()
+    {
+        var (vm, _) = await ChatsVmAsync();
+        vm.IsOpen = false;
+        Guid? opened = null;
+        var yard = false;
+        vm.CabRequested += (_, id) => opened = id;
+        vm.YardRequested += (_, _) => yard = true;
+
+        vm.OpenChatCommand.Execute(ChatNumbered(vm, 3));
+        vm.OpenChatCommand.Execute(vm.YardChat);
+
+        opened.ShouldBe(ChatNumbered(vm, 3).WorkspaceId);
+        yard.ShouldBeTrue();
+    }
     // Review of #175: a chat switch while collapsed (hotkey, voice, the Cab) cleared marks nobody had seen.
     [Fact]
     public async Task A_switch_while_collapsed_keeps_the_chat_s_marks_until_raven_opens()
