@@ -207,6 +207,32 @@ public sealed class AudioOutputTests
         devices.Players.ShouldBeEmpty();
     }
 
+    /// <summary>#307: a sound of the user's plays as the shipped ones do.</summary>
+    [Fact]
+    public async Task A_user_sound_plays_from_the_library()
+    {
+        var root = Directory.CreateTempSubdirectory("csx-play-").FullName;
+        try
+        {
+            var library = new SoundLibrary(Path.Combine(root, "sounds"));
+            var sound = library.Add(SoundLibraryTests.Tone(root, "Ding.wav", 0.5)).Sound;
+            var devices = new Devices();
+            var ct = TestContext.Current.CancellationToken;
+
+            var playing = new ChatSounds(devices.Output, new AudioLevels { Sounds = 1f }, TimeProvider.System, NullLogger<ChatSounds>.Instance, library)
+                .PlayAsync(sound.Id, ct);
+            await devices.Started.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            devices.Players.Single().Stop();
+            await playing.WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+            devices.Players.Single().Source!.WaveFormat.SampleRate.ShouldBe(44100);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void Picks_start_on_the_slots_defaults_and_none_is_null()
     {

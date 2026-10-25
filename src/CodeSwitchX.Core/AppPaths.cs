@@ -24,6 +24,9 @@ public sealed class AppPaths
     /// <summary>Raven's voice: the Python environment its text-to-speech sidecar runs in (several GB).</summary>
     public string VoiceDirectory => Path.Combine(Root, "voice");
 
+    /// <summary>The sounds the user added for the chats (#307), copied here so the originals can move or go.</summary>
+    public string SoundsDirectory => Path.Combine(Root, "sounds");
+
     /// <summary>Where Claude Code finds CodeSwitchX's MCP server: its address and the token. Readable by the current user only.</summary>
     public string McpConfigFile => Path.Combine(Root, "mcp.json");
 

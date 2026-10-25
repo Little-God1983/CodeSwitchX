@@ -33,6 +33,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly ILogger<SettingsViewModel> _logger;
     private readonly IChatSounds? _sounds;
     private readonly SoundPicks _picks;
+    private readonly SoundLibrary _library;
+    private readonly ISoundFilePicker? _soundFiles;
     private readonly AudioLevels _levels;
     private bool _loading;
     private readonly Lock _saveGate = new();
@@ -120,11 +122,23 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>A slot with no sound (#306), as stored and as its picker holds it: a picker cannot select an item whose value is null.</summary>
     public const string NoSound = "none";
 
-    /// <summary>A sound a slot's picker offers: a shipped sound, or None.</summary>
+    /// <summary>A sound a slot's picker offers: a sound of the pool, or None.</summary>
     public sealed record SoundChoice(string Id, string Name);
 
-    /// <summary>What each slot's picker offers: None, then the shipped sounds.</summary>
-    public IReadOnlyList<SoundChoice> SoundChoices { get; } = [new(NoSound, "None"), .. ShippedSounds.All.Select(s => new SoundChoice(s.Id, s.Name))];
+    /// <summary>
+    /// What each slot's picker offers: None, then the pool (#307: the user's sounds after the shipped ones). Kept in step item by
+    /// item, never rebuilt: a picker whose item went away would write an empty pick back into its slot.
+    /// </summary>
+    public ObservableCollection<SoundChoice> SoundChoices { get; } = [];
+
+    /// <summary>A sound of the user's as the Sounds page lists it: its name and how long it plays ("1.2 s").</summary>
+    public sealed record UserSoundRow(string Id, string Name, string Length);
+
+    /// <summary>The sounds the user added (#307), in the order they were added.</summary>
+    public ObservableCollection<UserSoundRow> UserSounds { get; } = [];
+
+    /// <summary>What the last sound added left to say: the 3 s notice, or why the file was refused; null for nothing.</summary>
+    [ObservableProperty] private string? _soundNotice;
 
     /// <summary>The sound a chat makes when it starts working (#306): a shipped sound's id, or <see cref="NoSound"/>.</summary>
     [ObservableProperty] private string _ravenSoundStart = ShippedSounds.DefaultFor(SoundSlot.StartsWorking);
@@ -245,10 +259,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(ClaudeHookInstaller installer, ISettingsStore settings, PersistenceWriterOptions writerOptions, BrainSettings brain,
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
         ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null,
-        IChatSounds? sounds = null, AudioLevels? levels = null, SoundPicks? picks = null)
+        IChatSounds? sounds = null, AudioLevels? levels = null, SoundPicks? picks = null, SoundLibrary? library = null,
+        ISoundFilePicker? soundFiles = null)
     {
         _sounds = sounds;
-        _picks = picks ?? new SoundPicks();
+        _library = library ?? new SoundLibrary(null);
+        _picks = picks ?? new SoundPicks(_library);
+        _soundFiles = soundFiles;
+        ShowSounds();
+        _library.Changed += (_, _) => ShowSounds();
         _levels = levels ?? new AudioLevels();
         ShowLevels();
         Shortcuts = shortcuts ?? new ChatHotkeys(settings);
@@ -543,6 +562,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public void Refresh()
     {
+        ShowSounds(); // a sound's file deleted outside the app since is gone from the page
         var status = _installer.GetStatus(RelayExecutable);
         HookState = status.State;
         HookStatusText = status.State switch
@@ -695,14 +715,124 @@ public sealed partial class SettingsViewModel : ObservableObject
         _ = _sounds?.PlayAsync(sound, _playing.Token);
     }
 
-    /// <summary>A slot's sound as stored (#306): <see cref="NoSound"/> for none; nothing stored, or a sound no longer shipped, is the slot's default.</summary>
+    /// <summary>"Add sound…": the file picked is copied into the pool; a long one is noted, one that is no sound refused (#307).</summary>
+    [RelayCommand]
+    private void AddSound()
+    {
+        if (_soundFiles?.Pick() is not { } file)
+        {
+            return;
+        }
+
+        try
+        {
+            SoundNotice = _library.Add(file).Notice;
+        }
+        catch (SoundImportException ex)
+        {
+            SoundNotice = $"This file can't be used as a sound: {ex.Message}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SoundNotice = $"This file can't be used as a sound: it could not be copied ({ex.Message.TrimEnd('.')}).";
+        }
+    }
+
+    /// <summary>A sound of the user's, played from its row.</summary>
+    [RelayCommand]
+    private void PlayUserSound(string id) => Play(id);
+
+    /// <summary>Removes a sound of the user's; the slots that used it go back to their defaults. One that cannot be removed says why.</summary>
+    [RelayCommand]
+    private void RemoveSound(string id)
+    {
+        try
+        {
+            _library.Remove(id); // its slots go back to their defaults as the pool changes (ShowSounds)
+            SoundNotice = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            SoundNotice = $"This sound could not be removed: {ex.Message.TrimEnd('.')}.";
+        }
+    }
+
+    /// <summary>The pickers and the list follow the pool, item by item.</summary>
+    private void ShowSounds()
+    {
+        var pool = _library.All;
+        List<SoundChoice> wanted = [new(NoSound, "None"), .. pool.Select(s => new SoundChoice(s.Id, s.Name))];
+        // A slot whose sound left the pool (its file deleted outside the app) goes back to its default first: taken out of the
+        // pickers while picked, its picker would write an empty pick back into it.
+        // One held for a moment, or damaged, keeps its pick (its slot plays the default meanwhile).
+        string Kept(string pick, SoundSlot slot) =>
+            pick == NoSound || wanted.Any(c => c.Id == pick) || _library.Keeps(pick) ? pick : ShippedSounds.DefaultFor(slot);
+        var picks = (Kept(RavenSoundStart, SoundSlot.StartsWorking), Kept(RavenSoundFinish, SoundSlot.Finishes),
+            Kept(RavenSoundQuestion, SoundSlot.AsksQuestion), Kept(RavenSoundPermission, SoundSlot.AsksPermission), Kept(RavenSoundFail, SoundSlot.Fails),
+            Kept(RavenSoundName, SoundSlot.HearsName));
+        SetPicks(picks);
+        Follow(SoundChoices, wanted);
+        Follow(UserSounds, [.. pool.Where(s => !s.Shipped).Select(s => new UserSoundRow(s.Id, s.Name,
+            s.Length.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s"))]);
+        SetPicks(picks); // a picker whose item went (a pick kept but not playable just now) let go of it: it is held all the same
+    }
+
+    private void SetPicks((string Start, string Finish, string Question, string Permission, string Fail, string Name) picks) =>
+        (RavenSoundStart, RavenSoundFinish, RavenSoundQuestion, RavenSoundPermission, RavenSoundFail, RavenSoundName) = picks;
+
+    /// <summary>Makes <paramref name="shown"/> hold <paramref name="wanted"/> in its order, moving the items it keeps rather than replacing them.</summary>
+    internal static void Follow<T>(ObservableCollection<T> shown, IReadOnlyList<T> wanted)
+    {
+        for (var i = shown.Count - 1; i >= 0; i--)
+        {
+            if (!wanted.Contains(shown[i]))
+            {
+                shown.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            if (i < shown.Count && Equals(shown[i], wanted[i]))
+            {
+                continue;
+            }
+
+            var at = -1;
+            for (var j = i + 1; j < shown.Count && at < 0; j++)
+            {
+                at = Equals(shown[j], wanted[i]) ? j : -1;
+            }
+
+            if (at >= 0)
+            {
+                shown.Move(at, i);
+            }
+            else
+            {
+                shown.Insert(i, wanted[i]);
+            }
+        }
+
+        while (shown.Count > wanted.Count)
+        {
+            shown.RemoveAt(shown.Count - 1);
+        }
+    }
+
+    /// <summary>A slot's sound as stored (#306): <see cref="NoSound"/> for none; nothing stored, or a sound no longer in the pool, is the slot's default.</summary>
     private async Task<string> LoadSoundAsync(string key, SoundSlot slot, CancellationToken ct) =>
-        await LoadOrDefaultAsync<string>(key, $"the sound of {slot}", ct) is { } stored && (stored == NoSound || ShippedSounds.Has(stored))
+        await LoadOrDefaultAsync<string>(key, $"the sound of {slot}", ct) is { } stored && (stored == NoSound || _library.Keeps(stored))
             ? stored : ShippedSounds.DefaultFor(slot);
 
     /// <summary>The chats' sounds follow the slot's pick at once; it is stored too, once loaded.</summary>
     private void PickSound(SoundSlot slot, string key, string sound)
     {
+        if (sound is null)
+        {
+            return; // a picker letting go of an item that went: the slot's pick is set back at once (ShowSounds)
+        }
+
         _picks.Set(slot, sound == NoSound ? null : sound);
         Persist(key, sound);
     }

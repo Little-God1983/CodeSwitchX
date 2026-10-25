@@ -18,27 +18,21 @@ public interface IChatSounds
 }
 
 /// <summary>
-/// The shipped sounds (<see cref="ShippedSounds"/>), each play opening the output chosen, or the default device of the moment,
+/// The sounds of the pool (<see cref="SoundLibrary"/>), each play opening the output chosen, or the default device of the moment,
 /// off the caller's thread (opening a waking device can take a while) and closing it when done.
 /// </summary>
-public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProvider time, ILogger<ChatSounds> logger) : IChatSounds
+public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProvider time, ILogger<ChatSounds> logger, SoundLibrary? library = null)
+    : IChatSounds
 {
+    private readonly SoundLibrary _library = library ?? new SoundLibrary(null);
+
     /// <summary>
     /// How much longer than the sound a play may take, for a waking device to open: past it the play is stopped, so a device
     /// that never says it stopped does not hold the floor, and Raven's speech after it, for good.
     /// </summary>
     public static readonly TimeSpan PlayMargin = TimeSpan.FromSeconds(5);
 
-    public TimeSpan LengthOf(string soundId)
-    {
-        if (!ShippedSounds.Has(soundId))
-        {
-            return TimeSpan.Zero;
-        }
-
-        var (pcm, format) = ShippedSounds.Load(soundId);
-        return TimeSpan.FromSeconds((double)pcm.Length / format.AverageBytesPerSecond);
-    }
+    public TimeSpan LengthOf(string soundId) => _library.LengthOf(soundId);
 
     public async Task PlayAsync(string soundId, CancellationToken ct)
     {
@@ -49,7 +43,7 @@ public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProv
 
     private async Task PlayUntilAsync(string soundId, CancellationToken ct)
     {
-        if (!ShippedSounds.Has(soundId))
+        if (!_library.Has(soundId))
         {
             logger.LogWarning("No sound {Sound} to play", soundId);
             return;
@@ -81,7 +75,7 @@ public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProv
             var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var opening = Task.Run(() =>
             {
-                var (pcm, format) = ShippedSounds.Load(soundId);
+                var (pcm, format) = _library.Load(soundId);
                 return output.Open(new RawSourceWaveStream(pcm, 0, pcm.Length, format), () => levels.Sounds, 120);
             }, CancellationToken.None);
             try
@@ -129,15 +123,18 @@ public sealed class ChatSounds(IAudioOutput output, AudioLevels levels, TimeProv
 }
 
 /// <summary>
-/// Which sound each slot plays (#306), as Settings picked it: an id of <see cref="ShippedSounds"/>, or null for none.
-/// Starts on the slots' defaults. Any thread.
+/// Which sound each slot plays (#306), as Settings picked it: an id of the pool (<see cref="SoundLibrary"/>), or null for
+/// none. Starts on the slots' defaults; a sound of the user's whose file went missing plays the slot's default (#307). Any thread.
 /// </summary>
-public sealed class SoundPicks
+public sealed class SoundPicks(SoundLibrary? library = null)
 {
+    private readonly SoundLibrary _library = library ?? new SoundLibrary(null);
+
     private readonly ConcurrentDictionary<SoundSlot, string?> _picks =
         new(Enum.GetValues<SoundSlot>().Select(s => KeyValuePair.Create(s, (string?)ShippedSounds.DefaultFor(s))));
 
-    public string? For(SoundSlot slot) => _picks.GetValueOrDefault(slot);
+    public string? For(SoundSlot slot) =>
+        _picks.GetValueOrDefault(slot) is { } id && !_library.Has(id) ? ShippedSounds.DefaultFor(slot) : _picks.GetValueOrDefault(slot);
 
     public void Set(SoundSlot slot, string? id) => _picks[slot] = id;
 }

@@ -301,16 +301,17 @@ public sealed class AppSettings : IAppSettings
                     return null;
                 });
 
-        // A slot's sound the Sounds page picks (#306): by the name its picker shows, or None.
-        IReadOnlyList<string> soundNames = ["None", .. ShippedSounds.All.Select(s => s.Name)];
+        // A slot's sound the Sounds page picks (#306): by the name its picker shows, the user's own too (#307), or None.
+        List<string> SoundNames() => [.. S.SoundChoices.Select(c => c.Name)];
         Entry Sound(string name, string description, string[] aliases, Func<string> get, Action<string> set) =>
-            new(new(name, Title(SettingsPage.Sounds), description, soundNames), SettingsPage.Sounds, aliases,
-                () => ShippedSounds.All.FirstOrDefault(s => s.Id == get())?.Name ?? "None", v =>
+            new(new(name, Title(SettingsPage.Sounds), description, null), SettingsPage.Sounds, aliases,
+                () => S.SoundChoices.FirstOrDefault(c => c.Id == get())?.Name ?? "None", v =>
                 {
-                    var picked = OneOf(name, v, soundNames);
-                    set(ShippedSounds.All.FirstOrDefault(s => s.Name == picked)?.Id ?? SettingsViewModel.NoSound);
+                    var picked = OneOf(name, v, SoundNames());
+                    set(S.SoundChoices.First(c => c.Name == picked).Id);
                     return null;
-                });
+                },
+                SoundNames);
 
         // A time the Yard page offers in a box, worded as there, or none: "10", "10 minutes", "off", "0". Said with a
         // unit, it is that long: "1 hour" is no "1 minute", and 60 minutes are one hour.

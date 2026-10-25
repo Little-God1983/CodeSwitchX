@@ -8,5 +8,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Listening\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- tone.mp3: a second of a 440 Hz tone at half scale, encoded by Media Foundation, which the import test reads (#307). -->
+    <None Include="Audio\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
