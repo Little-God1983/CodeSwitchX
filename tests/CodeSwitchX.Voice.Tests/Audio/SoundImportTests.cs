@@ -92,7 +92,9 @@ public sealed class SoundImportTests : IDisposable
         var length = SoundImport.Import(source, Target);
 
         SoundImport.NoticeFor(length).ShouldBeNull();
-        Peak(Read(Target).Samples[^220..]).ShouldBeGreaterThan(0.4, "not faded: nothing of it was cut that the ear would miss");
+        var samples = Read(Target).Samples;
+        (samples.Length / 44100.0).ShouldBe(3.04, 0.005, "kept whole: cut, its tail would click");
+        Peak(samples[^220..]).ShouldBeGreaterThan(0.4, "not faded");
     }
 
     [Fact]

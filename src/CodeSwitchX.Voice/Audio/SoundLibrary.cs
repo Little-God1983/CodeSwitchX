@@ -50,7 +50,16 @@ public sealed class SoundLibrary
         }
     }
 
-    public bool Has(string id) => ShippedSounds.Has(id) || UserLength(id) is not null;
+    public bool Has(string id) => ShippedSounds.Has(id) || (Listed(id) && UserLength(id) is not null);
+
+    /// <summary>Whether the index names the sound: one removed whose file could not be deleted is not in the pool.</summary>
+    private bool Listed(string id)
+    {
+        lock (_lock)
+        {
+            return _user.Any(u => u.Id == id);
+        }
+    }
 
     /// <summary>How long the sound plays; zero for one not in the pool.</summary>
     public TimeSpan LengthOf(string id)
@@ -123,19 +132,29 @@ public sealed class SoundLibrary
         Directory.CreateDirectory(directory);
         var id = UserPrefix + Guid.NewGuid().ToString("N")[..8];
         var length = SoundImport.Import(source, PathOf(id));
-        var taken = All.Select(s => s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Never as None, nor as another sound once case and punctuation are set aside: Raven picks them by name too.
+        var taken = All.Select(s => NameKey(s.Name)).Append(NameKey("None")).ToHashSet(StringComparer.Ordinal);
         SoundEntry sound;
         lock (_lock)
         {
-            taken.UnionWith(_user.Select(u => u.Name)); // added meanwhile
+            taken.UnionWith(_user.Select(u => NameKey(u.Name))); // added meanwhile
             var name = Path.GetFileNameWithoutExtension(source);
-            for (var n = 2; taken.Contains(name); n++)
+            for (var n = 2; taken.Contains(NameKey(name)); n++)
             {
                 name = $"{Path.GetFileNameWithoutExtension(source)} ({n})";
             }
 
+            try
+            {
+                WriteIndex([.. _user, new UserSound(id, name)]);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                TryDelete(PathOf(id)); // not kept: nothing of it stays
+                throw new SoundImportException($"it could not be kept ({ex.Message.TrimEnd('.')}).", ex);
+            }
+
             _user.Add(new UserSound(id, name));
-            WriteIndex();
             sound = new SoundEntry(id, name, LengthOf(id), Shipped: false);
         }
 
@@ -148,25 +167,34 @@ public sealed class SoundLibrary
     {
         lock (_lock)
         {
-            if (_user.RemoveAll(u => u.Id == id) == 0)
+            if (_user.All(u => u.Id != id))
             {
                 return;
             }
 
-            WriteIndex();
+            WriteIndex([.. _user.Where(u => u.Id != id)]);
+            _user.RemoveAll(u => u.Id == id);
         }
 
-        try
-        {
-            File.Delete(PathOf(id));
-        }
-        catch (IOException)
-        {
-            // Held by a play that has not let go yet: out of the index, it is no longer in the pool.
-        }
-
+        TryDelete(PathOf(id)); // held or read-only, it stays on disk, but out of the index it is no longer in the pool
         Changed?.Invoke(this, EventArgs.Empty);
     }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort.
+        }
+    }
+
+    /// <summary>A name as Raven matches it: lower case, letters and digits, one space between words.</summary>
+    private static string NameKey(string name) =>
+        string.Join(' ', System.Text.RegularExpressions.Regex.Split(name.ToLowerInvariant(), @"[^\p{L}\p{Nd}]+").Where(w => w.Length > 0));
 
     private static bool IsUser(string id) => id.StartsWith(UserPrefix, StringComparison.Ordinal) && id.Length > UserPrefix.Length
         && id[UserPrefix.Length..].All(char.IsAsciiHexDigit);
@@ -189,7 +217,21 @@ public sealed class SoundLibrary
         }
     }
 
-    private void WriteIndex() => File.WriteAllText(IndexFile, JsonSerializer.Serialize(_user));
+    /// <summary>Writes the index whole or not at all: a write cut off (the app killed, the power gone) leaves the one before.</summary>
+    private void WriteIndex(List<UserSound> sounds)
+    {
+        var part = IndexFile + ".tmp";
+        try
+        {
+            File.WriteAllText(part, JsonSerializer.Serialize(sounds));
+            File.Move(part, IndexFile, overwrite: true);
+        }
+        catch
+        {
+            TryDelete(part);
+            throw;
+        }
+    }
 
     private sealed record UserSound(string Id, string Name);
 }

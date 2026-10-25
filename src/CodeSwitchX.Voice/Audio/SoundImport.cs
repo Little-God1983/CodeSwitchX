@@ -120,7 +120,8 @@ public static class SoundImport
             provider = new WdlResamplingSampleProvider(provider, Rate);
         }
 
-        var most = (int)(Rate * MaximumLength.TotalSeconds);
+        // A file within the slack is kept whole: cut a few milliseconds short of its end, it would click.
+        var most = (int)(Rate * (IsLong(reader.TotalTime) ? MaximumLength : MaximumLength + Slack).TotalSeconds);
         var samples = new float[most];
         var count = 0;
         int read;

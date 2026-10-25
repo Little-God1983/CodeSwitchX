@@ -384,6 +384,24 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.RavenSoundFinish, "marimba-rise", Arg.Any<CancellationToken>());
     }
 
+    /// <summary>Review round 1 of #307: a picked sound whose file was deleted outside the app puts its slot back to the default, not to silence.</summary>
+    [Fact]
+    public async Task A_picked_sound_whose_file_went_missing_puts_its_slot_back_to_the_default()
+    {
+        await _vm.LoadAsync(CancellationToken.None);
+        _files.Next = Picked("Ding.wav");
+        _vm.AddSoundCommand.Execute(null);
+        var id = _vm.UserSounds.Single().Id;
+        _vm.RavenSoundFail = id;
+        File.Delete(Path.Combine(_paths.SoundsDirectory, id + ".wav")); // in Explorer
+
+        _files.Next = Picked("Dong.wav");
+        _vm.AddSoundCommand.Execute(null); // the pool changes: the missing one leaves the pickers
+
+        _vm.RavenSoundFail.ShouldBe("marimba-fall");
+        _vm.SoundChoices.ShouldNotContain(c => c.Id == id);
+    }
+
     [Fact]
     public async Task A_stored_pick_of_a_user_sound_loads()
     {

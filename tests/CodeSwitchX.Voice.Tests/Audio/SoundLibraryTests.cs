@@ -126,6 +126,68 @@ public sealed class SoundLibraryTests : IDisposable
         picks.For(SoundSlot.Fails).ShouldBe(ShippedSounds.DefaultFor(SoundSlot.Fails));
     }
 
+    /// <summary>Review round 1 of #307: a sound whose file is held or read-only when removed is out of the pool all the same, and nothing throws.</summary>
+    [Fact]
+    public void Removing_a_sound_whose_file_cannot_be_deleted_takes_it_out_of_the_pool()
+    {
+        var library = new SoundLibrary(Folder);
+        var held = library.Add(Picked("Held.wav")).Sound;
+        var locked = library.Add(Picked("Locked.wav")).Sound;
+        var lockedFile = Path.Combine(Folder, locked.Id + ".wav");
+        File.SetAttributes(lockedFile, FileAttributes.ReadOnly);
+        var changes = 0;
+        library.Changed += (_, _) => changes++;
+
+        using (File.Open(Path.Combine(Folder, held.Id + ".wav"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            library.Remove(held.Id);
+        }
+
+        library.Remove(locked.Id);
+        File.SetAttributes(lockedFile, FileAttributes.Normal);
+
+        (library.Has(held.Id), library.Has(locked.Id)).ShouldBe((false, false));
+        library.All.ShouldNotContain(s => !s.Shipped);
+        changes.ShouldBe(2);
+    }
+
+    /// <summary>Review round 1 of #307: an index that cannot be written keeps nothing half added: no entry, no file.</summary>
+    [Fact]
+    public void A_sound_whose_index_cannot_be_written_is_not_added()
+    {
+        var library = new SoundLibrary(Folder);
+        var first = library.Add(Picked("Ding.wav")).Sound;
+        var index = Path.Combine(Folder, "index.json");
+        File.SetAttributes(index, FileAttributes.ReadOnly);
+        try
+        {
+            Should.Throw<SoundImportException>(() => library.Add(Picked("Dong.wav")));
+        }
+        finally
+        {
+            File.SetAttributes(index, FileAttributes.Normal);
+        }
+
+        library.All.Where(s => !s.Shipped).Select(s => s.Id).ShouldBe([first.Id]);
+        Directory.GetFiles(Folder, "*.wav").Length.ShouldBe(1);
+        Directory.GetFiles(Folder, "*.tmp").ShouldBeEmpty();
+    }
+
+    /// <summary>Review round 1 of #307: no sound is named as None, nor as another sound once punctuation is set aside.</summary>
+    [Fact]
+    public void A_sound_never_takes_the_name_of_none_or_of_another_sound()
+    {
+        var library = new SoundLibrary(Folder);
+
+        var none = library.Add(Picked("none.wav")).Sound;
+        library.Add(Picked("Ding.wav"));
+        library.Add(Tone(Path.Combine(_root, "other"), "Ding.wav", 0.5)); // Ding (2)
+        var spaced = library.Add(Picked("Ding 2.wav")).Sound;
+
+        none.Name.ShouldBe("none (2)");
+        spaced.Name.ShouldBe("Ding 2 (2)");
+    }
+
     [Fact]
     public void A_broken_index_starts_empty()
     {

@@ -760,6 +760,15 @@ public sealed partial class SettingsViewModel : ObservableObject
     private void ShowSounds()
     {
         List<SoundChoice> wanted = [new(NoSound, "None"), .. _library.All.Select(s => new SoundChoice(s.Id, s.Name))];
+        // A slot whose sound left the pool (its file deleted outside the app) goes back to its default first: taken out of the
+        // pickers while picked, its picker would write an empty pick back into it.
+        string Kept(string pick, SoundSlot slot) => wanted.Any(c => c.Id == pick) ? pick : ShippedSounds.DefaultFor(slot);
+        RavenSoundStart = Kept(RavenSoundStart, SoundSlot.StartsWorking);
+        RavenSoundFinish = Kept(RavenSoundFinish, SoundSlot.Finishes);
+        RavenSoundQuestion = Kept(RavenSoundQuestion, SoundSlot.AsksQuestion);
+        RavenSoundPermission = Kept(RavenSoundPermission, SoundSlot.AsksPermission);
+        RavenSoundFail = Kept(RavenSoundFail, SoundSlot.Fails);
+        RavenSoundName = Kept(RavenSoundName, SoundSlot.HearsName);
         Follow(SoundChoices, wanted);
         Follow(UserSounds, [.. _library.All.Where(s => !s.Shipped).Select(s => new UserSoundRow(s.Id, s.Name,
             s.Length.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s"))]);
