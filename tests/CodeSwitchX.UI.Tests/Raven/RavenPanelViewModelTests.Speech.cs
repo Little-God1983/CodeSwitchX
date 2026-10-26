@@ -11,11 +11,41 @@ public sealed partial class RavenPanelViewModelTests
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!condition())
+        while (!Holds(condition))
         {
             DateTime.UtcNow.ShouldBeLessThan(deadline, "the condition never came true");
             await Task.Delay(5);
         }
+    }
+
+    /// <summary>
+    /// Whether the condition holds now. The tests' dispatcher runs the panel's UI work on the thread that asks for it, so a
+    /// list the condition reads (the log) may change under the read: that is not yet, not a failure (#321).
+    /// </summary>
+    private static bool Holds(Func<bool> condition)
+    {
+        try
+        {
+            return condition();
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Collection was modified", StringComparison.Ordinal))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// #321: the tests' dispatcher runs the panel's UI work on the thread that asks for it, so the panel can add to its log
+    /// while a test reads it: a list changed under the read is not there yet, and is looked at again.
+    /// </summary>
+    [Fact]
+    public async Task Until_looks_again_at_a_list_that_changed_while_it_was_read()
+    {
+        var reads = 0;
+
+        await Until(() => ++reads == 1 ? throw new InvalidOperationException("Collection was modified; enumeration operation may not execute.") : true);
+
+        reads.ShouldBe(2);
     }
 
     [Fact]

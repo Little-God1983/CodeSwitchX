@@ -14,6 +14,27 @@
     <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
     <infra:EnumIsConverter x:Key="EnumIs" />
 
+    <!-- Keyboard focus only (mouse clicks draw none): a ring in the voice colour around the control. Above every
+         style that uses them: a StaticResource finds only what is defined before it (#321). -->
+    <Style x:Key="FocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Rectangle Margin="-3" RadiusX="8" RadiusY="8" Stroke="#62D0E8" StrokeThickness="2" SnapsToDevicePixels="True" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="RoundFocusRing">
+      <Setter Property="Control.Template">
+        <Setter.Value>
+          <ControlTemplate>
+            <Ellipse Margin="-4" Stroke="#62D0E8" StrokeThickness="2" />
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <!-- One half of the Push to talk | Open mic switch: a radio button drawn as a pill. -->
     <Style x:Key="ModeSwitch" TargetType="RadioButton">
       <Setter Property="FontSize" Value="12" />
@@ -50,26 +71,6 @@
       <Setter Property="CornerRadius" Value="9" />
       <Setter Property="Padding" Value="8,1,8,2" />
       <Setter Property="Margin" Value="0,0,6,0" />
-    </Style>
-
-    <!-- Keyboard focus only (mouse clicks draw none): a ring in the voice colour around the control. -->
-    <Style x:Key="FocusRing">
-      <Setter Property="Control.Template">
-        <Setter.Value>
-          <ControlTemplate>
-            <Rectangle Margin="-3" RadiusX="8" RadiusY="8" Stroke="#62D0E8" StrokeThickness="2" SnapsToDevicePixels="True" />
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-    <Style x:Key="RoundFocusRing">
-      <Setter Property="Control.Template">
-        <Setter.Value>
-          <ControlTemplate>
-            <Ellipse Margin="-4" Stroke="#62D0E8" StrokeThickness="2" />
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
     </Style>
 
     <!-- The chevrons: a quiet square that lights up under the mouse. -->
