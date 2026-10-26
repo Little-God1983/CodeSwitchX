@@ -11,11 +11,73 @@ public sealed partial class RavenPanelViewModelTests
     private static async Task Until(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!condition())
+        while (!Holds(condition))
         {
             DateTime.UtcNow.ShouldBeLessThan(deadline, "the condition never came true");
             await Task.Delay(5);
         }
+    }
+
+    /// <summary>
+    /// Whether the condition holds now. The tests' dispatcher runs the panel's UI work on the thread that asks for it, so a
+    /// list the condition reads (the log) may change under the read: that is not yet, not a failure (#321). Not when the
+    /// panel's own code was reading: that is the panel's bug, and fails the test.
+    /// </summary>
+    private static bool Holds(Func<bool> condition)
+    {
+        try
+        {
+            return condition();
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Collection was modified", StringComparison.Ordinal) && !ReadByThePanel(ex))
+        {
+            return false;
+        }
+    }
+
+    /// <summary>The panel's own code is on the way to the read that failed.</summary>
+    private static bool ReadByThePanel(Exception ex) =>
+        new System.Diagnostics.StackTrace(ex).GetFrames().Any(f => f.GetMethod()?.DeclaringType?.Assembly == typeof(RavenPanelViewModel).Assembly);
+
+    /// <summary>
+    /// #321: the tests' dispatcher runs the panel's UI work on the thread that asks for it, so the panel can add to its log
+    /// while a test reads it: a list changed under the read is not there yet, and is looked at again.
+    /// </summary>
+    [Fact]
+    public async Task Until_looks_again_at_a_list_that_changed_while_it_was_read()
+    {
+        var reads = 0;
+
+        await Until(() => ++reads == 1 ? throw new InvalidOperationException("Collection was modified; enumeration operation may not execute.") : true);
+
+        reads.ShouldBe(2);
+    }
+
+    /// <summary>
+    /// The panel's own code changing a list it reads is a bug of the panel's, not a test reading while the panel writes: it
+    /// is not looked at again, it fails the test (review of #321).
+    /// </summary>
+    [Fact]
+    public async Task Until_lets_a_list_changed_under_the_panel_s_own_read_fail_the_test()
+    {
+        var thrown = await Should.ThrowAsync<InvalidOperationException>(() => Until(() => RavenPanelViewModel.Pressing(new ChangedWhileRead()).Count > 0));
+
+        thrown.Message.ShouldStartWith("Collection was modified");
+    }
+
+    /// <summary>A list that changes as soon as it is read, as one the panel changed while it read it would.</summary>
+    private sealed class ChangedWhileRead : IEnumerable<ChatNewsLine>
+    {
+        public IEnumerator<ChatNewsLine> GetEnumerator()
+        {
+            var list = new List<ChatNewsLine>();
+            using var reading = list.GetEnumerator();
+            list.Add(null!);
+            reading.MoveNext(); // throws: the list changed under the read
+            yield break;
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     [Fact]
