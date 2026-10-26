@@ -13,27 +13,49 @@ public sealed partial class XamlResourceOrderTests
     [Fact]
     public void Every_resource_a_view_defines_itself_is_defined_above_its_first_use()
     {
-        var views = Directory.EnumerateFiles(SourceOfUi(), "*.xaml", SearchOption.AllDirectories)
-            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        var ui = SourceOfUi();
+        var views = Directory.EnumerateFiles(ui, "*.xaml", SearchOption.AllDirectories)
+            .Where(f => Path.GetRelativePath(ui, f).Split(Path.DirectorySeparatorChar) is not ["bin" or "obj", ..])
             .ToList();
         views.ShouldNotBeEmpty();
 
-        var late = new List<string>();
-        foreach (var view in views)
-        {
-            var xaml = File.ReadAllText(view);
-            var defined = Key().Matches(xaml).GroupBy(m => m.Groups[1].Value).ToDictionary(g => g.Key, g => g.Min(m => m.Index));
-            foreach (Match use in Use().Matches(xaml))
-            {
-                if (defined.TryGetValue(use.Groups[1].Value, out var at) && at > use.Index)
-                {
-                    late.Add($"{Path.GetFileName(view)}: {use.Groups[1].Value} used on line {Line(xaml, use.Index)}, defined on line {Line(xaml, at)}");
-                }
-            }
-        }
+        var late = views.SelectMany(view => Late(File.ReadAllText(view)).Select(found => $"{Path.GetFileName(view)}: {found}")).ToList();
 
         late.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("<Style x:Key=\"Pill\"><Setter Value=\"{StaticResource Ring}\" /></Style>\n<Style x:Key=\"Ring\" />", "Ring used on line 1, defined on line 2")]
+    [InlineData("<Style x:Key=\"Pill\"><Setter Value=\"{StaticResource ResourceKey=Ring}\" /></Style>\n<Style x:Key=\"Ring\" />",
+        "Ring used on line 1, defined on line 2")]
+    [InlineData("<Setter.Value><StaticResource ResourceKey=\"Ring\" /></Setter.Value>\n<Style x:Key=\"Ring\" />", "Ring used on line 1, defined on line 2")]
+    [InlineData("<!-- once: x:Key=\"Ring\" -->\n<Setter Value=\"{StaticResource Ring}\" />\n<Style x:Key=\"Ring\" />", "Ring used on line 2, defined on line 3")]
+    [InlineData("<!-- the pills take {StaticResource Ring} -->\n<Style x:Key=\"Ring\" />\n<Setter Value=\"{StaticResource Ring}\" />", null)]
+    [InlineData("<Style x:Key=\"Ring\" />\n<Setter Value=\"{StaticResource Ring}\" />\n<Setter Value=\"{StaticResource FromTheApp}\" />", null)]
+    public void A_late_resource_is_found_in_every_way_it_is_written_and_not_in_a_comment(string xaml, string? late)
+    {
+        var found = Late(xaml);
+
+        if (late is null)
+        {
+            found.ShouldBeEmpty();
+        }
+        else
+        {
+            found.ShouldBe([late]);
+        }
+    }
+
+    /// <summary>Each resource the XAML defines itself and uses above its definition; comments are no XAML.</summary>
+    internal static List<string> Late(string xaml)
+    {
+        // Blanked, not cut: the lines stay where they are.
+        var text = Comment().Replace(xaml, c => NotNewLine().Replace(c.Value, " "));
+        var defined = Key().Matches(text).GroupBy(m => m.Groups[1].Value).ToDictionary(g => g.Key, g => g.Min(m => m.Index));
+        return [.. Use().Matches(text)
+            .Select(use => (Key: use.Groups["key"].Value, use.Index))
+            .Where(use => defined.TryGetValue(use.Key, out var at) && at > use.Index)
+            .Select(use => $"{use.Key} used on line {Line(text, use.Index)}, defined on line {Line(text, defined[use.Key])}")];
     }
 
     private static int Line(string text, int index) => text.AsSpan(0, index).Count('\n') + 1;
@@ -56,6 +78,13 @@ public sealed partial class XamlResourceOrderTests
     [GeneratedRegex("x:Key=\"([^\"]+)\"")]
     private static partial Regex Key();
 
-    [GeneratedRegex("""\{StaticResource\s+([^}\s]+)\s*\}""")]
+    /// <summary>The short form, <c>{StaticResource Ring}</c>; the long one, <c>{StaticResource ResourceKey=Ring}</c>; the element, <c>&lt;StaticResource ResourceKey="Ring" /&gt;</c>.</summary>
+    [GeneratedRegex("\\{StaticResource\\s+(?:ResourceKey\\s*=\\s*)?(?<key>[^}\\s,]+)[^}]*\\}|<StaticResource\\s+ResourceKey=\"(?<key>[^\"]+)\"")]
     private static partial Regex Use();
+
+    [GeneratedRegex("<!--.*?-->", RegexOptions.Singleline)]
+    private static partial Regex Comment();
+
+    [GeneratedRegex("[^\\n]")]
+    private static partial Regex NotNewLine();
 }
