@@ -34,7 +34,7 @@ public interface IChatCompactor
 /// chat's own id, and would tell CodeSwitchX that the chat ended while its tab still runs. The user's own hooks (a
 /// PreCompact one) do not run for it either.
 /// </summary>
-/// <param name="findClaude">The <c>claude.exe</c> to run (<see cref="ClaudeCliLocator"/>); null when none is installed.</param>
+/// <param name="findClaude">The <c>claude.exe</c> to run (the package's <c>ClaudeCliLocator</c>); null when none is installed.</param>
 public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time, ILogger<ChatCompactor> logger)
     : IChatCompactor
 {
