@@ -15,4 +15,19 @@ public static class SecretFile
         security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
         new FileInfo(file).SetAccessControl(security);
     }
+
+    /// <summary>
+    /// A folder whose files hold secrets: readable by the current user only, and so is everything made in it, which
+    /// inherits that (the brains' processes keep their MCP configs with the token in such a folder, #314).
+    /// </summary>
+    public static void RestrictFolderToCurrentUser(string folder)
+    {
+        var user = WindowsIdentity.GetCurrent().User ?? throw new InvalidOperationException("No current user SID.");
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.SetOwner(user);
+        security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(folder).SetAccessControl(security);
+    }
 }

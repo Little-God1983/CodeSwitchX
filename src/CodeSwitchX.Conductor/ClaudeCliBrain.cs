@@ -162,6 +162,9 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The chat's conversation was taken from its store: before the first use only. Guarded by <see cref="_prepareGate"/>.</summary>
     private bool _sessionLoaded;
 
+    /// <summary>The folder the processes keep their files in was made the user's alone. Guarded by <see cref="_prepareGate"/>.</summary>
+    private bool _folderGuarded;
+
     /// <summary>Set once the app disposes the brain.</summary>
     private volatile bool _disposed;
 
@@ -275,6 +278,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             yield break;
         }
 
+        var turn = new Turn();
         var updates = answer.GetAsyncEnumerator(ct);
         try
         {
@@ -303,7 +307,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     yield break;
                 }
 
-                foreach (var e in Events(updates.Current))
+                foreach (var e in Events(updates.Current, turn))
                 {
                     yield return e;
                 }
@@ -389,6 +393,13 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             try
             {
                 Directory.CreateDirectory(_paths.RavenDirectory); // where it runs: the session refuses a folder that is not there
+                if (!_folderGuarded)
+                {
+                    // The session writes each process's MCP config, the token in it, into a folder of its own in there:
+                    // the user's alone, as mcp.json is.
+                    SecretFile.RestrictFolderToCurrentUser(Directory.CreateDirectory(McpDirectory(_paths)).FullName);
+                    _folderGuarded = true;
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -421,8 +432,18 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
     }
 
+    /// <summary>What a turn has done so far that it does only once.</summary>
+    private sealed class Turn
+    {
+        /// <summary>
+        /// The process was to be replaced for its Yard tools: a turn may report one process's tools twice (a cancelled
+        /// question's init, told with it, and its own), which is one try.
+        /// </summary>
+        public bool YardTried { get; set; }
+    }
+
     /// <summary>What an update of the answer tells the panel.</summary>
-    private IEnumerable<BrainEvent> Events(ChatResponseUpdate update)
+    private IEnumerable<BrainEvent> Events(ChatResponseUpdate update, Turn turn)
     {
         foreach (var content in update.Contents)
         {
@@ -444,7 +465,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
                     yield return new BrainTextEnded();
                     break;
                 case ClaudeCliInitContent init:
-                    foreach (var notice in Report(init))
+                    foreach (var notice in Report(init, turn))
                     {
                         yield return notice;
                     }
@@ -517,7 +538,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// A failure replaces the process after the turn, a few times in a row, since Claude Code does not connect again by
     /// itself. The teller and the summarizer have no tools to report on.
     /// </summary>
-    private List<BrainEvent> Report(ClaudeCliInitContent init)
+    private List<BrainEvent> Report(ClaudeCliInitContent init, Turn turn)
     {
         List<BrainEvent> notices = [];
         if (Toolless)
@@ -532,9 +553,10 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         }
         else if (problem.Length > 0)
         {
-            var retry = _yardRetries < MaxYardRetries;
-            if (retry)
+            var retry = turn.YardTried || _yardRetries < MaxYardRetries;
+            if (retry && !turn.YardTried)
             {
+                turn.YardTried = true;
                 _yardRetries++;
                 _session.RestartWhenIdle(); // after the turn, or once a chat's turn running on it has ended (#196)
             }

@@ -387,6 +387,40 @@ public sealed class ClaudeCliBrainTests : IDisposable
         _session.Restarts.ShouldBe(ClaudeCliBrain.MaxYardRetries, "Claude Code does not connect again by itself, but a few new processes are enough");
     }
 
+    /// <summary>
+    /// A question cancelled before its echo leaves its init to be told with the next turn, which tells its own too: the
+    /// same process's tools, reported twice, are one try, not two (review of #314).
+    /// </summary>
+    [Fact]
+    public async Task Tools_reported_twice_in_one_turn_count_as_one_try()
+    {
+        var brain = Brain();
+        Answer(Init(yard: "failed"), new ClaudeCliQuestionSentContent(), Init(yard: "failed"));
+
+        await AskAsync(brain);
+        _session.Restarts.ShouldBe(1);
+        await AskAsync(brain);
+
+        _session.Restarts.ShouldBe(ClaudeCliBrain.MaxYardRetries, "each new process gets its try");
+    }
+
+    [Fact]
+    public async Task The_folder_the_processes_keep_the_token_in_is_the_user_s_alone()
+    {
+        var brain = Brain();
+
+        await AskAsync(brain);
+
+        var folder = new DirectoryInfo(ClaudeCliBrain.McpDirectory(_paths));
+        var security = folder.GetAccessControl();
+        security.AreAccessRulesProtected.ShouldBeTrue("nothing inherited from above");
+        var rules = security.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+        rules.ShouldHaveSingleItem().IdentityReference.ShouldBe(System.Security.Principal.WindowsIdentity.GetCurrent().User);
+        rules[0].InheritanceFlags.ShouldBe(System.Security.AccessControl.InheritanceFlags.ContainerInherit
+            | System.Security.AccessControl.InheritanceFlags.ObjectInherit, "each process's folder and config inherit it");
+    }
+
     [Fact]
     public async Task Tools_still_connecting_are_no_failure_and_a_failure_after_they_worked_is_told_and_retried_again()
     {
