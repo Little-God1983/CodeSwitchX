@@ -6,7 +6,7 @@
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
     <!-- The shared Claude CLI package, from the local feed (nuget.config): Raven's brains run on its ClaudeCliSession (#314). -->
-    <PackageVersion Include="LittleGod.Llm.ClaudeCli" Version="[0.4.0]" />
+    <PackageVersion Include="LittleGod.Llm.ClaudeCli" Version="[0.6.0]" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
