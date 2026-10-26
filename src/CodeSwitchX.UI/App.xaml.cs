@@ -32,6 +32,7 @@ using CodeSwitchX.Voice;
 using CodeSwitchX.Voice.Audio;
 using CodeSwitchX.Voice.Dictation;
 using CodeSwitchX.Voice.Listening;
+using LittleGod.Llm.ClaudeCli;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
@@ -208,6 +209,7 @@ public partial class App : Application
 
         // Raven's brain, and the Yard it looks at through the MCP tools the Event API serves.
         services.AddSingleton<BrainSettings>();
+        // Only the compactor starts claude itself: the brains run on the shared package's session (#314).
         services.AddSingleton<IBrainProcessLauncher, BrainProcessLauncher>();
         // A brain per Raven chat, each with its conversation kept (and picked up again after a restart) and its tools on its
         // window; few run at a time. Chat 0's is the Yard's overview, which knows the window chats by their summaries only.
@@ -215,9 +217,8 @@ public partial class App : Application
         {
             var paths = sp.GetRequiredService<AppPaths>();
             var sessions = new BrainSessionFile(Path.Combine(paths.RavenDirectory, "sessions.json"));
-            ChatMcpConfig.Clear(Path.Combine(paths.RavenDirectory, "mcp")); // a crash left them; each brain writes its own
-            return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(),
-                () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
+            ChatMcpConfig.Reset(ClaudeCliBrain.McpDirectory(paths)); // a crash left them, and it is the user's alone; each process writes its own
+            return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
                 window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>(),
                 sp.GetRequiredService<AskedChats>()) { RestartSettle = TimeSpan.FromSeconds(1) });
         });
@@ -243,8 +244,7 @@ public partial class App : Application
             id => VsCodeChats.ConversationPathOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id), sp.GetRequiredService<TimeProvider>(),
             sp.GetRequiredService<ILogger<ChatSummaries>>()));
         static ClaudeCliBrain ToollessBrain(IServiceProvider sp, BrainRole role) => new(sp.GetRequiredService<AppPaths>(),
-            sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(),
-            sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
+            sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(), role);
         // Which chats run right now, and the name Raven's brain messages each by.
         services.AddSingleton<ClaudeLiveSessions>();
         // A chat that Raven's brain messages is told to ask the user, not Raven (#181); its brains run in Raven's folder.

@@ -4,7 +4,11 @@ using System.Threading.Channels;
 
 namespace CodeSwitchX.Conductor;
 
-/// <summary>A running <c>claude</c>: lines in on standard input, lines out of standard output.</summary>
+/// <summary>
+/// A running <c>claude</c>: lines in on standard input, lines out of standard output. Only the compactor still starts one
+/// itself (<see cref="ChatCompactor"/>): the brains run on the shared package's session (#314), whose launcher cannot set
+/// the <c>CLAUDE_CODE_ENTRYPOINT</c> the compactor needs yet (Little-God1983/LittleGod.Llm#10).
+/// </summary>
 public interface IBrainProcess : IDisposable
 {
     /// <summary>Standard output, line by line; completes when the process closes it, which it does as it exits.</summary>
