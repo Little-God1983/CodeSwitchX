@@ -71,17 +71,32 @@ public sealed class ChatBrainsTests : IDisposable
     }
 
     [Fact]
-    public void Configs_left_by_an_earlier_run_are_cleared()
+    public void Configs_left_by_an_earlier_run_are_cleared_as_the_app_starts()
     {
         var folder = ClaudeCliBrain.McpDirectory(_paths);
         Directory.CreateDirectory(Path.Combine(folder, "a1b2"));
         File.WriteAllText(Path.Combine(folder, Window3.ToString("N") + ".json"), "{}"); // as brains before #314 kept them
         File.WriteAllText(Path.Combine(folder, "a1b2", "mcp-config.json"), "{}"); // as a session's process keeps it
 
-        ChatMcpConfig.Clear(folder);
+        ChatMcpConfig.Reset(folder);
 
         Directory.GetFileSystemEntries(folder).ShouldBeEmpty("a crash leaves them, with the token in them");
-        ChatMcpConfig.Clear(Path.Combine(_paths.RavenDirectory, "none")); // no folder: nothing to do
+    }
+
+    [Fact]
+    public void The_folder_the_brains_processes_keep_the_token_in_is_made_and_the_user_s_alone()
+    {
+        var folder = ClaudeCliBrain.McpDirectory(_paths);
+
+        ChatMcpConfig.Reset(folder);
+
+        var security = new DirectoryInfo(folder).GetAccessControl();
+        security.AreAccessRulesProtected.ShouldBeTrue("nothing inherited from above");
+        var rules = security.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+        rules.ShouldHaveSingleItem().IdentityReference.ShouldBe(System.Security.Principal.WindowsIdentity.GetCurrent().User);
+        rules[0].InheritanceFlags.ShouldBe(System.Security.AccessControl.InheritanceFlags.ContainerInherit
+            | System.Security.AccessControl.InheritanceFlags.ObjectInherit, "each process's folder and config inherit it");
     }
 
     [Fact]

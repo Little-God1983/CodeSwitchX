@@ -162,9 +162,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
     /// <summary>The chat's conversation was taken from its store: before the first use only. Guarded by <see cref="_prepareGate"/>.</summary>
     private bool _sessionLoaded;
 
-    /// <summary>The folder the processes keep their files in was made the user's alone. Guarded by <see cref="_prepareGate"/>.</summary>
-    private bool _folderGuarded;
-
     /// <summary>Set once the app disposes the brain.</summary>
     private volatile bool _disposed;
 
@@ -260,7 +257,7 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
         init => _options.RestartSettle = value;
     }
 
-    /// <summary>Where the brains' processes keep their MCP configs, which hold the token: cleared as the app starts (<see cref="ChatMcpConfig.Clear"/>).</summary>
+    /// <summary>Where the brains' processes keep their MCP configs, which hold the token: readied as the app starts (<see cref="ChatMcpConfig.Reset"/>).</summary>
     public static string McpDirectory(AppPaths paths) => Path.Combine(paths.RavenDirectory, "mcp");
 
     public IAsyncEnumerable<BrainEvent> AskAsync(string text, CancellationToken ct) =>
@@ -393,13 +390,6 @@ public sealed class ClaudeCliBrain : IConductorBrain, IDisposable
             try
             {
                 Directory.CreateDirectory(_paths.RavenDirectory); // where it runs: the session refuses a folder that is not there
-                if (!_folderGuarded)
-                {
-                    // The session writes each process's MCP config, the token in it, into a folder of its own in there:
-                    // the user's alone, as mcp.json is.
-                    SecretFile.RestrictFolderToCurrentUser(Directory.CreateDirectory(McpDirectory(_paths)).FullName);
-                    _folderGuarded = true;
-                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

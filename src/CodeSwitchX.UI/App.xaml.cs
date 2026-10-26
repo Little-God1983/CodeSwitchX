@@ -217,7 +217,7 @@ public partial class App : Application
         {
             var paths = sp.GetRequiredService<AppPaths>();
             var sessions = new BrainSessionFile(Path.Combine(paths.RavenDirectory, "sessions.json"));
-            ChatMcpConfig.Clear(ClaudeCliBrain.McpDirectory(paths)); // a crash left them; each process writes its own
+            ChatMcpConfig.Reset(ClaudeCliBrain.McpDirectory(paths)); // a crash left them, and it is the user's alone; each process writes its own
             return new ChatBrains(window => new ClaudeCliBrain(paths, sp.GetRequiredService<BrainSettings>(), sp.GetRequiredService<ILogger<ClaudeCliBrain>>(),
                 window is null ? BrainRole.Overview : BrainRole.Raven, BrainChat.Of(window, sessions), sp.GetRequiredService<UnaskedTurns>(),
                 sp.GetRequiredService<AskedChats>()) { RestartSettle = TimeSpan.FromSeconds(1) });

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeSwitchX.Core;
 using CodeSwitchX.Core.Yard;
 
 namespace CodeSwitchX.Conductor;
@@ -30,12 +31,23 @@ public static class ChatMcpConfig
     }
 
     /// <summary>
-    /// Deletes the configs in the folder, and the folders the brains' processes kept theirs in (#314): an earlier run that
-    /// crashed left them, the token in them. Each process writes its own again as it starts. Never throws; one that cannot
-    /// be deleted stays.
+    /// Readies the folder the brains' processes keep their MCP configs in (#314), as the app starts, before any brain runs:
+    /// deletes what an earlier run that crashed left there (configs, and the folders of the processes), the token in them,
+    /// and makes the folder the user's alone, as <c>mcp.json</c> is, which every process's folder and config inherit. Each
+    /// process writes its own again as it starts. Never throws; what cannot be deleted stays, and a folder whose access
+    /// cannot be set keeps its own.
     /// </summary>
-    public static void Clear(string folder)
+    public static void Reset(string folder)
     {
+        try
+        {
+            Directory.CreateDirectory(folder);
+            SecretFile.RestrictFolderToCurrentUser(folder);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or PlatformNotSupportedException)
+        {
+        }
+
         try
         {
             if (!Directory.Exists(folder))
