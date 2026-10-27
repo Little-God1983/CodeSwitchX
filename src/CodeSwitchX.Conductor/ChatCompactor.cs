@@ -65,6 +65,12 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
     /// <param name="what">What the command does to the chat, for what is said: "compact".</param>
     private async Task RunAsync(string sessionId, string folder, string command, string what, string done, string doing, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            // The package would resume it in a folder of its own, where Claude Code finds no conversation of it.
+            throw new YardActionException($"CodeSwitchX does not know the folder the chat runs in, so it cannot {what} it.");
+        }
+
         var options = new ChatOptions { ConversationId = sessionId }.WithClaudeCliSlashCommand().WithClaudeCli(c =>
         {
             c.WorkingDirectory = folder;
@@ -74,6 +80,7 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
         using var limit = new CancellationTokenSource(Limit, time);
         using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, limit.Token);
         string why;
+        Exception? failure = null;
         try
         {
             var response = await claude.GetResponseAsync([new ChatMessage(ChatRole.User, command)], options, both.Token).ConfigureAwait(false);
@@ -90,8 +97,10 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
             logger.LogWarning("{Doing} chat {Id} took longer than {Limit}; stopped", doing, sessionId, Limit);
             throw new YardActionException($"{doing} the chat took longer than {Limit.TotalMinutes:0} minutes and was stopped; it is as it was.");
         }
-        catch (ClaudeCliSessionGoneException)
+        catch (ClaudeCliSessionGoneException ex)
         {
+            // Logged with Claude Code's own words: the package says gone for any failure before the resume began.
+            failure = ex;
             why = "it no longer has the chat's conversation.";
         }
         catch (LlmException ex)
@@ -99,7 +108,7 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
             why = ex.UserMessage.StartsWith(TheCli, StringComparison.Ordinal) ? "it " + ex.UserMessage[TheCli.Length..] : ex.UserMessage;
         }
 
-        logger.LogWarning("{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
+        logger.LogWarning(failure, "{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
         throw new YardActionException($"Claude Code did not {what} the chat: {why}");
     }
 

@@ -2,6 +2,7 @@ using CodeSwitchX.Core.Yard;
 using LittleGod.Llm.Abstractions;
 using LittleGod.Llm.ClaudeCli;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -72,6 +73,36 @@ public sealed class ChatCompactorTests
             .ShouldBe("Claude Code did not compact the chat: it no longer has the chat's conversation.");
     }
 
+    [Fact]
+    public async Task A_chat_whose_conversation_is_gone_logs_Claude_Code_s_own_reason()
+    {
+        var log = new ListLogger();
+        _claude.Failure = new ClaudeCliSessionGoneException(Chat, "No conversation found with session ID: " + Chat);
+
+        await Should.ThrowAsync<YardActionException>(() => new ChatCompactor(_claude, _time, log).CompactAsync(Chat, @"E:\Repos\App", null, Ct));
+
+        log.Lines.ShouldContain(l => l.Contains("No conversation found with session ID"), "the package says gone for any failure before the resume starts");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task A_chat_in_no_known_folder_is_not_resumed_somewhere_else(string folder)
+    {
+        (await Should.ThrowAsync<YardActionException>(() => Compactor().NameAsync(Chat, folder, "Fix", Ct))).Message
+            .ShouldBe("CodeSwitchX does not know the folder the chat runs in, so it cannot name it.");
+        _claude.Calls.ShouldBeEmpty("the package would resume it in its own folder, where Claude Code finds no conversation");
+    }
+
+    [Fact]
+    public async Task A_name_Claude_Code_refuses_says_so()
+    {
+        _claude.Failure = new LlmException("error: something broke", ClaudeCliChatClient.ProviderKey);
+
+        (await Should.ThrowAsync<YardActionException>(() => Compactor().NameAsync(Chat, @"E:\Repos\App", "Fix", Ct))).Message
+            .ShouldBe("Claude Code did not name the chat: error: something broke");
+    }
+
     [Theory]
     [InlineData("Not enough messages to compact.", "Claude Code did not compact the chat: Not enough messages to compact.")]
     [InlineData("API Error: 529 Overloaded", "Claude Code did not compact the chat: API Error: 529 Overloaded")]
@@ -127,6 +158,19 @@ public sealed class ChatCompactorTests
         await stop.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => compact);
+    }
+
+    /// <summary>Keeps each line logged, with its exception's message.</summary>
+    private sealed class ListLogger : ILogger<ChatCompactor>
+    {
+        public List<string> Lines { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Lines.Add(formatter(state, exception) + (exception is null ? "" : " " + exception.Message));
     }
 
     /// <summary>The package's client as the compactor sees it: it answers each call as a slash command would.</summary>
