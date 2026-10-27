@@ -209,8 +209,6 @@ public partial class App : Application
 
         // Raven's brain, and the Yard it looks at through the MCP tools the Event API serves.
         services.AddSingleton<BrainSettings>();
-        // Only the compactor starts claude itself: the brains run on the shared package's session (#314).
-        services.AddSingleton<IBrainProcessLauncher, BrainProcessLauncher>();
         // A brain per Raven chat, each with its conversation kept (and picked up again after a restart) and its tools on its
         // window; few run at a time. Chat 0's is the Yard's overview, which knows the window chats by their summaries only.
         services.AddSingleton(sp =>
@@ -274,8 +272,8 @@ public partial class App : Application
             id => VsCodeChats.HasConversation(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
             sp.GetRequiredService<ClaudeLiveSessions>().RunsOutsideVsCode,
             sp.GetRequiredService<AppPaths>().StartSettingsDirectory,
-            // Claude Code compacts a conversation whose tab is closed (#226).
-            new ChatCompactor(sp.GetRequiredService<IBrainProcessLauncher>(), () => ClaudeCliLocator.Default().Find(), sp.GetRequiredService<TimeProvider>(),
+            // Claude Code compacts a conversation whose tab is closed (#226), through the shared package (#324).
+            new ChatCompactor(new ClaudeCliChatClient(ChatCompactor.Options()), sp.GetRequiredService<TimeProvider>(),
                 sp.GetRequiredService<ILogger<ChatCompactor>>()),
             id => VsCodeChats.StartOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id),
             sp.GetRequiredService<TimeProvider>(), sp.GetRequiredService<ILogger<VsCodeChats>>()));
