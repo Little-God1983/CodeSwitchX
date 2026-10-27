@@ -125,5 +125,5 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
     private static string OneLine(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string FirstLine(string text) =>
-        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? text;
+        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "it gave no reason.";
 }

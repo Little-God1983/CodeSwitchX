@@ -123,6 +123,7 @@ public sealed class ChatCompactorTests
     [InlineData("The Claude CLI call was interrupted.", "Claude Code did not compact the chat: The Claude CLI call was interrupted.")]
     [InlineData("Error: spawn failed\n    at resume (cli.js:10:3)\n    at main (cli.js:2:1)", "Claude Code did not compact the chat: Error: spawn failed")]
     [InlineData("\n  Not enough messages to compact.\n", "Claude Code did not compact the chat: Not enough messages to compact.")]
+    [InlineData(" \n  \n", "Claude Code did not compact the chat: it gave no reason.")]
     public async Task A_compaction_Claude_Code_refuses_says_why_in_its_first_line(string reason, string said)
     {
         _claude.Failure = new LlmException(reason, ClaudeCliChatClient.ProviderKey);
