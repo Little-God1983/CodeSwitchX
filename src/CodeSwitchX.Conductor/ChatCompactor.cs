@@ -1,5 +1,7 @@
-using System.Text.Json;
 using CodeSwitchX.Core.Yard;
+using LittleGod.Llm.Abstractions;
+using LittleGod.Llm.ClaudeCli;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Conductor;
@@ -26,20 +28,32 @@ public interface IChatCompactor
 }
 
 /// <summary>
-/// Claude Code compacts it, headless: <c>claude -p "/compact …" --resume &lt;id&gt;</c> in the chat's folder, which writes
-/// the compact boundary and the summary into the conversation as the tab's own <c>/compact</c> does (spike, 2026-10-08).
-/// It runs as VS Code's Claude Code (<c>CLAUDE_CODE_ENTRYPOINT</c>), which keeps the chat in VS Code's session list, and
-/// with no model given: Claude Code's own, as for a chat in a new tab. Its JSON result says whether it compacted; one
-/// that fails says why there or on standard error. It runs with hooks off: its SessionStart and SessionEnd carry the
-/// chat's own id, and would tell CodeSwitchX that the chat ended while its tab still runs. The user's own hooks (a
-/// PreCompact one) do not run for it either.
+/// Claude Code compacts it, headless, through the shared package (#324): <c>claude -p --resume &lt;id&gt;</c> in the chat's
+/// folder with the command as its prompt, which writes the compact boundary and the summary into the conversation as the
+/// tab's own <c>/compact</c> does (spike, 2026-10-08). Only that conversation: one that is gone is not started again as a
+/// new session, which VS Code would list as a chat of its own. It runs as VS Code's Claude Code (<c>CLAUDE_CODE_ENTRYPOINT</c>),
+/// which keeps the chat in VS Code's session list, and with no model given: the chat's own. It runs with hooks off: its
+/// SessionStart and SessionEnd carry the chat's own id, and would tell CodeSwitchX that the chat ended while its tab still
+/// runs. The user's own hooks (a PreCompact one) do not run for it either.
 /// </summary>
-/// <param name="findClaude">The <c>claude.exe</c> to run (the package's <c>ClaudeCliLocator</c>); null when none is installed.</param>
-public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> findClaude, TimeProvider time, ILogger<ChatCompactor> logger)
-    : IChatCompactor
+/// <param name="claude">The package's <see cref="ClaudeCliChatClient"/>, made with <see cref="Options"/>.</param>
+public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger<ChatCompactor> logger) : IChatCompactor
 {
     /// <summary>How long a compaction may take: a short chat takes about 15 seconds, a long one a minute or two.</summary>
     internal static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
+
+    private const string TheCli = "The Claude CLI ";
+
+    /// <summary>
+    /// How the compactor's client runs Claude Code: with the user's settings, Claude Code's own prompt and no tool or MCP
+    /// flags, as before the package (#324).
+    /// </summary>
+    public static ClaudeCliOptions Options() => new()
+    {
+        Isolation = ClaudeIsolation.Custom,
+        DefaultSystemPrompt = null,
+        KeepApiKeyEnvironment = true,
+    };
 
     public Task CompactAsync(string sessionId, string folder, string? keep, CancellationToken ct) =>
         RunAsync(sessionId, folder, Command(keep), "compact", "Compacted", "Compacting", ct);
@@ -51,86 +65,46 @@ public sealed class ChatCompactor(IBrainProcessLauncher launcher, Func<string?> 
     /// <param name="what">What the command does to the chat, for what is said: "compact".</param>
     private async Task RunAsync(string sessionId, string folder, string command, string what, string done, string doing, CancellationToken ct)
     {
-        var claude = findClaude() ?? throw new YardActionException($"Claude Code is not installed where CodeSwitchX looks for it, so it cannot {what} the chat.");
-        var arguments = new[] { "-p", command, "--resume", sessionId, "--output-format", "json", "--settings", ClaudeCliBrain.NoHooks };
-        IBrainProcess process;
+        var options = new ChatOptions { ConversationId = sessionId }.WithClaudeCliSlashCommand().WithClaudeCli(c =>
+        {
+            c.WorkingDirectory = folder;
+            c.Environment = new Dictionary<string, string?> { ["CLAUDE_CODE_ENTRYPOINT"] = "claude-vscode" };
+            c.ExtraArguments = ["--settings", ClaudeCliBrain.NoHooks];
+        });
+        using var limit = new CancellationTokenSource(Limit, time);
+        using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, limit.Token);
+        string why;
         try
         {
-            process = launcher.Start(claude, arguments, folder, new Dictionary<string, string?> { ["CLAUDE_CODE_ENTRYPOINT"] = "claude-vscode" });
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
-        {
-            throw new YardActionException($"Claude Code did not start to {what} the chat: {ex.Message}");
-        }
-
-        using (process)
-        {
-            process.CloseInput(); // it reads nothing: the command is its prompt
-            var lines = new List<string>();
-            using var limit = new CancellationTokenSource(Limit, time);
-            using var both = CancellationTokenSource.CreateLinkedTokenSource(ct, limit.Token);
-            try
-            {
-                await foreach (var line in process.Lines.ReadAllAsync(both.Token).ConfigureAwait(false))
-                {
-                    lines.Add(line);
-                }
-
-                await process.Exited.WaitAsync(both.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
-            {
-                logger.LogWarning("{Doing} chat {Id} took longer than {Limit}; stopped", doing, sessionId, Limit);
-                throw new YardActionException($"{doing} the chat took longer than {Limit.TotalMinutes:0} minutes and was stopped; it is as it was.");
-            }
-
-            var result = lines.Select(ResultOf).LastOrDefault(r => r is not null);
-            if (result is { Failed: false })
+            var response = await claude.GetResponseAsync([new ChatMessage(ChatRole.User, command)], options, both.Token).ConfigureAwait(false);
+            if (response.AdditionalProperties?.ContainsKey(ClaudeCliKeys.LocalCommand) == true)
             {
                 logger.LogInformation("{Done} chat {Id}", done, sessionId);
                 return;
             }
 
-            var why = result?.Text is { Length: > 0 } text ? text : LastLine(process.ErrorTail) ?? "it gave no reason";
-            logger.LogWarning("{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
-            throw new YardActionException($"Claude Code did not {what} the chat: {why}");
+            why = "it answered the command as a question instead of running it.";
         }
+        catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            logger.LogWarning("{Doing} chat {Id} took longer than {Limit}; stopped", doing, sessionId, Limit);
+            throw new YardActionException($"{doing} the chat took longer than {Limit.TotalMinutes:0} minutes and was stopped; it is as it was.");
+        }
+        catch (ClaudeCliSessionGoneException)
+        {
+            why = "it no longer has the chat's conversation.";
+        }
+        catch (LlmException ex)
+        {
+            why = ex.UserMessage.StartsWith(TheCli, StringComparison.Ordinal) ? "it " + ex.UserMessage[TheCli.Length..] : ex.UserMessage;
+        }
+
+        logger.LogWarning("{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
+        throw new YardActionException($"Claude Code did not {what} the chat: {why}");
     }
 
     /// <summary>The command, with what to keep on one line: <c>/compact keep the test plan</c>.</summary>
     internal static string Command(string? keep) => OneLine(keep) is { Length: > 0 } words ? $"/compact {words}" : "/compact";
 
     private static string OneLine(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-
-    private sealed record Result(bool Failed, string? Text);
-
-    /// <summary>The result line (<c>"type":"result"</c>); null for any other line.</summary>
-    private static Result? ResultOf(string line)
-    {
-        try
-        {
-            using var json = JsonDocument.Parse(line);
-            var root = json.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("type", out var type) || type.GetString() != "result")
-            {
-                return null;
-            }
-
-            var failed = !root.TryGetProperty("is_error", out var error) || error.ValueKind != JsonValueKind.False;
-            var text = root.TryGetProperty("result", out var said) && said.ValueKind == JsonValueKind.String ? said.GetString() : null;
-            if (failed && string.IsNullOrWhiteSpace(text) && root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
-            {
-                text = string.Join(" ", errors.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()));
-            }
-
-            return new Result(failed, text);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? LastLine(string text) =>
-        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
 }
