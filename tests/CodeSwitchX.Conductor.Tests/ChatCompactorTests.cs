@@ -12,6 +12,9 @@ public sealed class ChatCompactorTests
 {
     private const string Chat = "0b7e4f7a-3c55-4c39-9a51-2f1d6f0e8a11";
 
+    /// <summary>The chat's folder: one that exists.</summary>
+    private static readonly string Folder = AppContext.BaseDirectory;
+
     private readonly FakeChatClient _claude = new();
     private readonly FakeTimeProvider _time = new();
 
@@ -19,7 +22,7 @@ public sealed class ChatCompactorTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private Task CompactAsync(string? keep = null) => Compactor().CompactAsync(Chat, @"E:\Repos\App", keep, Ct);
+    private Task CompactAsync(string? keep = null) => Compactor().CompactAsync(Chat, Folder, keep, Ct);
 
     [Fact]
     public async Task Claude_Code_compacts_the_conversation_in_the_chat_s_folder_as_VS_Code_s_own()
@@ -33,7 +36,7 @@ public sealed class ChatCompactorTests
         var claude = options.GetClaudeCli().ShouldNotBeNull();
         claude.ResumeOnly.ShouldBeTrue("a chat whose conversation is gone is not started again as a new one (#324)");
         claude.OmitModel.ShouldBeTrue();
-        claude.WorkingDirectory.ShouldBe(@"E:\Repos\App", "Claude Code finds a conversation by the folder it runs in");
+        claude.WorkingDirectory.ShouldBe(Folder, "Claude Code finds a conversation by the folder it runs in");
         claude.Environment.ShouldNotBeNull()["CLAUDE_CODE_ENTRYPOINT"].ShouldBe("claude-vscode", "so VS Code keeps the chat in its session list");
         claude.ExtraArguments.ShouldBe(["--settings", """{"disableAllHooks":true}"""], "its hooks would tell CodeSwitchX that the chat ended");
     }
@@ -53,7 +56,7 @@ public sealed class ChatCompactorTests
     {
         _claude.Command = "rename";
 
-        await Compactor().NameAsync(Chat, @"E:\Repos\App", "Fix the\nupload", Ct);
+        await Compactor().NameAsync(Chat, Folder, "Fix the\nupload", Ct);
 
         _claude.Calls.ShouldHaveSingleItem().Messages.ShouldHaveSingleItem().Text.ShouldBe("/rename Fix the upload");
     }
@@ -79,7 +82,7 @@ public sealed class ChatCompactorTests
         var log = new ListLogger();
         _claude.Failure = new ClaudeCliSessionGoneException(Chat, "No conversation found with session ID: " + Chat);
 
-        await Should.ThrowAsync<YardActionException>(() => new ChatCompactor(_claude, _time, log).CompactAsync(Chat, @"E:\Repos\App", null, Ct));
+        await Should.ThrowAsync<YardActionException>(() => new ChatCompactor(_claude, _time, log).CompactAsync(Chat, Folder, null, Ct));
 
         log.Lines.ShouldContain(l => l.Contains("No conversation found with session ID"), "the package says gone for any failure before the resume starts");
     }
@@ -95,19 +98,32 @@ public sealed class ChatCompactorTests
     }
 
     [Fact]
+    public async Task A_chat_whose_folder_is_gone_says_so()
+    {
+        var gone = Path.Combine(Folder, "gone-" + Guid.NewGuid().ToString("N"));
+
+        (await Should.ThrowAsync<YardActionException>(() => Compactor().CompactAsync(Chat, gone, null, Ct))).Message
+            .ShouldBe($"The folder the chat runs in, {gone}, no longer exists, so CodeSwitchX cannot compact the chat.");
+        _claude.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_name_Claude_Code_refuses_says_so()
     {
         _claude.Failure = new LlmException("error: something broke", ClaudeCliChatClient.ProviderKey);
 
-        (await Should.ThrowAsync<YardActionException>(() => Compactor().NameAsync(Chat, @"E:\Repos\App", "Fix", Ct))).Message
+        (await Should.ThrowAsync<YardActionException>(() => Compactor().NameAsync(Chat, Folder, "Fix", Ct))).Message
             .ShouldBe("Claude Code did not name the chat: error: something broke");
     }
 
     [Theory]
     [InlineData("Not enough messages to compact.", "Claude Code did not compact the chat: Not enough messages to compact.")]
     [InlineData("API Error: 529 Overloaded", "Claude Code did not compact the chat: API Error: 529 Overloaded")]
-    [InlineData("The Claude CLI exited with code 1 without saying why.", "Claude Code did not compact the chat: it exited with code 1 without saying why.")]
-    public async Task A_compaction_Claude_Code_refuses_says_why(string reason, string said)
+    [InlineData("The Claude CLI exited with code 1 without saying why.", "Claude Code did not compact the chat: The Claude CLI exited with code 1 without saying why.")]
+    [InlineData("The Claude CLI call was interrupted.", "Claude Code did not compact the chat: The Claude CLI call was interrupted.")]
+    [InlineData("Error: spawn failed\n    at resume (cli.js:10:3)\n    at main (cli.js:2:1)", "Claude Code did not compact the chat: Error: spawn failed")]
+    [InlineData("\n  Not enough messages to compact.\n", "Claude Code did not compact the chat: Not enough messages to compact.")]
+    public async Task A_compaction_Claude_Code_refuses_says_why_in_its_first_line(string reason, string said)
     {
         _claude.Failure = new LlmException(reason, ClaudeCliChatClient.ProviderKey);
 
@@ -154,7 +170,7 @@ public sealed class ChatCompactorTests
         _claude.Hangs = true;
         using var stop = new CancellationTokenSource();
 
-        var compact = Compactor().CompactAsync(Chat, @"E:\Repos\App", null, stop.Token);
+        var compact = Compactor().CompactAsync(Chat, Folder, null, stop.Token);
         await stop.CancelAsync();
 
         await Should.ThrowAsync<OperationCanceledException>(() => compact);

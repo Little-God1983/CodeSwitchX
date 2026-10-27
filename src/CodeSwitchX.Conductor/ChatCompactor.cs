@@ -42,8 +42,6 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
     /// <summary>How long a compaction may take: a short chat takes about 15 seconds, a long one a minute or two.</summary>
     internal static readonly TimeSpan Limit = TimeSpan.FromMinutes(5);
 
-    private const string TheCli = "The Claude CLI ";
-
     /// <summary>
     /// How the compactor's client runs Claude Code: with the user's settings, Claude Code's own prompt and no tool or MCP
     /// flags, as before the package (#324).
@@ -69,6 +67,12 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
         {
             // The package would resume it in a folder of its own, where Claude Code finds no conversation of it.
             throw new YardActionException($"CodeSwitchX does not know the folder the chat runs in, so it cannot {what} it.");
+        }
+
+        if (!Directory.Exists(folder))
+        {
+            // A worktree removed since the chat began.
+            throw new YardActionException($"The folder the chat runs in, {folder}, no longer exists, so CodeSwitchX cannot {what} the chat.");
         }
 
         var options = new ChatOptions { ConversationId = sessionId }.WithClaudeCliSlashCommand().WithClaudeCli(c =>
@@ -105,7 +109,10 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
         }
         catch (LlmException ex)
         {
-            why = ex.UserMessage.StartsWith(TheCli, StringComparison.Ordinal) ? "it " + ex.UserMessage[TheCli.Length..] : ex.UserMessage;
+            // As the package words it, its first line only: what Claude Code wrote to standard error may be a stack trace,
+            // which the log keeps whole.
+            failure = ex;
+            why = FirstLine(ex.UserMessage);
         }
 
         logger.LogWarning(failure, "{Doing} chat {Id} failed: {Why}", doing, sessionId, why);
@@ -116,4 +123,7 @@ public sealed class ChatCompactor(IChatClient claude, TimeProvider time, ILogger
     internal static string Command(string? keep) => OneLine(keep) is { Length: > 0 } words ? $"/compact {words}" : "/compact";
 
     private static string OneLine(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string FirstLine(string text) =>
+        text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? text;
 }
