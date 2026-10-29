@@ -557,13 +557,12 @@ public sealed class TranscriptIndexer : BackgroundService
                 // the next turn. What the compact kept plus the part every request carries is that next turn's context, give
                 // or take the prompt; that reply replaces it.
                 case CompactBoundaryLine compact:
-                    // A boundary that does not say what it kept tells nothing about the size, and the reply after it is no
-                    // measure of the part.
+                    // A boundary that does not say what it kept tells nothing about the size, and the reply after it is an
+                    // ordinary reply: all of the part and more.
                     state.CompactKept = compact.PostTokens;
                     if (compact.PostTokens is { } kept)
                     {
-                        var estimate = kept + Math.Max(0, state.ContextBase);
-                        latestContext = estimate > 0 ? new TokenUsage(estimate, 0, 0, 0, 0) : latestContext;
+                        latestContext = new TokenUsage(kept + Math.Max(0, state.ContextBase), 0, 0, 0, 0);
                     }
 
                     break;
@@ -794,7 +793,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Offset = 0;
             PendingToolUse = false;
             CarriedInterrupt = false;
-            ContextBase = Math.Max(0, ContextBase);
+            ContextBase = 0;
             CompactKept = null;
             CountedUntil = LastCountedAt;
             SkipCustomUntilCurrent = TitleSource == TitleSource.Custom;

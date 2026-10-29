@@ -400,6 +400,29 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rewritten_file_measures_the_part_afresh_from_its_new_replies()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go " + new string('x', 2_000)), Assistant("s1", "msg_1", TextBlock)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        // Shorter than the stored offset, so the file is read again from its start; its first reply is bigger now.
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_9", TextBlock, cacheRead: 8_400)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull().ContextBase.ShouldBe(9_000);
+    }
+
+    [Fact]
+    public async Task A_compact_that_kept_nothing_of_a_chat_whose_part_is_not_known_leaves_no_old_fill()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);
+        using var indexer = RestartedOn(contextBase: -1);
+
+        (await AppendAsync(indexer, CompactBoundary("s1", 0))).LatestContext.ShouldBe(TokenUsage.Zero);
+    }
+
+    [Fact]
     public async Task The_reply_after_a_compact_lowers_a_part_that_a_big_first_prompt_made_too_big()
     {
         // A 30,000-token first prompt is in the first reply but not kept by a compact.
