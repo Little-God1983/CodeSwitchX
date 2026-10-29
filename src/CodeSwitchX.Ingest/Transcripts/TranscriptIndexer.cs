@@ -334,7 +334,9 @@ public sealed class TranscriptIndexer : BackgroundService
                 // live update): it goes out again with the first live update after the restart.
                 UndeliveredTitle = envelope ? null : cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
-                ContextBase = beforeTitles ? Math.Max(0, cursor.ContextBase) : cursor.ContextBase, // read from the head again
+                // Read from the head again, its replies and compacts with it.
+                ContextBase = beforeTitles ? Math.Max(0, cursor.ContextBase) : cursor.ContextBase,
+                CompactKept = beforeTitles ? null : cursor.CompactKept,
             };
         }
 
@@ -442,7 +444,7 @@ public sealed class TranscriptIndexer : BackgroundService
         var cursor = new TranscriptCursor
         {
             Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
-            Title = state.Title, TitleSource = state.TitleSource, ContextBase = state.ContextBase,
+            Title = state.Title, TitleSource = state.TitleSource, ContextBase = state.ContextBase, CompactKept = state.CompactKept,
         };
         _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
@@ -484,25 +486,25 @@ public sealed class TranscriptIndexer : BackgroundService
 
             latestContext = tokens;
 
-            // The first reply after a compact carries Claude Code's own part on top of what the compact kept, without the first
-            // prompt the smallest reply holds (and the only measure of it for a file whose head was read before it was kept).
-            // Any other reply is all of the part and more, except for a file whose head was not looked at.
+            // The first reply after a compact carries Claude Code's own part on top of what the compact kept and its prompt,
+            // without the first prompt the smallest reply holds. It is the newest measure and replaces the part: the part grows
+            // with a new MCP server or memory file, and a big prompt after a compact spoils one estimate, not every later one.
+            // It is the only measure for a file whose head was read before the part was kept. Any other reply is all of the
+            // part and more, except for a file whose head was not looked at.
             if (state.CompactKept is { } kept)
             {
                 if (context > kept)
                 {
-                    Lower(context - kept);
+                    state.ContextBase = context - kept;
                 }
             }
-            else if (state.ContextBase >= 0)
+            else if (state.ContextBase == 0 || (state.ContextBase > 0 && context < state.ContextBase))
             {
-                Lower(context);
+                state.ContextBase = context;
             }
 
             state.CompactKept = null;
         }
-
-        void Lower(long part) => state.ContextBase = state.ContextBase <= 0 ? part : Math.Min(state.ContextBase, part);
 
         foreach (var raw in lines)
         {
@@ -779,7 +781,7 @@ public sealed class TranscriptIndexer : BackgroundService
         /// </summary>
         public long ContextBase { get; set; }
 
-        /// <summary>What the latest compact kept, until the reply after it.</summary>
+        /// <summary>What the latest compact kept, until the reply after it; travels with the cursor.</summary>
         public long? CompactKept { get; set; }
 
         /// <summary>After a rewrite: usage stamped at or before this was counted before it.</summary>

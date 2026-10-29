@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CodeSwitchX.Data.Migrations
 {
     [DbContext(typeof(CodeSwitchXDbContext))]
-    [Migration("20261029080653_CursorContextBase")]
+    [Migration("20261029090843_CursorContextBase")]
     partial class CursorContextBase
     {
         /// <inheritdoc />
@@ -206,6 +206,9 @@ namespace CodeSwitchX.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<long>("ByteOffset")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("CompactKept")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("ContextBase")

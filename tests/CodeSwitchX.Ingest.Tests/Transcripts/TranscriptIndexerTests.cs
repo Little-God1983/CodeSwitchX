@@ -444,6 +444,45 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task The_reply_after_a_compact_raises_a_part_that_grew_since_it_was_measured()
+    {
+        // An MCP server added since the first reply: every request now carries 10,000 more of Claude Code's own part.
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_1", TextBlock)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        File.AppendAllLines(Transcript("s1"),
+        [
+            CompactBoundary("s1", 2_000),
+            Assistant("s1", "msg_2", TextBlock, ts: "2026-09-23T10:02:00.000Z", input: 10, output: 5, cacheWrite: 0, cacheRead: 15_590),
+        ]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        File.AppendAllLines(Transcript("s1"), [CompactBoundary("s1", 3_000, ts: "2026-09-23T10:03:00.000Z")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Cursor.ShouldNotBeNull().ContextBase.ShouldBe(13_600);
+        update.LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(16_600);
+    }
+
+    [Fact]
+    public async Task What_a_compact_kept_travels_with_the_cursor_so_the_reply_after_a_restart_still_measures_the_part()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);
+        using var first = RestartedOn(contextBase: -1);
+        var compact = await AppendAsync(first, CompactBoundary("s1", 2_000));
+        compact.Cursor.ShouldNotBeNull().CompactKept.ShouldBe(2_000);
+
+        // CodeSwitchX closes before the chat's next reply (Raven compacts idle chats) and starts again.
+        using var second = RestartedOn(compact.Cursor);
+        await AppendAsync(second, Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:02:00.000Z", input: 10, output: 5, cacheWrite: 0, cacheRead: 49_990));
+        var next = await AppendAsync(second, CompactBoundary("s1", 3_000, ts: "2026-09-23T10:03:00.000Z"));
+
+        next.Cursor.ShouldNotBeNull().ContextBase.ShouldBe(48_000);
+        next.LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(51_000);
+    }
+
+    [Fact]
     public async Task A_cursor_from_before_the_smallest_reply_was_kept_learns_it_from_the_reply_after_a_compact()
     {
         File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);

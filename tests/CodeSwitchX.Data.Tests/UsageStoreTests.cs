@@ -174,12 +174,17 @@ public class UsageStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Cursors_keep_the_chats_smallest_reply_context()
+    public async Task Cursors_keep_the_chats_own_part_and_what_a_compact_kept()
     {
         await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 10, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 48_000 }], TestContext.Current.CancellationToken);
-        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 47_000 }], TestContext.Current.CancellationToken);
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 47_000, CompactKept = 18_000 }], TestContext.Current.CancellationToken);
 
-        (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().ContextBase.ShouldBe(47_000);
+        var cursor = (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        cursor.ContextBase.ShouldBe(47_000);
+        cursor.CompactKept.ShouldBe(18_000);
+
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 30, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 47_000 }], TestContext.Current.CancellationToken);
+        (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().CompactKept.ShouldBeNull("the reply after the compact came");
     }
 
     [Fact]

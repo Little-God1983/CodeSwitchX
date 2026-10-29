@@ -22,4 +22,10 @@ public sealed class TranscriptCursor
     /// behind the offset were not looked at.
     /// </summary>
     public long ContextBase { get; set; }
+
+    /// <summary>
+    /// What the latest compact kept while the reply after it is not read yet (null otherwise): that reply measures Claude
+    /// Code's own part, also when the app was closed in between (Raven compacts idle chats).
+    /// </summary>
+    public long? CompactKept { get; set; }
 }

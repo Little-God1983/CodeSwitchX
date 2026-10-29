@@ -11,6 +11,12 @@ namespace CodeSwitchX.Data.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<long>(
+                name: "CompactKept",
+                table: "TranscriptCursors",
+                type: "INTEGER",
+                nullable: true);
+
+            migrationBuilder.AddColumn<long>(
                 name: "ContextBase",
                 table: "TranscriptCursors",
                 type: "INTEGER",
@@ -26,6 +32,10 @@ namespace CodeSwitchX.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropColumn(
+                name: "CompactKept",
+                table: "TranscriptCursors");
+
             migrationBuilder.DropColumn(
                 name: "ContextBase",
                 table: "TranscriptCursors");
