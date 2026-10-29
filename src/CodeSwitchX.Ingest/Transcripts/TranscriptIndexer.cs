@@ -334,6 +334,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 // live update): it goes out again with the first live update after the restart.
                 UndeliveredTitle = envelope ? null : cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
+                ContextBase = cursor.ContextBase,
             };
         }
 
@@ -441,7 +442,7 @@ public sealed class TranscriptIndexer : BackgroundService
         var cursor = new TranscriptCursor
         {
             Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
-            Title = state.Title, TitleSource = state.TitleSource,
+            Title = state.Title, TitleSource = state.TitleSource, ContextBase = state.ContextBase,
         };
         _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
@@ -469,6 +470,32 @@ public sealed class TranscriptIndexer : BackgroundService
                 newTitle = state.Title = candidate;
                 state.TitleSource = source;
             }
+        }
+
+        void Reply(TokenUsage tokens)
+        {
+            latestContext = tokens;
+            var context = tokens.ContextTokens;
+            if (context <= 0)
+            {
+                return;
+            }
+
+            if (state.ContextBase < 0)
+            {
+                // The file's head was read before the smallest reply was kept: the first reply after a compact carries
+                // Claude Code's own part on top of what the compact kept.
+                if (state.CompactKept is { } kept && context > kept)
+                {
+                    state.ContextBase = context - kept;
+                }
+            }
+            else if (state.ContextBase == 0 || context < state.ContextBase)
+            {
+                state.ContextBase = context;
+            }
+
+            state.CompactKept = null;
         }
 
         foreach (var raw in lines)
@@ -509,7 +536,7 @@ public sealed class TranscriptIndexer : BackgroundService
                     if (assistant.Usage is { } tokens && assistant.MessageId is { } id && !countedBefore && _messages.Remember(id))
                     {
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
-                        latestContext = tokens;
+                        Reply(tokens);
                         newMessageIds.Add(id);
                         if (assistant.Timestamp is { } at && (state.LastCountedAt is null || at > state.LastCountedAt))
                         {
@@ -518,7 +545,20 @@ public sealed class TranscriptIndexer : BackgroundService
                     }
                     else if (assistant.Usage is { } sameMessage)
                     {
-                        latestContext = sameMessage;
+                        Reply(sameMessage);
+                    }
+
+                    break;
+
+                // Claude Code writes no reply with usage for a compact, so the context would stay as full as before it until
+                // the next turn. What the compact kept plus the part every request carries is that next turn's context, give
+                // or take the prompt; that reply replaces it.
+                case CompactBoundaryLine compact:
+                    state.CompactKept = compact.PostTokens;
+                    var estimate = compact.PostTokens + Math.Max(0, state.ContextBase);
+                    if (estimate > 0)
+                    {
+                        latestContext = new TokenUsage(estimate, 0, 0, 0, 0);
                     }
 
                     break;
@@ -725,6 +765,15 @@ public sealed class TranscriptIndexer : BackgroundService
         /// before it. Claude Code stamps an assistant message when it starts, so assistant lines are in stamp order.
         /// </summary>
         public DateTimeOffset? LastCountedAt { get; set; }
+
+        /// <summary>
+        /// The context of the smallest reply read from this file (0 before one, -1 for a cursor stored before it was kept);
+        /// travels with the cursor.
+        /// </summary>
+        public long ContextBase { get; set; }
+
+        /// <summary>What the latest compact kept, until the reply after it.</summary>
+        public long? CompactKept { get; set; }
 
         /// <summary>After a rewrite: usage stamped at or before this was counted before it.</summary>
         public DateTimeOffset? CountedUntil { get; set; }

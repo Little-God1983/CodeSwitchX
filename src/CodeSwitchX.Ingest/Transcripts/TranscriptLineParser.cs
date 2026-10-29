@@ -82,6 +82,12 @@ public static class TranscriptLineParser
                         ? new CustomTitleLine(type, timestamp, sessionId, cwd, custom)
                         : new OtherLine(type, timestamp, sessionId, cwd);
 
+                case "system" when GetString(root, "subtype") == "compact_boundary":
+                    return new CompactBoundaryLine(type, timestamp, sessionId, cwd,
+                        root.TryGetProperty("compactMetadata", out var compact) && compact.ValueKind == JsonValueKind.Object
+                            ? Math.Max(0, GetLong(compact, "postTokens"))
+                            : 0);
+
                 default:
                     return new OtherLine(type, timestamp, sessionId, cwd);
             }
