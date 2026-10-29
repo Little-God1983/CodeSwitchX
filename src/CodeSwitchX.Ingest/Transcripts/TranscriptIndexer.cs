@@ -474,12 +474,15 @@ public sealed class TranscriptIndexer : BackgroundService
 
         void Reply(TokenUsage tokens)
         {
-            latestContext = tokens;
+            // Claude Code writes replies whose counts are all 0 (one came right after a compact): no measure of the context,
+            // so they replace neither it nor the wait for the first real reply after a compact.
             var context = tokens.ContextTokens;
             if (context <= 0)
             {
                 return;
             }
+
+            latestContext = tokens;
 
             // The first reply after a compact carries Claude Code's own part on top of what the compact kept, without the first
             // prompt the smallest reply holds (and the only measure of it for a file whose head was read before it was kept).

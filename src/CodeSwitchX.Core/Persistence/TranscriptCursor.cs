@@ -16,9 +16,10 @@ public sealed class TranscriptCursor
     public TitleSource TitleSource { get; set; }
 
     /// <summary>
-    /// The context of the transcript's smallest reply as far as it is read (0 before one): Claude Code's own part (system
-    /// prompt, tools, memory files) and the first prompt, which a compact keeps. A restart must not lose it. -1 marks a
-    /// cursor stored before it was, whose replies behind the offset were not looked at.
+    /// Claude Code's own part of the transcript's context (system prompt, tools, memory files), which a compact keeps: the
+    /// smallest reply as far as it is read, or the reply after a compact minus what the compact kept, which leaves out the
+    /// first prompt (0 before either). A restart must not lose it. -1 marks a cursor stored before it was, whose replies
+    /// behind the offset were not looked at.
     /// </summary>
     public long ContextBase { get; set; }
 }

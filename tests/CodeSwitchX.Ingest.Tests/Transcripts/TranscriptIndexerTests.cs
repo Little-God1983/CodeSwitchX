@@ -346,17 +346,16 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     /// <summary>An indexer restarted on a cursor of s1 that covers the file as it is now.</summary>
-    private TranscriptIndexer RestartedOn(long contextBase)
+    private TranscriptIndexer RestartedOn(long contextBase) => RestartedOn(new TranscriptCursor
+    {
+        Path = Transcript("s1").ToLowerInvariant(), ByteOffset = new FileInfo(Transcript("s1")).Length, LastWriteUtc = DateTimeOffset.UtcNow,
+        SessionId = "s1", Title = "go", TitleSource = TitleSource.Prompt, ContextBase = contextBase,
+    });
+
+    private TranscriptIndexer RestartedOn(TranscriptCursor cursor)
     {
         var restored = Substitute.For<IUsageStore>();
-        restored.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
-        [
-            new TranscriptCursor
-            {
-                Path = Transcript("s1").ToLowerInvariant(), ByteOffset = new FileInfo(Transcript("s1")).Length, LastWriteUtc = DateTimeOffset.UtcNow,
-                SessionId = "s1", Title = "go", TitleSource = TitleSource.Prompt, ContextBase = contextBase,
-            },
-        ]));
+        restored.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>([cursor]));
         restored.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
         return new TranscriptIndexer(_claude, restored, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
     }
@@ -463,6 +462,30 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reply_that_reports_no_usage_right_after_a_compact_keeps_the_estimate_and_the_next_reply_measures_the_part()
+    {
+        // Claude Code wrote such lines (thinking, then text, all counts 0) just after a compact.
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_1", TextBlock, cacheRead: 47_400)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        File.AppendAllLines(Transcript("s1"),
+        [
+            CompactBoundary("s1", 2_000),
+            Assistant("s1", "msg_0", TextBlock, ts: "2026-09-23T10:01:01.000Z", input: 0, output: 0, cacheWrite: 0, cacheRead: 0),
+        ]);
+        _updates.Clear();
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(50_000);
+
+        File.AppendAllLines(Transcript("s1"), [Assistant("s1", "msg_2", TextBlock, ts: "2026-09-23T10:02:00.000Z", input: 10, output: 5, cacheWrite: 0, cacheRead: 46_990)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        File.AppendAllLines(Transcript("s1"), [CompactBoundary("s1", 3_000, ts: "2026-09-23T10:03:00.000Z")]);
+        _updates.Clear();
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull().ContextBase.ShouldBe(45_000);
+    }
+
+    [Fact]
     public async Task A_reply_after_the_compact_reports_its_own_context()
     {
         File.WriteAllLines(Transcript("s1"),
@@ -486,16 +509,9 @@ public class TranscriptIndexerTests : IDisposable
         var cursor = _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull();
         cursor.ContextBase.ShouldBe(3_600);
 
-        var restored = Substitute.For<IUsageStore>();
-        restored.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>([cursor]));
-        restored.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
-        using var second = new TranscriptIndexer(_claude, restored, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
-        File.AppendAllLines(Transcript("s1"), [CompactBoundary("s1", 2_000)]);
-        _updates.Clear();
+        using var second = RestartedOn(cursor);
 
-        await second.ScanAsync(CancellationToken.None);
-
-        _updates.ShouldHaveSingleItem().LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(5_600);
+        (await AppendAsync(second, CompactBoundary("s1", 2_000))).LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(5_600);
     }
 
     [Fact]
