@@ -205,6 +205,12 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<long>("ByteOffset")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long?>("CompactKept")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ContextBase")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("LastWriteUtc")
                         .HasColumnType("INTEGER");
 

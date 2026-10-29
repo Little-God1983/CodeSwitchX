@@ -133,13 +133,15 @@ public sealed class UsageStore : IUsageStore
                 row.SessionId = cursor.SessionId;
                 row.Title = cursor.Title;
                 row.TitleSource = cursor.TitleSource;
+                row.ContextBase = cursor.ContextBase;
+                row.CompactKept = cursor.CompactKept;
             }
             else
             {
                 var added = new TranscriptCursor
                 {
                     Path = cursor.Path, ByteOffset = cursor.ByteOffset, LastWriteUtc = cursor.LastWriteUtc, SessionId = cursor.SessionId,
-                    Title = cursor.Title, TitleSource = cursor.TitleSource,
+                    Title = cursor.Title, TitleSource = cursor.TitleSource, ContextBase = cursor.ContextBase, CompactKept = cursor.CompactKept,
                 };
                 db.TranscriptCursors.Add(added);
                 existing[cursor.Path] = added;

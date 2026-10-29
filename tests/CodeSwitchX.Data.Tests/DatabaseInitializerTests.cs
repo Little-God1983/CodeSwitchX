@@ -180,6 +180,18 @@ public class DatabaseInitializerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_upgrade_marks_the_cursors_stored_before_the_smallest_reply_was_as_not_knowing_it()
+    {
+        await MigrateToAsync("20261012101017_SessionLastUse");
+        await ExecuteAsync("""INSERT INTO "TranscriptCursors" ("Path", "ByteOffset", "LastWriteUtc", "SessionId", "TitleSource") VALUES ('c:\t\s1.jsonl', 10, 0, 's1', 1);""");
+
+        await InitializeWithinTenSecondsAsync();
+
+        // Its replies before the offset were not looked at, so the next one read is no smallest reply.
+        (await _db.Get<IUsageStore>().GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().ContextBase.ShouldBe(-1);
+    }
+
+    [Fact]
     public async Task Every_connection_writes_with_synchronous_NORMAL_not_only_the_one_that_ran_the_initializer()
     {
         await _db.InitializeAsync();

@@ -334,6 +334,9 @@ public sealed class TranscriptIndexer : BackgroundService
                 // live update): it goes out again with the first live update after the restart.
                 UndeliveredTitle = envelope ? null : cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
+                // Read from the head again, its replies and compacts with it.
+                ContextBase = beforeTitles ? Math.Max(0, cursor.ContextBase) : cursor.ContextBase,
+                CompactKept = beforeTitles ? null : cursor.CompactKept,
             };
         }
 
@@ -441,7 +444,7 @@ public sealed class TranscriptIndexer : BackgroundService
         var cursor = new TranscriptCursor
         {
             Path = key, ByteOffset = state.Offset, LastWriteUtc = state.LastWriteUtc, SessionId = state.SessionId,
-            Title = state.Title, TitleSource = state.TitleSource,
+            Title = state.Title, TitleSource = state.TitleSource, ContextBase = state.ContextBase, CompactKept = state.CompactKept,
         };
         _bus.Publish(new TranscriptUpdated(update with { Cursor = cursor }));
     }
@@ -469,6 +472,38 @@ public sealed class TranscriptIndexer : BackgroundService
                 newTitle = state.Title = candidate;
                 state.TitleSource = source;
             }
+        }
+
+        void Reply(TokenUsage tokens)
+        {
+            // Claude Code writes replies whose counts are all 0 (one came right after a compact): no measure of the context,
+            // so they replace neither it nor the wait for the first real reply after a compact.
+            var context = tokens.ContextTokens;
+            if (context <= 0)
+            {
+                return;
+            }
+
+            latestContext = tokens;
+
+            // The first reply after a compact carries Claude Code's own part on top of what the compact kept and its prompt,
+            // without the first prompt the smallest reply holds. It is the newest measure and replaces the part: the part grows
+            // with a new MCP server or memory file, and a big prompt after a compact spoils one estimate, not every later one.
+            // It is the only measure for a file whose head was read before the part was kept. Any other reply is all of the
+            // part and more, except for a file whose head was not looked at.
+            if (state.CompactKept is { } kept)
+            {
+                if (context > kept)
+                {
+                    state.ContextBase = context - kept;
+                }
+            }
+            else if (state.ContextBase == 0 || (state.ContextBase > 0 && context < state.ContextBase))
+            {
+                state.ContextBase = context;
+            }
+
+            state.CompactKept = null;
         }
 
         foreach (var raw in lines)
@@ -509,7 +544,7 @@ public sealed class TranscriptIndexer : BackgroundService
                     if (assistant.Usage is { } tokens && assistant.MessageId is { } id && !countedBefore && _messages.Remember(id))
                     {
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
-                        latestContext = tokens;
+                        Reply(tokens);
                         newMessageIds.Add(id);
                         if (assistant.Timestamp is { } at && (state.LastCountedAt is null || at > state.LastCountedAt))
                         {
@@ -518,7 +553,21 @@ public sealed class TranscriptIndexer : BackgroundService
                     }
                     else if (assistant.Usage is { } sameMessage)
                     {
-                        latestContext = sameMessage;
+                        Reply(sameMessage);
+                    }
+
+                    break;
+
+                // Claude Code writes no reply with usage for a compact, so the context would stay as full as before it until
+                // the next turn. What the compact kept plus the part every request carries is that next turn's context, give
+                // or take the prompt; that reply replaces it.
+                case CompactBoundaryLine compact:
+                    // A boundary that does not say what it kept tells nothing about the size, and the reply after it is an
+                    // ordinary reply: all of the part and more.
+                    state.CompactKept = compact.PostTokens;
+                    if (compact.PostTokens is { } kept)
+                    {
+                        latestContext = new TokenUsage(kept + Math.Max(0, state.ContextBase), 0, 0, 0, 0);
                     }
 
                     break;
@@ -726,19 +775,31 @@ public sealed class TranscriptIndexer : BackgroundService
         /// </summary>
         public DateTimeOffset? LastCountedAt { get; set; }
 
+        /// <summary>
+        /// The context of the smallest reply read from this file (0 before one, -1 for a cursor stored before it was kept);
+        /// travels with the cursor.
+        /// </summary>
+        public long ContextBase { get; set; }
+
+        /// <summary>What the latest compact kept, until the reply after it; travels with the cursor.</summary>
+        public long? CompactKept { get; set; }
+
         /// <summary>After a rewrite: usage stamped at or before this was counted before it.</summary>
         public DateTimeOffset? CountedUntil { get; set; }
 
         /// <summary>
         /// The file was rewritten: read it again from the start. The usage it held is not counted again, even when the message
         /// id memory no longer holds its ids (it keeps only the newest). Its title was already found and is not sent again:
-        /// the lines read again offer nothing above its source, and its /rename names nothing up to the current one.
+        /// the lines read again offer nothing above its source, and its /rename names nothing up to the current one. Its
+        /// replies are read from the first, so the smallest is known again, and a compact read before is no compact of them.
         /// </summary>
         public void Reset()
         {
             Offset = 0;
             PendingToolUse = false;
             CarriedInterrupt = false;
+            ContextBase = 0;
+            CompactKept = null;
             CountedUntil = LastCountedAt;
             SkipCustomUntilCurrent = TitleSource == TitleSource.Custom;
         }

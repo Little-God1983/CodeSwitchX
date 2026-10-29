@@ -174,6 +174,20 @@ public class UsageStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Cursors_keep_the_chats_own_part_and_what_a_compact_kept()
+    {
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 10, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 48_000 }], TestContext.Current.CancellationToken);
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 20, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 47_000, CompactKept = 18_000 }], TestContext.Current.CancellationToken);
+
+        var cursor = (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem();
+        cursor.ContextBase.ShouldBe(47_000);
+        cursor.CompactKept.ShouldBe(18_000);
+
+        await _store.UpsertCursorsAsync([new TranscriptCursor { Path = @"c:\t\s1.jsonl", ByteOffset = 30, LastWriteUtc = _minute, SessionId = "s1", ContextBase = 47_000 }], TestContext.Current.CancellationToken);
+        (await _store.GetCursorsAsync(TestContext.Current.CancellationToken)).ShouldHaveSingleItem().CompactKept.ShouldBeNull("the reply after the compact came");
+    }
+
+    [Fact]
     public async Task Cursors_are_removed_by_path_even_more_of_them_than_SQLite_allows_parameters_in_one_statement()
     {
         // The first scan after an upgrade removes the cursors of every transcript Claude Code's cleanup deleted since the

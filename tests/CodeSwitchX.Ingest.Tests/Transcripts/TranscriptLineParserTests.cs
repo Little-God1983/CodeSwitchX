@@ -175,4 +175,25 @@ public class TranscriptLineParserTests
 
         parsed.Usage.ShouldBe(new TokenUsage(100, 20, 500, 3000, CacheWrite1h: 0));
     }
+
+    [Fact]
+    public void A_compact_boundary_yields_the_size_Claude_Code_kept()
+    {
+        const string line = """{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","sessionId":"s1","timestamp":"2026-10-11T15:28:54.035Z","compactMetadata":{"trigger":"manual","preTokens":305985,"postTokens":18238}}""";
+
+        var parsed = TranscriptLineParser.TryParse(line).ShouldBeOfType<CompactBoundaryLine>();
+
+        parsed.SessionId.ShouldBe("s1");
+        parsed.PostTokens.ShouldBe(18238);
+    }
+
+    [Fact]
+    public void A_compact_boundary_without_metadata_kept_no_known_size_and_another_system_line_is_no_boundary()
+    {
+        TranscriptLineParser.TryParse("""{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}""")
+            .ShouldBeOfType<CompactBoundaryLine>().PostTokens.ShouldBeNull();
+        TranscriptLineParser.TryParse("""{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":305985}}""")
+            .ShouldBeOfType<CompactBoundaryLine>().PostTokens.ShouldBeNull();
+        TranscriptLineParser.TryParse("""{"type":"system","subtype":"turn_duration","durationMs":5}""").ShouldBeOfType<OtherLine>();
+    }
 }
