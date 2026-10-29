@@ -191,7 +191,9 @@ public class TranscriptLineParserTests
     public void A_compact_boundary_without_metadata_kept_no_known_size_and_another_system_line_is_no_boundary()
     {
         TranscriptLineParser.TryParse("""{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}""")
-            .ShouldBeOfType<CompactBoundaryLine>().PostTokens.ShouldBe(0);
+            .ShouldBeOfType<CompactBoundaryLine>().PostTokens.ShouldBeNull();
+        TranscriptLineParser.TryParse("""{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"manual","preTokens":305985}}""")
+            .ShouldBeOfType<CompactBoundaryLine>().PostTokens.ShouldBeNull();
         TranscriptLineParser.TryParse("""{"type":"system","subtype":"turn_duration","durationMs":5}""").ShouldBeOfType<OtherLine>();
     }
 }

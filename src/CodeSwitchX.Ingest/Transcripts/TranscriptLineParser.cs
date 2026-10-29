@@ -85,8 +85,10 @@ public static class TranscriptLineParser
                 case "system" when GetString(root, "subtype") == "compact_boundary":
                     return new CompactBoundaryLine(type, timestamp, sessionId, cwd,
                         root.TryGetProperty("compactMetadata", out var compact) && compact.ValueKind == JsonValueKind.Object
-                            ? Math.Max(0, GetLong(compact, "postTokens"))
-                            : 0);
+                            && compact.TryGetProperty("postTokens", out var kept) && kept.ValueKind == JsonValueKind.Number
+                            && kept.TryGetInt64(out var tokens) && tokens >= 0
+                                ? tokens
+                                : null);
 
                 default:
                     return new OtherLine(type, timestamp, sessionId, cwd);

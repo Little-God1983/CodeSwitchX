@@ -334,7 +334,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 // live update): it goes out again with the first live update after the restart.
                 UndeliveredTitle = envelope ? null : cursor.Title,
                 LastCountedAt = cursor.LastWriteUtc,
-                ContextBase = cursor.ContextBase,
+                ContextBase = beforeTitles ? Math.Max(0, cursor.ContextBase) : cursor.ContextBase, // read from the head again
             };
         }
 
@@ -481,22 +481,25 @@ public sealed class TranscriptIndexer : BackgroundService
                 return;
             }
 
-            if (state.ContextBase < 0)
+            // The first reply after a compact carries Claude Code's own part on top of what the compact kept, without the first
+            // prompt the smallest reply holds (and the only measure of it for a file whose head was read before it was kept).
+            // Any other reply is all of the part and more, except for a file whose head was not looked at.
+            if (state.CompactKept is { } kept)
             {
-                // The file's head was read before the smallest reply was kept: the first reply after a compact carries
-                // Claude Code's own part on top of what the compact kept.
-                if (state.CompactKept is { } kept && context > kept)
+                if (context > kept)
                 {
-                    state.ContextBase = context - kept;
+                    Lower(context - kept);
                 }
             }
-            else if (state.ContextBase == 0 || context < state.ContextBase)
+            else if (state.ContextBase >= 0)
             {
-                state.ContextBase = context;
+                Lower(context);
             }
 
             state.CompactKept = null;
         }
+
+        void Lower(long part) => state.ContextBase = state.ContextBase <= 0 ? part : Math.Min(state.ContextBase, part);
 
         foreach (var raw in lines)
         {
@@ -554,11 +557,13 @@ public sealed class TranscriptIndexer : BackgroundService
                 // the next turn. What the compact kept plus the part every request carries is that next turn's context, give
                 // or take the prompt; that reply replaces it.
                 case CompactBoundaryLine compact:
+                    // A boundary that does not say what it kept tells nothing about the size, and the reply after it is no
+                    // measure of the part.
                     state.CompactKept = compact.PostTokens;
-                    var estimate = compact.PostTokens + Math.Max(0, state.ContextBase);
-                    if (estimate > 0)
+                    if (compact.PostTokens is { } kept)
                     {
-                        latestContext = new TokenUsage(estimate, 0, 0, 0, 0);
+                        var estimate = kept + Math.Max(0, state.ContextBase);
+                        latestContext = estimate > 0 ? new TokenUsage(estimate, 0, 0, 0, 0) : latestContext;
                     }
 
                     break;
@@ -781,13 +786,16 @@ public sealed class TranscriptIndexer : BackgroundService
         /// <summary>
         /// The file was rewritten: read it again from the start. The usage it held is not counted again, even when the message
         /// id memory no longer holds its ids (it keeps only the newest). Its title was already found and is not sent again:
-        /// the lines read again offer nothing above its source, and its /rename names nothing up to the current one.
+        /// the lines read again offer nothing above its source, and its /rename names nothing up to the current one. Its
+        /// replies are read from the first, so the smallest is known again, and a compact read before is no compact of them.
         /// </summary>
         public void Reset()
         {
             Offset = 0;
             PendingToolUse = false;
             CarriedInterrupt = false;
+            ContextBase = Math.Max(0, ContextBase);
+            CompactKept = null;
             CountedUntil = LastCountedAt;
             SkipCustomUntilCurrent = TitleSource == TitleSource.Custom;
         }

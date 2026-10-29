@@ -345,28 +345,88 @@ public class TranscriptIndexerTests : IDisposable
         _updates.ShouldHaveSingleItem().LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(5_600);
     }
 
-    [Fact]
-    public async Task A_cursor_from_before_the_smallest_reply_was_kept_learns_it_from_the_reply_after_a_compact()
+    /// <summary>An indexer restarted on a cursor of s1 that covers the file as it is now.</summary>
+    private TranscriptIndexer RestartedOn(long contextBase)
     {
-        File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);
         var restored = Substitute.For<IUsageStore>();
         restored.GetCursorsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<TranscriptCursor>>(
         [
             new TranscriptCursor
             {
                 Path = Transcript("s1").ToLowerInvariant(), ByteOffset = new FileInfo(Transcript("s1")).Length, LastWriteUtc = DateTimeOffset.UtcNow,
-                SessionId = "s1", Title = "go", TitleSource = TitleSource.Prompt, ContextBase = -1,
+                SessionId = "s1", Title = "go", TitleSource = TitleSource.Prompt, ContextBase = contextBase,
             },
         ]));
         restored.GetSeenMessageIdsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
-        using var indexer = new TranscriptIndexer(_claude, restored, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
-        async Task<TranscriptUpdate> Append(string line)
-        {
-            _updates.Clear();
-            File.AppendAllLines(Transcript("s1"), [line]);
-            await indexer.ScanAsync(CancellationToken.None);
-            return _updates.ShouldHaveSingleItem();
-        }
+        return new TranscriptIndexer(_claude, restored, _bus, _time, NullLogger<TranscriptIndexer>.Instance, new TranscriptIndexerOptions());
+    }
+
+    private async Task<TranscriptUpdate> AppendAsync(TranscriptIndexer indexer, string line)
+    {
+        _updates.Clear();
+        File.AppendAllLines(Transcript("s1"), [line]);
+        await indexer.ScanAsync(CancellationToken.None);
+        return _updates.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_compact_that_does_not_say_what_it_kept_teaches_nothing_about_the_chats_own_part()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);
+        using var indexer = RestartedOn(contextBase: -1);
+
+        var compact = await AppendAsync(indexer, """{"type":"system","subtype":"compact_boundary","content":"Conversation compacted","sessionId":"s1"}""");
+        compact.LatestContext.ShouldBeNull("nothing is known about the size, so the context is not guessed at");
+        await AppendAsync(indexer, Assistant("s1", "msg_1", TextBlock, input: 10, output: 5, cacheWrite: 0, cacheRead: 59_990));
+
+        (await AppendAsync(indexer, CompactBoundary("s1", 2_000))).Cursor.ShouldNotBeNull().ContextBase.ShouldBe(-1,
+            "the whole reply after a compact of unknown size is no measure of Claude Code's own part");
+    }
+
+    [Fact]
+    public async Task A_rewritten_file_of_a_cursor_from_before_the_smallest_reply_was_kept_learns_it_from_the_head()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go " + new string('x', 2_000)), CompactBoundary("s1", 2_000)]);
+        using var indexer = RestartedOn(contextBase: -1);
+        await AppendAsync(indexer, CompactBoundary("s1", 2_000, ts: "2026-09-23T10:01:30.000Z")); // a compact waiting for its reply
+        _updates.Clear();
+
+        // Shorter than the stored offset, so the file is read again from its start.
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_1", TextBlock)]);
+        await indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().Cursor.ShouldNotBeNull().ContextBase.ShouldBe(3_600,
+            "the first reply, read from the head, is no reply after the compact read before the rewrite");
+    }
+
+    [Fact]
+    public async Task The_reply_after_a_compact_lowers_a_part_that_a_big_first_prompt_made_too_big()
+    {
+        // A 30,000-token first prompt is in the first reply but not kept by a compact.
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "msg_1", TextBlock, input: 30_000, cacheWrite: 0, cacheRead: 3_600)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        File.AppendAllLines(Transcript("s1"),
+        [
+            CompactBoundary("s1", 5_000),
+            Assistant("s1", "msg_2", TextBlock, ts: "2026-09-23T10:02:00.000Z", input: 10, output: 5, cacheWrite: 0, cacheRead: 8_690),
+        ]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        File.AppendAllLines(Transcript("s1"), [CompactBoundary("s1", 4_000, ts: "2026-09-23T10:03:00.000Z")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.Cursor.ShouldNotBeNull().ContextBase.ShouldBe(3_700);
+        update.LatestContext.ShouldNotBeNull().ContextTokens.ShouldBe(7_700);
+    }
+
+    [Fact]
+    public async Task A_cursor_from_before_the_smallest_reply_was_kept_learns_it_from_the_reply_after_a_compact()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go")]);
+        using var indexer = RestartedOn(contextBase: -1);
+        Task<TranscriptUpdate> Append(string line) => AppendAsync(indexer, line);
 
         // A reply deep into the chat is no smallest reply, and without one a compact counts what it kept alone.
         await Append(Assistant("s1", "msg_1", TextBlock, input: 10, output: 5, cacheWrite: 0, cacheRead: 150_000));
