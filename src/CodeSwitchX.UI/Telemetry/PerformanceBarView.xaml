@@ -3,7 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
-             xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings">
+             xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:cache="clr-namespace:CodeSwitchX.Telemetry;assembly=CodeSwitchX.Telemetry">
   <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" Padding="12,4">
     <!-- On a narrow window the bar gives way instead of running its texts into each other (#168): first the models' names
          fold, leaving their dots and states, then the rate sparkline goes, then today's cost. -->
@@ -89,6 +90,13 @@
           <TextBlock Style="{StaticResource Value}" Text="{Binding ActiveSessions}" />
           <TextBlock Style="{StaticResource Label}" Text="waiting" />
           <TextBlock Style="{StaticResource Value}" Text="{Binding WaitingSessions}" Foreground="#F59E0B" />
+          <!-- Of the active chats, by the temperature of their cache (#331), in the colours of the Yard's gauges. -->
+          <TextBlock Style="{StaticResource Label}" Text="hot" ToolTip="Active chats whose cache has more than 20 minutes left" />
+          <TextBlock Style="{StaticResource Value}" Text="{Binding HotChats}"
+                     Foreground="{Binding Source={x:Static cache:CacheWarmth.Hot}, Converter={StaticResource CacheBrush}}" />
+          <TextBlock Style="{StaticResource Label}" Text="cooling" ToolTip="Active chats whose cache has 20 minutes or less left: go on with them or finish the work in them now" />
+          <TextBlock Style="{StaticResource Value}" Text="{Binding CoolingChats}"
+                     Foreground="{Binding Source={x:Static cache:CacheWarmth.Warm}, Converter={StaticResource CacheBrush}}" />
         </StackPanel>
       </DockPanel>
     </infra:GiveWayBar>

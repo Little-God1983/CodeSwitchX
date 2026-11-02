@@ -22,6 +22,7 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     private readonly TimeProvider _time;
     private readonly List<IDisposable> _subscriptions = [];
     private long? _budget;
+    private ITimer? _tickTimer;
 
     [ObservableProperty] private string _tokensTodayText = "0";
     [ObservableProperty] private string _costTodayText = "$0.00 est.";
@@ -30,6 +31,10 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     [ObservableProperty] private bool _hasBudget;
     [ObservableProperty] private int _activeSessions;
     [ObservableProperty] private int _waitingSessions;
+
+    /// <summary>Of the active chats, those whose prompt cache is hot, and those in its last minutes (#331). A cold one counts as neither: old chats would pile up there and call for nothing.</summary>
+    [ObservableProperty] private int _hotChats;
+    [ObservableProperty] private int _coolingChats;
     [ObservableProperty] private double[] _rateNormalized = new double[TelemetryService.RateMinutes];
     [ObservableProperty] private bool _isExpanded = true;
 
@@ -53,6 +58,9 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
         _budget = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
         _subscriptions.Add(_bus.Subscribe<TelemetryUpdated>(m => _ui.Post(() => Apply(m.Snapshot))));
         _subscriptions.Add(_bus.Subscribe<SessionChanged>(_ => _ui.Post(RecountSessions)));
+
+        // A cache cools with no chat doing anything; at the Yard's pace, so these change as its gauges do.
+        _tickTimer = _time.CreateTimer(_ => _ui.Post(RecountSessions), null, YardViewModel.TickInterval, YardViewModel.TickInterval);
         Apply(_telemetry.Current);
         RecountSessions();
     }
@@ -85,12 +93,19 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
         // matched nothing on screen. A session that is no chat yet (a VS Code window's prompt-less one) has no row either.
         var now = _time.GetUtcNow();
         var shown = _engine.Snapshots.Where(s => s.WorkspaceId is not null && s.ShowsAsChat).ToList();
-        ActiveSessions = shown.Count(s => SessionStateMachine.IsLive(s.State) && (s.State != SessionState.Stale || now - s.StateSince < WorkspaceTileViewModel.StaleRowLifetime));
+        var active = shown.Where(s => SessionStateMachine.IsLive(s.State) && (s.State != SessionState.Stale || now - s.StateSince < WorkspaceTileViewModel.StaleRowLifetime)).ToList();
+        ActiveSessions = active.Count;
         WaitingSessions = shown.Count(s => SessionStateMachine.NeedsUser(s.State));
+        HotChats = active.Count(s => WarmthOf(s, now) == CacheWarmth.Hot);
+        CoolingChats = active.Count(s => WarmthOf(s, now) == CacheWarmth.Warm);
     }
+
+    private static CacheWarmth WarmthOf(SessionSnapshot chat, DateTimeOffset now) =>
+        chat.LastRequestAt is { } request ? CacheWarmthCalculator.Level(CacheWarmthCalculator.Left(request, now)) : CacheWarmth.Unknown;
 
     public void Dispose()
     {
+        _tickTimer?.Dispose();
         foreach (var subscription in _subscriptions)
         {
             subscription.Dispose();
