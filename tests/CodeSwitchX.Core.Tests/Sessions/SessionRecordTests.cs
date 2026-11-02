@@ -56,6 +56,33 @@ public class SessionRecordTests
     }
 
     [Fact]
+    public void What_keeps_a_chat_working_through_a_restart_survives_the_record()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Working,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch,
+            StateSince = DateTimeOffset.UnixEpoch,
+            OpenJobs = ["b1", "a2"],
+            TurnOverAt = DateTimeOffset.UnixEpoch.AddHours(1),
+            AwaitingToolResult = true,
+        };
+
+        var back = SessionRecord.FromSnapshot(snapshot).ToSnapshot();
+
+        back.OpenJobs.ShouldBe(["b1", "a2"]);
+        back.TurnOverAt.ShouldBe(snapshot.TurnOverAt);
+        back.AwaitingToolResult.ShouldBeTrue();
+
+        var none = SessionRecord.FromSnapshot(snapshot with { OpenJobs = [], TurnOverAt = null, AwaitingToolResult = false }).ToSnapshot();
+        none.OpenJobs.ShouldBeEmpty();
+        none.TurnOverAt.ShouldBeNull();
+        none.AwaitingToolResult.ShouldBeFalse();
+    }
+
+    [Fact]
     public void The_last_request_survives_the_record()
     {
         var snapshot = new SessionSnapshot

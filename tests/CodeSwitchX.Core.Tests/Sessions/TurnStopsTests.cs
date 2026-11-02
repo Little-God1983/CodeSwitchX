@@ -42,6 +42,19 @@ public sealed class TurnStopsTests : IDisposable
         _stops.StoppedLately("s1").ShouldBeTrue();
     }
 
+    /// <summary>#332: a turn that ended with a background job open has no next step for a stop to take.</summary>
+    [Fact]
+    public async Task A_turn_that_ended_on_a_background_job_ends_the_pending_stop()
+    {
+        Turn("s1", SessionState.Working, SessionState.Idle);
+        var stopped = _stops.Request("s1");
+
+        _bus.Publish(new SessionChanged(Snapshot("s1", SessionState.Working), Snapshot("s1", SessionState.Working) with { OpenJobs = ["b1"], TurnOverAt = _time.GetUtcNow() }));
+
+        stopped.IsCompleted.ShouldBeTrue();
+        (await stopped).ShouldBe(TurnStopOutcome.TurnEnded);
+    }
+
     /// <summary>#226: the turn a compaction's closed tab cuts off ends as if stopped here; the chat's next turn is news again.</summary>
     [Fact]
     public void A_turn_cut_off_on_purpose_ends_as_no_news_until_the_next_turn()

@@ -19,6 +19,15 @@ public sealed class SessionRecord
 
     /// <summary><see cref="SessionSnapshot.LastRequestAt"/>; null in a row stored before #331.</summary>
     public DateTimeOffset? LastRequestAt { get; set; }
+
+    /// <summary><see cref="SessionSnapshot.OpenJobs"/>, one id per line; null for none.</summary>
+    public string? OpenJobs { get; set; }
+
+    /// <summary><see cref="SessionSnapshot.TurnOverAt"/>.</summary>
+    public DateTimeOffset? TurnOverAt { get; set; }
+
+    /// <summary><see cref="SessionSnapshot.AwaitingToolResult"/>.</summary>
+    public bool AwaitingToolResult { get; set; }
     public string? Cwd { get; set; }
     public string? TranscriptPath { get; set; }
     public string? Model { get; set; }
@@ -60,6 +69,9 @@ public sealed class SessionRecord
         LastUseAt = s.LastUseAt;
         StateSince = s.StateSince;
         LastRequestAt = s.LastRequestAt;
+        OpenJobs = s.OpenJobs.Count > 0 ? string.Join('\n', s.OpenJobs) : null;
+        TurnOverAt = s.TurnOverAt;
+        AwaitingToolResult = s.AwaitingToolResult;
         Cwd = s.Cwd;
         TranscriptPath = s.TranscriptPath;
         Model = s.Model;
@@ -87,6 +99,9 @@ public sealed class SessionRecord
         LastUseAt = LastUseAt,
         StateSince = StateSince,
         LastRequestAt = LastRequestAt,
+        OpenJobs = OpenJobs?.Split('\n', StringSplitOptions.RemoveEmptyEntries) ?? [],
+        TurnOverAt = TurnOverAt,
+        AwaitingToolResult = AwaitingToolResult,
         Cwd = Cwd,
         TranscriptPath = TranscriptPath,
         Model = Model,

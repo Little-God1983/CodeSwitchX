@@ -67,7 +67,7 @@ public sealed class YardDirectory : IYardDirectory
                 var snapshot = _sessionOf(r.Row.Id);
                 return new YardChat(r.Row.Id, r.Row.Title, r.Workspace.Id, r.Workspace.Name, r.Row.State, r.Row.NeedsYou, r.Row.StateSince,
                     r.Row.StateFor, snapshot?.Model, r.Row.LastTool, r.Row.ContextFill, snapshot?.LastNotification, snapshot?.Cwd, _isVoice(r.Row.Id),
-                    _sendNameOf(r.Row.Id), r.Workspace.Number, r.Row.HasTab);
+                    _sendNameOf(r.Row.Id), r.Workspace.Number, r.Row.HasTab, snapshot?.TurnOverAt is not null);
             })
             .ToList();
     }

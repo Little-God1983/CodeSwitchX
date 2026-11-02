@@ -23,6 +23,31 @@ public sealed record SessionSnapshot
     /// Null while none was seen. Persisted.
     /// </summary>
     public DateTimeOffset? LastRequestAt { get; init; }
+
+    /// <summary>
+    /// The background jobs the chat has open (#332): started by its main agent, with no end seen yet. Any of them keeps it
+    /// Working through the end of its turn, with no limit: only their ends, the chat's end, its process going or a new process
+    /// takes them away. Persisted.
+    /// </summary>
+    public IReadOnlyList<string> OpenJobs { get; init; } = [];
+
+    /// <summary>
+    /// When the turn of a chat held by <see cref="OpenJobs"/> ended: it sits at its input prompt, with no step for a stop to
+    /// take. Null while a turn runs. Persisted.
+    /// </summary>
+    public DateTimeOffset? TurnOverAt { get; init; }
+
+    /// <summary>
+    /// When the last job of a chat whose turn was over ended, while the turn Claude Code starts on that end may still come.
+    /// Not persisted.
+    /// </summary>
+    public DateTimeOffset? JobsEndedAt { get; init; }
+
+    /// <summary>
+    /// Restored Working with a tool running and its process alive: no hook speaks during a long foreground command, so the
+    /// quiet does not say it is over. Until the transcript says so. Not persisted.
+    /// </summary>
+    public bool RestoredWorking { get; init; }
     public string? Cwd { get; init; }
     public string? TranscriptPath { get; init; }
     public string? Model { get; init; }
@@ -35,7 +60,7 @@ public sealed record SessionSnapshot
     /// <summary>True once a hook event arrived in this process; not persisted, so restored sessions follow inference until hooks speak again.</summary>
     public bool HookSeen { get; init; }
 
-    /// <summary>Transcript ends with a tool call awaiting its result; drives the inferred Working-to-Waiting decay. Not persisted.</summary>
+    /// <summary>Transcript ends with a tool call awaiting its result; drives the inferred Working-to-Waiting decay. Persisted: with it, a foreground command stays Working through a restart.</summary>
     public bool AwaitingToolResult { get; init; }
 
     /// <summary>

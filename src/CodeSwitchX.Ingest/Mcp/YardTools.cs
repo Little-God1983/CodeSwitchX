@@ -162,6 +162,7 @@ public sealed class YardTools(IYardDirectory yard, ChatAsks? asks = null, ChatSc
     internal static string StateText(YardChat chat) => chat.State switch
     {
         _ when chat.NeedsYou => "needs you",
+        SessionState.Working when chat.WaitsOnJobs => "waiting on a background job, its turn is over",
         SessionState.Working => "working",
         SessionState.Idle => "idle, its turn is over",
         SessionState.Starting => "starting",

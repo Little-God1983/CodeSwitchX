@@ -112,9 +112,23 @@ public sealed class SessionEngine : IDisposable
                     }
                 }
 
-                if (corrected.State == SessionState.Working && now - corrected.LastEventAt > _options.InferredIdleAfter)
+                // With no process to watch, nothing would ever clear a job with no end marker.
+                if (corrected.ClaudePid is null && corrected.OpenJobs.Count > 0)
+                {
+                    corrected = corrected with { OpenJobs = [], TurnOverAt = null };
+                }
+
+                // A chat still running a foreground command or holding a job has said all it will say until that is over. Any
+                // other quiet Working chat may have lost its Stop while the app was closed, and no later line would tell.
+                var runsTool = corrected.AwaitingToolResult && corrected.ClaudePid is not null;
+                if (corrected.State == SessionState.Working && now - corrected.LastEventAt > _options.InferredIdleAfter && !runsTool && corrected.OpenJobs.Count == 0)
                 {
                     corrected = corrected with { State = SessionState.Idle, StateSince = now };
+                }
+
+                if (corrected.State == SessionState.Working && runsTool)
+                {
+                    corrected = corrected with { RestoredWorking = true };
                 }
 
                 if (corrected.State == SessionState.Idle && now - corrected.LastEventAt >= _options.StaleAfter)
@@ -153,6 +167,15 @@ public sealed class SessionEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// How long the end of a chat's last job may go without a sign of the turn it starts before the chat counts as idle: most
+    /// such ends have a turn that reacts, but some have none (a quarter had no Stop within the hour).
+    /// </summary>
+    public static readonly TimeSpan JobEndSettle = TimeSpan.FromMinutes(2);
+
+    /// <summary>The jobs each chat's transcript told the end of, since its process started: a hook that comes after one opens nothing. Under <see cref="_gate"/>.</summary>
+    private readonly Dictionary<string, HashSet<string>> _endedJobs = new(StringComparer.Ordinal);
+
     public void Apply(HookEvent e)
     {
         ArgumentNullException.ThrowIfNull(e);
@@ -175,6 +198,13 @@ public sealed class SessionEngine : IDisposable
             else if (e.Signal is null && !e.Informational)
             {
                 _logger.LogInformation("Unknown hook event {EventName} for session {SessionId}", e.EventName, e.SessionId);
+            }
+
+            var jobs = JobsAfterLocked(e, signal, s);
+            var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs);
+            if (state == SessionState.Idle && jobs.Count > 0)
+            {
+                state = SessionState.Working;
             }
 
             var cwd = e.Cwd ?? s.Cwd;
@@ -214,9 +244,45 @@ public sealed class SessionEngine : IDisposable
                     _ => s.TurnFailed,
                 },
                 TurnStartedAt = e.EventName == "UserPromptSubmit" ? e.At : s.TurnStartedAt,
+                OpenJobs = jobs,
+                TurnOverAt = turnOver,
+                JobsEndedAt = signal is null ? s.JobsEndedAt : null,
             });
         }
     }
+
+    /// <summary>
+    /// The chat's open jobs once this event is applied (#332). A new process took the old ones with it, and so did the chat's
+    /// end; a compact, which has no signal, leaves them. A sub-agent's job is left out: its end may never reach the chat's
+    /// own transcript. The same list when nothing changed, as a snapshot compares by it.
+    /// </summary>
+    private IReadOnlyList<string> JobsAfterLocked(HookEvent e, SessionSignal? signal, SessionSnapshot s)
+    {
+        if (signal is SessionSignal.SessionStart or SessionSignal.SessionEnd)
+        {
+            _endedJobs.Remove(e.SessionId);
+            return s.OpenJobs.Count > 0 ? [] : s.OpenJobs;
+        }
+
+        return e.BackgroundJob is { } job && e.AgentId is null ? WithJob(s.OpenJobs, e.SessionId, job) : s.OpenJobs;
+    }
+
+    private IReadOnlyList<string> WithJob(IReadOnlyList<string> jobs, string sessionId, string job) =>
+        jobs.Contains(job) || (_endedJobs.TryGetValue(sessionId, out var ended) && ended.Contains(job)) ? jobs : [.. jobs, job];
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.TurnOverAt"/> once this event is applied: a stop, or the idle prompt notice, with jobs open
+    /// ends the turn; a prompt, a question or a step of the main agent is a turn again. A background agent's steps say nothing
+    /// about the chat's own turn.
+    /// </summary>
+    private static DateTimeOffset? TurnOverAfter(HookEvent e, SessionSignal? signal, SessionSnapshot s, IReadOnlyList<string> jobs) => signal switch
+    {
+        SessionSignal.Stop => jobs.Count > 0 ? e.At : null,
+        SessionSignal.IdlePrompt => jobs.Count > 0 ? s.TurnOverAt ?? e.At : null,
+        SessionSignal.ToolUse when e.AgentId is not null => s.TurnOverAt,
+        null => s.TurnOverAt,
+        _ => null,
+    };
 
     /// <summary>
     /// The signal an event carries once the chat's agents are told apart (<see cref="Agents"/>). Sub-agents run tools while
@@ -417,6 +483,33 @@ public sealed class SessionEngine : IDisposable
                 state = next;
             }
 
+            var jobs = JobsAfterLocked(u, s);
+            var turnOver = s.TurnOverAt;
+            var jobsEndedAt = s.JobsEndedAt;
+
+            // The turn is over, as Esc or the transcript's quiet tells it, but a job goes on.
+            if (state == SessionState.Idle && jobs.Count > 0)
+            {
+                stateSince = s.State == SessionState.Working ? s.StateSince : activityAt;
+                state = SessionState.Working;
+                turnOver ??= activityAt;
+            }
+            else if (jobs.Count == 0 && s.OpenJobs.Count > 0 && turnOver is { } over && state == SessionState.Working)
+            {
+                // The last job ended. A stop since then was the turn that reacted to it, read late: the chat is done. Else that
+                // turn may still come, and the sweep ends the wait if it does not.
+                turnOver = null;
+                if (u.JobsEnded.Max(j => j.At) <= over)
+                {
+                    state = SessionState.Idle;
+                    stateSince = activityAt;
+                }
+                else
+                {
+                    jobsEndedAt = u.JobsEnded.Max(j => j.At);
+                }
+            }
+
             var cwd = s.Cwd ?? u.Cwd;
             // Sub-agent transcripts carry usage for their own model and no Model; the parent's context bar keeps the parent's.
             var model = u.Model ?? s.Model;
@@ -434,8 +527,44 @@ public sealed class SessionEngine : IDisposable
                 LatestContext = u.LatestContext ?? s.LatestContext,
                 LastRequestAt = u.LastRequestAt is { } request && (s.LastRequestAt is not { } known || request > known) ? request : s.LastRequestAt,
                 AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
+                OpenJobs = jobs,
+                TurnOverAt = turnOver,
+                JobsEndedAt = jobsEndedAt,
+                RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
             });
         }
+    }
+
+    /// <summary>
+    /// The chat's open jobs once these lines are applied. A start counts only for a chat whose end or process can clear it, in
+    /// lines that are not old, and from since the chat began: a copy <c>claude --resume</c> made keeps its old time.
+    /// </summary>
+    private IReadOnlyList<string> JobsAfterLocked(TranscriptUpdate u, SessionSnapshot s)
+    {
+        var jobs = s.OpenJobs;
+        if (!u.Historical && (s.HookSeen || s.ClaudePid is not null))
+        {
+            foreach (var started in u.JobsStarted.Where(j => j.At >= s.StartedAt))
+            {
+                jobs = WithJob(jobs, s.SessionId, started.Id);
+            }
+        }
+
+        foreach (var ended in u.JobsEnded)
+        {
+            if (!_endedJobs.TryGetValue(s.SessionId, out var known))
+            {
+                _endedJobs[s.SessionId] = known = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            known.Add(ended.Id);
+            if (jobs.Contains(ended.Id))
+            {
+                jobs = jobs.Where(j => j != ended.Id).ToArray();
+            }
+        }
+
+        return jobs;
     }
 
     /// <summary>
@@ -488,7 +617,8 @@ public sealed class SessionEngine : IDisposable
                     SessionState.Idle when quiet >= _options.StaleAfter => SessionSignal.StaleTimeout,
                     // Only an unknown hook event leaves a session in Starting; nothing else would ever move it.
                     SessionState.Starting when quiet >= _options.InferredIdleAfter => SessionSignal.Stop,
-                    SessionState.Working when !s.HookSeen && quiet >= _options.InferredIdleAfter =>
+                    SessionState.Working when s.JobsEndedAt is not null && quiet >= JobEndSettle => SessionSignal.Stop,
+                    SessionState.Working when !s.HookSeen && !s.RestoredWorking && s.OpenJobs.Count == 0 && quiet >= _options.InferredIdleAfter =>
                         s.AwaitingToolResult ? SessionSignal.Notification : SessionSignal.Stop,
                     SessionState.Waiting when !s.HookSeen && s.ClaudePid is null && quiet >= _options.StaleAfter => SessionSignal.Stop,
                     _ => null,
@@ -581,7 +711,20 @@ public sealed class SessionEngine : IDisposable
             return;
         }
 
-        Commit(previous, previous with { State = next, StateSince = since ?? _time.GetUtcNow() });
+        var over = next is SessionState.Ended or SessionState.Errored;
+        if (over)
+        {
+            _endedJobs.Remove(sessionId);
+        }
+
+        Commit(previous, previous with
+        {
+            State = next,
+            StateSince = since ?? _time.GetUtcNow(),
+            OpenJobs = over && previous.OpenJobs.Count > 0 ? [] : previous.OpenJobs,
+            TurnOverAt = over ? null : previous.TurnOverAt,
+            JobsEndedAt = next == SessionState.Idle || over ? null : previous.JobsEndedAt,
+        });
     }
 
     /// <summary>

@@ -8,7 +8,7 @@ public sealed record AssistantLine(string Type, DateTimeOffset? Timestamp, strin
     string? MessageId, string? Model, TokenUsage? Usage, bool HasToolUse) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 
 public sealed record UserLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd,
-    string? Text, bool IsToolResult, bool IsMeta, bool IsInterrupt = false) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
+    string? Text, bool IsToolResult, bool IsMeta, bool IsInterrupt = false, string? BackgroundJob = null) : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 
 public sealed record SummaryLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, string Title)
     : TranscriptLine(Type, Timestamp, SessionId, Cwd);
@@ -21,6 +21,9 @@ public sealed record CustomTitleLine(string Type, DateTimeOffset? Timestamp, str
 /// Claude Code compacted the chat here: the conversation before it is replaced by a summary and the messages it kept,
 /// <paramref name="PostTokens"/> together (null when the line does not say). No reply with usage follows until the next turn.
 /// </summary>
+public sealed record JobEndLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, string Job)
+    : TranscriptLine(Type, Timestamp, SessionId, Cwd);
+
 public sealed record CompactBoundaryLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd, long? PostTokens)
     : TranscriptLine(Type, Timestamp, SessionId, Cwd);
 

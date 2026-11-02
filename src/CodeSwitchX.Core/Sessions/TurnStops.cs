@@ -181,7 +181,8 @@ public sealed class TurnStops : IDisposable
         var state = change.Current.State;
         lock (_lock)
         {
-            if (state == SessionState.Working)
+            // Working on through a background job (#332) is no turn any more: it has no next step to take a stop.
+            if (state == SessionState.Working && change.Current.TurnOverAt is null)
             {
                 // A new turn (told to continue, say, or typed in the tab): the stopped one is over, and this one's end is news
                 // again. A stop still asked was for a turn that ended unseen (the Yard lags the bus): it must not cut this one off.

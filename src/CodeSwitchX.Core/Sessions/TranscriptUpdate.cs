@@ -1,5 +1,8 @@
 namespace CodeSwitchX.Core.Sessions;
 
+/// <summary>A background job's start or end, as a transcript tells it.</summary>
+public readonly record struct BackgroundJobEvent(string Id, DateTimeOffset At);
+
 /// <summary>Facts the transcript indexer extracted from newly appended JSONL lines of one session.</summary>
 public sealed record TranscriptUpdate
 {
@@ -15,6 +18,10 @@ public sealed record TranscriptUpdate
 
     /// <summary>When the newest request of these lines began, by the first line of its reply; null when they hold none (a sub-agent's never do).</summary>
     public DateTimeOffset? LastRequestAt { get; init; }
+
+    /// <summary>Background jobs these lines start, and those they end (#332), in order; none from a sub-agent's file.</summary>
+    public IReadOnlyList<BackgroundJobEvent> JobsStarted { get; init; } = [];
+    public IReadOnlyList<BackgroundJobEvent> JobsEnded { get; init; } = [];
 
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }

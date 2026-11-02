@@ -5,6 +5,45 @@ namespace CodeSwitchX.Ingest.Tests.Transcripts;
 
 public class TranscriptLineParserTests
 {
+    [Theory]
+    [InlineData("""{"backgroundTaskId":"b1","stdout":""}""", "b1")]
+    [InlineData("""{"isAsync":true,"agentId":"a1","status":"async_launched"}""", "a1")]
+    [InlineData("""{"isAsync":false,"agentId":"a1"}""", null)]
+    [InlineData("""{"stdout":"ok"}""", null)]
+    [InlineData("\"plain text\"", null)]
+    public void A_tool_result_names_the_background_job_it_started(string result, string? job)
+    {
+        var line = $$"""{"type":"user","sessionId":"s1","timestamp":"2026-11-02T10:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]},"toolUseResult":{{result}} }""";
+
+        TranscriptLineParser.TryParse(line).ShouldBeOfType<UserLine>().BackgroundJob.ShouldBe(job);
+    }
+
+    private static string Queue(string operation, string content) =>
+        $$"""{"type":"queue-operation","operation":"{{operation}}","sessionId":"s1","timestamp":"2026-11-02T10:05:00.000Z","content":"{{content}}"}""";
+
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    [InlineData("stopped")]
+    public void A_task_notification_with_a_status_is_a_job_s_end(string status)
+    {
+        var line = Queue("enqueue", $"<task-notification>\\n<task-id>b1</task-id>\\n<status>{status}</status>\\n</task-notification>");
+
+        var end = TranscriptLineParser.TryParse(line).ShouldBeOfType<JobEndLine>();
+
+        end.Job.ShouldBe("b1");
+        end.Timestamp.ShouldBe(new DateTimeOffset(2026, 11, 2, 10, 5, 0, TimeSpan.Zero));
+    }
+
+    [Theory]
+    [InlineData("enqueue", "<task-notification>\\n<task-id>a1</task-id>\\n<summary>Agent is waiting on its own background work</summary>\\n</task-notification>")]
+    [InlineData("dequeue", "<task-notification>\\n<task-id>b1</task-id>\\n<status>completed</status>\\n</task-notification>")]
+    [InlineData("enqueue", "a prompt typed while the chat worked, with <status>completed</status> in it")]
+    public void Other_queue_lines_end_no_job(string operation, string content)
+    {
+        TranscriptLineParser.TryParse(Queue(operation, content)).ShouldBeOfType<OtherLine>();
+    }
+
     [Fact]
     public void Assistant_line_yields_usage_model_and_message_id()
     {
