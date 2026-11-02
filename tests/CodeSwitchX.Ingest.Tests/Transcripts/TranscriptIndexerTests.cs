@@ -223,6 +223,81 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task The_last_request_is_when_the_newest_reply_began()
+    {
+        File.WriteAllLines(Transcript("s1"),
+        [
+            User("s1", "go"),
+            Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:00:05.000Z"),
+            Assistant("s1", "msg_2", TextBlock, ts: "2026-09-23T10:00:08.000Z"),
+            Assistant("s1", "msg_2", ToolBlock, ts: "2026-09-23T10:02:00.000Z"),
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 8, TimeSpan.Zero),
+            "a reply's later lines are the same request, which the cache counts from its start");
+    }
+
+    [Fact]
+    public async Task A_reply_copied_into_a_second_transcript_file_tells_the_new_chat_its_last_request()
+    {
+        File.WriteAllLines(Transcript("first"), [User("first", "go"), Assistant("first", "msg_shared", TextBlock)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.Clear();
+
+        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Assistant("resumed", "msg_shared", TextBlock)]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.Single(u => u.SessionId == "resumed").LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero),
+            "claude --resume keeps a message's timestamp, and the resumed chat reads the same cache");
+    }
+
+    [Fact]
+    public async Task A_message_whose_first_line_has_no_counts_counts_from_the_line_that_has()
+    {
+        File.WriteAllLines(Transcript("s1"),
+        [
+            User("s1", "go"),
+            Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:00:05.000Z", input: 0, output: 0, cacheWrite: 0, cacheRead: 0),
+            Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:00:08.000Z"),
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 8, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task Lines_without_a_real_reply_are_no_request()
+    {
+        File.WriteAllLines(Transcript("s1"),
+        [
+            User("s1", "go"),
+            Synthetic("s1"),
+            Assistant("s1", "msg_zero", TextBlock, input: 0, output: 0, cacheWrite: 0, cacheRead: 0),
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().LastRequestAt.ShouldBeNull("an API error and a reply with all-zero counts read no cache");
+    }
+
+    [Fact]
+    public async Task A_sub_agents_request_is_not_the_parent_chats()
+    {
+        File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-abc.jsonl"), [User("parent", "Explore"), Assistant("parent", "m2", TextBlock, ts: "2026-09-23T10:30:00.000Z")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl")).LastRequestAt.ShouldBeNull("a sub-agent has a cache of its own");
+        _updates.Single(u => u.TranscriptPath == Transcript("parent")).LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero));
+    }
+
+    [Fact]
     public async Task Subagent_transcripts_contribute_usage_to_the_parent_but_never_its_title_model_or_context()
     {
         File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);

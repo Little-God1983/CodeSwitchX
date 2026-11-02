@@ -457,6 +457,7 @@ public sealed class TranscriptIndexer : BackgroundService
         string? model = null;
         DateTimeOffset? lastActivity = null;
         TokenUsage? latestContext = null;
+        DateTimeOffset? lastRequest = null;
         var pendingToolUse = state.PendingToolUse;
         var interrupted = state.CarriedInterrupt;
         var newMessageIds = new List<string>();
@@ -535,6 +536,19 @@ public sealed class TranscriptIndexer : BackgroundService
                     if (assistant.HasToolUse)
                     {
                         pendingToolUse = true;
+                    }
+
+                    // A message's first line with counts tells its request: on real transcripts half of them within 4 s of the
+                    // send, 99 % within 46 s. Its later lines ask nothing more of the cache. A copy `claude --resume` made keeps
+                    // its timestamp and reads the same cache, so it counts too; an old time moves nothing in the engine.
+                    if (assistant.Usage is { ContextTokens: > 0 } && assistant.MessageId is { } request && request != state.LastRequestId
+                        && assistant.Timestamp is { } began)
+                    {
+                        state.LastRequestId = request;
+                        if (lastRequest is null || began > lastRequest)
+                        {
+                            lastRequest = began;
+                        }
                     }
 
                     // Dedup across every file and across restarts (the ids are saved with the usage): `claude --resume`
@@ -680,6 +694,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Usage = usage,
             MessageIds = newMessageIds,
             LatestContext = latestContext,
+            LastRequestAt = lastRequest,
             InferredSignal = inferred,
             PendingToolUse = partial ? null : pendingToolUse,
             Interrupted = !partial && interrupted,
@@ -774,6 +789,9 @@ public sealed class TranscriptIndexer : BackgroundService
         /// before it. Claude Code stamps an assistant message when it starts, so assistant lines are in stamp order.
         /// </summary>
         public DateTimeOffset? LastCountedAt { get; set; }
+
+        /// <summary>The message whose first line last told a request, so its later lines do not. Not saved: a restart in the middle of a reply is off by that reply's time.</summary>
+        public string? LastRequestId { get; set; }
 
         /// <summary>
         /// The context of the smallest reply read from this file (0 before one, -1 for a cursor stored before it was kept);

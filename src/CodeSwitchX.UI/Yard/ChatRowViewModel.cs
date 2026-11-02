@@ -16,6 +16,15 @@ public sealed partial class ChatRowViewModel : ObservableObject
     [ObservableProperty] private double _contextFill;
     [ObservableProperty] private ContextPressure _pressure;
     [ObservableProperty] private bool _inferred;
+
+    /// <summary>How warm the chat's prompt cache still is (#331); Unknown while it made no request.</summary>
+    [ObservableProperty] private CacheWarmth _cacheWarmth;
+
+    /// <summary>What the row's gauge shows, 0 to 1.</summary>
+    [ObservableProperty] private double _cacheFill;
+
+    /// <summary>The gauge's tooltip, with the exact time left; null while nothing is known.</summary>
+    [ObservableProperty] private string? _cacheTip;
     [ObservableProperty] private string? _lastToolName;
 
     /// <summary>
@@ -42,6 +51,12 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     /// <summary>Whether a tab alone has a time to show: when its chat was last written in.</summary>
     private bool _timed;
+
+    /// <summary>When the chat last sent a request; null while none was seen.</summary>
+    private DateTimeOffset? _lastRequestAt;
+
+    /// <summary>For a tab alone: when its conversation was last written in. A write need not be a request, but no request is later.</summary>
+    private DateTimeOffset? _writtenAt;
 
     private OpenChatTab? _tab;
 
@@ -91,6 +106,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         Model = snapshot.Model;
         ContextFill = ContextFillCalculator.Fill(snapshot.LatestContext, pricing.ContextWindowOf(snapshot.Model));
         Pressure = ContextFillCalculator.Level(ContextFill);
+        _lastRequestAt = snapshot.LastRequestAt;
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(NeedsUser));
     }
@@ -116,6 +132,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
             // Nothing was heard of it: idle while its Claude Code runs, ended else, since it was last written in as far
             // as anyone knows. The time is shown only when it is known; the tab's own title is cut short, the conversation's is not.
             _ownTitle = conversation?.Title;
+            _writtenAt = conversation?.WrittenAt;
             StateSince = conversation?.WrittenAt ?? listedAt;
             LastTurnAt = conversation?.WrittenAt ?? DateTimeOffset.MinValue; // a list's writing is no use of the chat
             _timed = conversation is not null;
@@ -137,7 +154,35 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>What a tab nothing was said in yet is called.</summary>
     public const string NewChatTitle = "New chat";
 
-    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+    public void Tick(DateTimeOffset now)
+    {
+        ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+        ShowCache(now);
+    }
+
+    /// <summary>
+    /// The gauge. With no request known, a conversation last written in over an hour ago is cold all the same (#331: a chat
+    /// the app did not restore, as a tab alone and on after it starts); within the hour its time left is not known.
+    /// </summary>
+    private void ShowCache(DateTimeOffset now)
+    {
+        var left = _lastRequestAt is { } request ? CacheWarmthCalculator.Left(request, now)
+            : _writtenAt is { } written && CacheWarmthCalculator.Left(written, now) == TimeSpan.Zero ? TimeSpan.Zero
+            : (TimeSpan?)null;
+        CacheWarmth = left is { } known ? CacheWarmthCalculator.Level(known) : CacheWarmth.Unknown;
+        CacheFill = left is { } shown ? CacheWarmthCalculator.Fill(shown) : 0;
+        CacheTip = left is { } told ? FormatCacheTip(CacheWarmth, told) : null;
+    }
+
+    private static string FormatCacheTip(CacheWarmth warmth, TimeSpan left)
+    {
+        var minutes = (int)left.TotalMinutes;
+        return warmth switch
+        {
+            CacheWarmth.Cold => "Cache cold: its hour ran out",
+            _ => $"Cache {warmth.ToString().ToLowerInvariant()}: {(minutes == 0 ? "less than a minute" : minutes == 1 ? "1 minute" : $"{minutes} minutes")} left",
+        };
+    }
 
     public static string FormatElapsed(TimeSpan elapsed)
     {

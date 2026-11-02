@@ -164,6 +164,36 @@ public class DatabaseInitializerTests : IAsyncLifetime
             }, ignoreOrder: true);
     }
 
+    /// <summary>The cursors are past those replies, so the usage kept is all that still tells a stored chat's last request.</summary>
+    [Fact]
+    public async Task An_upgrade_gives_the_stored_chats_their_last_request_by_the_usage_kept()
+    {
+        await MigrateToAsync("20261102183609_SessionLastRequest");
+        var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+        long T(DateTimeOffset at) => at.UtcTicks;
+        await ExecuteAsync($"""
+            INSERT INTO "Sessions" ("Id", "Title", "TitleLocked", "State", "StartedAt", "LastEventAt", "StateSince", "Inferred",
+                                    "ContextInput", "ContextOutput", "ContextCacheWrite", "ContextCacheRead", "ContextCacheWrite1h", "LastRequestAt") VALUES
+              ('used', 't', 0, 'Idle', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0, NULL),
+              ('behind', 't', 0, 'Idle', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0, {T(now.AddMinutes(-40))}),
+              ('ahead', 't', 0, 'Idle', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0, {T(now.AddMinutes(-1))}),
+              ('silent', 't', 0, 'Idle', 0, {T(now)}, 0, 0, 0, 0, 0, 0, 0, NULL);
+            INSERT INTO "UsageBuckets" ("SessionId", "Model", "MinuteUtc", "Input", "Output", "CacheWrite", "CacheRead", "CacheWrite1h") VALUES
+              ('used', 'm', {T(now.AddMinutes(-30))}, 1, 1, 0, 0, 0),
+              ('used', 'n', {T(now.AddMinutes(-20))}, 1, 1, 0, 0, 0),
+              ('behind', 'm', {T(now.AddMinutes(-10))}, 1, 1, 0, 0, 0),
+              ('ahead', 'm', {T(now.AddMinutes(-5))}, 1, 1, 0, 0, 0);
+            """);
+
+        await InitializeWithinTenSecondsAsync();
+
+        (await _db.Get<ISessionStore>().GetActiveSinceAsync(DateTimeOffset.MinValue, TestContext.Current.CancellationToken)).ToDictionary(s => s.Id, s => s.LastRequestAt)
+            .ShouldBe(new Dictionary<string, DateTimeOffset?>
+            {
+                ["used"] = now.AddMinutes(-20), ["behind"] = now.AddMinutes(-10), ["ahead"] = now.AddMinutes(-1), ["silent"] = null,
+            }, ignoreOrder: true);
+    }
+
     [Fact]
     public async Task An_upgrade_marks_the_cursors_stored_before_titles_were_as_having_found_a_prompt_title()
     {

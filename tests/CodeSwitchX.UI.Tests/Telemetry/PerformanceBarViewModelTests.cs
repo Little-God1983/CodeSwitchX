@@ -65,6 +65,66 @@ public class PerformanceBarViewModelTests
         bar.WaitingSessions.ShouldBe(1);
     }
 
+    /// <summary>A live chat on a tile, last requesting <paramref name="minutesAgo"/> minutes ago; null when it made no request.</summary>
+    private void Chat(string id, int? minutesAgo, SessionSignal signal = SessionSignal.PromptSubmit)
+    {
+        var now = _h.Time.GetUtcNow();
+        _h.Engine.Apply(new HookEvent { SessionId = id, EventName = "Hook", Signal = signal, At = now, Cwd = _h.App.RootPath });
+        if (minutesAgo is { } ago)
+        {
+            _h.Engine.Apply(new TranscriptUpdate { SessionId = id, TranscriptPath = "p", ObservedAt = now, LastRequestAt = now.AddMinutes(-ago) });
+        }
+    }
+
+    [Fact]
+    public async Task Hot_and_cooling_count_the_active_chats_by_their_cache()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+
+        Chat("hot1", 1);
+        Chat("hot2", 39);
+        Chat("cooling", 40);
+        Chat("cold", 60);
+        Chat("unknown", null);
+
+        bar.HotChats.ShouldBe(2);
+        bar.CoolingChats.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_chat_that_is_over_counts_as_neither_though_its_cache_lives_on()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+
+        Chat("over", 1, SessionSignal.SessionEnd);
+
+        bar.ActiveSessions.ShouldBe(0);
+        bar.HotChats.ShouldBe(0, "the counts are a part of the active chats beside them");
+    }
+
+    [Fact]
+    public async Task Hot_and_cooling_follow_the_clock_with_no_chat_doing_anything()
+    {
+        var bar = _h.Shell.PerformanceBar;
+        await bar.InitializeAsync(CancellationToken.None);
+        _h.Resolver.SetRoots(WorkspaceResolver.RootsOf([_h.App]));
+        Chat("a", 0);
+        bar.HotChats.ShouldBe(1);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(41));
+
+        bar.HotChats.ShouldBe(0);
+        bar.CoolingChats.ShouldBe(1);
+
+        _h.Time.Advance(TimeSpan.FromMinutes(20));
+
+        bar.CoolingChats.ShouldBe(0, "a cold chat counts as neither");
+    }
+
     [Fact]
     public async Task Active_chats_are_the_live_rows_of_the_yard_not_stale_ones_or_chats_on_no_tile()
     {

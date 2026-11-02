@@ -237,6 +237,26 @@ public class SessionEngineTests
     }
 
     [Fact]
+    public void The_last_request_only_moves_on()
+    {
+        var first = _time.GetUtcNow();
+        _engine.Apply(Hook("SessionStart", SessionSignal.SessionStart));
+        _engine.Get("s1")!.LastRequestAt.ShouldBeNull();
+
+        _engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = first, LastRequestAt = first });
+        _engine.Get("s1")!.LastRequestAt.ShouldBe(first);
+
+        _engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = first, LastRequestAt = first.AddMinutes(-5) });
+        _engine.Get("s1")!.LastRequestAt.ShouldBe(first, "lines read late move nothing back");
+
+        _engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = first });
+        _engine.Get("s1")!.LastRequestAt.ShouldBe(first, "an update without a request leaves it");
+
+        _engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = first, LastRequestAt = first.AddMinutes(5) });
+        _engine.Get("s1")!.LastRequestAt.ShouldBe(first.AddMinutes(5));
+    }
+
+    [Fact]
     public void A_transcript_summary_title_replaces_a_prompt_title_but_not_a_user_rename()
     {
         _engine.Apply(Hook("UserPromptSubmit", SessionSignal.PromptSubmit, prompt: "first prompt"));

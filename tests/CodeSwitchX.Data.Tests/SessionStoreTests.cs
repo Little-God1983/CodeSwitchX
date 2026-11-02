@@ -146,6 +146,19 @@ public class SessionStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Upsert_keeps_the_later_last_request_when_the_chat_comes_back_as_a_fresh_snapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(Snapshot("s1", SessionState.Idle, _now.AddMinutes(-30)) with { LastRequestAt = _now.AddMinutes(-30) })], ct);
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { State = SessionState.Idle })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastRequestAt.ShouldBe(_now.AddMinutes(-30), "a reload asks nothing of the cache");
+
+        await _store.UpsertAsync([SessionRecord.FromSnapshot(FreshStart("s1", title: null) with { LastRequestAt = _now })], ct);
+        (await _store.GetActiveSinceAsync(_now.AddHours(-1), ct)).ShouldHaveSingleItem().LastRequestAt.ShouldBe(_now);
+    }
+
+    [Fact]
     public async Task Events_append_query_newest_first_and_prune()
     {
         await _store.AppendEventsAsync([

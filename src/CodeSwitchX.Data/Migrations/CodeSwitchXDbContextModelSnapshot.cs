@@ -137,6 +137,9 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<string>("LastNotification")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("LastRequestAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("LastToolName")
                         .HasColumnType("TEXT");
 
