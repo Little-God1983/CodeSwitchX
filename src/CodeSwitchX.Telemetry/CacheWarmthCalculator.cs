@@ -9,8 +9,9 @@ public enum CacheWarmth
 }
 
 /// <summary>
-/// How much of its hour a chat's prompt cache has left (#331). Measured on the transcripts: every cache write was a 1-hour
-/// one, and the cache was still there at 59.4 minutes and gone at 60.8. A cache lost early is not something a timer can tell.
+/// How much of its hour a chat's prompt cache has left (#331). Measured on the transcripts: every cache write of a chat itself
+/// was a 1-hour one, and the cache was still there at 59.4 minutes and gone at 60.8. Sub-agents write 5-minute ones, to caches
+/// of their own, which is why their requests do not count here. A cache lost early is not something a timer can tell.
 /// </summary>
 public static class CacheWarmthCalculator
 {
