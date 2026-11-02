@@ -1,8 +1,10 @@
 using System.Globalization;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Yard;
 
 namespace CodeSwitchX.UI.Tests.Yard;
@@ -124,6 +126,49 @@ public class ChatRowViewModelTests
 
         row.CacheWarmth.ShouldBe(CacheWarmth.Unknown);
         row.CacheTip.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_tab_alone_whose_conversation_was_written_over_an_hour_ago_is_cold()
+    {
+        var row = new ChatRowViewModel("s1");
+
+        row.ShowTab(new OpenChatTab("s1", "Old chat"), notRunning: true, new TabConversation(Now.AddHours(-2), null), Now);
+        row.Tick(Now);
+
+        row.CacheWarmth.ShouldBe(CacheWarmth.Cold, "no request can be later than the last write");
+        row.CacheFill.ShouldBe(1.0);
+        row.CacheTip.ShouldBe("Cache cold: its hour ran out");
+    }
+
+    [Fact]
+    public void A_tab_alone_written_in_within_the_hour_tells_no_temperature()
+    {
+        var row = new ChatRowViewModel("s1");
+
+        row.ShowTab(new OpenChatTab("s1", "Recent chat"), notRunning: true, new TabConversation(Now.AddMinutes(-10), null), Now);
+        row.Tick(Now);
+
+        row.CacheWarmth.ShouldBe(CacheWarmth.Unknown, "a write need not be a request, so the time left is not known");
+
+        row.Tick(Now.AddMinutes(50));
+
+        row.CacheWarmth.ShouldBe(CacheWarmth.Cold);
+    }
+
+    [Fact]
+    public void A_cold_tab_stays_cold_when_its_chat_starts_until_it_makes_a_request()
+    {
+        var row = new ChatRowViewModel("s1");
+        row.ShowTab(new OpenChatTab("s1", "Old chat"), notRunning: true, new TabConversation(Now.AddHours(-2), null), Now);
+
+        row.Update(Requested(null), Pricing);
+        row.Tick(Now);
+        row.CacheWarmth.ShouldBe(CacheWarmth.Cold, "starting a chat asks nothing of its cache");
+
+        row.Update(Requested(Now), Pricing);
+        row.Tick(Now);
+        row.CacheWarmth.ShouldBe(CacheWarmth.Hot);
     }
 
     [Fact]

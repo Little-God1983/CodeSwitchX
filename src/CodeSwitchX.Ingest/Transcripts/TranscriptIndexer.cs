@@ -538,6 +538,19 @@ public sealed class TranscriptIndexer : BackgroundService
                         pendingToolUse = true;
                     }
 
+                    // A message's first line with counts tells its request: on real transcripts half of them within 4 s of the
+                    // send, 99 % within 46 s. Its later lines ask nothing more of the cache. A copy `claude --resume` made keeps
+                    // its timestamp and reads the same cache, so it counts too; an old time moves nothing in the engine.
+                    if (assistant.Usage is { ContextTokens: > 0 } && assistant.MessageId is { } request && request != state.LastRequestId
+                        && assistant.Timestamp is { } began)
+                    {
+                        state.LastRequestId = request;
+                        if (lastRequest is null || began > lastRequest)
+                        {
+                            lastRequest = began;
+                        }
+                    }
+
                     // Dedup across every file and across restarts (the ids are saved with the usage): `claude --resume`
                     // replays earlier assistant messages, with their usage, into a new transcript. After a rewrite the file
                     // is read again, and what it held before was counted then (see FileState.Reset).
@@ -547,14 +560,6 @@ public sealed class TranscriptIndexer : BackgroundService
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
                         Reply(tokens);
                         newMessageIds.Add(id);
-
-                        // A message's first line is its request, as near as the file tells: the cache counts from there, and its
-                        // later lines, or a copy `claude --resume` made of it, ask nothing more of the cache.
-                        if (tokens.ContextTokens > 0 && assistant.Timestamp is { } began && (lastRequest is null || began > lastRequest))
-                        {
-                            lastRequest = began;
-                        }
-
                         if (assistant.Timestamp is { } at && (state.LastCountedAt is null || at > state.LastCountedAt))
                         {
                             state.LastCountedAt = at;
@@ -784,6 +789,9 @@ public sealed class TranscriptIndexer : BackgroundService
         /// before it. Claude Code stamps an assistant message when it starts, so assistant lines are in stamp order.
         /// </summary>
         public DateTimeOffset? LastCountedAt { get; set; }
+
+        /// <summary>The message whose first line last told a request, so its later lines do not. Not saved: a restart in the middle of a reply is off by that reply's time.</summary>
+        public string? LastRequestId { get; set; }
 
         /// <summary>
         /// The context of the smallest reply read from this file (0 before one, -1 for a cursor stored before it was kept);

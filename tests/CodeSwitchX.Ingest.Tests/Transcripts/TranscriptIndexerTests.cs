@@ -240,16 +240,32 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
-    public async Task A_reply_replayed_into_a_second_transcript_file_is_no_new_request()
+    public async Task A_reply_copied_into_a_second_transcript_file_tells_the_new_chat_its_last_request()
     {
         File.WriteAllLines(Transcript("first"), [User("first", "go"), Assistant("first", "msg_shared", TextBlock)]);
         await _indexer.ScanAsync(CancellationToken.None);
         _updates.Clear();
 
-        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Assistant("resumed", "msg_shared", TextBlock, ts: "2026-09-23T10:30:00.000Z")]);
+        File.WriteAllLines(Transcript("resumed"), [User("resumed", "go"), Assistant("resumed", "msg_shared", TextBlock)]);
         await _indexer.ScanAsync(CancellationToken.None);
 
-        _updates.Single(u => u.SessionId == "resumed").LastRequestAt.ShouldBeNull("claude --resume copies earlier messages, which asks nothing of the cache");
+        _updates.Single(u => u.SessionId == "resumed").LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero),
+            "claude --resume keeps a message's timestamp, and the resumed chat reads the same cache");
+    }
+
+    [Fact]
+    public async Task A_message_whose_first_line_has_no_counts_counts_from_the_line_that_has()
+    {
+        File.WriteAllLines(Transcript("s1"),
+        [
+            User("s1", "go"),
+            Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:00:05.000Z", input: 0, output: 0, cacheWrite: 0, cacheRead: 0),
+            Assistant("s1", "msg_1", TextBlock, ts: "2026-09-23T10:00:08.000Z"),
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.ShouldHaveSingleItem().LastRequestAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 8, TimeSpan.Zero));
     }
 
     [Fact]
