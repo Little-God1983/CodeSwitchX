@@ -203,6 +203,34 @@ public class RelayTests : IDisposable
         other.RootElement.TryGetProperty("keepsRules", out _).ShouldBeFalse();
     }
 
+    private static string? JobIn(string eventName, string payload)
+    {
+        using var doc = JsonDocument.Parse(Relay.BuildEnvelope(eventName, payload, DateTimeOffset.UtcNow, 1, []));
+        return doc.RootElement.TryGetProperty("backgroundJob", out var job) ? job.GetString() : null;
+    }
+
+    [Fact]
+    public void A_tool_use_that_went_to_the_background_names_its_job()
+    {
+        JobIn("PostToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"stdout":"","backgroundTaskId":"b88625p40"}}""").ShouldBe("b88625p40");
+        JobIn("PostToolUse", """{"session_id":"s1","tool_name":"Agent","tool_response":{"isAsync":true,"status":"async_launched","agentId":"a6b0"}}""").ShouldBe("a6b0");
+    }
+
+    [Fact]
+    public void A_big_tool_response_still_names_its_job()
+    {
+        var big = new string('x', 200_000);
+        JobIn("PostToolUse", "{\"session_id\":\"s1\",\"tool_name\":\"Agent\",\"tool_response\":{\"isAsync\":true,\"agentId\":\"a6b0\",\"prompt\":\"" + big + "\"}}").ShouldBe("a6b0");
+    }
+
+    [Fact]
+    public void Any_other_tool_use_names_no_job()
+    {
+        JobIn("PostToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"stdout":"ok"}}""").ShouldBeNull();
+        JobIn("PostToolUse", """{"session_id":"s1","tool_name":"Agent","tool_response":{"isAsync":false,"agentId":"a6b0"}}""").ShouldBeNull("a foreground agent is over when its tool use is");
+        JobIn("PreToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"backgroundTaskId":"b1"}}""").ShouldBeNull();
+    }
+
     private static string? HashIn(string envelope)
     {
         using var doc = JsonDocument.Parse(envelope);

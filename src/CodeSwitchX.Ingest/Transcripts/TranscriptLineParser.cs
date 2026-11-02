@@ -66,7 +66,7 @@ public static class TranscriptLineParser
                         isMeta = true;
                     }
 
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt);
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, BackgroundJobOf(root));
                 }
 
                 // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
@@ -82,6 +82,10 @@ public static class TranscriptLineParser
                         ? new CustomTitleLine(type, timestamp, sessionId, cwd, custom)
                         : new OtherLine(type, timestamp, sessionId, cwd);
 
+                // Claude Code queues a task notification as a job ends. One with no status says something else about the job.
+                case "queue-operation" when GetString(root, "operation") == "enqueue" && JobEndedIn(GetString(root, "content")) is { } job:
+                    return new JobEndLine(type, timestamp, sessionId, cwd, job);
+
                 case "system" when GetString(root, "subtype") == "compact_boundary":
                     return new CompactBoundaryLine(type, timestamp, sessionId, cwd,
                         root.TryGetProperty("compactMetadata", out var compact) && compact.ValueKind == JsonValueKind.Object
@@ -94,6 +98,31 @@ public static class TranscriptLineParser
                     return new OtherLine(type, timestamp, sessionId, cwd);
             }
         }
+    }
+
+    /// <summary>The background job a tool result started: a command's task id, or the agent id of an agent that runs on by itself.</summary>
+    private static string? BackgroundJobOf(JsonElement root)
+    {
+        if (!root.TryGetProperty("toolUseResult", out var result) || result.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return GetString(result, "backgroundTaskId")
+            ?? (result.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True ? GetString(result, "agentId") : null);
+    }
+
+    private static string? JobEndedIn(string? content)
+    {
+        const string start = "<task-id>", end = "</task-id>";
+        if (content is null || !content.StartsWith("<task-notification>", StringComparison.Ordinal) || !content.Contains("<status>", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var from = content.IndexOf(start, StringComparison.Ordinal);
+        var to = from < 0 ? -1 : content.IndexOf(end, from, StringComparison.Ordinal);
+        return to < 0 ? null : content[(from + start.Length)..to];
     }
 
     private static TokenUsage? ParseUsage(JsonElement message)

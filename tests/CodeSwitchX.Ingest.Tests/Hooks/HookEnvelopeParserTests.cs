@@ -36,6 +36,17 @@ public class HookEnvelopeParserTests
     }
 
     [Fact]
+    public void The_relay_s_background_job_is_read_from_the_envelope()
+    {
+        const string json = """
+            {"event":"PostToolUse","relayPid":1,"parentChain":[],"backgroundJob":"b88625p40","payload":{"session_id":"abc","hook_event_name":"PostToolUse","tool_name":"Bash"}}
+            """;
+
+        HookEnvelopeParser.Parse(json, Received).ShouldNotBeNull().BackgroundJob.ShouldBe("b88625p40");
+        HookEnvelopeParser.Parse(json.Replace("\"backgroundJob\":\"b88625p40\",", ""), Received).ShouldNotBeNull().BackgroundJob.ShouldBeNull();
+    }
+
+    [Fact]
     public void The_relay_s_fingerprint_of_the_tool_input_is_read_from_the_envelope()
     {
         var json = """

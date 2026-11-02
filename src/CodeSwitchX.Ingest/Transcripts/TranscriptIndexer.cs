@@ -458,6 +458,8 @@ public sealed class TranscriptIndexer : BackgroundService
         DateTimeOffset? lastActivity = null;
         TokenUsage? latestContext = null;
         DateTimeOffset? lastRequest = null;
+        var jobsStarted = new List<BackgroundJobEvent>();
+        var jobsEnded = new List<BackgroundJobEvent>();
         var pendingToolUse = state.PendingToolUse;
         var interrupted = state.CarriedInterrupt;
         var newMessageIds = new List<string>();
@@ -586,7 +588,17 @@ public sealed class TranscriptIndexer : BackgroundService
 
                     break;
 
+                // A sub-agent's jobs are not the chat's; and its file is no place for theirs to end.
+                case JobEndLine end when !subagent && end.Timestamp is { } endedAt:
+                    jobsEnded.Add(new BackgroundJobEvent(end.Job, endedAt));
+                    break;
+
                 case UserLine user:
+                    if (!subagent && user.BackgroundJob is { } job && user.Timestamp is { } startedAt)
+                    {
+                        jobsStarted.Add(new BackgroundJobEvent(job, startedAt));
+                    }
+
                     if (user.IsInterrupt)
                     {
                         // Esc: the turn is over and no tool result will come; Claude Code fires no Stop hook for this.
@@ -695,6 +707,8 @@ public sealed class TranscriptIndexer : BackgroundService
             MessageIds = newMessageIds,
             LatestContext = latestContext,
             LastRequestAt = lastRequest,
+            JobsStarted = jobsStarted,
+            JobsEnded = jobsEnded,
             InferredSignal = inferred,
             PendingToolUse = partial ? null : pendingToolUse,
             Interrupted = !partial && interrupted,

@@ -445,11 +445,16 @@ public sealed class YardActionTools(IYardDirectory yard, IYardActions actions, C
         CancellationToken cancellationToken = default)
     {
         var one = On(string.IsNullOrWhiteSpace(chat)
-            ? await WindowChatAsync(c => c.State == SessionState.Working && !c.NeedsYou, "to stop", "is working", cancellationToken).ConfigureAwait(false)
+            ? await WindowChatAsync(c => c.State == SessionState.Working && !c.NeedsYou && !c.WaitsOnJobs, "to stop", "is working", cancellationToken).ConfigureAwait(false)
             : await OneChatAsync(chat, "", cancellationToken).ConfigureAwait(false), "stop_chat");
         if (one.NeedsYou)
         {
             throw new McpException($"The {one.Title} chat is waiting for the user, not working: they can answer or refuse it in its VS Code tab. Nothing was stopped.");
+        }
+
+        if (one.WaitsOnJobs)
+        {
+            throw new McpException($"The {one.Title} chat has ended its turn and waits on a background job: there is no turn to stop, and this would not end the job. Nothing was stopped.");
         }
 
         if (one.State != SessionState.Working)

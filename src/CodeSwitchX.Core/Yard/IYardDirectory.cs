@@ -42,6 +42,7 @@ public sealed record YardGitLine(string? Folder, string? Branch, string? Changes
 /// VS Code lists a tab of it in the workspace's window (#297), running or not; false for one closed and kept greyed, one run
 /// elsewhere, and one whose tab VS Code has not written down yet.
 /// </param>
+/// <param name="WaitsOnJobs">Its turn is over and only a background job keeps it Working (#332): it sits at its input prompt.</param>
 public sealed record YardChat(string Id, string Title, Guid WorkspaceId, string Workspace, SessionState State, bool NeedsYou, DateTimeOffset StateSince,
     string StateFor, string? Model, string? LastTool, double ContextFill, string? LastNotification, string? Cwd, bool Voice = false,
-    string? SendName = null, int WorkspaceNumber = 0, bool HasTab = false);
+    string? SendName = null, int WorkspaceNumber = 0, bool HasTab = false, bool WaitsOnJobs = false);

@@ -222,6 +222,43 @@ public class TranscriptIndexerTests : IDisposable
         _updates.Single(u => u.SessionId == "new").Historical.ShouldBeFalse();
     }
 
+    private static string JobStart(string session, string job, string ts = "2026-09-23T10:00:06.000Z") =>
+        $$"""{"type":"user","sessionId":"{{session}}","timestamp":"{{ts}}","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"started"}]},"toolUseResult":{"backgroundTaskId":"{{job}}"} }""";
+
+    private static string JobEnd(string session, string job, string ts = "2026-09-23T10:00:09.000Z") =>
+        $$"""{"type":"queue-operation","operation":"enqueue","sessionId":"{{session}}","timestamp":"{{ts}}","content":"<task-notification>\n<task-id>{{job}}</task-id>\n<status>completed</status>\n</task-notification>"}""";
+
+    [Fact]
+    public async Task A_job_s_start_and_end_go_out_with_their_times()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "m1", ToolBlock), JobStart("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().JobsStarted.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 6, TimeSpan.Zero))]);
+        _updates.Clear();
+
+        File.AppendAllLines(Transcript("s1"), [JobEnd("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.JobsStarted.ShouldBeEmpty();
+        update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
+    }
+
+    [Fact]
+    public async Task A_sub_agent_s_file_tells_no_job_of_the_chat()
+    {
+        File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-abc.jsonl"), [JobStart("parent", "b1"), JobEnd("parent", "b2")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var subagent = _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl"));
+        subagent.JobsStarted.ShouldBeEmpty();
+        subagent.JobsEnded.ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task The_last_request_is_when_the_newest_reply_began()
     {

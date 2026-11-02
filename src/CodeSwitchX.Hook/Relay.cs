@@ -267,6 +267,12 @@ internal static class Relay
                         writer.WriteString("toolInputHash", ToolInputHash(input));
                     }
 
+                    // Taken before anything is cut too: the turn's Stop follows at once, sooner than the transcript is read (#332).
+                    if (eventName == "PostToolUse" && BackgroundJobOf(document.RootElement) is { } job)
+                    {
+                        writer.WriteString("backgroundJob", job);
+                    }
+
                     writer.WritePropertyName("payload");
                     WriteValue(writer, document.RootElement, top: true, maxNestedBytes, keepStrings);
                 }
@@ -281,6 +287,23 @@ internal static class Relay
         }
 
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
+    }
+
+    /// <summary>The background job a tool use started (#332): a command's task id, or the agent id of an agent that runs on by itself.</summary>
+    private static string? BackgroundJobOf(JsonElement payload)
+    {
+        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty("tool_response", out var response) || response.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (response.TryGetProperty("backgroundTaskId", out var task) && task.ValueKind == JsonValueKind.String)
+        {
+            return task.GetString();
+        }
+
+        return response.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True
+            && response.TryGetProperty("agentId", out var agent) && agent.ValueKind == JsonValueKind.String ? agent.GetString() : null;
     }
 
     /// <summary>

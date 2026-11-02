@@ -18,6 +18,9 @@ public sealed record HookEvent
     public string? ToolName { get; init; }
     public string? ToolUseId { get; init; }
 
+    /// <summary>The background job this tool use started, the relay's on a PostToolUse (#332). Null for any other, and from an older relay.</summary>
+    public string? BackgroundJob { get; init; }
+
     /// <summary>
     /// A fingerprint of the tool's input, the relay's: the same in a tool use's PreToolUse and in the PermissionRequest it
     /// raises, which names no tool use of its own. Null without a tool input, and from a relay older than permission prompts.

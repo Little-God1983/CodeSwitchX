@@ -107,6 +107,9 @@ namespace CodeSwitchX.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("AwaitingToolResult")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("ClaudePid")
                         .HasColumnType("INTEGER");
 
@@ -149,6 +152,9 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<string>("Model")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OpenJobs")
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("StartedAt")
                         .HasColumnType("INTEGER");
 
@@ -168,6 +174,9 @@ namespace CodeSwitchX.Data.Migrations
 
                     b.Property<string>("TranscriptPath")
                         .HasColumnType("TEXT");
+
+                    b.Property<long?>("TurnOverAt")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("WindowFolders")
                         .HasColumnType("TEXT");

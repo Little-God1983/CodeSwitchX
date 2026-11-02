@@ -365,6 +365,17 @@ public sealed class YardActionToolsTests
     }
 
     [Fact]
+    public async Task A_chat_that_only_waits_on_a_background_job_has_no_turn_to_stop()
+    {
+        var index = _yard.Chats.FindIndex(c => c.State == SessionState.Working);
+        _yard.Chats[index] = _yard.Chats[index] with { WaitsOnJobs = true };
+
+        (await Should.ThrowAsync<McpException>(() => Tools.StopChat(_yard.Chats[index].Id, Ct))).Message.ShouldContain("waits on a background job");
+
+        _actions.Calls.ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task A_chat_VS_Code_cannot_close_is_said()
     {
         _actions.Refusal = "VS Code did not close the chat: That chat is not in a tab of this VS Code window.";
