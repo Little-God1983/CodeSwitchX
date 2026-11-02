@@ -16,6 +16,15 @@ public sealed partial class ChatRowViewModel : ObservableObject
     [ObservableProperty] private double _contextFill;
     [ObservableProperty] private ContextPressure _pressure;
     [ObservableProperty] private bool _inferred;
+
+    /// <summary>How warm the chat's prompt cache still is (#331); Unknown while it made no request.</summary>
+    [ObservableProperty] private CacheWarmth _cacheWarmth;
+
+    /// <summary>What the row's gauge shows, 0 to 1.</summary>
+    [ObservableProperty] private double _cacheFill;
+
+    /// <summary>The gauge's tooltip, with the exact time left; null while nothing is known.</summary>
+    [ObservableProperty] private string? _cacheTip;
     [ObservableProperty] private string? _lastToolName;
 
     /// <summary>
@@ -42,6 +51,9 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     /// <summary>Whether a tab alone has a time to show: when its chat was last written in.</summary>
     private bool _timed;
+
+    /// <summary>When the chat last sent a request; null while none was seen.</summary>
+    private DateTimeOffset? _lastRequestAt;
 
     private OpenChatTab? _tab;
 
@@ -91,6 +103,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         Model = snapshot.Model;
         ContextFill = ContextFillCalculator.Fill(snapshot.LatestContext, pricing.ContextWindowOf(snapshot.Model));
         Pressure = ContextFillCalculator.Level(ContextFill);
+        _lastRequestAt = snapshot.LastRequestAt;
         OnPropertyChanged(nameof(IsLive));
         OnPropertyChanged(nameof(NeedsUser));
     }
@@ -137,7 +150,27 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>What a tab nothing was said in yet is called.</summary>
     public const string NewChatTitle = "New chat";
 
-    public void Tick(DateTimeOffset now) => ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+    public void Tick(DateTimeOffset now)
+    {
+        ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+        if (_lastRequestAt is { } request)
+        {
+            var left = CacheWarmthCalculator.Left(request, now);
+            CacheWarmth = CacheWarmthCalculator.Level(left);
+            CacheFill = CacheWarmthCalculator.Fill(left);
+            CacheTip = FormatCacheTip(CacheWarmth, left);
+        }
+    }
+
+    private static string FormatCacheTip(CacheWarmth warmth, TimeSpan left)
+    {
+        var minutes = (int)left.TotalMinutes;
+        return warmth switch
+        {
+            CacheWarmth.Cold => "Cache cold: its hour ran out",
+            _ => $"Cache {warmth.ToString().ToLowerInvariant()}: {(minutes == 0 ? "less than a minute" : minutes == 1 ? "1 minute" : $"{minutes} minutes")} left",
+        };
+    }
 
     public static string FormatElapsed(TimeSpan elapsed)
     {

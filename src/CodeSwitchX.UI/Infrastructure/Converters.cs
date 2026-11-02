@@ -68,6 +68,22 @@ public sealed class PressureToBrushConverter : IValueConverter
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
 }
 
+public sealed class CacheWarmthToBrushConverter : IValueConverter
+{
+    private static readonly Brush Hot = SessionStateToBrushConverter.Freeze("#FF6B2C");
+    private static readonly Brush Warm = SessionStateToBrushConverter.Freeze("#F2A33A");
+    private static readonly Brush Cold = SessionStateToBrushConverter.Freeze("#7CC4FF");
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
+    {
+        CacheWarmth.Hot => Hot,
+        CacheWarmth.Warm => Warm,
+        _ => Cold,
+    };
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+}
+
 public sealed class HostStateToTextConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch

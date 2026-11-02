@@ -432,6 +432,7 @@ public sealed class SessionEngine : IDisposable
                 Model = model,
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
                 LatestContext = u.LatestContext ?? s.LatestContext,
+                LastRequestAt = u.LastRequestAt is { } request && (s.LastRequestAt is not { } known || request > known) ? request : s.LastRequestAt,
                 AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
             });
         }

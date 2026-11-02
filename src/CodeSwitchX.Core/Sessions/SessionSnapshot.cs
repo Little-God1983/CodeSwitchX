@@ -17,6 +17,12 @@ public sealed record SessionSnapshot
     /// </summary>
     public DateTimeOffset? LastUseAt { get; init; }
     public required DateTimeOffset StateSince { get; init; }
+
+    /// <summary>
+    /// When the chat last sent Claude a request, as told by its transcript (#331): what its prompt cache counts its hour from.
+    /// Null while none was seen. Persisted.
+    /// </summary>
+    public DateTimeOffset? LastRequestAt { get; init; }
     public string? Cwd { get; init; }
     public string? TranscriptPath { get; init; }
     public string? Model { get; init; }

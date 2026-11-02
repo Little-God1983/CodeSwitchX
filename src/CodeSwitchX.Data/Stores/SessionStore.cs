@@ -52,7 +52,7 @@ public sealed class SessionStore : ISessionStore
         {
             if (existing.TryGetValue(record.Id, out var row))
             {
-                var stored = (row.Title, row.TitleLocked, row.StartedAt, row.LastUseAt);
+                var stored = (row.Title, row.TitleLocked, row.StartedAt, row.LastUseAt, row.LastRequestAt);
                 db.Entry(row).CurrentValues.SetValues(record);
                 // Nothing unlocks a title (SessionEngine.Rename only locks), so an unlocked record here is a fresh snapshot.
                 // A feature that resets a title to automatic has to change this merge as well.
@@ -74,6 +74,11 @@ public sealed class SessionStore : ISessionStore
                 if (stored.LastUseAt is { } storedUse && (record.LastUseAt is not { } use || storedUse > use))
                 {
                     row.LastUseAt = storedUse;
+                }
+
+                if (stored.LastRequestAt is { } storedRequest && (record.LastRequestAt is not { } request || storedRequest > request))
+                {
+                    row.LastRequestAt = storedRequest;
                 }
             }
             else

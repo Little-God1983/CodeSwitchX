@@ -1,6 +1,8 @@
+using System.Globalization;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Yard;
 
 namespace CodeSwitchX.UI.Tests.Yard;
@@ -70,6 +72,67 @@ public class ChatRowViewModelTests
 
         row.ContextFill.ShouldBe(0.0, "the window of a model without a rule is not known");
         row.Pressure.ShouldBe(ContextPressure.Normal);
+    }
+
+    private static SessionSnapshot Requested(DateTimeOffset? at) => new()
+    {
+        SessionId = "s1", State = SessionState.Idle, StartedAt = Now.AddHours(-3), LastEventAt = Now, StateSince = Now, LastRequestAt = at,
+    };
+
+    [Theory]
+    [InlineData(720, CacheWarmth.Hot, "Cache hot: 48 minutes left")]
+    [InlineData(2_640, CacheWarmth.Warm, "Cache warm: 16 minutes left")]
+    [InlineData(3_540, CacheWarmth.Warm, "Cache warm: 1 minute left")]
+    [InlineData(3_570, CacheWarmth.Warm, "Cache warm: less than a minute left")]
+    [InlineData(4_200, CacheWarmth.Cold, "Cache cold: its hour ran out")]
+    public void The_gauge_shows_how_warm_the_cache_is(int secondsAgo, CacheWarmth warmth, string tip)
+    {
+        var row = new ChatRowViewModel("s1");
+        row.Update(Requested(Now.AddSeconds(-secondsAgo)), Pricing);
+
+        row.Tick(Now);
+
+        row.CacheWarmth.ShouldBe(warmth);
+        row.CacheTip.ShouldBe(tip);
+    }
+
+    [Fact]
+    public void The_gauge_drains_as_time_goes_by_and_fills_again_with_a_new_request()
+    {
+        var row = new ChatRowViewModel("s1");
+        row.Update(Requested(Now), Pricing);
+        row.Tick(Now);
+        row.CacheFill.ShouldBe(1.0);
+
+        row.Tick(Now.AddMinutes(44));
+        row.CacheFill.ShouldBe(16.0 / 60, tolerance: 1e-9);
+        row.CacheWarmth.ShouldBe(CacheWarmth.Warm);
+
+        row.Update(Requested(Now.AddMinutes(44)), Pricing);
+        row.Tick(Now.AddMinutes(44));
+        row.CacheFill.ShouldBe(1.0);
+        row.CacheWarmth.ShouldBe(CacheWarmth.Hot);
+    }
+
+    [Fact]
+    public void A_chat_that_made_no_request_shows_no_temperature()
+    {
+        var row = new ChatRowViewModel("s1");
+        row.Update(Requested(null), Pricing);
+
+        row.Tick(Now);
+
+        row.CacheWarmth.ShouldBe(CacheWarmth.Unknown);
+        row.CacheTip.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Each_temperature_has_a_colour_of_its_own()
+    {
+        var converter = new CacheWarmthToBrushConverter();
+        var brushes = new[] { CacheWarmth.Hot, CacheWarmth.Warm, CacheWarmth.Cold }.Select(w => converter.Convert(w, typeof(object), null, CultureInfo.InvariantCulture)).ToList();
+
+        brushes.Distinct().Count().ShouldBe(3);
     }
 
     [Fact]

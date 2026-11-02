@@ -9,6 +9,7 @@
     <infra:SessionStateToBrushConverter x:Key="StateBrush" />
     <infra:HexToBrushConverter x:Key="HexBrush" />
     <infra:PressureToBrushConverter x:Key="PressureBrush" />
+    <infra:CacheWarmthToBrushConverter x:Key="CacheBrush" />
     <infra:HostStateToTextConverter x:Key="HostStateText" />
     <infra:EnumEqualsToVisibilityConverter x:Key="EnumVisible" />
     <infra:NullToCollapsedConverter x:Key="NullToCollapsed" />

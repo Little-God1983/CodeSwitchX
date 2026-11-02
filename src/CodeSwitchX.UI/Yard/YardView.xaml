@@ -69,6 +69,20 @@
           <TextBlock Text="inferred" FontSize="10" Opacity="0.6" Margin="0,0,6,0"
                      Visibility="{Binding Inferred, Converter={StaticResource BoolVisible}}" ToolTip="Hooks not installed: state guessed from the transcript" />
           <TextBlock Text="{Binding ElapsedText}" FontSize="11" Opacity="0.7" MinWidth="34" TextAlignment="Right" />
+          <!-- How warm the chat's prompt cache still is (#331). Hidden rather than collapsed while unknown, so the times of a tile stay in line. -->
+          <ProgressBar Width="30" Height="6" Margin="6,0,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" AutomationProperties.Name="Cache temperature"
+                       Value="{Binding CacheFill, Mode=OneWay}" Foreground="{Binding CacheWarmth, Converter={StaticResource CacheBrush}}"
+                       BorderThickness="0" Background="#22FFFFFF" ToolTip="{Binding CacheTip}">
+            <ProgressBar.Style>
+              <Style TargetType="ProgressBar" BasedOn="{StaticResource {x:Type ProgressBar}}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding CacheWarmth}" Value="Unknown">
+                    <Setter Property="Visibility" Value="Hidden" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ProgressBar.Style>
+          </ProgressBar>
         </StackPanel>
         <ProgressBar Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="4,0,0,0" Height="3" Minimum="0" Maximum="1"
                      Value="{Binding ContextFill, Mode=OneWay}" Foreground="{Binding Pressure, Converter={StaticResource PressureBrush}}"

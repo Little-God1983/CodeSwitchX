@@ -457,6 +457,7 @@ public sealed class TranscriptIndexer : BackgroundService
         string? model = null;
         DateTimeOffset? lastActivity = null;
         TokenUsage? latestContext = null;
+        DateTimeOffset? lastRequest = null;
         var pendingToolUse = state.PendingToolUse;
         var interrupted = state.CarriedInterrupt;
         var newMessageIds = new List<string>();
@@ -546,6 +547,14 @@ public sealed class TranscriptIndexer : BackgroundService
                         usage.Add(new UsageDelta(assistant.Model ?? model ?? "unknown", assistant.Timestamp ?? _time.GetUtcNow(), tokens));
                         Reply(tokens);
                         newMessageIds.Add(id);
+
+                        // A message's first line is its request, as near as the file tells: the cache counts from there, and its
+                        // later lines, or a copy `claude --resume` made of it, ask nothing more of the cache.
+                        if (tokens.ContextTokens > 0 && assistant.Timestamp is { } began && (lastRequest is null || began > lastRequest))
+                        {
+                            lastRequest = began;
+                        }
+
                         if (assistant.Timestamp is { } at && (state.LastCountedAt is null || at > state.LastCountedAt))
                         {
                             state.LastCountedAt = at;
@@ -680,6 +689,7 @@ public sealed class TranscriptIndexer : BackgroundService
             Usage = usage,
             MessageIds = newMessageIds,
             LatestContext = latestContext,
+            LastRequestAt = lastRequest,
             InferredSignal = inferred,
             PendingToolUse = partial ? null : pendingToolUse,
             Interrupted = !partial && interrupted,

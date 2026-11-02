@@ -56,6 +56,23 @@ public class SessionRecordTests
     }
 
     [Fact]
+    public void The_last_request_survives_the_record()
+    {
+        var snapshot = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Idle,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch.AddHours(2),
+            StateSince = DateTimeOffset.UnixEpoch,
+            LastRequestAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        };
+
+        SessionRecord.FromSnapshot(snapshot).ToSnapshot().LastRequestAt.ShouldBe(snapshot.LastRequestAt);
+        SessionRecord.FromSnapshot(snapshot with { LastRequestAt = null }).ToSnapshot().LastRequestAt.ShouldBeNull();
+    }
+
+    [Fact]
     public void Each_fact_that_shows_a_chat_held_a_conversation_survives_the_record()
     {
         var bare = new SessionSnapshot

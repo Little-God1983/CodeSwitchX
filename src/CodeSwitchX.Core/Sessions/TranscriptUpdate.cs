@@ -13,6 +13,9 @@ public sealed record TranscriptUpdate
     public IReadOnlyList<UsageDelta> Usage { get; init; } = [];
     public TokenUsage? LatestContext { get; init; }
 
+    /// <summary>When the newest request of these lines began, by the first line of its reply; null when they hold none (a sub-agent's never do).</summary>
+    public DateTimeOffset? LastRequestAt { get; init; }
+
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
 
