@@ -92,7 +92,9 @@ public sealed class GitHubReader(IGhCli gh)
         {
             using var doc = JsonDocument.Parse(output);
             var rows = doc.RootElement.EnumerateArray().Select(row => ParseItem(row, graphql: false, isPullRequest)).ToList();
-            return new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
+            var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
+            // Not one row read: the format is not what it was, which is a read that failed, not a repository with nothing in it.
+            return list.Items.Count == 0 && list.Skipped > 0 ? null : list;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
@@ -125,13 +127,15 @@ public sealed class GitHubReader(IGhCli gh)
 
             var issues = node.GetProperty("issues");
             var pullRequests = node.GetProperty("pullRequests");
-            var activity = new RepoActivity(
-                repo,
-                account,
-                issues.GetProperty("totalCount").GetInt32(),
-                pullRequests.GetProperty("totalCount").GetInt32(),
-                issues.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, false)).OfType<GitHubItem>().ToList(),
-                pullRequests.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, true)).OfType<GitHubItem>().ToList());
+            var issueCount = issues.GetProperty("totalCount").GetInt32();
+            var pullRequestCount = pullRequests.GetProperty("totalCount").GetInt32();
+            if (Newest(issues, issueCount, isPullRequest: false) is not { } newestIssues
+                || Newest(pullRequests, pullRequestCount, isPullRequest: true) is not { } newestPullRequests)
+            {
+                return new AccountRead();
+            }
+
+            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests);
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
@@ -139,6 +143,14 @@ public sealed class GitHubReader(IGhCli gh)
         {
             return new AccountRead();
         }
+    }
+
+    /// <summary>The items of a preview, odd ones left out; null when there are open items and not one could be read, which is a read that failed.</summary>
+    private static List<GitHubItem>? Newest(JsonElement kind, int total, bool isPullRequest)
+    {
+        var nodes = kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)).ToList();
+        var items = nodes.OfType<GitHubItem>().ToList();
+        return items.Count == 0 && nodes.Count > 0 && total > 0 ? null : items;
     }
 
     /// <summary>

@@ -22,6 +22,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly ILogger _logger;
     private readonly Action<GitHubListViewModel> _closed;
     private bool _isClosed;
+    private CancellationTokenSource? _stop;
 
     [ObservableProperty] private string _heading;
     [ObservableProperty] private IReadOnlyList<GitHubRow> _rows;
@@ -30,6 +31,16 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     /// <summary>Says the list is cut short when the repository holds more than the read gave, or none. Kept apart from <see cref="LoadMessage"/>: the list did load.</summary>
     [ObservableProperty] private string? _cutShortMessage;
+
+    /// <summary>Says how many rows of the list could not be made sense of and are left out, or none.</summary>
+    [ObservableProperty] private string? _skippedMessage;
+
+    /// <summary>The fresh read has not ended yet; a large repository's can take minutes.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LoadingMessage))]
+    private bool _isLoading = true;
+
+    public string? LoadingMessage => IsLoading ? "Loading the full list..." : null;
 
     /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
@@ -61,12 +72,22 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Reads the full list. The tile's count follows it even when the panel was closed meanwhile; the panel does not.</summary>
     public async Task LoadAsync(CancellationToken ct)
     {
+        // Its own cancellation: closing the panel ends the gh run instead of leaving it to run out its timeout.
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _stop = stop;
         try
         {
-            await ReadAsync(ct).ConfigureAwait(false);
+            if (_isClosed)
+            {
+                stop.Cancel();
+            }
+
+            await ReadAsync(stop.Token).ConfigureAwait(false);
         }
         finally
         {
+            _stop = null;
+            _ui.Post(() => IsLoading = false);
             _loaded.TrySetResult();
         }
     }
@@ -75,9 +96,12 @@ public sealed partial class GitHubListViewModel : ObservableObject
     {
         var activity = _pill.Activity;
         GitHubList? all;
+        var since = _activity.VersionOf(activity.Repo);
         try
         {
             all = await _reader.ListAsync(activity.Repo, activity.Account, _pill.Kind, ct).ConfigureAwait(false);
+            // An answer that was already on its way when the panel closed does not exist.
+            ct.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException)
         {
@@ -90,15 +114,21 @@ public sealed partial class GitHubListViewModel : ObservableObject
             all = null;
         }
 
+        // The total the tile now holds: the list's when it was applied, else the newer result's that it lost to.
+        int? stored = null;
         if (all is not null)
         {
-            _activity.Replace(activity.Repo, _pill.Kind, all);
+            stored = _activity.Replace(activity.Repo, _pill.Kind, all, since);
+            if (all.Skipped > 0)
+            {
+                _logger.LogWarning("{Skipped} rows of a GitHub list could not be read", all.Skipped);
+            }
         }
 
-        _ui.Post(() => Show(all));
+        _ui.Post(() => Show(all, stored));
     }
 
-    private void Show(GitHubList? all)
+    private void Show(GitHubList? all, int? stored)
     {
         if (_isClosed)
         {
@@ -112,9 +142,10 @@ public sealed partial class GitHubListViewModel : ObservableObject
         }
 
         // A list that is not the whole truth (the limit, a row left out) keeps the count GraphQL gave.
-        var total = all.TotalGiven(_pill.Count);
+        var total = stored ?? all.TotalGiven(_pill.Count);
         Heading = HeadingFor(total);
         Rows = RowsOf(all.Items);
+        SkippedMessage = all.Skipped switch { 0 => null, 1 => "1 row could not be shown.", var n => $"{n} rows could not be shown." };
         CutShortMessage = all.ReachedLimit && total > all.Items.Count ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
         LoadMessage = null;
     }
@@ -131,6 +162,15 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private void Close()
     {
         _isClosed = true;
+        try
+        {
+            _stop?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // the read ended meanwhile
+        }
+
         _closed(this);
     }
 

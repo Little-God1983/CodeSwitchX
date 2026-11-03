@@ -289,6 +289,46 @@ public class GitHubActivityTests
     }
 
     [Fact]
+    public async Task A_list_started_before_a_newer_result_is_ignored_and_the_stored_total_comes_back()
+    {
+        var gh = new FakeGh { Issues = 3 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        var repo = new GitHubRepo("acme", "tool");
+        var started = activity.VersionOf(repo);
+        gh.Issues = 20;
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        var before = activity.ForFolder(@"c:	ool")!;
+
+        var total = activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), started);
+
+        total.ShouldBe(20);
+        activity.ForFolder(@"c:	ool").ShouldBeSameAs(before);
+    }
+
+    [Fact]
+    public async Task A_list_started_after_the_latest_result_is_applied_and_its_total_comes_back()
+    {
+        var gh = new FakeGh { Issues = 3 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        var repo = new GitHubRepo("acme", "tool");
+
+        var total = activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), activity.VersionOf(repo));
+
+        total.ShouldBe(7);
+        activity.ForFolder(@"c:	ool")!.OpenIssues.ShouldBe(7);
+    }
+
+    [Fact]
+    public void A_repository_no_round_has_read_has_no_total_to_give()
+    {
+        var activity = Activity(new FakeGh(), _ => "https://github.com/acme/tool.git");
+
+        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, ListOf(2), 0).ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_slow_repository_does_not_hold_back_the_others_results()
     {
         var gh = new FakeGh { HangOn = "slow" };

@@ -438,6 +438,61 @@ public class GitHubReaderTests
     }
 
     [Fact]
+    public async Task ListAsync_gives_null_when_no_row_can_be_read()
+    {
+        var gh = new FakeGh([], (_, _) => """[{"number":"a"},{"title":1}]""");
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_empty_list_is_still_a_list()
+    {
+        var gh = new FakeGh([], (_, _) => "[]");
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldNotBeNull().Items.ShouldBeEmpty();
+    }
+
+    private const string OddNode = "{\"number\":\"x\",\"title\":\"T\",\"url\":\"u\",\"updatedAt\":null,\"labels\":{\"nodes\":[]},\"headRefName\":\"b\"}";
+
+    [Fact]
+    public async Task A_read_whose_every_issue_node_is_odd_is_a_failed_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 9, issueNodes: OddNode) });
+
+        var read = await Outcome(gh);
+
+        read.Activity.ShouldBeNull();
+        read.NobodySeesIt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_read_whose_every_pull_request_node_is_odd_is_a_failed_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", pullRequests: 2, prNodes: OddNode) });
+
+        (await Read(gh)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Odd_nodes_with_a_zero_total_are_no_failure()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 0, issueNodes: OddNode) });
+
+        (await Read(gh)).ShouldNotBeNull();
+    }
+
+    [Theory]
+    [InlineData(3, 4, 1, 5)]
+    [InlineData(900, 998, 2, 1000)]
+    public void A_list_never_totals_below_what_it_read_skipped_rows_included(int known, int items, int skipped, int expected)
+    {
+        var list = new GitHubList(Enumerable.Range(1, items).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList(), skipped);
+
+        list.TotalGiven(known).ShouldBe(expected);
+    }
+
+    [Fact]
     public void SameAs_compares_the_lists_by_content()
     {
         RepoActivity Make(string title) => new(Repo, "acme", 1, 0,

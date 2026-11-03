@@ -30,8 +30,8 @@ public sealed record GitHubList(IReadOnlyList<GitHubItem> Items, int Skipped = 0
     /// <summary>The list is the whole truth: it stopped short of the limit and no row was left out, so its length is the count.</summary>
     public bool IsExact => Skipped == 0 && Items.Count < Limit;
 
-    /// <summary>The count to show: the list's own length when it is exact, otherwise <paramref name="known"/> (what GraphQL counted), never below what the list shows.</summary>
-    public int TotalGiven(int known) => IsExact ? Items.Count : Math.Max(known, Items.Count);
+    /// <summary>The count to show: the list's own length when it is exact, otherwise <paramref name="known"/> (what GraphQL counted), never below what the list read, skipped rows included.</summary>
+    public int TotalGiven(int known) => IsExact ? Items.Count : Math.Max(known, Items.Count + Skipped);
 }
 
 /// <param name="Account">The login that read it.</param>

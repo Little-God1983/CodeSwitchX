@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -59,6 +60,9 @@ public class GitHubListViewModelTests
 
         public int ListThread { get; private set; }
 
+        /// <summary>The token the last list read was given.</summary>
+        public CancellationToken ListToken { get; private set; }
+
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));
 
@@ -70,6 +74,7 @@ public class GitHubListViewModelTests
             }
 
             ListThread = Environment.CurrentManagedThreadId;
+            ListToken = ct;
             ListAsked.Set();
             return arguments[0] == "pr" ? PullRequestList.Task : List.Task;
         }
@@ -245,20 +250,92 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task Closing_while_loading_changes_nothing()
+    public async Task Closing_while_loading_cancels_the_read_and_changes_nothing()
     {
         var (activity, pill) = await PillAsync();
         var list = List(activity, pill);
         var load = list.LoadAsync(TestContext.Current.CancellationToken);
+        _gh.ListToken.IsCancellationRequested.ShouldBeFalse();
 
         list.CloseCommand.Execute(null);
-        _gh.List.SetResult(ListOf(3));
+        _gh.ListToken.IsCancellationRequested.ShouldBeTrue("the gh run is not left to run out its timeout");
+        _gh.List.SetResult(ListOf(3)); // an answer that was already on its way
         await load;
 
         _closedLists.ShouldBe([list]);
         list.Rows.Count.ShouldBe(1);
         list.Heading.ShouldBe("app: 12 open issues");
-        activity.ForFolder("app")!.OpenIssues.ShouldBe(3);
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(12, "a late result after the close does not exist");
+    }
+
+    [Fact]
+    public async Task Opening_another_pill_cancels_the_read_of_the_list_it_replaces()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+        yard.OpenGitHubListCommand.Execute(pill);
+        var first = yard.GitHubList.ShouldNotBeNull();
+        _gh.ListAsked.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+        var token = _gh.ListToken;
+
+        yard.OpenGitHubListCommand.Execute(new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+
+        token.IsCancellationRequested.ShouldBeTrue();
+        _gh.List.SetResult(ListOf(3));
+        await first.Loaded;
+    }
+
+    [Fact]
+    public async Task The_panel_says_it_is_loading_until_the_read_ends_however_it_ends()
+    {
+        foreach (var end in new Action<FakeGh>[] { g => g.List.SetResult(ListOf(3)), g => g.List.SetResult(null), g => g.List.SetException(new InvalidOperationException("boom")) })
+        {
+            var gh = new FakeGh();
+            var activity = new GitHubActivity(gh, new GitHubReader(gh), (_, _) => Task.FromResult(new OriginLookup("https://github.com/acme/app.git")), NullLogger<GitHubActivity>.Instance);
+            await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken);
+            var list = new GitHubListViewModel(new GitHubPill(activity.ForFolder("app")!, GitHubItemKind.Issue), new GitHubReader(gh), activity, Browsers(),
+                new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
+            list.LoadingMessage.ShouldBe("Loading the full list...");
+
+            var load = list.LoadAsync(TestContext.Current.CancellationToken);
+            list.LoadingMessage.ShouldBe("Loading the full list...");
+            end(gh);
+            await load;
+
+            list.LoadingMessage.ShouldBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task A_cancelled_read_stops_saying_it_is_loading()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        using var stop = new CancellationTokenSource();
+        var load = list.LoadAsync(stop.Token);
+
+        stop.Cancel();
+        _gh.List.SetCanceled(stop.Token);
+        await load;
+
+        list.LoadingMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_list_that_a_newer_result_overtook_shows_its_rows_with_the_stored_total()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        var load = list.LoadAsync(TestContext.Current.CancellationToken);
+        _gh.IssueTotal = 20;
+        await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken); // a round stores a newer result while the list is read
+        _gh.List.SetResult(ListOf(3));
+        await load;
+
+        list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
+        list.Heading.ShouldBe("app: 20 open issues");
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(20);
+        activity.ForFolder("app")!.NewestIssues.Count.ShouldBe(1);
     }
 
     [Fact]
@@ -597,7 +674,23 @@ public class GitHubListViewModelTests
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#3"]);
         list.Heading.ShouldBe("app: 12 open issues");
         list.CutShortMessage.ShouldBeNull();
+        list.SkippedMessage.ShouldBe("1 row could not be shown.");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
+    }
+
+    [Fact]
+    public async Task Several_skipped_rows_are_counted_in_one_line_and_none_is_no_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(4).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal).Replace("\"number\":3,", "\"number\":\"3\",", StringComparison.Ordinal));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.SkippedMessage.ShouldBe("2 rows could not be shown.");
+
+        var clean = List(activity, pill);
+        clean.SkippedMessage.ShouldBeNull();
     }
 
     /// <summary>A panel with that many rows, measured and arranged.</summary>
@@ -648,6 +741,31 @@ public class GitHubListViewModelTests
                 // the keyboard stays inside the panel and lands on the next row, and the next
                 ((Button)Keyboard.FocusedElement).DataContext.ShouldBeSameAs(list.Rows[step]);
             }
+        });
+    }
+
+    [Fact]
+    public async Task Shift_Tab_from_the_close_button_lands_on_a_row_of_the_panel()
+    {
+        var list = await ListWithRowsAsync(1000);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(list);
+            using var _ = source;
+            var close = Descendants(panel).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Close the list");
+            Keyboard.Focus(close);
+
+            close.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous));
+            panel.UpdateLayout();
+
+            // With virtualization Shift+Tab cannot reach the last row of the list: the rows past the view are not built. The cycle
+            // wraps to the last row that is built, so the keyboard stays in the panel, on a row in view.
+            var landed = ((Button)Keyboard.FocusedElement).DataContext.ShouldBeOfType<GitHubRow>();
+            var at = list.Rows.ToList().IndexOf(landed);
+            at.ShouldBeGreaterThan(0);
+            at.ShouldBeLessThan(100);
+            RowButtons(panel).ShouldContain(b => ReferenceEquals(b.DataContext, landed));
         });
     }
 

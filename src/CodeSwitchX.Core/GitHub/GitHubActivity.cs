@@ -17,6 +17,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     private readonly SemaphoreSlim _reads = new(MostReadsAtOnce, MostReadsAtOnce);
     private readonly Dictionary<string, GitHubRepo?> _repoOfFolder = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<GitHubRepo, RepoActivity> _results = [];
+    private readonly Dictionary<GitHubRepo, long> _versions = [];
 
     /// <summary>A round changed at least one result, or <see cref="Replace"/> did; raised on whichever thread did it.</summary>
     public event EventHandler? Changed;
@@ -27,6 +28,15 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         lock (_gate)
         {
             return _repoOfFolder.GetValueOrDefault(Key(path)) is { } repo ? _results.GetValueOrDefault(repo) : null;
+        }
+    }
+
+    /// <summary>Counts the results stored for the repository, so a caller can tell later whether one was stored since; take it before starting a long read.</summary>
+    public long VersionOf(GitHubRepo repo)
+    {
+        lock (_gate)
+        {
+            return _versions.GetValueOrDefault(repo);
         }
     }
 
@@ -69,28 +79,44 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     /// the one GraphQL gave stays. <paramref name="all"/> is newest first, as <see cref="GitHubReader.ListAsync"/> gives it.
     /// Nothing is known of a repository no round has read, so that one is left alone.
     /// </summary>
-    public void Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all)
+    /// <param name="since">The <see cref="VersionOf"/> from before the list was read: a result stored since is newer than the list, which then changes nothing.</param>
+    /// <returns>The count the repository now holds for that kind, which is the list's when it was applied; null when no round has read the repository.</returns>
+    public int? Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, long? since = null)
     {
+        int total;
         lock (_gate)
         {
             if (!_results.TryGetValue(repo, out var last))
             {
-                return;
+                return null;
+            }
+
+            if (since is { } started && started < _versions.GetValueOrDefault(repo))
+            {
+                return kind == GitHubItemKind.Issue ? last.OpenIssues : last.OpenPullRequests;
             }
 
             var newest = all.Items.Take(RepoActivity.PreviewCount).ToList();
             var next = kind == GitHubItemKind.Issue
                 ? last with { OpenIssues = all.TotalGiven(last.OpenIssues), NewestIssues = newest }
                 : last with { OpenPullRequests = all.TotalGiven(last.OpenPullRequests), NewestPullRequests = newest };
+            total = kind == GitHubItemKind.Issue ? next.OpenIssues : next.OpenPullRequests;
             if (last.SameAs(next))
             {
-                return;
+                return total;
             }
 
-            _results[repo] = next;
+            Store(repo, next);
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
+        return total;
+    }
+
+    private void Store(GitHubRepo repo, RepoActivity result)
+    {
+        _results[repo] = result;
+        _versions[repo] = _versions.GetValueOrDefault(repo) + 1;
     }
 
     /// <returns><c>Moved</c> is true when the folder now shows another result than before, which no read of the round would report.</returns>
@@ -160,6 +186,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     {
                         return false;
                     }
+
+                    _versions[repo] = _versions.GetValueOrDefault(repo) + 1;
                 }
 
                 logger.LogInformation("No account can see the repository of {Folder}; its result goes", folder);
@@ -185,7 +213,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     return false;
                 }
 
-                _results[repo] = activity;
+                Store(repo, activity);
                 return true;
             }
         }
