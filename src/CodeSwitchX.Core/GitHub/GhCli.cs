@@ -31,12 +31,12 @@ public sealed class GhCli : IGhCli
         _listTimeout = listTimeout ?? ListTimeout;
     }
 
-    public async Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
+    public async Task<GhAccounts> AccountsAsync(CancellationToken ct)
     {
-        var output = await RunAsync(["auth", "status", "--json", "hosts"], null, ct).ConfigureAwait(false);
-        if (output is null)
+        var run = await GitInspector.RunProcessAsync(StartInfo(["auth", "status", "--json", "hosts"], null, _executable), _timeout, ct).ConfigureAwait(false);
+        if (run.Output is not { } output)
         {
-            return null;
+            return GhAccounts.Failed(FailureOf(run));
         }
 
         try
@@ -46,31 +46,42 @@ public sealed class GhCli : IGhCli
                 || !doc.RootElement.TryGetProperty("hosts", out var hosts)
                 || hosts.ValueKind != JsonValueKind.Object)
             {
-                return null;
+                return GhAccounts.Failed();
             }
 
             // No github.com among the hosts is nobody logged in; one that is not a list is an answer this cannot read.
             if (!hosts.TryGetProperty("github.com", out var accounts))
             {
-                return [];
+                return GhAccounts.Of([]);
             }
 
             if (accounts.ValueKind != JsonValueKind.Array)
             {
-                return null;
+                return GhAccounts.Failed();
             }
 
             // Whatever each login's state: gh exits 0 on an auth issue too, and offline every check fails. A read as a login that cannot read fails safely.
-            return accounts.EnumerateArray()
+            return GhAccounts.Of(accounts.EnumerateArray()
                 .Select(a => a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null)
                 .OfType<string>()
-                .ToList();
+                .ToList());
         }
         catch (JsonException)
         {
-            return null;
+            return GhAccounts.Failed();
         }
     }
+
+    /// <summary>
+    /// Not started at all is no <c>gh</c>; one that exits with cobra's "unknown flag" does not know <c>auth status --json</c>
+    /// (the text is only read here, never kept or logged); anything else is another failure.
+    /// </summary>
+    private static GhFailure FailureOf(ProcessRunResult run) => run switch
+    {
+        { Pid: null, ExitCode: null, TimedOut: false } => GhFailure.NotFound,
+        { ErrorOutput: { } error } when error.Contains("unknown flag", StringComparison.OrdinalIgnoreCase) => GhFailure.TooOld,
+        _ => GhFailure.Other,
+    };
 
     public Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
         RunAndAnswerAsync(login, arguments, _listTimeout, ct);

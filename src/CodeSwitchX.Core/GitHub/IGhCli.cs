@@ -5,11 +5,35 @@ namespace CodeSwitchX.Core.GitHub;
 /// <param name="TimedOut">The run was killed at its timeout.</param>
 public sealed record GhAnswer(string? Output, string? FailureOutput = null, bool TimedOut = false);
 
+/// <summary>Why <c>gh</c> gave no list of accounts.</summary>
+public enum GhFailure
+{
+    None,
+
+    /// <summary><c>gh</c> did not start: it is not installed, or not on the path.</summary>
+    NotFound,
+
+    /// <summary><c>gh</c> ran but does not know <c>auth status --json</c>.</summary>
+    TooOld,
+
+    /// <summary>Anything else: a non-zero exit, a timeout, an answer that cannot be read.</summary>
+    Other,
+}
+
+/// <param name="Logins">Logins signed in to github.com, whatever their state: empty when there are none, null when the read failed.</param>
+/// <param name="Failure">Why the read failed; <see cref="GhFailure.None"/> exactly when <paramref name="Logins"/> is not null.</param>
+public sealed record GhAccounts(IReadOnlyList<string>? Logins, GhFailure Failure = GhFailure.None)
+{
+    public static GhAccounts Of(IReadOnlyList<string> logins) => new(logins);
+
+    public static GhAccounts Failed(GhFailure failure = GhFailure.Other) => new(null, failure);
+}
+
 /// <summary>The GitHub command line, one account at a time and without switching the active one.</summary>
 public interface IGhCli
 {
-    /// <summary>Logins signed in to github.com: empty when there are none, null when <c>gh</c> is missing or fails or answered something unreadable.</summary>
-    Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct);
+    /// <summary>Logins signed in to github.com: empty when there are none; no logins, and the kind of failure, when <c>gh</c> is missing or too old or fails or answered something unreadable.</summary>
+    Task<GhAccounts> AccountsAsync(CancellationToken ct);
 
     /// <summary>The same run for reading a whole list, which may take far longer than a single read: it has a timeout of its own, and the answer says whether it ran out of it.</summary>
     Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct);

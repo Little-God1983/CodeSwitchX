@@ -18,10 +18,20 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
 
     private bool _read;
 
+    private GhFailure _failure;
+
     public ObservableCollection<GitHubAccountRow> Accounts { get; } = [];
 
     /// <summary>The accounts were read and there are none: the page says how to log in.</summary>
     public bool HasNoAccounts => _read && Accounts.Count == 0;
+
+    /// <summary>What the page says when it has no rows: how to get gh and an account, or, when gh could not be read, why.</summary>
+    public string NoAccountsText => _failure switch
+    {
+        GhFailure.TooOld => "The GitHub command line (gh) is too old for this. Update it, then reopen this page.",
+        GhFailure.Other => "Couldn't read the GitHub accounts. Check that the GitHub command line (gh) works, then reopen this page.",
+        _ => "No GitHub accounts found. Install the GitHub command line (gh) and run gh auth login.",
+    };
 
     public async Task RefreshAsync(CancellationToken ct)
     {
@@ -31,16 +41,23 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         var accountsRead = Task.Run(() => gh.AccountsAsync(ct), ct);
         // Read again, so a browser installed since the page was last open is there, and once for all rows.
         var browsersRead = Task.Run(() => catalog.Refresh(), ct);
-        IReadOnlyList<string>? logins = null;
+        var read = GhAccounts.Failed();
         try
         {
-            logins = await accountsRead;
+            read = await accountsRead;
+            if (read.Logins is null)
+            {
+                logger?.LogWarning("The GitHub accounts could not be read: {Failure}", read.Failure);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Null: the rows stay, or the page says how to log in; only the kind of failure is logged.
+            // A failed read: the rows stay, or the page says why; only the kind of failure is logged.
             logger?.LogWarning("The GitHub accounts could not be read: {Failure}", ex.GetType().Name);
+            read = GhAccounts.Failed();
         }
+
+        var logins = read.Logins;
 
         IReadOnlyList<BrowserEntry> entries;
         try
@@ -61,10 +78,12 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
 
         // Null is a failed read: the rows (and a pick or Test line in them) stay, and the page says how to log in only when there are none.
         // An empty list is gh saying nobody is logged in.
+        var textBefore = NoAccountsText;
+        _failure = read.Failure;
         if (logins is null)
         {
             _read = true;
-            OnPropertyChanged(nameof(HasNoAccounts));
+            Announce(textBefore);
             return;
         }
 
@@ -99,6 +118,17 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         }
 
         _read = true;
+        Announce(textBefore);
+    }
+
+    /// <summary>The text only when it changed, and the flag last: a page that waits for a read waits for one change.</summary>
+    private void Announce(string textBefore)
+    {
+        if (NoAccountsText != textBefore)
+        {
+            OnPropertyChanged(nameof(NoAccountsText));
+        }
+
         OnPropertyChanged(nameof(HasNoAccounts));
     }
 

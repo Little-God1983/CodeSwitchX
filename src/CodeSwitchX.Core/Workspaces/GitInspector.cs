@@ -12,7 +12,8 @@ public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount,
 /// <param name="Pid">The started process id, when it started.</param>
 /// <param name="ExitCode">The code it exited with; null when it never got that far (did not start, timed out, cancelled, a pipe broke).</param>
 /// <param name="FailureOutput">Stdout when it exited with another code than 0; otherwise null.</param>
-public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, int? ExitCode = null, string? FailureOutput = null);
+/// <param name="ErrorOutput">Stderr when it ran to its end; otherwise null.</param>
+public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, int? ExitCode = null, string? FailureOutput = null, string? ErrorOutput = null);
 
 /// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
 public sealed class GitInspector
@@ -178,9 +179,9 @@ public sealed class GitInspector
                 // The pipes close when the last process holding them exits, which can be a grandchild that outlives the child
                 // (cmd's "start /b"); the timeout covers the reads too, and the kill takes the whole tree with it.
                 var output = await stdout.ConfigureAwait(false);
-                await stderr.ConfigureAwait(false);
+                var error = await stderr.ConfigureAwait(false);
                 var succeeded = process.ExitCode == 0;
-                return new ProcessRunResult(succeeded ? output : null, false, process.Id, process.ExitCode, succeeded ? null : output);
+                return new ProcessRunResult(succeeded ? output : null, false, process.Id, process.ExitCode, succeeded ? null : output, error);
             }
             catch (OperationCanceledException)
             {

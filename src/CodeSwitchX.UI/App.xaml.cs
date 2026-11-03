@@ -300,12 +300,15 @@ public partial class App : Application
         // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
+        // What ~/.ssh/config makes of a host name in a remote (git@github-work:owner/repo), asked once per name.
+        services.AddSingleton<SshAliases>();
         services.AddSingleton(sp => new BrowserCatalog(new InstalledBrowsers(), logger: sp.GetRequiredService<ILogger<BrowserCatalog>>()));
         services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
             info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<IGhCli>(), sp.GetRequiredService<GitHubReader>(),
             OriginLookup.ReadAsync,
-            sp.GetRequiredService<ILogger<GitHubActivity>>()));
+            sp.GetRequiredService<ILogger<GitHubActivity>>(),
+            sp.GetRequiredService<SshAliases>().HostOfAsync));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
             (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
             (Func<IReadOnlyDictionary<string, bool>>)(() =>

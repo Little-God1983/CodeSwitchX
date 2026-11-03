@@ -18,7 +18,7 @@ public class GitHubReaderTests
         /// <summary>What a login's run prints when it exits with an error.</summary>
         public Dictionary<string, string> Printed { get; } = [];
 
-        public Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>?>(accounts);
+        public Task<GhAccounts> AccountsAsync(CancellationToken ct) => Task.FromResult(GhAccounts.Of(accounts));
 
         /// <summary>The commands that were run as list reads.</summary>
         public List<IReadOnlyList<string>> ListCommands { get; } = [];

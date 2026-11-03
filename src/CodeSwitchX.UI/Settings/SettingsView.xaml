@@ -1309,7 +1309,7 @@
           </ItemsControl>
           <TextBlock DataContext="{Binding GitHub}" Style="{StaticResource Help}" Margin="0,0,0,12"
                      Visibility="{Binding HasNoAccounts, Converter={StaticResource BoolVisible}}"
-                     Text="No GitHub accounts found. Install the GitHub command line (gh) and run gh auth login." />
+                     Text="{Binding NoAccountsText}" />
           <TextBlock Style="{StaticResource Help}"
                      Text="Accounts come from the GitHub command line (gh). To add one, run gh auth login; it shows up here by itself." />
         </StackPanel>

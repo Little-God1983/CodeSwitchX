@@ -52,7 +52,7 @@ public class YardGitHubTests : IDisposable
             }
         }
 
-        public Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>?>(["me"]);
+        public Task<GhAccounts> AccountsAsync(CancellationToken ct) => Task.FromResult(GhAccounts.Of(["me"]));
 
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));

@@ -8,8 +8,10 @@ namespace CodeSwitchX.Core.GitHub;
 /// result, one every account answers with "not found" drops it, and a result that did not change keeps its instance, so the
 /// tiles built on it compare equal and stay as they are. A round raises <see cref="Changed"/> when a result changed or a folder
 /// now belongs to another repository. <see cref="Retain"/> lets go of what no folder on the tiles needs any more.
+/// A round logs the reads that failed once per kind of failure, not once per repository: the logs carry no names, only counts and kinds.
 /// </summary>
-public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger)
+/// <param name="hostOfAlias">What <c>ssh -G</c> makes of an ssh host name in a remote such as <c>git@github-work:owner/repo</c> (null: no alias is looked up).</param>
+public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null)
 {
     private const int MostReadsAtOnce = 4;
 
@@ -83,9 +85,13 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
             // No answer from gh (null) makes no reads, so the last results stay; no logins at all (empty) is read as it is.
-            var changes = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
+            var reads = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
+            foreach (var failure in reads.Select(r => r.Failure).OfType<string>().GroupBy(f => f))
+            {
+                logger.LogWarning("GitHub round: {Failed} of {Total} repositories could not be read: {Failure}", failure.Count(), reads.Length, failure.Key);
+            }
 
-            if (changes.Any(c => c) || folderRepos.Any(p => p.Moved))
+            if (reads.Any(r => r.Changed) || folderRepos.Any(p => p.Moved))
             {
                 Changed?.Invoke(this, EventArgs.Empty);
             }
@@ -144,6 +150,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         try
         {
             var origin = await originOf(folder, ct).ConfigureAwait(false);
+            var parsed = origin.Failed ? null : await RepoOfRemoteAsync(origin.Url, ct).ConfigureAwait(false);
             lock (_gate)
             {
                 var known = _repoOfFolder.GetValueOrDefault(folder);
@@ -161,14 +168,13 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     return (folder, null, false);
                 }
 
-                var repo = GitHubRepo.FromRemote(origin.Url);
-                _repoOfFolder[folder] = repo;
-                return (folder, repo, known != repo);
+                _repoOfFolder[folder] = parsed;
+                return (folder, parsed, known != parsed);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Finding the GitHub repository of {Folder} failed", folder);
+            logger.LogWarning("Finding the GitHub repository of {Folder} failed: {Failure}", folder, ex.GetType().Name);
             lock (_gate)
             {
                 return (folder, _repoOfFolder.GetValueOrDefault(folder), false);
@@ -176,22 +182,54 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
-    /// <summary>The round's accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer (null) means no reads, and the last results stay.</summary>
-    private async Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
+    /// <summary>The repository a remote address points at; an ssh host name that might be an alias is looked up once (by <c>hostOfAlias</c>), and counts as GitHub only if it resolves to GitHub.</summary>
+    private async Task<GitHubRepo?> RepoOfRemoteAsync(string? url, CancellationToken ct)
     {
+        if (GitHubRepo.FromRemote(url) is { } repo)
+        {
+            return repo;
+        }
+
+        if (hostOfAlias is null || GitHubRepo.AliasOf(url) is not { } alias)
+        {
+            return null;
+        }
+
         try
         {
-            return await gh.AccountsAsync(ct).ConfigureAwait(false);
+            var host = await hostOfAlias(alias, ct).ConfigureAwait(false);
+            return GitHubRepo.FromRemote(url, a => a.Equals(alias, StringComparison.OrdinalIgnoreCase) ? host : null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Reading the GitHub accounts failed; the last results stay");
+            // Not the alias either: it is a word of the user, not ours to log.
+            logger.LogDebug("Looking up an ssh host name failed: {Failure}", ex.GetType().Name);
             return null;
         }
     }
 
-    /// <summary>Reads the repository and stores what came; true when that differs from the last result.</summary>
-    private async Task<bool> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, CancellationToken ct)
+    /// <summary>The round accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer (null) means no reads, and the last results stay.</summary>
+    private async Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var accounts = await gh.AccountsAsync(ct).ConfigureAwait(false);
+            if (accounts.Logins is null)
+            {
+                logger.LogWarning("GitHub round: the accounts could not be read ({Failure}); the last results stay", accounts.Failure);
+            }
+
+            return accounts.Logins;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("GitHub round: the accounts could not be read ({Failure}); the last results stay", ex.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>Reads the repository and stores what came. <c>Changed</c> is true when that differs from the last result; <c>Failure</c> names the kind of failure when nothing was read (the last result stays), for the round to count.</summary>
+    private async Task<(bool Changed, string? Failure)> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, CancellationToken ct)
     {
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -203,37 +241,37 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 {
                     if (!_results.Remove(repo))
                     {
-                        return false;
+                        return (false, null);
                     }
                 }
 
                 logger.LogInformation("No account can see the repository of {Folder}; its result goes", folder);
-                return true;
+                return (true, null);
             }
 
             var activity = read.Activity;
             // Nothing read: the last result stays. A zero is a read like any other.
             if (activity is null)
             {
-                logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
-                return false;
+                logger.LogDebug("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
+                return (false, "no answer");
             }
 
             lock (_gate)
             {
                 if (_results.TryGetValue(repo, out var last) && last.SameAs(activity))
                 {
-                    return false;
+                    return (false, null);
                 }
 
                 _results[repo] = activity;
-                return true;
+                return (true, null);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
-            return false;
+            logger.LogDebug("Reading the open issues and pull requests of {Folder} failed ({Failure}); the last result stays", folder, ex.GetType().Name);
+            return (false, ex.GetType().Name);
         }
         finally
         {

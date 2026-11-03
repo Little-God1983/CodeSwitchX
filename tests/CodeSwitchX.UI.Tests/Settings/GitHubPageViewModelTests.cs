@@ -2,6 +2,7 @@ using System.Diagnostics;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Hosting.Browsers;
+using CodeSwitchX.Tests;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Tests.Infrastructure;
@@ -23,7 +24,7 @@ public class GitHubPageViewModelTests
     public GitHubPageViewModelTests()
     {
         _start = info => { _started.Add(info); return true; };
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["someone", "other"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of(["someone", "other"])));
         var catalog = new BrowserCatalog(_source);
         _browsers = new GitHubBrowsers(catalog, _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
         _page = new GitHubPageViewModel(_gh, _browsers, catalog);
@@ -107,7 +108,7 @@ public class GitHubPageViewModelTests
     [Fact]
     public async Task No_accounts_says_how_to_log_in()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>([]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of([])));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -119,7 +120,7 @@ public class GitHubPageViewModelTests
     public async Task A_refresh_replaces_the_rows_with_the_accounts_there_are_now()
     {
         await _page.RefreshAsync(CancellationToken.None);
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["third"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of(["third"])));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -135,7 +136,7 @@ public class GitHubPageViewModelTests
         _start = _ => false;
         kept.TestCommand.Execute(null);
         kept.Message.ShouldNotBeNull();
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["other", "third"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of(["other", "third"])));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -151,7 +152,7 @@ public class GitHubPageViewModelTests
         await _page.RefreshAsync(CancellationToken.None);
         var someone = _page.Accounts[0];
         var other = _page.Accounts[1];
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["third", "other", "someone"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of(["third", "other", "someone"])));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -207,7 +208,7 @@ public class GitHubPageViewModelTests
     [Fact]
     public async Task An_account_listed_twice_gets_one_row()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["first", "FIRST", "second"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of(["first", "FIRST", "second"])));
 
         await _page.RefreshAsync(CancellationToken.None);
         await _page.RefreshAsync(CancellationToken.None);
@@ -239,7 +240,7 @@ public class GitHubPageViewModelTests
         row.SelectedId = "firefox|alpha";
         _start = _ => false;
         row.TestCommand.Execute(null);
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>?>>(_ => throw new InvalidOperationException("boom"));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<GhAccounts>>(_ => throw new InvalidOperationException("boom"));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -253,7 +254,7 @@ public class GitHubPageViewModelTests
     public async Task An_empty_answer_while_rows_are_shown_means_everyone_logged_out()
     {
         await _page.RefreshAsync(CancellationToken.None);
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>([]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of([])));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -266,7 +267,7 @@ public class GitHubPageViewModelTests
     {
         await _page.RefreshAsync(CancellationToken.None);
         var row = _page.Accounts[0];
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(null));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Failed()));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -278,11 +279,82 @@ public class GitHubPageViewModelTests
     [Fact]
     public async Task A_failed_answer_from_gh_before_any_row_says_how_to_log_in()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(null));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Failed()));
 
         await _page.RefreshAsync(CancellationToken.None);
 
         _page.HasNoAccounts.ShouldBeTrue();
+    }
+
+    private const string InstallGh = "No GitHub accounts found. Install the GitHub command line (gh) and run gh auth login.";
+
+    private const string TooOld = "The GitHub command line (gh) is too old for this. Update it, then reopen this page.";
+
+    private const string CouldNotRead = "Couldn't read the GitHub accounts. Check that the GitHub command line (gh) works, then reopen this page.";
+
+    [Theory]
+    [InlineData(GhFailure.NotFound, InstallGh)]
+    [InlineData(GhFailure.TooOld, TooOld)]
+    [InlineData(GhFailure.Other, CouldNotRead)]
+    public async Task With_no_rows_the_page_says_why_gh_could_not_help(GhFailure failure, string expected)
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Failed(failure)));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.HasNoAccounts.ShouldBeTrue();
+        _page.NoAccountsText.ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task Nobody_logged_in_is_the_install_line()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of([])));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.NoAccountsText.ShouldBe(InstallGh);
+    }
+
+    [Fact]
+    public async Task A_gh_that_throws_is_another_failure()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<GhAccounts>>(_ => throw new InvalidOperationException("boom"));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.NoAccountsText.ShouldBe(CouldNotRead);
+    }
+
+    [Fact]
+    public async Task The_line_follows_the_latest_read_and_says_so()
+    {
+        var changed = new List<string?>();
+        _page.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Failed(GhFailure.TooOld)));
+        await _page.RefreshAsync(CancellationToken.None);
+        _page.NoAccountsText.ShouldBe(TooOld);
+        changed.ShouldContain(nameof(GitHubPageViewModel.NoAccountsText));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Of([])));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.NoAccountsText.ShouldBe(InstallGh);
+    }
+
+    [Fact]
+    public async Task A_failed_read_is_logged_by_its_kind_only()
+    {
+        var log = new ListLogger<GitHubPageViewModel>();
+        var catalog = new BrowserCatalog(_source);
+        var page = new GitHubPageViewModel(_gh, _browsers, catalog, log);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(GhAccounts.Failed(GhFailure.TooOld)));
+
+        await page.RefreshAsync(CancellationToken.None);
+
+        var warning = log.Entries.ShouldHaveSingleItem();
+        warning.Level.ShouldBe(Microsoft.Extensions.Logging.LogLevel.Warning);
+        warning.Message.ShouldContain("TooOld");
     }
 
     [Fact]
@@ -300,7 +372,7 @@ public class GitHubPageViewModelTests
     [Fact]
     public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>?>>(_ => throw new InvalidOperationException("boom"));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<GhAccounts>>(_ => throw new InvalidOperationException("boom"));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -330,7 +402,7 @@ public class GitHubPageViewModelTests
         _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
             accountsThread = Environment.CurrentManagedThreadId;
-            return Task.FromResult<IReadOnlyList<string>?>([]);
+            return Task.FromResult(GhAccounts.Of([]));
         });
         var source = Substitute.For<IBrowserSource>();
         source.Installed().Returns(_ =>
