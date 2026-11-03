@@ -103,6 +103,19 @@ public sealed class GitHubPillPreviewTests(GitHubPillPreviewTests.PreviewThread 
     });
 
     [Fact]
+    public Task The_list_panel_appearing_closes_it() => thread.RunAsync(() =>
+    {
+        var pill = PillButton();
+        _ = WindowWith(pill);
+        Hover(pill);
+        thread.Shown.ShouldBeTrue();
+
+        new GitHubPanelFocus().PanelShown(new Border { Focusable = true });
+
+        thread.Shown.ShouldBeFalse();
+    });
+
+    [Fact]
     public Task A_pill_invoked_through_UI_Automation_closes_it() => thread.RunAsync(() =>
     {
         var pill = PillButton();

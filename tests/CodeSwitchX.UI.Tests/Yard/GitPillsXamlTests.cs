@@ -173,7 +173,10 @@ public sealed class GitPillsXamlTests
     }
 
     /// <summary>App.xaml's resources are not reachable without the application, so they are parsed from the file, as a dictionary (the namespaces name the assembly, as the XAML compiler would).</summary>
-    private static ResourceDictionary AppResources()
+    private static ResourceDictionary AppResources() => (ResourceDictionary)XamlReader.Parse(AssemblyQualified(AppResourcesXaml().ToString()));
+
+    /// <summary>The application's resources as markup, for a control whose own markup needs them while it is read.</summary>
+    internal static XElement AppResourcesXaml()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "App.xaml")))
@@ -184,10 +187,11 @@ public sealed class GitPillsXamlTests
         dir.ShouldNotBeNull();
         XNamespace wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
         var app = XDocument.Load(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "App.xaml")).Root!;
-        var xaml = new XElement(wpf + "ResourceDictionary", app.Attributes().Where(a => a.IsNamespaceDeclaration), app.Element(wpf + "Application.Resources")!.Nodes());
-        return (ResourceDictionary)XamlReader.Parse(xaml.ToString().Replace("\"clr-namespace:CodeSwitchX.UI.Infrastructure\"", "\"clr-namespace:CodeSwitchX.UI.Infrastructure;assembly=CodeSwitchX\"")
-            .Replace("\"clr-namespace:CodeSwitchX.UI.Yard\"", "\"clr-namespace:CodeSwitchX.UI.Yard;assembly=CodeSwitchX\""));
+        return new XElement(wpf + "ResourceDictionary", app.Attributes().Where(a => a.IsNamespaceDeclaration), app.Element(wpf + "Application.Resources")!.Nodes());
     }
+
+    internal static string AssemblyQualified(string xaml) => xaml.Replace("\"clr-namespace:CodeSwitchX.UI.Infrastructure\"", "\"clr-namespace:CodeSwitchX.UI.Infrastructure;assembly=CodeSwitchX\"")
+        .Replace("\"clr-namespace:CodeSwitchX.UI.Yard\"", "\"clr-namespace:CodeSwitchX.UI.Yard;assembly=CodeSwitchX\"");
 
     private static ContentPresenter Render(GitLine line, bool tile, double width = 400)
     {

@@ -337,7 +337,7 @@
       <TextBlock DockPanel.Dock="Top" Text="{Binding LoadMessage}" Margin="16,0,16,8" TextWrapping="Wrap" Foreground="#F0C674"
                  Visibility="{Binding LoadMessage, Converter={StaticResource NullToCollapsed}}" />
       <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8">
+        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8" Focusable="False">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
               <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"

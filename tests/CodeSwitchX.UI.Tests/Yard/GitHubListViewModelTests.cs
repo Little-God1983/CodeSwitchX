@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Markup;
+using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using CodeSwitchX.Core.GitHub;
@@ -371,6 +373,67 @@ public class GitHubListViewModelTests
         var panel = YardViewXaml().Descendants(Wpf + "Border").Single(b => (string?)b.Attribute(x + "Name") == "GitHubPanel");
 
         ((string?)panel.Attribute("KeyboardNavigation.TabNavigation")).ShouldBe("Cycle");
+    }
+
+    /// <summary>
+    /// The list panel as the Yard shows it: its markup from the file, on the application's resources, with the list as the context
+    /// of the Yard. The code-behind's handler is left out.
+    /// </summary>
+    private static Grid Panel(GitHubListViewModel? list)
+    {
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var root = YardViewXaml();
+        var markup = new XElement(root.Descendants(Wpf + "Border").Single(b => (string?)b.Attribute(x + "Name") == "GitHubPanel"));
+        markup.Attribute("IsVisibleChanged")!.Remove();
+        // in a Grid of its own: the panel's attributes look their resources up outside it
+        var grid = new XElement(Wpf + "Grid", root.Attributes().Where(a => a.IsNamespaceDeclaration),
+            new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
+        var panel = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
+        panel.Children.OfType<Border>().Single().DataContext = new { GitHubList = list };
+        panel.Measure(new Size(560, 600));
+        panel.Arrange(new Rect(0, 0, 560, 600));
+        panel.UpdateLayout();
+        return panel;
+    }
+
+    /// <summary>What Tab can land on, in the order of the tree: focusable, a tab stop, enabled, and not collapsed by the markup.</summary>
+    private static List<UIElement> TabStops(DependencyObject root)
+    {
+        var found = new List<UIElement>();
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is UIElement { Visibility: not Visibility.Visible })
+            {
+                continue;
+            }
+
+            if (child is UIElement { IsEnabled: true, Focusable: true } element && KeyboardNavigation.GetIsTabStop(element))
+            {
+                found.Add(element);
+            }
+
+            found.AddRange(TabStops(child));
+        }
+
+        return found;
+    }
+
+    [Fact]
+    public async Task Each_row_is_one_tab_stop()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
+
+            // the close button, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button"]);
+        });
     }
 
     private static readonly XNamespace Wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";

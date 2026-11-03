@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -11,10 +12,21 @@ public partial class YardView : UserControl
 {
     private IDataObject? _dragData;
     private string? _dragPath;
+    private readonly GitHubPanelFocus _panelFocus = new();
 
     public YardView()
     {
         InitializeComponent();
+        // Raised before the pill's command opens the list, so the panel knows which pill to hand the keyboard back to.
+        AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(OnPillClicked));
+    }
+
+    private void OnPillClicked(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is Button { DataContext: GitHubPill } pill)
+        {
+            _panelFocus.Opened(pill);
+        }
     }
 
     private void OnGitHubShadeClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -23,13 +35,15 @@ public partial class YardView : UserControl
         e.Handled = true;
     }
 
-    /// <summary>The panel takes the keyboard when it appears, so Escape closes it. The hover preview goes: it is topmost and would sit over the rows.</summary>
     private void OnGitHubPanelVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is true)
         {
-            GitHubPillPreview.Close();
-            ((UIElement)sender).Focus();
+            _panelFocus.PanelShown((UIElement)sender);
+        }
+        else
+        {
+            _panelFocus.PanelHidden();
         }
     }
 
