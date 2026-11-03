@@ -12,7 +12,10 @@ namespace CodeSwitchX.UI.GitHub;
 /// </summary>
 public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settings, Func<ProcessStartInfo, bool> start, ILogger<GitHubBrowsers> logger)
 {
+    // Read on the UI thread, written there and by LoadAsync's continuation: every access holds the lock.
     private readonly Dictionary<string, string> _choices = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+    private Task _saving = Task.CompletedTask;
 
     /// <summary>The saved choices; unreadable ones leave every account on the Windows default. Never throws.</summary>
     public async Task LoadAsync(CancellationToken ct)
@@ -21,9 +24,12 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         {
             if (await settings.GetAsync<Dictionary<string, string>>(SettingKeys.GitHubBrowsers, ct).ConfigureAwait(false) is { } stored)
             {
-                foreach (var (login, id) in stored)
+                lock (_gate)
                 {
-                    _choices[login] = id;
+                    foreach (var (login, id) in stored)
+                    {
+                        _choices[login] = id;
+                    }
                 }
             }
         }
@@ -33,12 +39,23 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         }
     }
 
-    public string ChoiceFor(string login) => _choices.TryGetValue(login, out var id) ? id : BrowserEntry.DefaultId;
+    public string ChoiceFor(string login)
+    {
+        lock (_gate)
+        {
+            return _choices.TryGetValue(login, out var id) ? id : BrowserEntry.DefaultId;
+        }
+    }
 
     public void SetChoice(string login, string id)
     {
-        _choices[login] = id;
-        _ = SaveAsync();
+        lock (_gate)
+        {
+            _choices[login] = id;
+            // Saves run one after another, each writing the choices as they are when it runs, so an earlier pick never lands over a later one.
+            var previous = _saving;
+            _saving = Task.Run(() => SaveAfterAsync(previous));
+        }
     }
 
     /// <summary>The label of the account's browser; the id itself when that browser is gone.</summary>
@@ -58,6 +75,29 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
 
         var id = ChoiceFor(login);
         var entry = catalog.List().FirstOrDefault(e => e.Id == id);
+        var problem = OpenIn(entry, id, uri);
+        if (problem is null || id == BrowserEntry.DefaultId)
+        {
+            return problem; // the Windows default is always in the list: a new read cannot help it
+        }
+
+        // The list may be older than the browser's move or install: look once more at what is installed now, and report only what is still wrong.
+        BrowserEntry? fresh;
+        try
+        {
+            fresh = catalog.Refresh().FirstOrDefault(e => e.Id == id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("The installed browsers could not be read again: {Failure}", ex.GetType().Name);
+            return problem;
+        }
+
+        return fresh is not null && !fresh.SameAs(entry) ? OpenIn(fresh, id, uri) : problem;
+    }
+
+    private string? OpenIn(BrowserEntry? entry, string id, Uri uri)
+    {
         if (entry is null)
         {
             return $"Couldn't find {id}. Pick a browser in Settings, GitHub.";
@@ -98,11 +138,18 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         return $"Couldn't open {entry.Label}. Pick another browser in Settings, GitHub.";
     }
 
-    private async Task SaveAsync()
+    private async Task SaveAfterAsync(Task previous)
     {
+        await previous.ConfigureAwait(false); // never faults: a failed save is logged below
         try
         {
-            await settings.SetAsync(SettingKeys.GitHubBrowsers, new Dictionary<string, string>(_choices), CancellationToken.None).ConfigureAwait(false);
+            Dictionary<string, string> choices;
+            lock (_gate)
+            {
+                choices = new Dictionary<string, string>(_choices);
+            }
+
+            await settings.SetAsync(SettingKeys.GitHubBrowsers, choices, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

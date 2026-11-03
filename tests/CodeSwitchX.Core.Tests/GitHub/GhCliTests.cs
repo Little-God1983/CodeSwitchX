@@ -225,9 +225,9 @@ public class GhCliTests : IDisposable
     }
 
     [Theory]
-    [InlineData("""[1,2]""", new string[0])]
-    [InlineData("""{"hosts":[]}""", new string[0])]
-    [InlineData("""{"hosts":{"github.com":{"login":"amy"}}}""", new string[0])]
+    [InlineData("""{"hosts":{}}""", new string[0])]
+    [InlineData("""{"hosts":{"ghe.example.com":[{"login":"amy"}]}}""", new string[0])]
+    [InlineData("""{"hosts":{"github.com":[]}}""", new string[0])]
     [InlineData("""{"hosts":{"github.com":[{"login":5},{"login":null},{"login":"amy"},"zed",null,{"state":"x"}]}}""", new[] { "amy" })]
     [InlineData("""{"hosts":{"github.com":[{"login":"amy"},{"login":"kim"}]}}""", new[] { "amy", "kim" })]
     public async Task Accounts_survive_an_unexpected_shape_and_give_what_they_can(string payload, string[] expected)
@@ -240,11 +240,26 @@ public class GhCliTests : IDisposable
         (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(expected);
     }
 
+    [Theory]
+    [InlineData("""[1,2]""")]
+    [InlineData("""{"hosts":[]}""")]
+    [InlineData("""{"hosts":{"github.com":{"login":"amy"}}}""")]
+    [InlineData("not json")]
+    public async Task An_answer_that_is_not_the_expected_shape_is_a_failed_read(string payload)
+    {
+        var file = Path.Combine(_root, "status.json");
+        await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + file + "\"\r\n", TestContext.Current.CancellationToken);
+
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
     [Fact]
-    public async Task A_missing_gh_gives_no_accounts()
+    public async Task A_missing_gh_is_a_failed_read()
     {
         var gh = new GhCli(Path.Combine(_root, "no-such-gh.exe"), GhCli.Timeout);
 
-        (await gh.AccountsAsync(CancellationToken.None)).ShouldBeEmpty();
+        (await gh.AccountsAsync(CancellationToken.None)).ShouldBeNull();
     }
 }

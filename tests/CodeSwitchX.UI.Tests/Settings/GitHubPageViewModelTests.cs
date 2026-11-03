@@ -16,14 +16,15 @@ public class GitHubPageViewModelTests
     private readonly ISettingsStore _store = Substitute.For<ISettingsStore>();
     private readonly List<ProcessStartInfo> _started = [];
     private Func<ProcessStartInfo, bool> _start;
+    private readonly FakeSource _source = new();
     private readonly GitHubBrowsers _browsers;
     private readonly GitHubPageViewModel _page;
 
     public GitHubPageViewModelTests()
     {
         _start = info => { _started.Add(info); return true; };
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["someone", "other"]));
-        var catalog = new BrowserCatalog(new FakeSource());
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["someone", "other"]));
+        var catalog = new BrowserCatalog(_source);
         _browsers = new GitHubBrowsers(catalog, _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
         _page = new GitHubPageViewModel(_gh, _browsers, catalog);
     }
@@ -106,7 +107,7 @@ public class GitHubPageViewModelTests
     [Fact]
     public async Task No_accounts_says_how_to_log_in()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>([]));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -118,7 +119,7 @@ public class GitHubPageViewModelTests
     public async Task A_refresh_replaces_the_rows_with_the_accounts_there_are_now()
     {
         await _page.RefreshAsync(CancellationToken.None);
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["third"]));
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["third"]));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -126,9 +127,158 @@ public class GitHubPageViewModelTests
     }
 
     [Fact]
-    public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
+    public async Task A_refresh_keeps_the_row_of_an_account_that_is_still_there_with_its_message()
     {
-        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>>>(_ => throw new InvalidOperationException("boom"));
+        await _page.RefreshAsync(CancellationToken.None);
+        var kept = _page.Accounts[1];
+        kept.SelectedId = "firefox|alpha";
+        _start = _ => false;
+        kept.TestCommand.Execute(null);
+        kept.Message.ShouldNotBeNull();
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["other", "third"]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Select(a => a.Login).ShouldBe(["other", "third"]);
+        _page.Accounts[0].ShouldBeSameAs(kept);
+        kept.SelectedId.ShouldBe("firefox|alpha");
+        kept.Message.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+    }
+
+    [Fact]
+    public async Task A_refresh_puts_the_rows_in_the_order_of_the_accounts()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var someone = _page.Accounts[0];
+        var other = _page.Accounts[1];
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["third", "other", "someone"]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Select(a => a.Login).ShouldBe(["third", "other", "someone"]);
+        _page.Accounts[1].ShouldBeSameAs(other);
+        _page.Accounts[2].ShouldBeSameAs(someone);
+    }
+
+    [Fact]
+    public async Task A_refresh_gives_a_kept_row_the_browsers_installed_now()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|beta";
+        _source.Keys = [("Firefox-1A2B", @"C:\ff\firefox.exe"), ("Some Browser", @"C:\sb\sb.exe")];
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts[0].ShouldBeSameAs(row);
+        row.Choices.Select(c => c.Id).ShouldBe([BrowserEntry.DefaultId, "firefox|alpha", "firefox|beta", "some browser"]);
+        row.SelectedId.ShouldBe("firefox|beta");
+    }
+
+    [Fact]
+    public async Task A_refresh_leaves_the_choices_of_a_kept_row_alone_when_nothing_changed()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        var choices = row.Choices;
+        var changes = new List<string?>();
+        row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        row.Choices.ShouldBeSameAs(choices);
+        changes.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_kept_row_whose_browser_was_uninstalled_shows_it_as_missing()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|beta";
+        _source.Keys = [];
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        row.SelectedId.ShouldBe("firefox|beta");
+        row.Choices.Single(c => c.Id == "firefox|beta").Label.ShouldBe("Missing: firefox|beta");
+    }
+
+    [Fact]
+    public async Task An_account_listed_twice_gets_one_row()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["first", "FIRST", "second"]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Select(a => a.Login).ShouldBe(["first", "second"]);
+    }
+
+    [Fact]
+    public async Task A_kept_row_loses_a_failed_test_line_when_its_browser_list_changes()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|alpha";
+        _start = _ => false;
+        row.TestCommand.Execute(null);
+        row.Message.ShouldNotBeNull();
+        _source.Keys = [("Firefox-1A2B", @"C:\ff\firefox.exe"), ("Some Browser", @"C:\sb\sb.exe")];
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        row.Message.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_failed_read_leaves_the_rows_and_their_lines_alone()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|alpha";
+        _start = _ => false;
+        row.TestCommand.Execute(null);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>?>>(_ => throw new InvalidOperationException("boom"));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Count.ShouldBe(2);
+        _page.Accounts[0].ShouldBeSameAs(row);
+        row.Message.ShouldNotBeNull();
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_empty_answer_while_rows_are_shown_means_everyone_logged_out()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>([]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.ShouldBeEmpty();
+        _page.HasNoAccounts.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_failed_answer_from_gh_leaves_the_rows_alone()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(null));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Count.ShouldBe(2);
+        _page.Accounts[0].ShouldBeSameAs(row);
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_failed_answer_from_gh_before_any_row_says_how_to_log_in()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(null));
 
         await _page.RefreshAsync(CancellationToken.None);
 
@@ -136,7 +286,29 @@ public class GitHubPageViewModelTests
     }
 
     [Fact]
-    public async Task A_failing_browser_list_says_how_to_log_in_instead_of_throwing()
+    public async Task A_failing_browser_read_leaves_the_rows_alone()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        _source.Throws = true;
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Count.ShouldBe(2);
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>?>>(_ => throw new InvalidOperationException("boom"));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.HasNoAccounts.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_failing_browser_list_still_shows_the_accounts_with_the_Windows_default()
     {
         var source = Substitute.For<IBrowserSource>();
         source.Installed().Returns(_ => throw new InvalidOperationException("boom"));
@@ -145,7 +317,9 @@ public class GitHubPageViewModelTests
 
         await page.RefreshAsync(CancellationToken.None);
 
-        page.HasNoAccounts.ShouldBeTrue();
+        page.Accounts.Select(a => a.Login).ShouldBe(["someone", "other"]);
+        page.Accounts[0].Choices.Select(c => c.Id).ShouldBe([BrowserEntry.DefaultId]);
+        page.HasNoAccounts.ShouldBeFalse();
     }
 
     [Fact]
@@ -156,7 +330,7 @@ public class GitHubPageViewModelTests
         _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
             accountsThread = Environment.CurrentManagedThreadId;
-            return Task.FromResult<IReadOnlyList<string>>([]);
+            return Task.FromResult<IReadOnlyList<string>?>([]);
         });
         var source = Substitute.For<IBrowserSource>();
         source.Installed().Returns(_ =>
@@ -181,9 +355,12 @@ public class GitHubPageViewModelTests
 
     private sealed class FakeSource : IBrowserSource
     {
-        public IReadOnlyList<(string Key, string? Executable)> Installed() => [("Firefox-1A2B", @"C:\ff\firefox.exe")];
+        public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
+
+        public bool Throws { get; set; }
+
+        public IReadOnlyList<(string Key, string? Executable)> Installed() => Throws ? throw new InvalidOperationException("boom") : Keys;
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=beta\n";
-        public string? EdgeLocalState() => null;
-        public string? ChromeLocalState() => null;
+        public string? ChromiumLocalState(string folder) => null;
     }
 }

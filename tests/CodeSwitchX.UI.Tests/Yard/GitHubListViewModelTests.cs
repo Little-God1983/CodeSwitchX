@@ -53,7 +53,7 @@ public class GitHubListViewModelTests
         /// <summary>The same for the pull request list, which stays unanswered unless a test answers it.</summary>
         public TaskCompletionSource<string?> PullRequestList { get; } = new();
 
-        public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["me"]);
+        public Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>?>(["me"]);
 
         /// <summary>Set when a list read reaches gh, after <see cref="ListThread"/>.</summary>
         public ManualResetEventSlim ListAsked { get; } = new();
@@ -885,7 +885,6 @@ public class GitHubListViewModelTests
     {
         public IReadOnlyList<(string Key, string? Executable)> Installed() => [("Firefox-1A2B", @"C:\ff\firefox.exe")];
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=beta\n";
-        public string? EdgeLocalState() => null;
-        public string? ChromeLocalState() => null;
+        public string? ChromiumLocalState(string folder) => null;
     }
 }
