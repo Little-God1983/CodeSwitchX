@@ -172,7 +172,7 @@
             </Border>
             <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
           </DockPanel>
-          <ItemsControl ItemsSource="{Binding GitLines}" ItemTemplate="{StaticResource GitLineTemplate}" Margin="0,4,0,8" />
+          <ItemsControl ItemsSource="{Binding GitLines}" ItemTemplate="{StaticResource GitLineTemplate}" Margin="0,4,0,8" yard:GitPills.IsShown="True" />
           <ItemsControl ItemsSource="{Binding ShownChats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
           <!-- the chats that do not fit (#295); a click on it opens the window, as one on the tile does -->
           <TextBlock Text="{Binding MoreChats, StringFormat='+{0} more'}" Opacity="0.7" Margin="18,4,0,0">

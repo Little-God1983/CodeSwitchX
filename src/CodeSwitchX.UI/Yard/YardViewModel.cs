@@ -901,6 +901,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
+    /// <summary>A click on a pill opens the repository's list in the browser of its account; a stub until then.</summary>
+    [RelayCommand]
+    private void OpenGitHubList(GitHubPill pill)
+    {
+    }
+
     [RelayCommand]
     private Task RefreshGit() => RefreshGitAsync(CancellationToken.None);
 
