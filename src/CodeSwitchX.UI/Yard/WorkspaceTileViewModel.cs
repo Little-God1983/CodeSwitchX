@@ -13,6 +13,9 @@ namespace CodeSwitchX.UI.Yard;
 
 public sealed partial class WorkspaceTileViewModel : ObservableObject
 {
+    /// <summary>The tile left the Yard; a git pass that started before still holds it.</summary>
+    internal volatile bool Removed;
+
     /// <summary>
     /// On a tile VS Code keeps no tab list for, stale chats fall off after this long; they come back as soon as the
     /// session shows activity again.

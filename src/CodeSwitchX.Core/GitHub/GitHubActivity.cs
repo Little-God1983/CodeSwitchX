@@ -211,7 +211,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             }
 
             var activity = read.Activity;
-            if (activity is null && !ct.IsCancellationRequested)
+            if (activity is null)
             {
                 logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
             }

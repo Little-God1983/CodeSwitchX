@@ -23,6 +23,7 @@ public class YardGitHubTests : IDisposable
     private readonly List<YardViewModel> _yards = [];
     private GitHubActivity? _activity;
     private string? _profile;
+    private Func<string, string>? _gitRunner;
 
     /// <summary>What each folder's git says its origin is: github.com/acme/&lt;folder name&gt;.</summary>
     private Func<string, OriginLookup> _originOf = path => new OriginLookup($"https://github.com/acme/{Path.GetFileName(path)}.git");
@@ -198,7 +199,7 @@ public class YardGitHubTests : IDisposable
         pricing.Pricing.Returns(PricingTable.Default);
         var registry = new WorkspaceRegistry(_store, resolver, _bus);
         // Git answers "clean" to status.
-        var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(string.Empty), _profile);
+        var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(_gitRunner?.Invoke(args) ?? string.Empty), _profile);
         _activity = withGitHub
             ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;
@@ -368,7 +369,6 @@ public class YardGitHubTests : IDisposable
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
         _bus.Publish(new WorkspaceUnregistered(app.Id));
         yard.FindTile(app.Id).ShouldBeNull();
-        await yard.RefreshGitAsync(CancellationToken.None);
         _gh.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _bus.Publish(new WorkspaceRegistered(app));
@@ -429,9 +429,49 @@ public class YardGitHubTests : IDisposable
         File.WriteAllText(file, """{ "folders": [ { "path": "sdk" } ] }""");
 
         await yard.RefreshGitAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None); // the line left the tile with the first; the folder goes with the second
 
         _activity!.Knows(nexus).ShouldBeFalse();
         _activity.Knows(sdk).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_folder_that_stops_resolving_for_a_pass_keeps_its_result_and_its_pills()
+    {
+        var sdk = Repo("sdk");
+        var nexus = Repo("nexus");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" } ] }""");
+        var full = Add("Full", sdk, file);
+        var yard = Yard(true, full);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(full.Id)!.GitLines is [{ Issues: not null }, { Issues: not null }]);
+        await Quiet();
+        var reads = _gh.Reads;
+        Directory.Delete(nexus, recursive: true); // an unplugged share, say
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        Repo("nexus");
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Quiet();
+
+        yard.FindTile(full.Id)!.GitLines.Count.ShouldBe(2);
+        yard.FindTile(full.Id)!.GitLines[1].Issues.ShouldNotBeNull();
+        _gh.Reads.ShouldBe(reads, "the result was kept, so nothing is asked again");
+    }
+
+    [Fact]
+    public async Task A_git_pass_that_throws_after_computing_the_lines_still_asks_about_the_folder()
+    {
+        var root = Repo("app");
+        Directory.CreateDirectory(Path.Combine(root, ".git", "worktrees", "wt")); // a linked worktree: the pass lists them
+        _gitRunner = args => args.StartsWith("worktree", StringComparison.Ordinal) ? throw new InvalidOperationException("boom") : string.Empty;
+        var app = Add("App", root);
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
     }
 
     [Fact]
@@ -509,8 +549,10 @@ public class YardGitHubTests : IDisposable
     [Fact]
     public async Task A_repository_whose_branch_cannot_be_read_keeps_its_pills()
     {
+        // A reftable repository: HEAD holds a placeholder and only git can tell the branch, which it does not for a moment.
         var root = Path.Combine(_tempRoot, "headless");
-        Directory.CreateDirectory(Path.Combine(root, ".git")); // no HEAD in it
+        Directory.CreateDirectory(Path.Combine(root, ".git"));
+        File.WriteAllText(Path.Combine(root, ".git", "HEAD"), "ref: refs/heads/.invalid\n");
         var app = Add("Headless", root);
         var yard = Yard(true, app);
 
