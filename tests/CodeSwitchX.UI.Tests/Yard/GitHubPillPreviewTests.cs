@@ -4,6 +4,7 @@ using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Threading;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.UI.Yard;
@@ -110,7 +111,11 @@ public sealed class GitHubPillPreviewTests(GitHubPillPreviewTests.PreviewThread 
         Hover(pill);
         thread.Shown.ShouldBeTrue();
 
-        new GitHubPanelFocus().PanelShown(new Border { Focusable = true });
+        var panel = new Border { Focusable = true, Visibility = Visibility.Collapsed };
+        using var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = new Grid { Children = { panel } } };
+        _ = new GitHubPanelFocus((UIElement)source.RootVisual, panel);
+
+        panel.Visibility = Visibility.Visible;
 
         thread.Shown.ShouldBeFalse();
     });

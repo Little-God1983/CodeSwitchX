@@ -50,8 +50,25 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     public string AccountLine { get; }
 
+    private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes when the read of <see cref="LoadAsync"/> has ended, however it ended.</summary>
+    internal Task Loaded => _loaded.Task;
+
     /// <summary>Reads the full list. The tile's count follows it even when the panel was closed meanwhile; the panel does not.</summary>
     public async Task LoadAsync(CancellationToken ct)
+    {
+        try
+        {
+            await ReadAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _loaded.TrySetResult();
+        }
+    }
+
+    private async Task ReadAsync(CancellationToken ct)
     {
         var activity = _pill.Activity;
         IReadOnlyList<GitHubItem>? all;

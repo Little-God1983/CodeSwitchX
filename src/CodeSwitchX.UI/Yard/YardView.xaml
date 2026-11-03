@@ -323,8 +323,23 @@
     <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
     <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
             Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
-            Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" IsVisibleChanged="OnGitHubPanelVisibleChanged">
+            KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle"
+            Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}">
       <DockPanel DataContext="{Binding GitHubList}">
+        <DockPanel.Resources>
+          <!-- why the list could not be read, why a row could not be opened: each shows only while it has something to say -->
+          <Style x:Key="GitHubFailureLine" TargetType="TextBlock">
+            <Setter Property="DockPanel.Dock" Value="Top" />
+            <Setter Property="Margin" Value="16,0,16,8" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="#F0C674" />
+            <Style.Triggers>
+              <Trigger Property="Text" Value="">
+                <Setter Property="Visibility" Value="Collapsed" />
+              </Trigger>
+            </Style.Triggers>
+          </Style>
+        </DockPanel.Resources>
         <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
           <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
           <StackPanel>
@@ -332,10 +347,8 @@
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="{Binding OpenMessage}" Margin="16,0,16,8" TextWrapping="Wrap" Foreground="#F0C674"
-                   Visibility="{Binding OpenMessage, Converter={StaticResource NullToCollapsed}}" />
-        <TextBlock DockPanel.Dock="Top" Text="{Binding LoadMessage}" Margin="16,0,16,8" TextWrapping="Wrap" Foreground="#F0C674"
-                   Visibility="{Binding LoadMessage, Converter={StaticResource NullToCollapsed}}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8" Focusable="False">
             <ItemsControl.ItemTemplate>

@@ -1,6 +1,5 @@
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -12,39 +11,17 @@ public partial class YardView : UserControl
 {
     private IDataObject? _dragData;
     private string? _dragPath;
-    private readonly GitHubPanelFocus _panelFocus = new();
 
     public YardView()
     {
         InitializeComponent();
-        // Raised before the pill's command opens the list, so the panel knows which pill to hand the keyboard back to.
-        AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(OnPillClicked));
-    }
-
-    private void OnPillClicked(object sender, RoutedEventArgs e)
-    {
-        if (e.OriginalSource is Button { DataContext: GitHubPill } pill)
-        {
-            _panelFocus.Opened(pill);
-        }
+        _ = new GitHubPanelFocus(this, GitHubPanel); // lives as long as the two it listens to
     }
 
     private void OnGitHubShadeClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         (DataContext as YardViewModel)?.GitHubList?.CloseCommand.Execute(null);
         e.Handled = true;
-    }
-
-    private void OnGitHubPanelVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
-    {
-        if (e.NewValue is true)
-        {
-            _panelFocus.PanelShown((UIElement)sender);
-        }
-        else
-        {
-            _panelFocus.PanelHidden();
-        }
     }
 
     private void OnBoardMouseMove(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.HoldOrder();
