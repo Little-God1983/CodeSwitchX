@@ -297,7 +297,7 @@ public partial class App : Application
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
         services.AddSingleton(sp => new GitHubBrowsers(new BrowserCatalog(new InstalledBrowsers()), sp.GetRequiredService<ISettingsStore>(),
-            info => Process.Start(info) is not null, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
+            info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<GitHubReader>(),
             (path, ct) => sp.GetRequiredService<GitInspector>().RunAsync(path, "config --get remote.origin.url", ct),
             sp.GetRequiredService<ILogger<GitHubActivity>>()));

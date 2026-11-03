@@ -107,9 +107,40 @@ public class GitHubBrowsersTests
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
     }
 
+    [Fact]
+    public void A_chosen_browser_without_an_executable_never_falls_back_to_the_default()
+    {
+        var browsers = new GitHubBrowsers(new BrowserCatalog(new FakeSource { Keys = [("Firefox-1", null)] }), _store,
+            info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+        browsers.SetChoice("someone", "firefox|alpha");
+
+        browsers.Open("someone", Url).ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        _started.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_start_that_returns_false_for_a_chosen_browser_says_so()
+    {
+        var browsers = Create();
+        browsers.SetChoice("someone", "firefox|alpha");
+        _start = _ => false;
+
+        browsers.Open("someone", Url).ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+    }
+
+    [Fact]
+    public void A_shell_start_that_returns_no_process_is_still_an_open()
+    {
+        _start = _ => false; // Process.Start gives null when a running process took the address
+
+        Create().Open("someone", Url).ShouldBeNull();
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
-        public IReadOnlyList<(string Key, string? Executable)> Installed() => [("Firefox-1A2B", @"C:\ff\firefox.exe")];
+        public IReadOnlyList<(string Key, string? Executable)> Keys { get; init; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
+
+        public IReadOnlyList<(string Key, string? Executable)> Installed() => Keys;
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=name with space\n";
         public string? EdgeLocalState() => null;
         public string? ChromeLocalState() => null;

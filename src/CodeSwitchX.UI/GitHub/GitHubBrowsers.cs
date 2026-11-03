@@ -63,10 +63,17 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
             return $"Couldn't find {id}. Pick a browser in Settings, GitHub.";
         }
 
-        var info = entry.Executable is null
+        // Only the Windows default goes through the shell; a browser whose program is unknown never falls back to it.
+        var isDefault = entry.Id == BrowserEntry.DefaultId;
+        if (!isDefault && entry.Executable is null)
+        {
+            return $"Couldn't open {entry.Label}. Pick another browser in Settings, GitHub.";
+        }
+
+        var info = isDefault
             ? new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }
-            : new ProcessStartInfo(entry.Executable) { UseShellExecute = false };
-        if (entry.Executable is not null)
+            : new ProcessStartInfo(entry.Executable!) { UseShellExecute = false };
+        if (!isDefault)
         {
             foreach (var argument in entry.Arguments(uri.AbsoluteUri))
             {
@@ -76,7 +83,8 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
 
         try
         {
-            if (start(info))
+            // A shell start gives no process when a running one took the address: only an exception is a failure there.
+            if (start(info) || info.UseShellExecute)
             {
                 return null;
             }
