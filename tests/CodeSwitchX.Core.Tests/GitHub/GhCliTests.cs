@@ -56,7 +56,7 @@ public class GhCliTests : IDisposable
         await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + payload + "\"\r\n", TestContext.Current.CancellationToken);
         var gh = new GhCli(script, GhCli.Timeout);
 
-        (await gh.RunAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).ShouldBe(json);
+        (await gh.AnswerAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).Output.ShouldBe(json);
     }
 
     private static void WithInheritedEnvironment(Action action)
@@ -96,7 +96,7 @@ public class GhCliTests : IDisposable
         var gh = new GhCli(script, TimeSpan.FromSeconds(1));
 
         var watch = Stopwatch.StartNew();
-        var result = await gh.RunAsAsync("acme", ["api", "user"], CancellationToken.None);
+        var result = (await gh.AnswerAsAsync("acme", ["api", "user"], CancellationToken.None)).Output;
 
         result.ShouldBeNull();
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
@@ -122,7 +122,7 @@ public class GhCliTests : IDisposable
 
         answer.Output.ShouldBeNull();
         answer.FailureOutput.ShouldBe(payload);
-        (await gh.RunAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await gh.AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken)).Output.ShouldBeNull();
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public class GhCliTests : IDisposable
     {
         var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
 
-        (await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None)).ShouldBeNull();
+        (await gh.AnswerAsAsync("acme", ["issue", "list"], CancellationToken.None)).Output.ShouldBeNull();
     }
 
     [Fact]

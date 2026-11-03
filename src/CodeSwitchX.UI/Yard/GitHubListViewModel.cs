@@ -110,11 +110,15 @@ public sealed partial class GitHubListViewModel : ObservableObject
             all = null;
         }
 
-        // The total the tile now holds: the list's when it was applied, else the newer result's that it lost to.
+        // The total the tile now holds when the list was applied; a list that lost to a newer result shows its own total, and the tile keeps the newer one.
         int? stored = null;
         if (all is not null)
         {
-            stored = _activity.Replace(activity.Repo, _pill.Kind, all, since);
+            if (_activity.Replace(activity.Repo, _pill.Kind, all, since, out var total))
+            {
+                stored = total;
+            }
+
             if (all.Skipped > 0)
             {
                 _logger.LogWarning("{Skipped} rows of a GitHub list could not be read", all.Skipped);
@@ -137,12 +141,12 @@ public sealed partial class GitHubListViewModel : ObservableObject
             return;
         }
 
-        // A list that is not the whole truth (the limit, a row left out) keeps the count GraphQL gave.
+        // A list at the limit keeps the count GraphQL gave (see TotalGiven).
         var total = stored ?? all.TotalGiven(_pill.Count);
         Heading = HeadingFor(total);
         Rows = RowsOf(all.Items);
         SkippedMessage = all.Skipped switch { 0 => null, 1 => "1 row could not be shown.", var n => $"{n} rows could not be shown." };
-        CutShortMessage = all.ReachedLimit && total > all.Items.Count ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
+        CutShortMessage = all.ReachedLimit && total > all.Items.Count + all.Skipped ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
         LoadMessage = null;
     }
 

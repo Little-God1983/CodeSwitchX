@@ -86,6 +86,12 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         ], ct).ConfigureAwait(false);
         if (answer.Output is not { } output)
         {
+            // A read the caller cancelled is no failure.
+            if (ct.IsCancellationRequested)
+            {
+                return null;
+            }
+
             // No names: a repository's name is not for a log.
             logger?.LogWarning(answer.TimedOut ? "Reading a GitHub list ran out of its time" : "Reading a GitHub list failed");
             return null;
@@ -94,10 +100,13 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         try
         {
             using var doc = JsonDocument.Parse(output);
-            var rows = doc.RootElement.EnumerateArray().Select(row => ParseItem(row, graphql: false, isPullRequest)).ToList();
-            var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
-            // Two rows or more and not one read: the format is not what it was, which is a read that failed. A single odd row is a skipped one.
-            return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
+            var list = Split(doc.RootElement.EnumerateArray().Select(row => ParseItem(row, graphql: false, isPullRequest)));
+            if (list is null)
+            {
+                logger?.LogWarning("No row of a GitHub list could be read");
+            }
+
+            return list;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
@@ -149,12 +158,19 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         }
     }
 
-    /// <summary>The items of a preview, odd ones left out; null when two nodes or more came and not one could be read, which is a read that failed.</summary>
-    private static List<GitHubItem>? Newest(JsonElement kind, bool isPullRequest)
+    /// <summary>The items of a preview, odd ones left out; null when the read failed (see <see cref="Split"/>).</summary>
+    private static IReadOnlyList<GitHubItem>? Newest(JsonElement kind, bool isPullRequest) =>
+        Split(kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)))?.Items;
+
+    /// <summary>
+    /// The parsed rows (null for an odd one) as the items read and the count left out. Two rows or more and not one read means the
+    /// format is not what it was, which is a read that failed: null. A single odd row is a skipped one.
+    /// </summary>
+    private static GitHubList? Split(IEnumerable<GitHubItem?> parsed)
     {
-        var nodes = kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)).ToList();
-        var items = nodes.OfType<GitHubItem>().ToList();
-        return items.Count == 0 && nodes.Count > 1 ? null : items;
+        var rows = parsed.ToList();
+        var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
+        return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
     }
 
     /// <summary>

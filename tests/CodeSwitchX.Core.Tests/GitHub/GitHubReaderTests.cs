@@ -412,6 +412,30 @@ public class GitHubReaderTests
             Warnings.Add(logLevel + ": " + formatter(state, exception));
     }
 
+    [Fact]
+    public async Task A_list_in_no_readable_format_is_logged_without_names()
+    {
+        var gh = new FakeGh([], (_, _) => """[{"number":"a"},{"title":1}]""");
+        var log = new Lines();
+
+        (await new GitHubReader(gh, log).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+
+        log.Warnings.ShouldHaveSingleItem().ShouldStartWith("Warning: No row of a GitHub list");
+    }
+
+    [Fact]
+    public async Task A_read_cancelled_by_the_caller_is_no_failure_and_logs_nothing()
+    {
+        var gh = new FakeGh([], (_, _) => null);
+        var log = new Lines();
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+
+        (await new GitHubReader(gh, log).ListAsync(Repo, "amy", GitHubItemKind.Issue, stop.Token)).ShouldBeNull();
+
+        log.Warnings.ShouldBeEmpty();
+    }
+
     [Theory]
     [InlineData(true, "ran out of its time")]
     [InlineData(false, "failed")]

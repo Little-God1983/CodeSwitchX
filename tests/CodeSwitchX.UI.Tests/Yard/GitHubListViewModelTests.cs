@@ -325,7 +325,7 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task A_list_that_a_newer_result_overtook_shows_its_rows_with_the_stored_total()
+    public async Task A_list_that_a_newer_result_overtook_shows_its_own_total_and_the_tile_keeps_the_newer_one()
     {
         var (activity, pill) = await PillAsync();
         var list = List(activity, pill);
@@ -336,7 +336,7 @@ public class GitHubListViewModelTests
         await load;
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
-        list.Heading.ShouldBe("app: 20 open issues");
+        list.Heading.ShouldBe("app: 3 open issues");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(20);
         activity.ForFolder("app")!.NewestIssues.Count.ShouldBe(1);
     }
@@ -649,6 +649,21 @@ public class GitHubListViewModelTests
 
         list.Heading.ShouldBe("app: 1000 open issues");
         list.CutShortMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_list_of_exactly_the_limit_with_one_odd_row_is_not_cut_short()
+    {
+        _gh.IssueTotal = 1000;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Heading.ShouldBe("app: 1000 open issues");
+        list.CutShortMessage.ShouldBeNull();
+        list.SkippedMessage.ShouldBe("1 row could not be shown.");
     }
 
     [Fact]

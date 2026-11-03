@@ -77,23 +77,24 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     /// has it, so the pill agrees with it before the next round. <paramref name="all"/> is newest first, as
     /// <see cref="GitHubReader.ListAsync"/> gives it. Nothing is known of a repository no round has read, so that one is left alone.
     /// </summary>
-    /// <param name="since">The <see cref="Latest"/> from before the list was read: when another result has been stored since, the list changes nothing.</param>
-    /// <returns>The count the repository now holds for that kind, which is the list's when it was applied; null when no round has read the repository.</returns>
-    public int? Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, RepoActivity? since = null)
+    /// <param name="since">The <see cref="Latest"/> from before the list was read (null when there was none): when another result is stored now, the list changes nothing.</param>
+    /// <param name="total">The count the repository now holds for that kind, when the list was applied.</param>
+    /// <returns>Whether the list was applied: not when no round has read the repository, nor when another result is stored than <paramref name="since"/>.</returns>
+    public bool Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, RepoActivity? since, out int total)
     {
-        int total;
+        total = 0;
         lock (_gate)
         {
             if (!_results.TryGetValue(repo, out var last))
             {
-                return null;
+                return false;
             }
 
             // A list read before a newer result was stored must not overwrite it. The other orders, and a round that changed only the
             // other kind, are accepted: the next refresh heals them.
-            if (since is not null && !ReferenceEquals(last, since))
+            if (!ReferenceEquals(last, since))
             {
-                return kind == GitHubItemKind.Issue ? last.OpenIssues : last.OpenPullRequests;
+                return false;
             }
 
             var newest = all.Items.Take(RepoActivity.PreviewCount).ToList();
@@ -103,14 +104,14 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             total = kind == GitHubItemKind.Issue ? next.OpenIssues : next.OpenPullRequests;
             if (last.SameAs(next))
             {
-                return total;
+                return true;
             }
 
             _results[repo] = next;
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
-        return total;
+        return true;
     }
 
     /// <returns><c>Moved</c> is true when the folder now shows another result than before, which no read of the round would report.</returns>

@@ -63,9 +63,6 @@ public sealed class GhCli : IGhCli
         }
     }
 
-    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
-        (await RunAndAnswerAsync(login, arguments, _timeout, ct).ConfigureAwait(false)).Output;
-
     public Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
         RunAndAnswerAsync(login, arguments, _listTimeout, ct);
 
