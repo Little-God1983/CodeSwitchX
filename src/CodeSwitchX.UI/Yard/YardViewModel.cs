@@ -920,10 +920,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubList?.CloseCommand.Execute(null);
-        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time,
+        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
         GitHubList = list;
-        _ = list.LoadAsync(CancellationToken.None);
+        _ = list.LoadAsync(_gitHubStop.Token);
     }
 
     [RelayCommand]

@@ -3,6 +3,7 @@ using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Yard;
 
@@ -18,6 +19,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly GitHubBrowsers _browsers;
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
+    private readonly ILogger _logger;
     private readonly Action<GitHubListViewModel> _closed;
     private bool _isClosed;
 
@@ -26,7 +28,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     [ObservableProperty] private string? _message;
 
     public GitHubListViewModel(GitHubPill pill, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers, IUiDispatcher ui,
-        TimeProvider time, Action<GitHubListViewModel> closed)
+        TimeProvider time, ILogger logger, Action<GitHubListViewModel> closed)
     {
         _pill = pill;
         _reader = reader;
@@ -34,6 +36,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
         _browsers = browsers;
         _ui = ui;
         _time = time;
+        _logger = logger;
         _closed = closed;
         _heading = HeadingFor(pill.Count);
         _rows = RowsOf(pill.Kind == GitHubItemKind.Issue ? pill.Activity.NewestIssues : pill.Activity.NewestPullRequests);
@@ -47,7 +50,22 @@ public sealed partial class GitHubListViewModel : ObservableObject
     public async Task LoadAsync(CancellationToken ct)
     {
         var activity = _pill.Activity;
-        var all = await _reader.ListAsync(activity.Repo, activity.Account, _pill.Kind, ct).ConfigureAwait(false);
+        IReadOnlyList<GitHubItem>? all;
+        try
+        {
+            all = await _reader.ListAsync(activity.Repo, activity.Account, _pill.Kind, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            // The type only: a message could carry a repository's name or a title.
+            _logger.LogWarning("Reading the GitHub list failed: {ExceptionType}", ex.GetType().Name);
+            all = null;
+        }
+
         if (all is not null)
         {
             _activity.Replace(activity.Repo, _pill.Kind, all);

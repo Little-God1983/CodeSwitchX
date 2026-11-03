@@ -64,7 +64,7 @@ public class GitHubListViewModelTests
     }
 
     private GitHubListViewModel List(GitHubActivity activity, GitHubPill pill, GitHubBrowsers? browsers = null) =>
-        new(pill, new GitHubReader(_gh), activity, browsers ?? Browsers(), new ImmediateDispatcher(), _time, _closedLists.Add);
+        new(pill, new GitHubReader(_gh), activity, browsers ?? Browsers(), new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
 
     [Fact]
     public async Task Opening_shows_last_known_rows_at_once_then_the_fresh_list()
@@ -176,6 +176,36 @@ public class GitHubListViewModelTests
         list.Rows.Count.ShouldBe(1);
         list.Heading.ShouldBe("app: 12 open issues");
         activity.ForFolder("app")!.OpenIssues.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_cancelled_load_changes_nothing_and_throws_nothing()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        using var stop = new CancellationTokenSource();
+        var load = list.LoadAsync(stop.Token);
+
+        stop.Cancel();
+        _gh.List.SetCanceled(stop.Token);
+        await load;
+
+        list.Rows.Count.ShouldBe(1);
+        list.Message.ShouldBeNull();
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
+    }
+
+    [Fact]
+    public async Task A_reader_that_throws_shows_the_failed_load_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetException(new InvalidOperationException("boom"));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Message.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+        list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
     }
 
     [Fact]
