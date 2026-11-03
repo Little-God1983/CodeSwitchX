@@ -670,6 +670,11 @@ public class SettingsViewModelTests : IDisposable
 
         await gh.Received(2).AccountsAsync(Arg.Any<CancellationToken>());
         page.Accounts.Select(a => a.Login).ShouldBe(["fresh"]);
+
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["again"]));
+        vm.Refresh(); // Settings shown again on the page it was left on
+        await gh.Received(3).AccountsAsync(Arg.Any<CancellationToken>());
+        page.Accounts.Select(a => a.Login).ShouldBe(["again"]);
     }
 
     [Fact]

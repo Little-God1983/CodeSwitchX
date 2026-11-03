@@ -318,11 +318,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     /// <summary>The GitHub page reads the accounts each time it is opened, so a new login shows up by itself.</summary>
     partial void OnSelectedPageChanged(SettingsPageItem value)
     {
-        if (value.Page == SettingsPage.GitHub && GitHub is not null)
+        if (value.Page == SettingsPage.GitHub)
         {
-            _ = GitHub.RefreshAsync(CancellationToken.None);
+            ReadGitHubAccounts();
         }
     }
+
+    private void ReadGitHubAccounts() => _ = GitHub?.RefreshAsync(CancellationToken.None);
 
     /// <summary>The pages the sidebar lists: those the search finds.</summary>
     public ObservableCollection<SettingsPageItem> Pages { get; }
@@ -575,6 +577,11 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public void Refresh()
     {
+        if (Page == SettingsPage.GitHub)
+        {
+            ReadGitHubAccounts(); // Settings shown again on the page it was left on
+        }
+
         ShowSounds(); // a sound's file deleted outside the app since is gone from the page
         var status = _installer.GetStatus(RelayExecutable);
         HookState = status.State;

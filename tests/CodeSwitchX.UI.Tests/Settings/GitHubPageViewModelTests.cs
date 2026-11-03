@@ -110,6 +110,29 @@ public class GitHubPageViewModelTests
         _page.Accounts.Select(a => a.Login).ShouldBe(["third"]);
     }
 
+    [Fact]
+    public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>>>(_ => throw new InvalidOperationException("boom"));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.HasNoAccounts.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_failing_browser_list_says_how_to_log_in_instead_of_throwing()
+    {
+        var source = Substitute.For<IBrowserSource>();
+        source.Installed().Returns(_ => throw new InvalidOperationException("boom"));
+        var catalog = new BrowserCatalog(source);
+        var page = new GitHubPageViewModel(_gh, new GitHubBrowsers(catalog, _store, _ => true, NullLogger<GitHubBrowsers>.Instance), catalog);
+
+        await page.RefreshAsync(CancellationToken.None);
+
+        page.HasNoAccounts.ShouldBeTrue();
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
         public IReadOnlyList<(string Key, string? Executable)> Installed() => [("Firefox-1A2B", @"C:\ff\firefox.exe")];

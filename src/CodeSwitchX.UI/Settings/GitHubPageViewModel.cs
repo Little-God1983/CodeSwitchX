@@ -4,6 +4,7 @@ using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.UI.Settings;
 
@@ -11,7 +12,7 @@ namespace CodeSwitchX.UI.Settings;
 /// Settings → GitHub (#335): one row per account the GitHub command line knows, each paired with the browser its issues and
 /// pull requests open in. The accounts are read again whenever the page is opened, so a new <c>gh auth login</c> shows up by itself.
 /// </summary>
-public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, BrowserCatalog catalog) : ObservableObject
+public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, BrowserCatalog catalog, ILogger<GitHubPageViewModel>? logger = null) : ObservableObject
 {
     private int _round;
 
@@ -25,14 +26,26 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
     public async Task RefreshAsync(CancellationToken ct)
     {
         var round = ++_round;
-        var logins = await gh.AccountsAsync(ct);
+        IReadOnlyList<string> logins = [];
+        IReadOnlyList<BrowserEntry> entries = [];
+        try
+        {
+            logins = await gh.AccountsAsync(ct);
+            // The installed browsers are read once for all rows.
+            entries = catalog.List();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The page then says how to log in; only the kind of failure is logged.
+            logger?.LogWarning("The GitHub accounts could not be read: {Failure}", ex.GetType().Name);
+            logins = [];
+        }
+
         if (round != _round)
         {
             return; // a later refresh is the newer answer
         }
 
-        // The installed browsers are read once for all rows.
-        var entries = catalog.List();
         Accounts.Clear();
         foreach (var login in logins)
         {
