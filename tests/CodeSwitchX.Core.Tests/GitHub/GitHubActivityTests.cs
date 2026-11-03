@@ -24,6 +24,8 @@ public class GitHubActivityTests
 
         public bool AccountsThrow { get; set; }
 
+        public bool AccountsNull { get; set; }
+
         public int AccountReads { get; private set; }
 
         public IReadOnlyList<string> Accounts { get; set; } = ["me"];
@@ -31,14 +33,14 @@ public class GitHubActivityTests
         /// <summary>What an account's read comes to, instead of the usual answer; null gives the usual one.</summary>
         public Func<string, GhAnswer?>? AnswerOf { get; set; }
 
-        public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
+        public Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
         {
             lock (Slugs)
             {
                 AccountReads++;
             }
 
-            return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult(Accounts);
+            return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult<IReadOnlyList<string>?>(AccountsNull ? null : Accounts);
         }
 
         public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
@@ -153,6 +155,23 @@ public class GitHubActivityTests
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
+    }
+
+    [Fact]
+    public async Task A_failed_accounts_read_makes_no_reads_and_keeps_the_last_result()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var first = activity.ForFolder(@"c:\r\tool");
+        first.ShouldNotBeNull();
+        var asked = gh.Slugs.Count;
+        gh.AccountsNull = true;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        gh.Slugs.Count.ShouldBe(asked, "no repository was read");
         activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
     }
 
@@ -334,11 +353,11 @@ public class GitHubActivityTests
         var activity = Activity(new FakeGh { Issues = 3 }, _ => "https://github.com/acme/tool.git");
         var repo = new GitHubRepo("acme", "tool");
         var started = activity.Latest(repo); // null
-        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
 
         activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), started, out _).ShouldBeFalse();
 
-        activity.ForFolder(@"c:	ool")!.OpenIssues.ShouldBe(3);
+        activity.ForFolder(@"c:	ool")!.OpenIssues.ShouldBe(3);
     }
 
     [Fact]

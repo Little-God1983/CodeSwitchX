@@ -108,19 +108,10 @@ public partial class App : Application
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
             await shell.InitializeAsync(CancellationToken.None);
             await _host.Services.GetRequiredService<GitHubBrowsers>().LoadAsync(CancellationToken.None);
-            // The installed browsers are read now, off the UI thread, so the first pill click finds the list.
+            // The installed browsers are read now, off the UI thread, so the first pill click finds the list. List never throws and logs a failure;
+            // a failed read keeps nothing, so the first click then reads again.
             var browserCatalog = _host.Services.GetRequiredService<CodeSwitchX.Hosting.Browsers.BrowserCatalog>();
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    browserCatalog.Refresh();
-                }
-                catch (Exception)
-                {
-                    // The first List then reads again and reports it.
-                }
-            });
+            _ = Task.Run(browserCatalog.List);
             // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
             var engine = _host.Services.GetRequiredService<SessionEngine>();
             // One it holds goes to VS Code once the Cab shows the chat's own VS Code.
@@ -309,7 +300,7 @@ public partial class App : Application
         // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
-        services.AddSingleton(new BrowserCatalog(new InstalledBrowsers()));
+        services.AddSingleton(sp => new BrowserCatalog(new InstalledBrowsers(), logger: sp.GetRequiredService<ILogger<BrowserCatalog>>()));
         services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
             info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<IGhCli>(), sp.GetRequiredService<GitHubReader>(),

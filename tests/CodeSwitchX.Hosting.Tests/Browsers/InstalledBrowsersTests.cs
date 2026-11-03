@@ -20,13 +20,21 @@ public class InstalledBrowsersTests
         InstalledBrowsers.ExecutableOf(command).ShouldBe(expected);
 
     [Fact]
+    public void A_program_that_is_not_there_counts_as_no_program()
+    {
+        var found = InstalledBrowsers.Collect(["Alpha", "Stale"], name => $@"""C:\{name}\{name}.exe""", path => path.Contains("Alpha"));
+
+        found.ShouldBe([("Alpha", @"C:\Alpha\Alpha.exe"), ("Stale", null)]);
+    }
+
+    [Fact]
     public void One_name_that_cannot_be_read_leaves_the_others_listed()
     {
         var found = InstalledBrowsers.Collect(["Alpha", "Broken", "Gamma"], name => name switch
         {
             "Broken" => throw new UnauthorizedAccessException("denied"),
             _ => $@"""C:\{name}\{name}.exe"" ""%1""",
-        });
+        }, _ => true);
 
         found.ShouldBe([("Alpha", @"C:\Alpha\Alpha.exe"), ("Gamma", @"C:\Gamma\Gamma.exe")]);
     }

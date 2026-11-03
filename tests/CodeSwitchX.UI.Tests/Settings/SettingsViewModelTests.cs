@@ -651,7 +651,7 @@ public class SettingsViewModelTests : IDisposable
     public async Task Opening_the_page_reads_the_accounts_again()
     {
         var gh = Substitute.For<CodeSwitchX.Core.GitHub.IGhCli>();
-        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>([]));
         var catalog = new CodeSwitchX.Hosting.Browsers.BrowserCatalog(Substitute.For<CodeSwitchX.Hosting.Browsers.IBrowserSource>());
         var browsers = new CodeSwitchX.UI.GitHub.GitHubBrowsers(catalog, _store, _ => true, NullLogger<CodeSwitchX.UI.GitHub.GitHubBrowsers>.Instance);
         var page = new GitHubPageViewModel(gh, browsers, catalog);
@@ -673,7 +673,7 @@ public class SettingsViewModelTests : IDisposable
         vm.OpenPage(SettingsPage.GitHub);
         await read;
         await gh.Received(1).AccountsAsync(Arg.Any<CancellationToken>());
-        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["fresh"]));
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["fresh"]));
         vm.OpenPage(SettingsPage.Yard);
         read = Read();
         vm.OpenPage(SettingsPage.GitHub);
@@ -682,7 +682,7 @@ public class SettingsViewModelTests : IDisposable
         await gh.Received(2).AccountsAsync(Arg.Any<CancellationToken>());
         page.Accounts.Select(a => a.Login).ShouldBe(["fresh"]);
 
-        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["again"]));
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>?>(["again"]));
         read = Read();
         vm.Refresh(); // Settings shown again on the page it was left on
         await read;

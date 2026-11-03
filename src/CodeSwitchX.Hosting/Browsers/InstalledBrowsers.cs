@@ -23,7 +23,7 @@ public sealed class InstalledBrowsers : IBrowserSource
                     {
                         using var command = root.OpenSubKey($@"{name}\shell\open\command");
                         return command?.GetValue(null) as string;
-                    }));
+                    }, File.Exists));
                 }
             }
             catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
@@ -35,15 +35,15 @@ public sealed class InstalledBrowsers : IBrowserSource
         return found;
     }
 
-    /// <summary>Each name with the program of its open command; a name that cannot be read is left out, not the others.</summary>
-    internal static List<(string Key, string? Executable)> Collect(IEnumerable<string> names, Func<string, string?> commandOf)
+    /// <summary>Each name with the program of its open command, or null when that program is not there (a leftover key); a name that cannot be read is left out, not the others.</summary>
+    internal static List<(string Key, string? Executable)> Collect(IEnumerable<string> names, Func<string, string?> commandOf, Func<string, bool> exists)
     {
         var found = new List<(string, string?)>();
         foreach (var name in names)
         {
             try
             {
-                found.Add((name, ExecutableOf(commandOf(name))));
+                found.Add((name, ExecutableOf(commandOf(name)) is { } program && exists(program) ? program : null));
             }
             catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
             {

@@ -3,6 +3,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Tests.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -239,11 +240,63 @@ public class GitHubBrowsersTests
         }
     }
 
+    [Fact]
+    public void A_list_that_cannot_be_read_gives_a_line_not_an_exception()
+    {
+        var source = new FakeSource { Throws = true };
+        var browsers = new GitHubBrowsers(new BrowserCatalog(source), _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+        browsers.SetChoice("someone", "firefox|alpha");
+
+        browsers.NameFor("someone").ShouldBe("firefox|alpha");
+        browsers.Open("someone", Url).ShouldBe("Couldn't find firefox|alpha. Pick a browser in Settings, GitHub.");
+    }
+
+    [Fact]
+    public void A_failed_start_of_the_Windows_default_is_not_retried_with_a_new_read()
+    {
+        var source = new FakeSource();
+        var browsers = new GitHubBrowsers(new BrowserCatalog(source), _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+        browsers.Open("someone", Url).ShouldBeNull();
+        var reads = source.Reads;
+        _start = _ => throw new InvalidOperationException("no shell");
+
+        browsers.Open("someone", Url).ShouldNotBeNull();
+
+        source.Reads.ShouldBe(reads);
+    }
+
+    [Fact]
+    public async Task A_save_does_not_start_on_the_thread_of_the_pick()
+    {
+        int pickThread = 0, saveThread = 0;
+        var saved = new ManualResetEventSlim();
+        _store.SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { saveThread = Environment.CurrentManagedThreadId; saved.Set(); return Task.CompletedTask; });
+        var browsers = Create();
+
+        await StaThread.RunAsync(() =>
+        {
+            pickThread = Environment.CurrentManagedThreadId;
+            browsers.SetChoice("someone", "firefox|alpha");
+            saved.Wait(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken).ShouldBeTrue();
+        });
+
+        saveThread.ShouldNotBe(pickThread);
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
         public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
 
-        public IReadOnlyList<(string Key, string? Executable)> Installed() => Keys;
+        public bool Throws { get; set; }
+
+        public int Reads { get; private set; }
+
+        public IReadOnlyList<(string Key, string? Executable)> Installed()
+        {
+            Reads++;
+            return Throws ? throw new InvalidOperationException("boom") : Keys;
+        }
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=name with space\n";
         public string? ChromiumLocalState(string folder) => null;
     }

@@ -53,7 +53,7 @@ public class GitHubListViewModelTests
         /// <summary>The same for the pull request list, which stays unanswered unless a test answers it.</summary>
         public TaskCompletionSource<string?> PullRequestList { get; } = new();
 
-        public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["me"]);
+        public Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>?>(["me"]);
 
         /// <summary>Set when a list read reaches gh, after <see cref="ListThread"/>.</summary>
         public ManualResetEventSlim ListAsked { get; } = new();

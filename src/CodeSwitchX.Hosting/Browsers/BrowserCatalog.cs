@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace CodeSwitchX.Hosting.Browsers;
 
 /// <summary>Where the catalog finds what is installed; the real one reads the registry and the browsers' profile files.</summary>
@@ -17,7 +19,7 @@ public interface IBrowserSource
 /// <see cref="List"/> answers with the last list at once; when it is older than <see cref="KeepFor"/> one read runs in the background,
 /// and only the very first call reads on its own thread. <see cref="Refresh"/> reads now, for a caller that is already off the UI thread.
 /// </summary>
-public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = null)
+public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = null, ILogger<BrowserCatalog>? logger = null)
 {
     public static readonly TimeSpan KeepFor = TimeSpan.FromSeconds(30);
 
@@ -34,6 +36,8 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
         ["Google Chrome Dev"] = ("chrome-dev", @"Google\Chrome Dev"),
         ["Google Chrome Canary"] = ("chrome-canary", @"Google\Chrome SxS"),
     };
+
+    private static readonly BrowserEntry DefaultEntry = new(BrowserEntry.DefaultId, "Windows default browser", null, []);
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly object _gate = new();
@@ -69,11 +73,17 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
             }
         }
 
-        // No list yet (App start warms it, so this is rare): the one read that has to be waited for. A read that throws keeps nothing.
-        var first = Begin();
-        var read = Read();
-        Keep(read, first);
-        return read;
+        // No list yet (App start warms it, so this is rare): the one read that has to be waited for. One that fails keeps nothing, gives the
+        // Windows default alone, and is tried again by the next call.
+        try
+        {
+            return Refresh();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogWarning("The installed browsers could not be read: {Failure}", ex.GetType().Name);
+            return [DefaultEntry];
+        }
     }
 
     private long Begin()
@@ -104,9 +114,10 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
         {
             Keep(Read(), number);
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // The old list stays; the next call after KeepFor tries again.
+            // The old list stays, and the next call tries again.
+            logger?.LogWarning("The installed browsers could not be read again: {Failure}", ex.GetType().Name);
         }
         finally
         {
@@ -119,7 +130,7 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
 
     private List<BrowserEntry> Read()
     {
-        var entries = new List<BrowserEntry> { new(BrowserEntry.DefaultId, "Windows default browser", null, []) };
+        var entries = new List<BrowserEntry> { DefaultEntry };
         var indexOf = new Dictionary<string, int>(StringComparer.Ordinal) { [BrowserEntry.DefaultId] = 0 };
         // A browser in both registry hives is one key: its files are read once, and the entry that has a program wins.
         var keys = new Dictionary<string, (string Key, string? Executable)>(StringComparer.OrdinalIgnoreCase);
@@ -152,7 +163,9 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
             }
             else
             {
-                added.Add(new(name.ToLowerInvariant(), name, executable, []));
+                // An unknown key loses what follows its first dot only when that looks like a registration suffix (Brave.ABC123DEF, not Foo.Stable or Browser 2.1).
+                var shown = dot >= 0 && LooksLikeSuffix(key[(dot + 1)..]) ? name : key;
+                added.Add(new(shown.ToLowerInvariant(), shown, executable, []));
             }
 
             // The id is what is saved and compared: another key of the same browser is one entry, the one with a program wins.
@@ -173,10 +186,12 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
         return entries;
     }
 
+    private static bool LooksLikeSuffix(string text) => text.Length >= 8 && text.All(char.IsAsciiLetterOrDigit);
+
     /// <summary>
     /// The Firefox build a key names: the release one is <c>Firefox-&lt;hash&gt;</c> (or the old <c>FIREFOX</c>) in a <c>Mozilla Firefox</c> folder.
     /// Another build is told by the key or by its install folder's own name (never the rest of the path): Developer Edition and Nightly,
-    /// and any other such as <c>Mozilla Firefox ESR</c> gets a prefix built from that folder name. A key that merely starts with the letters is another browser.
+    /// and so are ESR and Beta; any other folder is the release. A key that merely starts with the letters is another browser.
     /// </summary>
     private static (string Prefix, string Label)? FirefoxBuild(string name, string? executable)
     {
@@ -201,11 +216,16 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
             return ("firefox-nightly", "Firefox Nightly");
         }
 
-        // A folder that does not name Firefox says nothing; one that does, with more than "Mozilla Firefox", is another build.
-        var rest = folder.Contains("Firefox", StringComparison.OrdinalIgnoreCase)
-            ? folder.Replace("Mozilla", "", StringComparison.OrdinalIgnoreCase).Replace("Firefox", "", StringComparison.OrdinalIgnoreCase).Trim()
-            : "";
-        return rest.Length == 0 ? ("firefox", "Firefox") : ($"firefox-{rest.ToLowerInvariant().Replace(' ', '-')}", $"Firefox {rest}");
+        // Only a folder that names a known channel makes another build; any other folder (D:\Apps\Firefox64) is the release.
+        foreach (var channel in new[] { "ESR", "Beta" })
+        {
+            if (folder.Contains("Firefox", StringComparison.OrdinalIgnoreCase) && folder.Contains(channel, StringComparison.OrdinalIgnoreCase))
+            {
+                return ($"firefox-{channel.ToLowerInvariant()}", $"Firefox {channel}");
+            }
+        }
+
+        return ("firefox", "Firefox");
     }
 
     /// <summary>One profile gives the plain label, several give one entry each; none gives the browser as it opens by itself.</summary>

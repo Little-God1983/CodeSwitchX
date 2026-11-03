@@ -309,7 +309,7 @@ public class BrowserCatalogTests
     [Fact]
     public void An_unknown_browser_registered_per_user_is_the_same_as_the_machine_wide_one()
     {
-        var source = new FakeSource { Keys = [("Brave", null), ("Brave.ABC123", @"C:\b\brave.exe")] };
+        var source = new FakeSource { Keys = [("Brave", null), ("Brave.ABC123DEF", @"C:\b\brave.exe")] };
 
         var entry = new BrowserCatalog(source).List().Skip(1).ShouldHaveSingleItem();
 
@@ -328,16 +328,42 @@ public class BrowserCatalogTests
         new BrowserCatalog(source).List().Skip(1).Select(e => e.Id).ShouldBe(["chrome|Work", "chrome|work"]);
     }
 
-    [Fact]
-    public void A_failed_read_is_not_kept()
+    [Theory]
+    [InlineData(@"D:\Apps\Firefox64\firefox.exe", "firefox|alpha", "Firefox")]
+    [InlineData(@"C:\Program Files\Mozilla Firefox ESR\firefox.exe", "firefox-esr|alpha", "Firefox ESR")]
+    [InlineData(@"C:\Program Files\Mozilla Firefox Beta\firefox.exe", "firefox-beta|alpha", "Firefox Beta")]
+    [InlineData(@"C:\Program Files\Mozilla Firefox\firefox.exe", "firefox|alpha", "Firefox")]
+    public void Only_a_folder_that_names_a_known_channel_makes_another_Firefox_build(string executable, string id, string label)
     {
-        var source = new FakeSource { Throws = true };
+        var source = new FakeSource { Keys = [("Firefox-1A2B", executable)], Ini = "[Profile0]\nName=alpha\n" };
+
+        var entry = new BrowserCatalog(source).List()[1];
+
+        (entry.Id, entry.Label).ShouldBe((id, label));
+    }
+
+    [Fact]
+    public void Only_something_that_looks_like_a_registration_suffix_is_cut_from_an_unknown_key()
+    {
+        var source = new FakeSource
+        {
+            Keys = [("Foo.Stable", @"C:\f\s.exe"), ("Foo.Beta", @"C:\f\b.exe"), ("Browser 2.1", @"C:\b\b.exe"), ("Brave.ABC123DEF", @"C:\v\brave.exe"), ("Brave", null)],
+        };
+
+        new BrowserCatalog(source).List().Skip(1).Select(e => (e.Id, e.Label)).ShouldBe(
+            [("foo.stable", "Foo.Stable"), ("foo.beta", "Foo.Beta"), ("browser 2.1", "Browser 2.1"), ("brave", "Brave")]);
+    }
+
+    [Fact]
+    public void A_list_that_cannot_be_read_at_first_is_just_the_Windows_default_and_is_tried_again()
+    {
+        var source = new FakeSource { Throws = true, Keys = [("Some Browser", @"C:\sb\sb.exe")] };
         var catalog = new BrowserCatalog(source, new FakeTimeProvider());
 
-        Should.Throw<InvalidOperationException>(() => catalog.List());
+        catalog.List().Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId]);
         source.Throws = false;
 
-        catalog.List().ShouldHaveSingleItem();
+        catalog.List().Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId, "some browser"]);
     }
 
     private sealed class FakeSource : IBrowserSource

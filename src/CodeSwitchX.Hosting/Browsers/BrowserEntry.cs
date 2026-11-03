@@ -9,6 +9,11 @@ public sealed record BrowserEntry(string Id, string Label, string? Executable, I
 {
     public const string DefaultId = "default";
 
+    /// <summary>The same entry as far as opening and showing it goes.</summary>
+    public bool SameAs(BrowserEntry? other) =>
+        other is not null && Id == other.Id && Label == other.Label && Executable == other.Executable && IsFirefox == other.IsFirefox
+        && ProfileArguments.SequenceEqual(other.ProfileArguments);
+
     /// <summary>What a combo box item reads as, to the eye and to automation: the label, not the record's fields.</summary>
     public override string ToString() => Label;
 

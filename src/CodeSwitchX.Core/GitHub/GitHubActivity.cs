@@ -82,7 +82,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             var repos = folderRepos.Where(p => p.Repo is not null).GroupBy(p => p.Repo!).ToList();
             var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
-            var changes = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
+            // No answer from gh (null) makes no reads, so the last results stay; no logins at all (empty) is read as it is.
+            var changes = accounts is null ? [] : await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
 
             if (changes.Any(c => c) || folderRepos.Any(p => p.Moved))
             {
@@ -175,8 +176,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
-    /// <summary>The round's accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer means no reads, and the last results stay.</summary>
-    private async Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
+    /// <summary>The round's accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer (null) means no reads, and the last results stay.</summary>
+    private async Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
     {
         try
         {
@@ -185,7 +186,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Reading the GitHub accounts failed; the last results stay");
-            return [];
+            return null;
         }
     }
 

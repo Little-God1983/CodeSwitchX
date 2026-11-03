@@ -53,7 +53,8 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         {
             _choices[login] = id;
             // Saves run one after another, each writing the choices as they are when it runs, so an earlier pick never lands over a later one.
-            _saving = SaveAfterAsync(_saving);
+            var previous = _saving;
+            _saving = Task.Run(() => SaveAfterAsync(previous));
         }
     }
 
@@ -75,9 +76,9 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         var id = ChoiceFor(login);
         var entry = catalog.List().FirstOrDefault(e => e.Id == id);
         var problem = OpenIn(entry, id, uri);
-        if (problem is null)
+        if (problem is null || id == BrowserEntry.DefaultId)
         {
-            return null;
+            return problem; // the Windows default is always in the list: a new read cannot help it
         }
 
         // The list may be older than the browser's move or install: look once more at what is installed now, and report only what is still wrong.
@@ -92,11 +93,8 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
             return problem;
         }
 
-        return fresh is not null && !Same(fresh, entry) ? OpenIn(fresh, id, uri) : problem;
+        return fresh is not null && !fresh.SameAs(entry) ? OpenIn(fresh, id, uri) : problem;
     }
-
-    private static bool Same(BrowserEntry a, BrowserEntry? b) =>
-        b is not null && a.Executable == b.Executable && a.ProfileArguments.SequenceEqual(b.ProfileArguments);
 
     private string? OpenIn(BrowserEntry? entry, string id, Uri uri)
     {

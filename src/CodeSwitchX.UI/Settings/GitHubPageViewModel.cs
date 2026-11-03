@@ -26,24 +26,32 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
     public async Task RefreshAsync(CancellationToken ct)
     {
         var round = ++_round;
-        IReadOnlyList<string> logins = [];
-        IReadOnlyList<BrowserEntry> entries = [];
-        var failed = false;
+        // Off the UI thread, which this continues on: gh starts before its first await, and the browsers are read from the registry and files.
+        // The two are read apart, so a failure of one does not discard the other.
+        var accountsRead = Task.Run(() => gh.AccountsAsync(ct), ct);
+        // Read again, so a browser installed since the page was last open is there, and once for all rows.
+        var browsersRead = Task.Run(() => catalog.Refresh(), ct);
+        IReadOnlyList<string>? logins = null;
         try
         {
-            // Off the UI thread, which this continues on: gh starts before its first await, and the browsers are read from the registry and files.
-            (logins, entries) = await Task.Run(async () =>
-            {
-                var accounts = await gh.AccountsAsync(ct).ConfigureAwait(false);
-                // The installed browsers are read again, so one installed since the page was last open is there, and once for all rows.
-                return (accounts, catalog.Refresh());
-            }, ct);
+            logins = await accountsRead;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // The page then says how to log in; only the kind of failure is logged.
+            // Null: the rows stay, or the page says how to log in; only the kind of failure is logged.
             logger?.LogWarning("The GitHub accounts could not be read: {Failure}", ex.GetType().Name);
-            failed = true;
+        }
+
+        IReadOnlyList<BrowserEntry> entries;
+        try
+        {
+            entries = await browsersRead;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The rows are built from what the catalog has: its last list, or at least the Windows default.
+            logger?.LogWarning("The installed browsers could not be read: {Failure}", ex.GetType().Name);
+            entries = catalog.List();
         }
 
         if (round != _round)
@@ -51,10 +59,9 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             return; // a later refresh is the newer answer
         }
 
-        // IGhCli.AccountsAsync gives an empty list when gh failed, and gh does not lose every login at once: with rows shown, an empty answer is
-        // taken as a failed read, and a failed read leaves the rows (and a pick or Test line in them) alone. A login really logged out
-        // stays listed until the app restarts; accepted.
-        if (failed || (logins.Count == 0 && Accounts.Count > 0))
+        // Null is a failed read: the rows (and a pick or Test line in them) stay, and the page says how to log in only when there are none.
+        // An empty list is gh saying nobody is logged in.
+        if (logins is null)
         {
             _read = true;
             OnPropertyChanged(nameof(HasNoAccounts));
@@ -154,7 +161,7 @@ public sealed partial class GitHubAccountRow : ObservableObject
     public void Update(IReadOnlyList<BrowserEntry> entries)
     {
         var choices = ChoicesFor(entries, _selectedId);
-        if (choices.Count == Choices.Count && choices.Zip(Choices).All(p => Same(p.First, p.Second)))
+        if (choices.Count == Choices.Count && choices.Zip(Choices).All(p => p.First.SameAs(p.Second)))
         {
             return;
         }
@@ -166,9 +173,6 @@ public sealed partial class GitHubAccountRow : ObservableObject
         // The combo box drops its selection while the list is rebuilt: it reads the pick again.
         OnPropertyChanged(nameof(SelectedId));
     }
-
-    private static bool Same(BrowserEntry a, BrowserEntry b) =>
-        a.Id == b.Id && a.Label == b.Label && a.Executable == b.Executable && a.IsFirefox == b.IsFirefox && a.ProfileArguments.SequenceEqual(b.ProfileArguments);
 
     // A browser that is gone stays selected, shown as missing, so the choice is not lost behind another one.
     private static IReadOnlyList<BrowserEntry> ChoicesFor(IReadOnlyList<BrowserEntry> entries, string selectedId) =>

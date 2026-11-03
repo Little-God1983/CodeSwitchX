@@ -8,8 +8,8 @@ public sealed record GhAnswer(string? Output, string? FailureOutput = null, bool
 /// <summary>The GitHub command line, one account at a time and without switching the active one.</summary>
 public interface IGhCli
 {
-    /// <summary>Logins signed in to github.com; empty when <c>gh</c> is missing or fails.</summary>
-    Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct);
+    /// <summary>Logins signed in to github.com: empty when there are none, null when <c>gh</c> is missing or fails or answered something unreadable.</summary>
+    Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct);
 
     /// <summary>The same run for reading a whole list, which may take far longer than a single read: it has a timeout of its own, and the answer says whether it ran out of it.</summary>
     Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct);

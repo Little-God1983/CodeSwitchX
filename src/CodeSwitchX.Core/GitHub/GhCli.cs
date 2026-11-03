@@ -31,12 +31,12 @@ public sealed class GhCli : IGhCli
         _listTimeout = listTimeout ?? ListTimeout;
     }
 
-    public async Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<string>?> AccountsAsync(CancellationToken ct)
     {
         var output = await RunAsync(["auth", "status", "--json", "hosts"], null, ct).ConfigureAwait(false);
         if (output is null)
         {
-            return [];
+            return null;
         }
 
         try
@@ -44,11 +44,20 @@ public sealed class GhCli : IGhCli
             using var doc = JsonDocument.Parse(output);
             if (doc.RootElement.ValueKind != JsonValueKind.Object
                 || !doc.RootElement.TryGetProperty("hosts", out var hosts)
-                || hosts.ValueKind != JsonValueKind.Object
-                || !hosts.TryGetProperty("github.com", out var accounts)
-                || accounts.ValueKind != JsonValueKind.Array)
+                || hosts.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            // No github.com among the hosts is nobody logged in; one that is not a list is an answer this cannot read.
+            if (!hosts.TryGetProperty("github.com", out var accounts))
             {
                 return [];
+            }
+
+            if (accounts.ValueKind != JsonValueKind.Array)
+            {
+                return null;
             }
 
             // Whatever each login's state: gh exits 0 on an auth issue too, and offline every check fails. A read as a login that cannot read fails safely.
@@ -59,7 +68,7 @@ public sealed class GhCli : IGhCli
         }
         catch (JsonException)
         {
-            return [];
+            return null;
         }
     }
 
