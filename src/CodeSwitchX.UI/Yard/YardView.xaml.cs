@@ -23,11 +23,12 @@ public partial class YardView : UserControl
         e.Handled = true;
     }
 
-    /// <summary>The panel takes the keyboard when it appears, so Escape closes it.</summary>
+    /// <summary>The panel takes the keyboard when it appears, so Escape closes it. The hover preview goes: it is topmost and would sit over the rows.</summary>
     private void OnGitHubPanelVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is true)
         {
+            GitHubPillPreview.Close();
             ((UIElement)sender).Focus();
         }
     }

@@ -21,7 +21,19 @@ public class GitHubActivityTests
 
         public TimeSpan Delay { get; set; }
 
-        public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["me"]);
+        public bool AccountsThrow { get; set; }
+
+        public int AccountReads { get; private set; }
+
+        public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
+        {
+            lock (Slugs)
+            {
+                AccountReads++;
+            }
+
+            return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult<IReadOnlyList<string>>(["me"]);
+        }
 
         public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
@@ -62,7 +74,7 @@ public class GitHubActivityTests
         + "\"pullRequests\":{\"totalCount\":1,\"nodes\":[]}}}}";
 
     private static GitHubActivity Activity(FakeGh gh, Func<string, string?>? originOf = null) =>
-        new(new GitHubReader(gh), (path, _) => Task.FromResult(originOf is null ? $"https://github.com/acme/{Path.GetFileName(path)}.git" : originOf(path)),
+        new(gh, new GitHubReader(gh), (path, _) => Task.FromResult(originOf is null ? $"https://github.com/acme/{Path.GetFileName(path)}.git" : originOf(path)),
             NullLogger<GitHubActivity>.Instance);
 
     private static GitHubItem Item(int number) => new(number, "t" + number, "https://github.com/acme/tool/issues/" + number, DateTimeOffset.UnixEpoch, []);
@@ -78,6 +90,54 @@ public class GitHubActivityTests
         gh.Slugs.Count.ShouldBe(1);
         activity.ForFolder(@"c:\r\a").ShouldBeSameAs(activity.ForFolder(@"c:\r\b"));
         activity.ForFolder(@"c:\r\a")!.OpenIssues.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task A_round_reads_the_accounts_once_however_many_repositories_it_reads()
+    {
+        var gh = new FakeGh();
+
+        await Activity(gh).RefreshAsync([@"c:\r\one", @"c:\r\two", @"c:\r\three", @"c:\r\four", @"c:\r\five"], CancellationToken.None);
+
+        gh.Slugs.Count.ShouldBe(5);
+        gh.AccountReads.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Every_round_reads_the_accounts_again()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+
+        await activity.RefreshAsync([@"c:\r\one", @"c:\r\two"], CancellationToken.None);
+        await activity.RefreshAsync([@"c:\r\one", @"c:\r\two"], CancellationToken.None);
+
+        gh.AccountReads.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_round_with_no_GitHub_repository_reads_no_accounts()
+    {
+        var gh = new FakeGh();
+
+        await Activity(gh, _ => "https://example.com/acme/tool.git").RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        gh.AccountReads.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Accounts_that_cannot_be_read_keep_the_last_result()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var first = activity.ForFolder(@"c:\r\tool");
+        first.ShouldNotBeNull();
+        gh.AccountsThrow = true;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
     }
 
     [Fact]

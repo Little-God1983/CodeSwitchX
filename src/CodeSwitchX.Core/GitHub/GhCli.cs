@@ -44,8 +44,8 @@ public sealed class GhCli : IGhCli
                 return [];
             }
 
+            // Whatever each login's state: gh exits 0 on an auth issue too, and offline every check fails. A read as a login that cannot read fails safely.
             return accounts.EnumerateArray()
-                .Where(a => a.TryGetProperty("state", out var s) && s.GetString() == "success")
                 .Select(a => a.TryGetProperty("login", out var l) ? l.GetString() : null)
                 .OfType<string>()
                 .ToList();
@@ -67,7 +67,7 @@ public sealed class GhCli : IGhCli
 
     /// <summary>
     /// An inherited <c>GH_TOKEN</c> or <c>GITHUB_TOKEN</c> is removed from every child: it would win over the account asked
-    /// for, and make <c>gh auth token --user</c> hand it back.
+    /// for, and make <c>gh auth token --user</c> hand it back. So is <c>GH_HOST</c>: without it gh talks to github.com.
     /// </summary>
     internal static ProcessStartInfo StartInfo(IReadOnlyList<string> arguments, string? token, string executable = "gh")
     {
@@ -80,6 +80,7 @@ public sealed class GhCli : IGhCli
 
         info.Environment.Remove("GH_TOKEN");
         info.Environment.Remove("GITHUB_TOKEN");
+        info.Environment.Remove("GH_HOST");
         if (token is not null)
         {
             info.Environment["GH_TOKEN"] = token;

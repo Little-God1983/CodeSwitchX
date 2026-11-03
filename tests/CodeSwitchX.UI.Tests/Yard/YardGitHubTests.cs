@@ -142,7 +142,7 @@ public class YardGitHubTests : IDisposable
         // Git answers "clean" to status and each folder's own name as its origin: github.com/acme/<folder name>.
         var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(string.Empty));
         var activity = withGitHub
-            ? new GitHubActivity(new GitHubReader(_gh), (path, _) => Task.FromResult<string?>($"https://github.com/acme/{Path.GetFileName(path)}.git"),
+            ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult<string?>($"https://github.com/acme/{Path.GetFileName(path)}.git"),
                 NullLogger<GitHubActivity>.Instance)
             : null;
         return new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: activity);

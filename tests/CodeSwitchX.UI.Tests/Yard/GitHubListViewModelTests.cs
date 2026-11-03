@@ -57,7 +57,7 @@ public class GitHubListViewModelTests
     /// <summary>An activity that has read the repository (12 issues, 1 pull request) and the pill of one kind of it.</summary>
     private async Task<(GitHubActivity Activity, GitHubPill Pill)> PillAsync(GitHubItemKind kind = GitHubItemKind.Issue)
     {
-        var activity = new GitHubActivity(new GitHubReader(_gh), (_, _) => Task.FromResult<string?>("https://github.com/acme/app.git"),
+        var activity = new GitHubActivity(_gh, new GitHubReader(_gh), (_, _) => Task.FromResult<string?>("https://github.com/acme/app.git"),
             NullLogger<GitHubActivity>.Instance);
         await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken);
         return (activity, new GitHubPill(activity.ForFolder("app")!, kind));

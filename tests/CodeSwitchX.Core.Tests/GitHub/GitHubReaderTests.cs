@@ -8,6 +8,8 @@ public class GitHubReaderTests
 
     private sealed class FakeGh(IReadOnlyList<string> accounts, Func<string, IReadOnlyList<string>, string?> answer) : IGhCli
     {
+        public IReadOnlyList<string> Accounts => accounts;
+
         public List<string> Asked { get; } = [];
 
         public List<IReadOnlyList<string>> Commands { get; } = [];
@@ -31,7 +33,7 @@ public class GitHubReaderTests
         new(accounts, (login, _) => answers.GetValueOrDefault(login));
 
     private static Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) =>
-        new GitHubReader(gh).ReadAsync(repo ?? Repo, CancellationToken.None);
+        new GitHubReader(gh).ReadAsync(repo ?? Repo, gh.Accounts, CancellationToken.None);
 
     [Theory]
     [InlineData("Zed", "acme")]
@@ -205,6 +207,35 @@ public class GitHubReaderTests
         var item = items.ShouldNotBeNull().Single();
         item.Branch.ShouldBe("feature/x");
         item.Author.ShouldBe("amy");
+    }
+
+    [Fact]
+    public async Task ListAsync_keeps_a_row_whose_author_has_no_login()
+    {
+        var rows = """
+            [{"number":8,"title":"Odd","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":"feature/x","author":{"name":"Someone"}},
+             {"number":7,"title":"Plain","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":"feature/y","author":{"login":"amy"}}]
+            """;
+        var gh = new FakeGh([], (_, _) => rows);
+
+        var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
+
+        items.Select(i => i.Author).ShouldBe([null, "amy"]);
+    }
+
+    [Theory]
+    [InlineData("app/helper-bot", "helper-bot")]
+    [InlineData("appsmith", "appsmith")]
+    [InlineData("amy", "amy")]
+    public async Task ListAsync_spells_an_author_as_GraphQL_does(string login, string expected)
+    {
+        var rows = "[{\"number\":8,\"title\":\"PR\",\"url\":\"u\",\"updatedAt\":\"2026-11-01T10:00:00Z\",\"labels\":[],\"headRefName\":\"b\","
+            + "\"author\":{\"is_bot\":true,\"login\":\"" + login + "\"}}]";
+        var gh = new FakeGh([], (_, _) => rows);
+
+        var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
+
+        items.Single().Author.ShouldBe(expected);
     }
 
     [Fact]

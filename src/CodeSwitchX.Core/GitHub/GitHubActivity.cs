@@ -3,11 +3,11 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Core.GitHub;
 
 /// <summary>
-/// The open issues and pull requests of the repositories the Yard's folders belong to, in memory only. A round reads each
-/// repository once however many folders share it, four at a time; a read that fails keeps the last result, and a result
-/// that did not change keeps its instance, so the tiles built on it compare equal and stay as they are.
+/// The open issues and pull requests of the repositories the Yard's folders belong to, in memory only. A round reads the
+/// accounts once and each repository once however many folders share it, four at a time; a read that fails keeps the last
+/// result, and a result that did not change keeps its instance, so the tiles built on it compare equal and stay as they are.
 /// </summary>
-public sealed class GitHubActivity(GitHubReader reader, Func<string, CancellationToken, Task<string?>> originOf, ILogger<GitHubActivity> logger)
+public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<string?>> originOf, ILogger<GitHubActivity> logger)
 {
     private const int MostReadsAtOnce = 4;
     private const int PreviewCount = 5;
@@ -48,8 +48,9 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
             var folderRepos = await Task.WhenAll(folders.Select(f => Key(f)).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(folder => RepoOfAsync(folder, ct))).ConfigureAwait(false);
             var repos = folderRepos.Where(p => p.Repo is not null).GroupBy(p => p.Repo!).ToList();
+            var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
-            var changes = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, g.First().Folder, ct))).ConfigureAwait(false);
+            var changes = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
 
             if (changes.Any(c => c))
             {
@@ -120,13 +121,27 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
         }
     }
 
+    /// <summary>The round's accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer means no reads, and the last results stay.</summary>
+    private async Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await gh.AccountsAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Reading the GitHub accounts failed; the last results stay");
+            return [];
+        }
+    }
+
     /// <summary>Reads the repository and stores what came; true when that differs from the last result.</summary>
-    private async Task<bool> ReadAsync(GitHubRepo repo, string folder, CancellationToken ct)
+    private async Task<bool> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, string folder, CancellationToken ct)
     {
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var activity = await reader.ReadAsync(repo, ct).ConfigureAwait(false);
+            var activity = await reader.ReadAsync(repo, accounts, ct).ConfigureAwait(false);
             if (activity is null && !ct.IsCancellationRequested)
             {
                 logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);

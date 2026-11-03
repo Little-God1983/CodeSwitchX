@@ -10,7 +10,7 @@ namespace CodeSwitchX.UI.Yard;
 /// <summary>
 /// The preview a GitHub pill shows on hover (#335): its heading and the newest rows, in one popup that moves from pill to
 /// pill. It opens at once and closes <see cref="CloseDelay"/> after the mouse left the pill and the popup, so the mouse can
-/// cross from one to the other.
+/// cross from one to the other. It is topmost, so it also closes when the list opens and when its window loses the activation.
 /// </summary>
 public static class GitHubPillPreview
 {
@@ -19,6 +19,11 @@ public static class GitHubPillPreview
     private static readonly DispatcherTimer CloseTimer = NewTimer();
 
     private static Popup? _popup;
+
+    private static Window? _window;
+
+    /// <summary>Shows or hides the popup. A real one is a window on the screen, so a test notes what was asked instead.</summary>
+    internal static Action<Popup, bool> Show { get; set; } = (popup, open) => popup.IsOpen = open;
 
     public static readonly DependencyProperty IsEnabledProperty = DependencyProperty.RegisterAttached(
         "IsEnabled", typeof(bool), typeof(GitHubPillPreview), new PropertyMetadata(false, OnIsEnabledChanged));
@@ -44,12 +49,14 @@ public static class GitHubPillPreview
         pill.MouseEnter -= OnPillEnter;
         pill.MouseLeave -= OnLeave;
         pill.PreviewMouseLeftButtonDown -= OnPillClick;
+        pill.RemoveHandler(ButtonBase.ClickEvent, (RoutedEventHandler)OnPillClick);
         pill.Unloaded -= OnPillUnloaded;
         if (e.NewValue is true)
         {
             pill.MouseEnter += OnPillEnter;
             pill.MouseLeave += OnLeave;
             pill.PreviewMouseLeftButtonDown += OnPillClick;
+            pill.AddHandler(ButtonBase.ClickEvent, (RoutedEventHandler)OnPillClick);
             pill.Unloaded += OnPillUnloaded;
         }
     }
@@ -57,19 +64,20 @@ public static class GitHubPillPreview
     private static void OnPillEnter(object sender, RoutedEventArgs e)
     {
         CloseTimer.Stop();
-        if (sender is not FrameworkElement { DataContext: GitHubPill pill } target || Application.Current is not { } app)
+        if (sender is not FrameworkElement { DataContext: GitHubPill pill } target || target.TryFindResource("GitHubRowTemplate") is not DataTemplate rowTemplate)
         {
             return;
         }
 
         var popup = _popup ??= NewPopup();
-        popup.IsOpen = false;
+        Show(popup, false);
         popup.PlacementTarget = target;
-        popup.Child = Content(pill, (DataTemplate)app.FindResource("GitHubRowTemplate"));
-        popup.IsOpen = true;
+        popup.Child = Content(pill, rowTemplate);
+        Show(popup, true);
+        WatchWindow(Window.GetWindow(target));
     }
 
-    /// <summary>A click opens the full list: the popup is topmost and would sit over it.</summary>
+    /// <summary>A click, or the keyboard or UI Automation doing the same, opens the full list: the popup is topmost and would sit over it.</summary>
     private static void OnPillClick(object sender, RoutedEventArgs e) => Close();
 
     private static void OnLeave(object sender, RoutedEventArgs e) => CloseTimer.Start();
@@ -83,14 +91,32 @@ public static class GitHubPillPreview
         }
     }
 
-    private static void Close()
+    public static void Close()
     {
         CloseTimer.Stop();
+        WatchWindow(null);
         if (_popup is { } popup)
         {
-            popup.IsOpen = false;
+            Show(popup, false);
         }
     }
+
+    /// <summary>Alt-tab must not leave a topmost popup behind: the window the popup hangs on says when it lost the activation.</summary>
+    private static void WatchWindow(Window? window)
+    {
+        if (_window is { } watched)
+        {
+            watched.Deactivated -= OnWindowDeactivated;
+        }
+
+        _window = window;
+        if (window is not null)
+        {
+            window.Deactivated += OnWindowDeactivated;
+        }
+    }
+
+    private static void OnWindowDeactivated(object? sender, EventArgs e) => Close();
 
     private static Popup NewPopup()
     {

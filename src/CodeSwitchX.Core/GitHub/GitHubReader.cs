@@ -5,7 +5,7 @@ namespace CodeSwitchX.Core.GitHub;
 
 /// <summary>
 /// Reads a repository's open issues and pull requests through <see cref="IGhCli"/>, as whichever signed-in account can see
-/// it best. Nothing is remembered: the account is worked out again on every read, so a brief failure cannot stick.
+/// it best. Nothing is remembered: which account reads is worked out again on every read, so a brief failure cannot stick.
 /// </summary>
 public sealed class GitHubReader(IGhCli gh)
 {
@@ -15,17 +15,17 @@ public sealed class GitHubReader(IGhCli gh)
          pullRequests(states:OPEN,first:5,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName author{login} labels(first:10){nodes{name color}}}}}}
         """;
 
+    private const string AppPrefix = "app/";
+
     private static readonly string[] PermissionOrder = ["READ", "TRIAGE", "WRITE", "MAINTAIN", "ADMIN"];
 
-    /// <summary>Counts and the newest items; null when no account can see the repository or the answer is unreadable.</summary>
-    public async Task<RepoActivity?> ReadAsync(GitHubRepo repo, CancellationToken ct)
+    /// <summary>Counts and the newest items, read as the best of <paramref name="accounts"/>; null when none of them can see the repository or the answer is unreadable.</summary>
+    public async Task<RepoActivity?> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct)
     {
-        var accounts = (await gh.AccountsAsync(ct).ConfigureAwait(false))
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
 
         // The owner's own account surely sees the repository: one request and no comparing.
-        var owner = accounts.FirstOrDefault(a => a.Equals(repo.Owner, StringComparison.OrdinalIgnoreCase));
+        var owner = candidates.FirstOrDefault(a => a.Equals(repo.Owner, StringComparison.OrdinalIgnoreCase));
         if (owner is not null)
         {
             var own = await ReadAsAsync(repo, owner, ct).ConfigureAwait(false);
@@ -34,11 +34,11 @@ public sealed class GitHubReader(IGhCli gh)
                 return own.Value.Activity;
             }
 
-            accounts.Remove(owner);
+            candidates.Remove(owner);
         }
 
         (RepoActivity Activity, int Rank)? best = null;
-        foreach (var account in accounts)
+        foreach (var account in candidates)
         {
             var read = await ReadAsAsync(repo, account, ct).ConfigureAwait(false);
             // Strictly greater: on a tie the first login alphabetically stays.
@@ -129,7 +129,12 @@ public sealed class GitHubReader(IGhCli gh)
             branch = row.GetProperty("headRefName").GetString();
             if (row.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object)
             {
-                author = a.GetProperty("login").GetString();
+                // gh pr list can give an author without a login, and spells a bot app/name where GraphQL says name.
+                author = a.TryGetProperty("login", out var login) ? login.GetString() : null;
+                if (author is not null && author.StartsWith(AppPrefix, StringComparison.Ordinal))
+                {
+                    author = author[AppPrefix.Length..];
+                }
             }
         }
 

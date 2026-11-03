@@ -16,12 +16,13 @@ public class GhCliTests : IDisposable
     [Fact]
     public void Token_goes_in_the_environment_only()
     {
-        WithInheritedTokens(() =>
+        WithInheritedEnvironment(() =>
         {
             var info = GhCli.StartInfo(["api", "user"], "secret-token");
 
             info.Environment["GH_TOKEN"].ShouldBe("secret-token");
             info.Environment.ContainsKey("GITHUB_TOKEN").ShouldBeFalse();
+            info.Environment.ContainsKey("GH_HOST").ShouldBeFalse();
             info.ArgumentList.ShouldBe(["api", "user"]);
         });
     }
@@ -29,12 +30,13 @@ public class GhCliTests : IDisposable
     [Fact]
     public void An_inherited_token_never_reaches_a_lookup()
     {
-        WithInheritedTokens(() =>
+        WithInheritedEnvironment(() =>
         {
             var info = GhCli.StartInfo(["auth", "token", "--user", "acme"], null);
 
             info.Environment.ContainsKey("GH_TOKEN").ShouldBeFalse();
             info.Environment.ContainsKey("GITHUB_TOKEN").ShouldBeFalse();
+            info.Environment.ContainsKey("GH_HOST").ShouldBeFalse();
         });
     }
 
@@ -57,19 +59,21 @@ public class GhCliTests : IDisposable
         (await gh.RunAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).ShouldBe(json);
     }
 
-    private static void WithInheritedTokens(Action action)
+    private static void WithInheritedEnvironment(Action action)
     {
-        var saved = (Environment.GetEnvironmentVariable("GH_TOKEN"), Environment.GetEnvironmentVariable("GITHUB_TOKEN"));
+        var saved = (Environment.GetEnvironmentVariable("GH_TOKEN"), Environment.GetEnvironmentVariable("GITHUB_TOKEN"), Environment.GetEnvironmentVariable("GH_HOST"));
         try
         {
             Environment.SetEnvironmentVariable("GH_TOKEN", "inherited-marker");
             Environment.SetEnvironmentVariable("GITHUB_TOKEN", "inherited-marker");
+            Environment.SetEnvironmentVariable("GH_HOST", "inherited-marker");
             action();
         }
         finally
         {
             Environment.SetEnvironmentVariable("GH_TOKEN", saved.Item1);
             Environment.SetEnvironmentVariable("GITHUB_TOKEN", saved.Item2);
+            Environment.SetEnvironmentVariable("GH_HOST", saved.Item3);
         }
     }
 
@@ -96,6 +100,26 @@ public class GhCliTests : IDisposable
 
         result.ShouldBeNull();
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Accounts_are_every_login_on_github_com_whatever_its_state()
+    {
+        var payload = Path.Combine(_root, "status.json");
+        await File.WriteAllTextAsync(payload, """
+            {"hosts":{
+             "github.com":[{"state":"success","active":true,"host":"github.com","login":"amy"},
+                           {"state":"timeout","active":false,"host":"github.com","login":"zed"},
+                           {"state":"error","active":false,"host":"github.com","login":"kim"},
+                           {"active":false,"host":"github.com","login":"lou"}],
+             "ghe.example.com":[{"state":"success","active":true,"host":"ghe.example.com","login":"elsewhere"}]}}
+            """, TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + payload + "\"\r\n", TestContext.Current.CancellationToken);
+
+        var accounts = await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken);
+
+        accounts.ShouldBe(["amy", "zed", "kim", "lou"]);
     }
 
     [Fact]
