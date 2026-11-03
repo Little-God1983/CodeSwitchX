@@ -43,11 +43,13 @@ public static class GitHubPillPreview
 
         pill.MouseEnter -= OnPillEnter;
         pill.MouseLeave -= OnLeave;
+        pill.PreviewMouseLeftButtonDown -= OnPillClick;
         pill.Unloaded -= OnPillUnloaded;
         if (e.NewValue is true)
         {
             pill.MouseEnter += OnPillEnter;
             pill.MouseLeave += OnLeave;
+            pill.PreviewMouseLeftButtonDown += OnPillClick;
             pill.Unloaded += OnPillUnloaded;
         }
     }
@@ -66,6 +68,9 @@ public static class GitHubPillPreview
         popup.Child = Content(pill, (DataTemplate)app.FindResource("GitHubRowTemplate"));
         popup.IsOpen = true;
     }
+
+    /// <summary>A click opens the full list: the popup is topmost and would sit over it.</summary>
+    private static void OnPillClick(object sender, RoutedEventArgs e) => Close();
 
     private static void OnLeave(object sender, RoutedEventArgs e) => CloseTimer.Start();
 

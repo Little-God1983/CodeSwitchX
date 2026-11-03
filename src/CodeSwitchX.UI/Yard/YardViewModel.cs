@@ -8,6 +8,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -42,6 +43,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private ITimer? _gitTimer;
     private ITimer? _gitHubTimer;
     private readonly GitHubActivity? _gitHub;
+    private readonly GitHubReader? _gitHubReader;
+    private readonly GitHubBrowsers? _gitHubBrowsers;
     private readonly CancellationTokenSource _gitHubStop = new();
     private ITimer? _tabsTimer;
 
@@ -279,9 +282,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
-        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null)
+        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null)
     {
         _gitHub = gitHub;
+        _gitHubReader = gitHubReader;
+        _gitHubBrowsers = gitHubBrowsers;
         _storedLastUse = storedLastUse ?? (_ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(new Dictionary<Guid, DateTimeOffset>()));
         _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
@@ -901,10 +907,23 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// </summary>
     public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
 
-    /// <summary>A click on a pill opens the repository's list in the browser of its account; a stub until then.</summary>
+    /// <summary>The panel a click on a pill opens with every open item of its kind; null when closed. Another pill replaces it.</summary>
+    [ObservableProperty] private GitHubListViewModel? _gitHubList;
+
+    /// <summary>A click on a pill opens the repository's full list over the Yard. Without the readers (tests, no gh) it does nothing.</summary>
     [RelayCommand]
     private void OpenGitHubList(GitHubPill pill)
     {
+        if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
+        {
+            return;
+        }
+
+        GitHubList?.CloseCommand.Execute(null);
+        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time,
+            closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
+        GitHubList = list;
+        _ = list.LoadAsync(CancellationToken.None);
     }
 
     [RelayCommand]

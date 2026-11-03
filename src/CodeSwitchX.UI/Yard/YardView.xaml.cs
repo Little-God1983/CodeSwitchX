@@ -17,6 +17,21 @@ public partial class YardView : UserControl
         InitializeComponent();
     }
 
+    private void OnGitHubShadeClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        (DataContext as YardViewModel)?.GitHubList?.CloseCommand.Execute(null);
+        e.Handled = true;
+    }
+
+    /// <summary>The panel takes the keyboard when it appears, so Escape closes it.</summary>
+    private void OnGitHubPanelVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (e.NewValue is true)
+        {
+            ((UIElement)sender).Focus();
+        }
+    }
+
     private void OnBoardMouseMove(object sender, System.Windows.Input.MouseEventArgs e) => (DataContext as YardViewModel)?.HoldOrder();
 
     /// <summary>
