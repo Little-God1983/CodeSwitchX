@@ -276,6 +276,17 @@ public class GhCliTests : IDisposable
     }
 
     [Fact]
+    public async Task A_cancelled_accounts_read_throws_and_is_no_failure_of_gh()
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nexit /b 1\r\n", TestContext.Current.CancellationToken);
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(new GhCli(script, GhCli.Timeout).AccountsAsync(stop.Token));
+    }
+
+    [Fact]
     public async Task A_gh_that_runs_out_of_time_is_another_failure()
     {
         var script = Path.Combine(_root, "gh.cmd");

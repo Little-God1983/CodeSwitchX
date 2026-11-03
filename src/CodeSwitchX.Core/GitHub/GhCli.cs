@@ -34,6 +34,8 @@ public sealed class GhCli : IGhCli
     public async Task<GhAccounts> AccountsAsync(CancellationToken ct)
     {
         var run = await GitInspector.RunProcessAsync(StartInfo(["auth", "status", "--json", "hosts"], null, _executable), _timeout, ct).ConfigureAwait(false);
+        // A run the caller cancelled says nothing about gh.
+        ct.ThrowIfCancellationRequested();
         if (run.Output is not { } output)
         {
             return GhAccounts.Failed(FailureOf(run));

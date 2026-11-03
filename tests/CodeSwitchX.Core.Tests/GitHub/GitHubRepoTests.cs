@@ -26,7 +26,15 @@ public class GitHubRepoTests
     [InlineData("git@notgithub.com:acme/tool.git", null)]
     [InlineData("notgithub.com:acme/tool.git", null)]
     [InlineData("git@github.com-:acme/tool.git", null)]
-    [InlineData("git@ssh.github.com:acme/tool.git", null)]
+    [InlineData("git@ssh.github.com:acme/tool.git", "acme/tool")]
+    [InlineData("ssh.github.com:acme/tool.git", "acme/tool")]
+    [InlineData("git@github.com:/acme/tool.git", "acme/tool")]
+    [InlineData("git@github.com://acme/tool.git", null)]
+    [InlineData("git+ssh://git@github.com/acme/tool.git", "acme/tool")]
+    [InlineData("ssh+git://git@github.com/acme/tool.git", "acme/tool")]
+    [InlineData("git+ssh://git@github.com-work/acme/tool.git", "acme/tool")]
+    [InlineData("C:/acme/tool.git", null)]
+    [InlineData(@"C:\acme\tool.git", null)]
     [InlineData("ssh://git@ssh.github.com.evil.example/acme/tool.git", null)]
     [InlineData("ssh://git@github.com-evil.example/acme/tool.git", null)]
     [InlineData("ssh://git@github.com-work/acme/tool.git", "acme/tool")]
@@ -64,6 +72,15 @@ public class GitHubRepoTests
     [InlineData("git@github-work:acme/tool.git", "github-work", "ssh.github.com.evil.example", null)]
     [InlineData("git@github-work:acme/tool.git", "github-work", "", null)]
     [InlineData("git@other:acme/tool.git", "github-work", "github.com", null)]
+    [InlineData("git@github.com-corp:acme/tool.git", "github.com-corp", "git.corp.example", null)]
+    [InlineData("ssh://git@github.com-corp/acme/tool.git", "github.com-corp", "git.corp.example", null)]
+    [InlineData("git@github.com-corp:acme/tool.git", "github.com-corp", "github.com", "acme/tool")]
+    [InlineData("git@github.com-corp:acme/tool.git", "other", "git.corp.example", "acme/tool")]
+    [InlineData("git@github.com-evil.example:acme/tool.git", "other", "github.com", null)]
+    [InlineData("git+ssh://git@github-work/acme/tool.git", "github-work", "github.com", "acme/tool")]
+    [InlineData("ssh://git@GitHub-Work/acme/tool.git", "GitHub-Work", "github.com", "acme/tool")]
+    [InlineData("ssh://git@GitHub-Work/acme/tool.git", "github-work", "github.com", null)]
+    [InlineData("git@GitHub-Work:acme/tool.git", "github-work", "github.com", null)]
     [InlineData("https://other/acme/tool.git", "other", "github.com", null)]
     [InlineData("git://other/acme/tool.git", "other", "github.com", null)]
     [InlineData("file://other/acme/tool.git", "other", "github.com", null)]
@@ -79,24 +96,37 @@ public class GitHubRepoTests
         GitHubRepo.FromRemote(remote).ShouldBeNull();
 
     [Theory]
-    [InlineData("git@github-work:acme/tool.git", "github-work")]
-    [InlineData("ssh://git@github-work/acme/tool.git", "github-work")]
-    [InlineData("ssh://git@github-work:22/acme/tool.git", "github-work")]
-    [InlineData("github-work:acme/tool.git", "github-work")]
-    [InlineData("git@gitlab.com:acme/tool.git", "gitlab.com")]
-    [InlineData("git@github.com:acme/tool.git", null)] // GitHub by its name: nothing to ask
-    [InlineData("git@github.com-work:acme/tool.git", null)]
-    [InlineData("ssh://git@github.com-work/acme/tool.git", null)]
-    [InlineData("https://github-work/acme/tool.git", null)] // only ssh remotes go through ~/.ssh/config
-    [InlineData("file://github-work/acme/tool.git", null)]
-    [InlineData("git@-oProxyCommand=calc:acme/tool.git", null)] // never an option for ssh
-    [InlineData("ssh://git@-oProxyCommand=calc/acme/tool.git", null)]
-    [InlineData(@"C:\repos\tool", null)]
-    [InlineData("/repos/tool", null)]
-    [InlineData("", null)]
-    [InlineData(null, null)]
-    public void AliasOf(string? remote, string? alias) =>
-        GitHubRepo.AliasOf(remote).ShouldBe(alias);
+    [InlineData("git@github-work:acme/tool.git", "github-work", true)]
+    [InlineData("ssh://git@GitHub-Work/acme/tool.git", "GitHub-Work", true)]
+    [InlineData("ssh://git@github-work:22/acme/tool.git", "github-work", true)]
+    [InlineData("git+ssh://git@github-work/acme/tool.git", "github-work", true)]
+    [InlineData("github-work:acme/tool.git", "github-work", true)]
+    [InlineData("git@gitlab.com:acme/tool.git", "gitlab.com", true)]
+    [InlineData("git@github.com-work:acme/tool.git", "github.com-work", true)]
+    [InlineData("ssh://git@github.com-work/acme/tool.git", "github.com-work", true)]
+    [InlineData("git@github.com:acme/tool.git", "github.com", false)] // GitHub by its name: nothing to ask
+    [InlineData("git@ssh.github.com:acme/tool.git", "ssh.github.com", false)]
+    [InlineData("https://github-work/acme/tool.git", "github-work", false)] // only ssh remotes go through ~/.ssh/config
+    [InlineData("git://github-work/acme/tool.git", "github-work", false)]
+    [InlineData("git@-oProxyCommand=calc:acme/tool.git", "-oProxyCommand=calc", false)] // never an option for ssh
+    [InlineData("ssh://git@-oProxyCommand=calc/acme/tool.git", "-oProxyCommand=calc", false)]
+    public void Parse_gives_the_host_as_written_and_whether_ssh_is_to_be_asked(string remote, string host, bool lookup)
+    {
+        var address = GitHubRepo.Parse(remote).ShouldNotBeNull();
+        address.Host.ShouldBe(host);
+        address.NeedsLookup.ShouldBe(lookup);
+    }
+
+    [Theory]
+    [InlineData("file://github-work/acme/tool.git")]
+    [InlineData(@"C:\repos\tool")]
+    [InlineData("C:/repos/tool")]
+    [InlineData("/repos/tool")]
+    [InlineData("git@github-work:acme")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Parse_is_null_for_what_is_no_remote_with_a_repository(string? remote) =>
+        GitHubRepo.Parse(remote).ShouldBeNull();
 
     [Fact]
     public void Owner_and_name_compare_ignoring_case()

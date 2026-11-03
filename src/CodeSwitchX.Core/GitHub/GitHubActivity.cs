@@ -8,10 +8,11 @@ namespace CodeSwitchX.Core.GitHub;
 /// result, one every account answers with "not found" drops it, and a result that did not change keeps its instance, so the
 /// tiles built on it compare equal and stay as they are. A round raises <see cref="Changed"/> when a result changed or a folder
 /// now belongs to another repository. <see cref="Retain"/> lets go of what no folder on the tiles needs any more.
-/// A round logs the reads that failed once per kind of failure, not once per repository: the logs carry no names, only counts and kinds.
+/// A round logs what failed once per kind of failure (a folder whose origin could not be told, a repository that could not be read), not once
+/// per folder or repository: the Warnings carry only counts and kinds, and a folder path appears only in a Debug line.
 /// </summary>
 /// <param name="hostOfAlias">What <c>ssh -G</c> makes of an ssh host name in a remote such as <c>git@github-work:owner/repo</c> (null: no alias is looked up).</param>
-public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null)
+public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<SshAnswer>>? hostOfAlias = null)
 {
     private const int MostReadsAtOnce = 4;
 
@@ -81,6 +82,11 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         {
             var folderRepos = await Task.WhenAll(folders.Select(f => Key(f)).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(folder => RepoOfAsync(folder, ct))).ConfigureAwait(false);
+            foreach (var failure in folderRepos.Select(p => p.Failure).OfType<string>().GroupBy(f => f))
+            {
+                logger.LogWarning("GitHub round: {Failed} of {Total} folders could not be resolved to a repository: {Failure}", failure.Count(), folderRepos.Length, failure.Key);
+            }
+
             var repos = folderRepos.Where(p => p.Repo is not null).GroupBy(p => p.Repo!).ToList();
             var accounts = repos.Count == 0 ? [] : await AccountsAsync(ct).ConfigureAwait(false);
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
@@ -144,67 +150,67 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         return true;
     }
 
-    /// <returns><c>Moved</c> is true when the folder now belongs to another repository than before (or to its first), which no read of the round would report when the repository was read already.</returns>
-    private async Task<(string Folder, GitHubRepo? Repo, bool Moved)> RepoOfAsync(string folder, CancellationToken ct)
+    /// <returns>
+    /// <c>Moved</c> is true when the folder now belongs to another repository than before (or to its first), which no read of the round would report when the repository was read already.
+    /// <c>Failure</c> names why the folder could not be resolved this time, for the round to count; the folder then keeps the repository it had, and has no entry if it had none,
+    /// so the next round asks again instead of waiting ten minutes.
+    /// </returns>
+    private async Task<(string Folder, GitHubRepo? Repo, bool Moved, string? Failure)> RepoOfAsync(string folder, CancellationToken ct)
     {
         try
         {
             var origin = await originOf(folder, ct).ConfigureAwait(false);
-            var parsed = origin.Failed ? null : await RepoOfRemoteAsync(origin.Url, ct).ConfigureAwait(false);
+            var (parsed, lookupFailed) = origin.Failed ? (null, false) : await RepoOfRemoteAsync(origin.Url, ct).ConfigureAwait(false);
+            var failure = origin.Failed ? "git gave no answer" : lookupFailed ? "ssh gave no answer" : null;
             lock (_gate)
             {
                 var known = _repoOfFolder.GetValueOrDefault(folder);
-                // No answer (git timed out or failed) is not an origin that is gone: the folder keeps its repository.
-                if (origin.Failed && known is not null)
+                // No answer (git timed out or failed, ssh could not be asked) is not an origin that is gone.
+                if (failure is not null)
                 {
-                    logger.LogWarning("Reading the origin of {Folder} failed; it keeps the repository it had", folder);
-                    return (folder, known, false);
-                }
-
-                // Nothing known and no answer: no entry either, so the next git round asks again instead of waiting ten minutes.
-                if (origin.Failed)
-                {
-                    logger.LogWarning("Reading the origin of {Folder} failed; it is asked again next round", folder);
-                    return (folder, null, false);
+                    logger.LogDebug("Reading the origin of {Folder} failed ({Failure}); it keeps the repository it had, if any", folder, failure);
+                    return (folder, known, false, failure);
                 }
 
                 _repoOfFolder[folder] = parsed;
-                return (folder, parsed, known != parsed);
+                return (folder, parsed, known != parsed, null);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning("Finding the GitHub repository of {Folder} failed: {Failure}", folder, ex.GetType().Name);
+            logger.LogDebug("Finding the GitHub repository of {Folder} failed: {Failure}", folder, ex.GetType().Name);
             lock (_gate)
             {
-                return (folder, _repoOfFolder.GetValueOrDefault(folder), false);
+                return (folder, _repoOfFolder.GetValueOrDefault(folder), false, ex.GetType().Name);
             }
         }
     }
 
-    /// <summary>The repository a remote address points at; an ssh host name that might be an alias is looked up once (by <c>hostOfAlias</c>), and counts as GitHub only if it resolves to GitHub.</summary>
-    private async Task<GitHubRepo?> RepoOfRemoteAsync(string? url, CancellationToken ct)
+    /// <summary>
+    /// The repository a remote address points at. An ssh host that is not GitHub by name is asked about once (<c>hostOfAlias</c>); <c>LookupFailed</c> is true
+    /// when that ask failed, which says nothing about the remote.
+    /// </summary>
+    private async Task<(GitHubRepo? Repo, bool LookupFailed)> RepoOfRemoteAsync(string? url, CancellationToken ct)
     {
-        if (GitHubRepo.FromRemote(url) is { } repo)
+        if (GitHubRepo.Parse(url) is not { } address)
         {
-            return repo;
+            return (null, false);
         }
 
-        if (hostOfAlias is null || GitHubRepo.AliasOf(url) is not { } alias)
+        if (!address.NeedsLookup || hostOfAlias is null)
         {
-            return null;
+            return (address.RepoGiven(null), false);
         }
 
         try
         {
-            var host = await hostOfAlias(alias, ct).ConfigureAwait(false);
-            return GitHubRepo.FromRemote(url, a => a.Equals(alias, StringComparison.OrdinalIgnoreCase) ? host : null);
+            var answer = await hostOfAlias(address.Host, ct).ConfigureAwait(false);
+            return answer.Failed ? (null, true) : (address.RepoGiven(answer.Host), false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Not the alias either: it is a word of the user, not ours to log.
             logger.LogDebug("Looking up an ssh host name failed: {Failure}", ex.GetType().Name);
-            return null;
+            return (null, true);
         }
     }
 

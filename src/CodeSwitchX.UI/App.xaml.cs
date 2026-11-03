@@ -301,7 +301,7 @@ public partial class App : Application
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
         // What ~/.ssh/config makes of a host name in a remote (git@github-work:owner/repo), asked once per name.
-        services.AddSingleton<SshAliases>();
+        services.AddSingleton(sp => new SshAliases(sp.GetRequiredService<ILogger<SshAliases>>()));
         services.AddSingleton(sp => new BrowserCatalog(new InstalledBrowsers(), logger: sp.GetRequiredService<ILogger<BrowserCatalog>>()));
         services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
             info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
