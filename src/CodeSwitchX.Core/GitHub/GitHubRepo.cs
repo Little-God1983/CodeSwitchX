@@ -82,9 +82,13 @@ public sealed record GitHubRepo(string Owner, string Name)
     internal static bool IsGitHubHost(string host, bool ssh) =>
         host.Equals(Host, StringComparison.OrdinalIgnoreCase) || (ssh && host.Equals(SshHost, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>A remote address read once: its repository, the host as written, and whether it is spoken over ssh (an ssh URL or the scp form).</summary>
-    public sealed record RemoteAddress(GitHubRepo Repo, string Host, bool IsSsh)
+    /// <summary>A remote address read once: the host as written, and whether it is spoken over ssh (an ssh URL or the scp form). Its repository, whatever the host, is handed out only by <see cref="RepoGiven"/>.</summary>
+    public sealed class RemoteAddress(GitHubRepo repo, string host, bool isSsh)
     {
+        public string Host { get; } = host;
+
+        public bool IsSsh { get; } = isSsh;
+
         /// <summary>The host is GitHub by its name.</summary>
         public bool IsGitHub => IsGitHubHost(Host, IsSsh);
 
@@ -100,7 +104,7 @@ public sealed record GitHubRepo(string Owner, string Name)
         {
             if (IsGitHub)
             {
-                return Repo;
+                return repo;
             }
 
             if (!NeedsLookup)
@@ -108,7 +112,7 @@ public sealed record GitHubRepo(string Owner, string Name)
                 return null;
             }
 
-            return (sshHost is null ? GitHubAlias.IsMatch(Host) : IsGitHubHost(sshHost, ssh: true)) ? Repo : null;
+            return (sshHost is null ? GitHubAlias.IsMatch(Host) : IsGitHubHost(sshHost, ssh: true)) ? repo : null;
         }
     }
 }

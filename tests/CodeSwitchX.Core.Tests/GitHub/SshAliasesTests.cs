@@ -53,15 +53,17 @@ public class SshAliasesTests : IDisposable
     }
 
     [Fact]
-    public async Task An_echo_of_the_name_is_no_answer()
+    public async Task An_echo_of_the_name_is_the_name_and_no_failure()
     {
-        var ssh = Aliases(await Ssh("echo hostname github.com-work"));
+        var log = new Lines();
+        var ssh = Aliases(await Ssh("echo hostname github.com-work"), logger: log);
 
-        (await ssh.HostOfAsync("github.com-work", CancellationToken.None)).ShouldBeNull();
+        (await ssh.HostOfAsync("github.com-work", CancellationToken.None)).ShouldBe("github.com-work");
+        log.Warnings.ShouldBeEmpty();
     }
 
     [Fact]
-    public async Task An_alias_is_matched_as_written_and_asked_once_within_ten_minutes()
+    public async Task An_alias_is_matched_as_written_and_asked_once_while_kept()
     {
         var ssh = Aliases(await Ssh("echo hostname github.com"));
 
@@ -73,7 +75,7 @@ public class SshAliasesTests : IDisposable
     }
 
     [Fact]
-    public async Task An_answer_is_asked_again_after_ten_minutes()
+    public async Task An_answer_is_asked_again_when_it_is_no_longer_kept()
     {
         var ssh = Aliases(await Ssh("echo hostname github.com"));
         await ssh.HostOfAsync("github-work", CancellationToken.None);

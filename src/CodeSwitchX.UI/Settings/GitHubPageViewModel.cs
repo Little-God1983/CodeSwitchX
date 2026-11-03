@@ -52,8 +52,8 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A failed read: the rows stay, or the page says why; only the kind of failure is logged.
-            logger?.LogWarning("The GitHub accounts could not be read: {Failure}", ex.GetType().Name);
+            // A failed read: the rows stay, or the page says why; only the exception type and stack are logged.
+            logger?.LogWarning("The GitHub accounts could not be read: {Failure}", FailureText.Of(ex));
             read = GhAccounts.Failed();
         }
 
@@ -67,7 +67,7 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The rows are built from what the catalog has: its last list, or at least the Windows default.
-            logger?.LogWarning("The installed browsers could not be read: {Failure}", ex.GetType().Name);
+            logger?.LogWarning("The installed browsers could not be read: {Failure}", FailureText.Of(ex));
             entries = catalog.List();
         }
 
@@ -76,7 +76,7 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             return; // a later refresh is the newer answer
         }
 
-        // Null is a failed read: the rows (and a pick or Test line in them) stay, and the page says how to log in only when there are none.
+        // Null is a failed read: the rows (and a pick or Test line in them) stay, and the page says why only when there are none.
         // An empty list is gh saying nobody is logged in.
         var textBefore = NoAccountsText;
         _failure = read.Failure;

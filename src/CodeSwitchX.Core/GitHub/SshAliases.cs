@@ -6,16 +6,18 @@ namespace CodeSwitchX.Core.GitHub;
 
 /// <summary>
 /// What an ssh host name in a git remote (<c>git@github-work:owner/repo</c>) stands for, as <c>ssh -G</c> reads it from
-/// <c>~/.ssh/config</c>. A name is matched as written, case included, as ssh does. The answer is the host ssh names, or null for no
-/// answer: ssh is missing or blocked, it failed or timed out, or it only echoed the name (<c>ssh -G</c> does that, with exit 0, when no
-/// <c>Host</c> stanza matches). Every answer is kept for <see cref="KeepFor"/>, so nothing is asked again on every pass and an edit of the
-/// config is picked up. Asks run off the caller's thread; each kind of failure is logged once per run, without the name.
+/// <c>~/.ssh/config</c>. A name is matched as written, case included, as ssh does. The answer is the host ssh names; the name itself when
+/// ssh only echoed it (<c>ssh -G</c> does that, with exit 0, when no <c>Host</c> stanza matches: it says the name is no alias); or null for no
+/// answer: ssh is missing or blocked, it failed or timed out, or it printed no host. Every answer is kept for <see cref="KeepFor"/>, so nothing
+/// is asked again on every pass and an edit of the config is picked up. Asks run off the caller's thread; each kind of failure is logged once
+/// per run, without the name.
 /// </summary>
 public sealed class SshAliases
 {
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
-    public static readonly TimeSpan KeepFor = TimeSpan.FromMinutes(10);
+    /// <summary>A little under the 30 s passes' ten-minute round, so an answer is not kept through a second one.</summary>
+    public static readonly TimeSpan KeepFor = TimeSpan.FromMinutes(9);
 
     private readonly string _executable;
     private readonly TimeSpan _timeout;
@@ -38,7 +40,7 @@ public sealed class SshAliases
         _logger = logger;
     }
 
-    /// <returns>The host ssh names for the alias, or null for no answer. A caller that stops waiting does not stop the ask.</returns>
+    /// <returns>The host ssh names for the alias (the alias itself when it is none), or null for no answer. A caller that stops waiting does not stop the ask.</returns>
     public Task<string?> HostOfAsync(string alias, CancellationToken ct)
     {
         Task<string?> asking;
@@ -99,8 +101,7 @@ public sealed class SshAliases
             if (run.Output is { } output)
             {
                 var host = output.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("hostname ", StringComparison.OrdinalIgnoreCase))?[9..].Trim();
-                // No Host stanza matches: ssh names the alias itself, which is no answer.
-                return host is { Length: > 0 } && !host.Equals(alias, StringComparison.OrdinalIgnoreCase) ? (host, null) : (null, host is { Length: > 0 } ? null : "no hostname in the answer");
+                return host is { Length: > 0 } ? (host, null) : (null, "no hostname in the answer");
             }
 
             return (null, run switch

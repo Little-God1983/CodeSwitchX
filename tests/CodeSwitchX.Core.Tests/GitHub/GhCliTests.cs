@@ -285,6 +285,34 @@ public class GhCliTests : IDisposable
     }
 
     [Fact]
+    public void Failure_text_has_the_type_and_stack_of_the_exception_and_of_its_cause_and_no_message()
+    {
+        Exception thrown;
+        try
+        {
+            try
+            {
+                throw new InvalidOperationException("secret inner");
+            }
+            catch (InvalidOperationException inner)
+            {
+                throw new IOException("secret outer", inner);
+            }
+        }
+        catch (IOException ex)
+        {
+            thrown = ex;
+        }
+
+        var text = FailureText.Of(thrown);
+
+        text.ShouldContain(nameof(IOException));
+        text.ShouldContain(nameof(InvalidOperationException));
+        text.ShouldContain("   at ", Case.Sensitive);
+        text.ShouldNotContain("secret");
+    }
+
+    [Fact]
     public async Task A_cancelled_accounts_read_throws_and_is_no_failure_of_gh()
     {
         var script = Path.Combine(_root, "gh.cmd");

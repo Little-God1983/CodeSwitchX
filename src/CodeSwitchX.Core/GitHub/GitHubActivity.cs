@@ -9,7 +9,7 @@ namespace CodeSwitchX.Core.GitHub;
 /// tiles built on it compare equal and stay as they are. A round raises <see cref="Changed"/> when a result changed or a folder
 /// now belongs to another repository. <see cref="Retain"/> lets go of what no folder on the tiles needs any more.
 /// A round logs what failed once per kind of failure (a folder whose origin could not be told, a repository that could not be read), not once
-/// per folder or repository: the Warnings carry only counts and kinds, and a folder path appears only in a Debug line.
+/// per folder or repository: a Warning carries counts, the kind and the first failure's exception types and stacks, never a message or a name, and a folder path appears only in a Debug line.
 /// </summary>
 /// <param name="hostOfAlias">What <c>ssh -G</c> makes of an ssh host name in a remote such as <c>git@github-work:owner/repo</c> (null: no alias is looked up).</param>
 public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null)
@@ -153,26 +153,30 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     /// <returns>
     /// <c>Moved</c> is true when the folder now belongs to another repository than before (or to its first), which no read of the round would report when the repository was read already.
     /// <c>Failure</c> names why git could not tell the folder's origin this time, for the round to count; the folder then keeps the repository it had, and has no entry if it had none,
-    /// so the next round asks again instead of waiting ten minutes. An ssh host that has no answer is no failure: the folder is recorded with no repository, and keeps the one it had.
+    /// so the next round asks again instead of waiting for the cache. An ssh that failed is no failure of the round: the folder is recorded (with no repository if it had none), and keeps the one it had.
     /// </returns>
     private async Task<(string Folder, GitHubRepo? Repo, bool Moved, Fail? Failure)> RepoOfAsync(string folder, CancellationToken ct)
     {
         try
         {
             var origin = await originOf(folder, ct).ConfigureAwait(false);
-            var (parsed, noAnswer) = origin.Failed ? (null, false) : await RepoOfRemoteAsync(origin.Url, ct).ConfigureAwait(false);
+            if (origin.Failed)
+            {
+                // No answer (git timed out or failed) is not an origin that is gone.
+                logger.LogDebug("Reading the origin of {Folder} failed; it keeps the repository it had, if any", folder);
+                lock (_gate)
+                {
+                    return (folder, _repoOfFolder.GetValueOrDefault(folder), false, new Fail("git gave no answer"));
+                }
+            }
+
+            var (parsed, ssh) = await RepoOfRemoteAsync(origin.Url, ct).ConfigureAwait(false);
             lock (_gate)
             {
                 var known = _repoOfFolder.GetValueOrDefault(folder);
-                // No answer (git timed out or failed) is not an origin that is gone.
-                if (origin.Failed)
-                {
-                    logger.LogDebug("Reading the origin of {Folder} failed; it keeps the repository it had, if any", folder);
-                    return (folder, known, false, new Fail("git gave no answer"));
-                }
-
-                // Neither is ssh with nothing to say about the host: it never clears a repository, and with none it is recorded, so it is not asked every pass.
-                if (noAnswer && known is not null)
+                // An ssh that failed is no more an answer than a git that failed: it never clears a repository, and with none the folder is
+                // recorded, so it is not asked every pass. An ssh that answered "no such alias" (or another host) does clear it.
+                if (ssh == SshOutcome.Failed && known is not null)
                 {
                     return (folder, known, false, null);
                 }
@@ -192,19 +196,32 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
+    /// <summary>How asking ssh about a host went: not needed, it named a host (its echo of the name included), or it failed and said nothing.</summary>
+    private enum SshOutcome
+    {
+        NotAsked,
+        Answered,
+        Failed,
+    }
+
     /// <summary>
-    /// The repository a remote address points at. An ssh host that is not GitHub by name is asked about (<c>hostOfAlias</c>); <c>NoAnswer</c> is true
-    /// when that gave no host and the remote is not GitHub by the <c>github.com-name</c> convention either.
+    /// The repository a remote address points at. An ssh host that is not GitHub by name is asked about (<c>hostOfAlias</c>). An echo of the name
+    /// means ssh knows no such alias, and is not taken as naming a host; the <c>github.com-name</c> convention then still counts, as it does when ssh failed.
     /// </summary>
-    private async Task<(GitHubRepo? Repo, bool NoAnswer)> RepoOfRemoteAsync(string? url, CancellationToken ct)
+    private async Task<(GitHubRepo? Repo, SshOutcome Ssh)> RepoOfRemoteAsync(string? url, CancellationToken ct)
     {
         if (GitHubRepo.Parse(url) is not { } address)
         {
-            return (null, false);
+            return (null, SshOutcome.NotAsked);
+        }
+
+        if (!address.NeedsLookup)
+        {
+            return (address.RepoGiven(null), SshOutcome.NotAsked);
         }
 
         string? host = null;
-        if (address.NeedsLookup && hostOfAlias is not null)
+        if (hostOfAlias is not null)
         {
             try
             {
@@ -216,8 +233,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             }
         }
 
-        var repo = address.RepoGiven(host);
-        return (repo, address.NeedsLookup && host is null && repo is null);
+        var echoed = host is not null && host.Equals(address.Host, StringComparison.OrdinalIgnoreCase);
+        return (address.RepoGiven(echoed ? null : host), host is null ? SshOutcome.Failed : SshOutcome.Answered);
     }
 
     /// <summary>The round accounts. <c>gh auth status</c> checks every token against the API, so it runs once a round and not once a repository; no answer (null) means no reads, and the last results stay.</summary>
@@ -293,9 +310,11 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     }
 
     /// <summary>A kind of failure, for the round to count; <c>Detail</c> is what a Warning shows of the first: the exception type and its stack, never its message.</summary>
-    private sealed record Fail(string Kind, string? Detail = null)
+    private sealed record Fail(string Kind, string Detail)
     {
-        public string Detail { get; } = Detail ?? Kind;
+        public Fail(string kind) : this(kind, kind)
+        {
+        }
     }
 
     private static string Key(string path) => Path.TrimEndingDirectorySeparator(path);

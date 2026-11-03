@@ -375,7 +375,7 @@ public class GitHubActivityTests
     }
 
     [Fact]
-    public async Task No_answer_from_ssh_keeps_the_repository_the_folder_had()
+    public async Task A_failed_ssh_keeps_the_repository_the_folder_had()
     {
         var gh = new FakeGh();
         var remote = "https://github.com/acme/tool.git";
@@ -423,6 +423,31 @@ public class GitHubActivityTests
         activity.Knows(@"c:\r\tool").ShouldBeTrue();
         activity.ForFolder(@"c:\r\tool").ShouldBeNull();
         log.Warnings.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task An_echo_from_ssh_clears_the_repository_the_folder_had()
+    {
+        var remote = "https://github.com/acme/tool.git";
+        var activity = Activity(new FakeGh(), _ => new OriginLookup(remote), null, (alias, _) => Task.FromResult<string?>(alias));
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
+        remote = "git@gitlab.com:acme/tool.git";
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeNull();
+        activity.Knows(@"c:\r\tool").ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_echo_from_ssh_keeps_the_pills_of_a_dash_name_host()
+    {
+        var activity = Activity(new FakeGh(), _ => new OriginLookup("git@github.com-corp:acme/tool.git"), null, (alias, _) => Task.FromResult<string?>(alias));
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
     }
 
     [Fact]
