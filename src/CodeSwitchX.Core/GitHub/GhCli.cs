@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using CodeSwitchX.Core.Workspaces;
 
@@ -70,7 +71,8 @@ public sealed class GhCli : IGhCli
     /// </summary>
     internal static ProcessStartInfo StartInfo(IReadOnlyList<string> arguments, string? token, string executable = "gh")
     {
-        var info = new ProcessStartInfo(executable);
+        // gh writes UTF-8; a windowed process would decode the pipe with the ANSI code page and garble titles.
+        var info = new ProcessStartInfo(executable) { StandardOutputEncoding = Encoding.UTF8 };
         foreach (var argument in arguments)
         {
             info.ArgumentList.Add(argument);

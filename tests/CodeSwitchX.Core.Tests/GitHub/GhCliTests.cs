@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Text;
 using CodeSwitchX.Core.GitHub;
 
 namespace CodeSwitchX.Core.Tests.GitHub;
 
+[Collection("ProcessEnvironment")]
 public class GhCliTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "csx-gh-" + Guid.NewGuid().ToString("N"));
@@ -14,19 +16,61 @@ public class GhCliTests : IDisposable
     [Fact]
     public void Token_goes_in_the_environment_only()
     {
-        var info = GhCli.StartInfo(["api", "user"], "secret-token");
+        WithInheritedTokens(() =>
+        {
+            var info = GhCli.StartInfo(["api", "user"], "secret-token");
 
-        info.Environment["GH_TOKEN"].ShouldBe("secret-token");
-        info.ArgumentList.ShouldBe(["api", "user"]);
+            info.Environment["GH_TOKEN"].ShouldBe("secret-token");
+            info.Environment.ContainsKey("GITHUB_TOKEN").ShouldBeFalse();
+            info.ArgumentList.ShouldBe(["api", "user"]);
+        });
     }
 
     [Fact]
     public void An_inherited_token_never_reaches_a_lookup()
     {
-        var info = GhCli.StartInfo(["auth", "token", "--user", "acme"], null);
+        WithInheritedTokens(() =>
+        {
+            var info = GhCli.StartInfo(["auth", "token", "--user", "acme"], null);
 
-        info.Environment.ContainsKey("GH_TOKEN").ShouldBeFalse();
-        info.Environment.ContainsKey("GITHUB_TOKEN").ShouldBeFalse();
+            info.Environment.ContainsKey("GH_TOKEN").ShouldBeFalse();
+            info.Environment.ContainsKey("GITHUB_TOKEN").ShouldBeFalse();
+        });
+    }
+
+    [Fact]
+    public void Output_is_read_as_UTF8()
+    {
+        GhCli.StartInfo(["api", "user"], null).StandardOutputEncoding.ShouldBe(Encoding.UTF8);
+    }
+
+    [Fact]
+    public async Task Non_ASCII_output_survives_the_pipe()
+    {
+        var payload = Path.Combine(_root, "payload.json");
+        var json = "[{\"title\":\"Café 😜\"}]";
+        await File.WriteAllBytesAsync(payload, new UTF8Encoding(false).GetBytes(json), TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + payload + "\"\r\n", TestContext.Current.CancellationToken);
+        var gh = new GhCli(script, GhCli.Timeout);
+
+        (await gh.RunAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).ShouldBe(json);
+    }
+
+    private static void WithInheritedTokens(Action action)
+    {
+        var saved = (Environment.GetEnvironmentVariable("GH_TOKEN"), Environment.GetEnvironmentVariable("GITHUB_TOKEN"));
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", "inherited-marker");
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", "inherited-marker");
+            action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", saved.Item1);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", saved.Item2);
+        }
     }
 
     [Fact]
