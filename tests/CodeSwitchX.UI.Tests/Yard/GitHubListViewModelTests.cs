@@ -105,7 +105,7 @@ public class GitHubListViewModelTests
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
         list.Rows[0].AgeText.ShouldBe("updated today");
-        list.Message.ShouldBeNull();
+        list.LoadMessage.ShouldBeNull();
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Message.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
     }
@@ -166,7 +166,7 @@ public class GitHubListViewModelTests
         list.OpenRowCommand.Execute(list.Rows[0]);
 
         _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app/issues/1");
-        list.Message.ShouldBeNull();
+        list.OpenMessage.ShouldBeNull();
         _closedLists.ShouldBeEmpty();
     }
 
@@ -181,8 +181,59 @@ public class GitHubListViewModelTests
 
         list.OpenRowCommand.Execute(list.Rows[0]);
 
-        list.Message.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
         _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_that_opens_clears_an_earlier_open_failure()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _start = _ => false;
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        list.OpenMessage.ShouldNotBeNull();
+
+        _start = info => { _started.Add(info); return true; };
+        list.OpenRowCommand.Execute(list.Rows[0]);
+
+        list.OpenMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_load_failure_and_an_open_failure_each_keep_their_own_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _gh.List.SetResult(null);
+        _start = _ => false;
+
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.OpenMessage.ShouldStartWith("Couldn't open");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+    }
+
+    [Fact]
+    public async Task A_load_that_works_clears_the_load_line_and_leaves_the_open_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _start = _ => false;
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        _gh.List.SetResult(ListOf(3));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.LoadMessage.ShouldBeNull();
+        list.OpenMessage.ShouldStartWith("Couldn't open");
     }
 
     [Fact]
@@ -215,7 +266,7 @@ public class GitHubListViewModelTests
         await load;
 
         list.Rows.Count.ShouldBe(1);
-        list.Message.ShouldBeNull();
+        list.LoadMessage.ShouldBeNull();
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
     }
 
@@ -228,7 +279,7 @@ public class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Message.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
     }
 
