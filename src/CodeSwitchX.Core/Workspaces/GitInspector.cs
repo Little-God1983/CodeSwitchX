@@ -37,6 +37,13 @@ public sealed class GitInspector
 
     private static string DefaultProfileDirectory => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+    /// <summary>
+    /// <see cref="GitDirOf"/> for the default user profile, for a caller with no inspector. <paramref name="dangling"/> is true when the
+    /// folder has a <c>.git</c> file whose pointer leads nowhere: that is a repository that cannot be reached, not a folder without one.
+    /// </summary>
+    internal static string? GitDirOfFolder(string folder, out bool dangling) =>
+        ResolveGitDir(folder, DefaultProfileDirectory, out dangling) is { } gitDir ? Path.GetFullPath(gitDir) : null;
+
     public static string? ReadBranch(string root) => ReadHead(ResolveGitDir(root, DefaultProfileDirectory));
 
     private static string? ReadHead(string? gitDir)
@@ -203,8 +210,11 @@ public sealed class GitInspector
         }
     }
 
-    private static string? ResolveGitDir(string root, string profileDirectory)
+    private static string? ResolveGitDir(string root, string profileDirectory) => ResolveGitDir(root, profileDirectory, out _);
+
+    private static string? ResolveGitDir(string root, string profileDirectory, out bool dangling)
     {
+        dangling = false;
         if (!Directory.Exists(root))
         {
             return null;
@@ -230,7 +240,9 @@ public sealed class GitInspector
 
             if (File.Exists(dotGit))
             {
-                return FollowGitDirPointer(dir.FullName, dotGit);
+                var followed = FollowGitDirPointer(dir.FullName, dotGit);
+                dangling = followed is null;
+                return followed;
             }
         }
 
@@ -248,6 +260,7 @@ public sealed class GitInspector
 
         var target = pointer[prefix.Length..].Trim();
         var resolved = Path.IsPathRooted(target) ? target : Path.GetFullPath(Path.Combine(root, target));
-        return Directory.Exists(resolved) ? resolved : null;
+        // Without its trailing separator, so the one checkout has the one name and a quoted argument keeps its closing quote.
+        return Directory.Exists(resolved) ? Path.TrimEndingDirectorySeparator(Path.GetFullPath(resolved)) : null;
     }
 }

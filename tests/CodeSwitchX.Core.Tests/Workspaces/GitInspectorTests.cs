@@ -126,6 +126,23 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_pointer_ending_in_a_separator_gives_the_same_git_directory_to_inspecting_and_to_GitDirOf()
+    {
+        var gitdir = Path.Combine(_root, "real-gitdir");
+        Directory.CreateDirectory(gitdir);
+        File.WriteAllText(Path.Combine(gitdir, "HEAD"), "ref: refs/heads/wt-branch\n");
+        var worktree = Path.Combine(_root, "wt");
+        Directory.CreateDirectory(worktree);
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {gitdir}{Path.DirectorySeparatorChar}\n");
+        var inspector = new GitInspector((_, _, _) => Task.FromResult<string?>(string.Empty));
+
+        var info = await inspector.InspectAsync(worktree, CancellationToken.None);
+
+        info.GitDir.ShouldBe(gitdir);
+        inspector.GitDirOf(worktree).ShouldBe(info.GitDir);
+    }
+
+    [Fact]
     public async Task GitDirOf_names_the_checkout_a_folder_is_in_without_running_git()
     {
         var repo = Path.Combine(_root, "repo");

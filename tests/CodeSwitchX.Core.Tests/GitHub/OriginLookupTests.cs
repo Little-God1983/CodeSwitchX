@@ -53,16 +53,73 @@ public class OriginLookupTests : IDisposable
     }
 
     [Fact]
+    public async Task An_empty_git_directory_under_a_repository_has_no_origin_and_not_the_one_above()
+    {
+        await Git("init");
+        await Git("remote add origin https://github.com/acme/parent.git");
+        var child = Path.Combine(_root, "child");
+        Directory.CreateDirectory(Path.Combine(child, ".git"));
+
+        (await OriginLookup.ReadAsync(child, TestContext.Current.CancellationToken)).ShouldBe(OriginLookup.NoOrigin);
+    }
+
+    [Fact]
+    public async Task A_pointer_file_to_a_git_directory_that_is_gone_is_a_failure_not_a_missing_origin()
+    {
+        var folder = Path.Combine(_root, "dangling");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, ".git"), "gitdir: " + Path.Combine(_root, "not-there") + "\n");
+
+        (await OriginLookup.ReadAsync(folder, TestContext.Current.CancellationToken)).ShouldBe(OriginLookup.Failure);
+    }
+
+    [Fact]
+    public async Task A_pointer_file_ending_in_a_separator_still_finds_the_origin()
+    {
+        await Git("init");
+        await Git("remote add origin https://github.com/acme/tool.git");
+        await Git("-c user.name=t -c user.email=t@example.com commit --allow-empty -m first");
+        await Git("worktree add wt");
+        var pointer = Path.Combine(_root, "wt", ".git");
+        File.SetAttributes(pointer, FileAttributes.Normal);
+        File.WriteAllText(pointer, File.ReadAllText(pointer).TrimEnd() + Path.DirectorySeparatorChar);
+
+        (await OriginLookup.ReadAsync(Path.Combine(_root, "wt"), TestContext.Current.CancellationToken)).Url!.Trim().ShouldBe("https://github.com/acme/tool.git");
+    }
+
+    [Fact]
+    public async Task A_linked_worktree_reads_the_origin_through_its_pointer_file()
+    {
+        await Git("init");
+        await Git("remote add origin https://github.com/acme/tool.git");
+        await Git("-c user.name=t -c user.email=t@example.com commit --allow-empty -m first");
+        await Git("worktree add wt");
+        var worktree = Path.Combine(_root, "wt");
+        File.Exists(Path.Combine(worktree, ".git")).ShouldBeTrue("the worktree has a pointer file");
+
+        (await OriginLookup.ReadAsync(worktree, TestContext.Current.CancellationToken)).Url!.Trim().ShouldBe("https://github.com/acme/tool.git");
+    }
+
+    [Fact]
+    public async Task A_folder_outside_any_repository_has_no_origin()
+    {
+        var plain = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(plain);
+
+        (await OriginLookup.ReadAsync(plain, TestContext.Current.CancellationToken)).ShouldBe(OriginLookup.NoOrigin);
+    }
+
+    [Fact]
     public async Task A_folder_that_cannot_be_reached_is_a_failure() =>
         (await OriginLookup.ReadAsync(Path.Combine(_root, "not-there"), TestContext.Current.CancellationToken)).ShouldBe(OriginLookup.Failure);
 
     [Fact]
-    public async Task A_cancelled_lookup_is_a_failure()
+    public async Task A_cancelled_lookup_stops()
     {
         using var stop = new CancellationTokenSource();
         await stop.CancelAsync();
 
-        (await OriginLookup.ReadAsync(_root, stop.Token)).ShouldBe(OriginLookup.Failure);
+        await Should.ThrowAsync<OperationCanceledException>(OriginLookup.ReadAsync(_root, stop.Token));
     }
 
     private async Task Git(string arguments)
