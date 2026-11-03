@@ -26,8 +26,6 @@
       <Setter Property="Cursor" Value="Hand" />
       <Setter Property="Margin" Value="8,0,0,0" />
       <Setter Property="VerticalAlignment" Value="Center" />
-      <Setter Property="ToolTipService.IsEnabled" Value="False" />
-      <Setter Property="ToolTip" Value="" />
       <Setter Property="yard:GitHubPillPreview.IsEnabled" Value="True" />
       <Setter Property="Template">
         <Setter.Value>
@@ -84,16 +82,17 @@
     <!-- A repository's line: on a tile, and in the header of its Raven chat. -->
     <DataTemplate x:Key="GitLineTemplate" DataType="{x:Type yard:GitLine}">
       <!-- the pill sits at the line's right edge, so the pills of every line and every tile line up; the folder and the
-           branch share what is left, a long folder name at most 120 wide, so the pills stay whole -->
-      <Grid Margin="0,1" ToolTip="{Binding ToolTipText}">
+           branch share what is left, a long folder name at most 120 wide, so the pills stay whole. The line's tooltip is on its
+           parts, not on the Grid: a pill has none above it, so the preview is the only thing over it -->
+      <Grid Margin="0,1">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="*" />
           <ColumnDefinition Width="Auto" />
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
-        <TextBlock Grid.Column="0" Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" Opacity="0.75" />
-        <DockPanel Grid.Column="1">
+        <TextBlock Grid.Column="0" Text="&#xE9F5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Margin="0,0,4,0" VerticalAlignment="Center" Opacity="0.75" ToolTip="{Binding ToolTipText}" />
+        <DockPanel Grid.Column="1" ToolTip="{Binding ToolTipText}">
           <TextBlock DockPanel.Dock="Left" Text="{Binding Folder}" MaxWidth="120" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Opacity="0.75" />
           <TextBlock DockPanel.Dock="Left" Text="{Binding Separator}" VerticalAlignment="Center" Opacity="0.75" />
           <TextBlock Text="{Binding BranchText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Opacity="0.75" />
@@ -128,7 +127,7 @@
             </StackPanel>
           </Button>
         </StackPanel>
-        <Border Grid.Column="3" CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1">
+        <Border Grid.Column="3" CornerRadius="8" Padding="7,0,7,1" Margin="8,0,0,0" VerticalAlignment="Center" BorderThickness="1" ToolTip="{Binding ToolTipText}">
           <Border.Style>
             <Style TargetType="Border">
               <Setter Property="Background" Value="#26F59E0B" />

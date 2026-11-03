@@ -54,6 +54,26 @@ public sealed class GitPillsXamlTests
         state.TranslatePoint(new Point(state.ActualWidth, 0), presenter).X.ShouldBeLessThanOrEqualTo(right + 0.5);
     });
 
+    [Fact]
+    public Task No_tooltip_sits_above_a_pill_but_the_names_and_the_state_pill_keep_theirs() => StaThread.RunAsync(() =>
+    {
+        var line = new GitLine("Folder", "main", 3, "/work/Folder", Pill(GitHubItemKind.Issue), Pill(GitHubItemKind.PullRequest));
+        var presenter = Render(line, tile: true);
+
+        var pills = PillButtons(presenter);
+        pills.Count.ShouldBe(2);
+        foreach (var pill in pills)
+        {
+            for (DependencyObject? node = pill; node is not null; node = VisualTreeHelper.GetParent(node))
+            {
+                (node as FrameworkElement)?.ToolTip.ShouldBeNull();
+            }
+        }
+
+        Descendants<DockPanel>(presenter).Single().ToolTip.ShouldNotBeNull();
+        Descendants<Border>(presenter).Single(b => Descendants<TextBlock>(b).Any(t => t.Text == "3 changed")).ToolTip.ShouldNotBeNull();
+    });
+
     [Theory]
     [InlineData(1, GitHubItemKind.Issue, "1 open issue in SomeRepo")]
     [InlineData(2, GitHubItemKind.Issue, "2 open issues in SomeRepo")]
