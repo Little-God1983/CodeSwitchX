@@ -12,15 +12,17 @@ using Shouldly;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
-/// <summary>#362: closing the GitHub list hands the keyboard back to the pill that opened it, as the tile has it now.</summary>
+/// <summary>#362: closing the GitHub list by the keyboard hands the keyboard back to the pill that opened it, as its tile has it now.</summary>
 public sealed class GitHubPanelFocusTests
 {
-    private static GitHubPill Pill(string repo, GitHubItemKind kind = GitHubItemKind.Issue) =>
-        new(new RepoActivity(new GitHubRepo("acme", repo), "me", 3, 3, [], []), kind);
+    private static GitHubPill Pill(GitHubItemKind kind = GitHubItemKind.Issue) =>
+        new(new RepoActivity(new GitHubRepo("acme", "app"), "me", 3, 3, [], []), kind);
+
+    private static Button NewPill(GitHubPill pill) => new() { DataContext = pill };
 
     /// <summary>
-    /// The Yard in little: a tile with a pill and a chat button, Raven's type box beside it, and the list's panel with a button
-    /// in it, all under a window of their own, which keeps the keyboard focus as far as WPF is concerned.
+    /// The Yard in little: tiles that each hold a pill and a chat button, Raven's type box beside them, and the list's panel
+    /// with a button in it, all under a window of their own, which keeps the keyboard focus as far as WPF is concerned.
     /// </summary>
     private sealed class Rig : IDisposable
     {
@@ -28,26 +30,34 @@ public sealed class GitHubPanelFocusTests
 
         public Rig()
         {
-            Pill = NewPill(GitHubPanelFocusTests.Pill("app"));
-            Chat = new Button();
-            Tile = new StackPanel { Children = { Pill, Chat } };
             Type = new TextBox();
             InPanel = new Button();
             Panel = new Border { Focusable = true, Visibility = Visibility.Collapsed, Child = InPanel };
-            Root = new Grid { Children = { Tile, Type, Panel } };
+            Root = new Grid { Children = { Type, Panel } };
             _source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = Root };
             _ = new GitHubPanelFocus(Root, Panel, () => { });
+            Tile = AddTile("A");
+            Pill = (Button)Tile.Children[0];
+            Chat = (Button)Tile.Children[1];
         }
 
         public Grid Root { get; }
         public StackPanel Tile { get; }
-        public Button Pill { get; set; }
+        public Button Pill { get; }
         public Button Chat { get; }
         public TextBox Type { get; }
         public Border Panel { get; }
         public Button InPanel { get; }
 
-        public static Button NewPill(GitHubPill pill) => new() { DataContext = pill };
+        /// <summary>A tile with an issue pill and a chat button; its git line has the pill, as the app's does.</summary>
+        public StackPanel AddTile(string name)
+        {
+            var model = new WorkspaceTileViewModel(new Workspace { Name = name, RootPath = @"c:\" + name }, null!);
+            model.ShowGit([new GitLine("app", "main", 0, Issues: GitHubPanelFocusTests.Pill())]);
+            var tile = new StackPanel { DataContext = model, Children = { NewPill(GitHubPanelFocusTests.Pill()), new Button() } };
+            Root.Children.Add(tile);
+            return tile;
+        }
 
         /// <summary>What a click on the pill does: the Click, then the list showing its panel, which takes the keyboard in.</summary>
         public void Open(Button? pill = null)
@@ -57,8 +67,14 @@ public sealed class GitHubPanelFocusTests
             Keyboard.Focus(InPanel);
         }
 
-        public void Close()
+        public void Press(Key key) => InPanel.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, _source, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+
+        public void ClickMouse() => InPanel.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+
+        /// <summary>A key that closes the list, which the Yard answers by collapsing the panel.</summary>
+        public void Close(Key key = Key.Escape)
         {
+            Press(key);
             Panel.Visibility = Visibility.Collapsed;
             Drain();
         }
@@ -78,15 +94,45 @@ public sealed class GitHubPanelFocusTests
         Keyboard.FocusedElement.ShouldBeSameAs(rig.Panel);
     });
 
-    [Fact]
-    public Task Closing_the_list_puts_the_keyboard_back_on_the_pill() => StaThread.RunAsync(() =>
+    [Theory]
+    [InlineData(Key.Escape)]
+    [InlineData(Key.Space)]
+    [InlineData(Key.Enter)]
+    public Task Closing_the_list_by_the_keyboard_puts_it_back_on_the_pill(Key key) => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();
         rig.Open();
 
-        rig.Close();
+        rig.Close(key);
 
         Keyboard.FocusedElement.ShouldBeSameAs(rig.Pill);
+    });
+
+    [Fact]
+    public Task Closing_the_list_with_the_mouse_hands_nothing_back() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+
+        rig.ClickMouse();
+        rig.Panel.Visibility = Visibility.Collapsed;
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
+    });
+
+    [Fact]
+    public Task A_mouse_click_after_a_key_still_closes_without_a_hand_back() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+        rig.Press(Key.Enter); // opens a row's page, the list stays
+
+        rig.ClickMouse();
+        rig.Panel.Visibility = Visibility.Collapsed;
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
     });
 
     [Fact]
@@ -94,32 +140,36 @@ public sealed class GitHubPanelFocusTests
     {
         using var rig = new Rig();
         rig.Open();
-        var old = rig.Pill;
-        rig.Tile.Children.Remove(old);
+        rig.Tile.Children.Remove(rig.Pill);
         // a changed count makes a new record and a new button for the same repository and kind
-        rig.Pill = Rig.NewPill(Pill("app") with { Activity = ((GitHubPill)old.DataContext).Activity with { OpenIssues = 4 } });
-        rig.Tile.Children.Insert(0, rig.Pill);
+        var rebuilt = NewPill(Pill() with { Activity = Pill().Activity with { OpenIssues = 4 } });
+        rig.Tile.Children.Insert(0, rebuilt);
 
         rig.Close();
 
-        Keyboard.FocusedElement.ShouldBeSameAs(rig.Pill);
+        Keyboard.FocusedElement.ShouldBeSameAs(rebuilt);
     });
 
     [Fact]
-    public Task A_pill_that_is_gone_hands_the_keyboard_to_its_tile() => StaThread.RunAsync(() =>
+    public Task Two_tiles_on_one_repository_hand_the_keyboard_to_the_pill_that_was_clicked() => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();
-        var tile = new WorkspaceTileViewModel(new Workspace { Name = "A", RootPath = @"c:\a" }, null!);
-        tile.ShowGit([new GitLine("app", "main", 0, Issues: Pill("app"), PullRequests: Pill("app", GitHubItemKind.PullRequest))]);
-        var tileElement = new StackPanel { DataContext = tile };
-        rig.Root.Children.Remove(rig.Tile);
-        rig.Tile.Children.Remove(rig.Chat);
-        tileElement.Children.Add(rig.Chat);
-        rig.Root.Children.Add(tileElement);
-        var pill = Rig.NewPill(Pill("app"));
-        tileElement.Children.Add(pill);
-        rig.Open(pill);
-        tileElement.Children.Remove(pill); // the line no longer has the pill: no button holds it any more
+        var second = (Button)rig.AddTile("B").Children[0];
+        rig.Open(second);
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(second);
+    });
+
+    [Fact]
+    public Task A_tile_whose_last_pill_is_gone_gets_the_keyboard_itself() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+        // the repository has no open item any more: the line has no pill, and no button holds it
+        ((WorkspaceTileViewModel)rig.Tile.DataContext).ShowGit([new GitLine("app", "main", 0)]);
+        rig.Tile.Children.Remove(rig.Pill);
 
         rig.Close();
 
@@ -127,13 +177,27 @@ public sealed class GitHubPanelFocusTests
     });
 
     [Fact]
-    public Task A_pill_that_left_the_tree_and_no_tile_gets_nothing_and_throws_nothing() => StaThread.RunAsync(() =>
+    public Task A_pill_that_is_gone_hands_the_keyboard_to_the_repositorys_other_pill() => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();
+        var requests = NewPill(Pill(GitHubItemKind.PullRequest));
+        rig.Tile.Children.Add(requests);
         rig.Open();
         rig.Tile.Children.Remove(rig.Pill);
 
-        Should.NotThrow(rig.Close);
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(requests);
+    });
+
+    [Fact]
+    public Task A_tile_that_is_gone_too_gets_nothing_and_throws_nothing() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+        rig.Root.Children.Remove(rig.Tile);
+
+        Should.NotThrow(() => rig.Close());
 
         Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
     });
@@ -157,6 +221,7 @@ public sealed class GitHubPanelFocusTests
         rig.Open();
 
         // the shell closes the list, then collapses the Yard
+        rig.Press(Key.Escape);
         rig.Panel.Visibility = Visibility.Collapsed;
         rig.Root.Visibility = Visibility.Collapsed;
         Rig.Drain();
@@ -168,7 +233,7 @@ public sealed class GitHubPanelFocusTests
     public Task A_list_that_replaces_another_keeps_the_pill_that_opened_it() => StaThread.RunAsync(() =>
     {
         using var rig = new Rig();
-        var second = Rig.NewPill(Pill("app", GitHubItemKind.PullRequest));
+        var second = NewPill(Pill(GitHubItemKind.PullRequest));
         rig.Tile.Children.Insert(1, second);
         rig.Open();
 
@@ -209,5 +274,29 @@ public sealed class GitHubPanelFocusTests
         rig.Close();
 
         Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
+    });
+
+    [Fact]
+    public Task A_list_that_swaps_its_rows_keeps_the_keyboard_in_the_panel() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+
+        // the rows are rebuilt: the button that had the keyboard is gone
+        rig.Panel.Child = new Button();
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(rig.Panel);
+    });
+
+    [Fact]
+    public Task A_swap_does_not_pull_the_keyboard_back_from_another_control() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+        Keyboard.Focus(rig.Type);
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(rig.Type);
     });
 }
