@@ -205,6 +205,33 @@ public class GitHubPageViewModelTests
     }
 
     [Fact]
+    public async Task An_account_listed_twice_gets_one_row()
+    {
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["first", "FIRST", "second"]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Select(a => a.Login).ShouldBe(["first", "second"]);
+    }
+
+    [Fact]
+    public async Task A_kept_row_loses_a_failed_test_line_when_its_browser_list_changes()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|alpha";
+        _start = _ => false;
+        row.TestCommand.Execute(null);
+        row.Message.ShouldNotBeNull();
+        _source.Keys = [("Firefox-1A2B", @"C:\ff\firefox.exe"), ("Some Browser", @"C:\sb\sb.exe")];
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        row.Message.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
     {
         _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>>>(_ => throw new InvalidOperationException("boom"));

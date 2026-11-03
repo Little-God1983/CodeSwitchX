@@ -85,6 +85,7 @@ public sealed class InstalledBrowsers : IBrowserSource
             return end > 1 ? command[1..end] : null;
         }
 
+        // Accepted: an unusual command with ".exe " inside an argument can be misread.
         // An unquoted path may hold spaces: the program ends at the first ".exe" that is followed by a space or the end.
         for (var at = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase); at >= 0; at = command.IndexOf(".exe", at + 1, StringComparison.OrdinalIgnoreCase))
         {

@@ -188,24 +188,100 @@ public class BrowserCatalogTests
     }
 
     [Fact]
-    public void The_list_is_read_once_for_thirty_seconds_and_again_after_a_refresh()
+    public async Task An_expired_list_is_answered_at_once_while_one_read_runs_in_the_background()
     {
         var clock = new FakeTimeProvider();
-        var source = new FakeSource { Keys = [("Some Browser", @"C:\sb\sb.exe")] };
+        var source = new FakeSource { Keys = [("First Browser", @"C:\f\f.exe")] };
         var catalog = new BrowserCatalog(source, clock);
+        catalog.List().Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId, "first browser"]);
+        using var gate = new ManualResetEventSlim(false);
+        source.Gate = gate;
+        source.Keys = [("Second Browser", @"C:\s\s.exe")];
+        clock.Advance(TimeSpan.FromSeconds(31));
 
+        // A read that waited for the held source would never come back here.
+        var old = await Task.Run(() => catalog.List()).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        SpinWait.SpinUntil(() => source.Reads == 2, TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        catalog.List();
+        catalog.List();
+
+        old.Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId, "first browser"]);
+        source.Reads.ShouldBe(2, "only one read runs at a time");
+        gate.Set();
+        SpinWait.SpinUntil(() => catalog.List().Count == 2 && catalog.List()[1].Id == "second browser", TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        source.Reads.ShouldBe(2);
+    }
+
+    [Fact]
+    public void A_refresh_reads_at_once_and_a_fresh_list_is_not_read_again()
+    {
+        var clock = new FakeTimeProvider();
+        var source = new FakeSource { Keys = [("First Browser", @"C:\f\f.exe")] };
+        var catalog = new BrowserCatalog(source, clock);
         catalog.List();
         clock.Advance(TimeSpan.FromSeconds(29));
         catalog.List();
         source.Reads.ShouldBe(1);
-
-        clock.Advance(TimeSpan.FromSeconds(2));
-        catalog.List();
-        source.Reads.ShouldBe(2);
+        source.Keys = [("Second Browser", @"C:\s\s.exe")];
 
         catalog.Refresh();
-        catalog.List();
-        source.Reads.ShouldBe(3);
+
+        source.Reads.ShouldBe(2);
+        catalog.List()[1].Id.ShouldBe("second browser");
+    }
+
+    [Fact]
+    public void A_per_user_install_registers_a_suffixed_key_and_is_still_that_browser()
+    {
+        var source = new FakeSource
+        {
+            Keys = [("Google Chrome.ABC123", @"C:\u\chrome.exe"), ("Google Chrome Canary.XYZ", @"C:\u\canary.exe"), ("FIREFOX.EXE", @"C:\ff\firefox.exe")],
+            Ini = Ini,
+            LocalStates = { [ChromeFolder] = EdgeOne, [@"Google\Chrome SxS"] = EdgeOne },
+        };
+
+        new BrowserCatalog(source).List().Select(e => e.Id).ShouldBe(
+            [BrowserEntry.DefaultId, "chrome|Default", "chrome-canary|Default", "firefox|alpha", "firefox|name with space"]);
+    }
+
+    [Fact]
+    public void A_release_under_a_folder_path_with_Nightly_in_it_is_still_the_release()
+    {
+        var source = new FakeSource { Keys = [("Firefox-1A2B", @"C:\Users\Nightly\Mozilla Firefox\firefox.exe")], Ini = Ini };
+
+        new BrowserCatalog(source).List()[1].Id.ShouldBe("firefox|alpha");
+    }
+
+    [Fact]
+    public void Another_Firefox_build_beside_the_release_gets_its_own_ids()
+    {
+        var source = new FakeSource
+        {
+            Keys = [("Firefox-1A2B", @"C:\Program Files\Mozilla Firefox\firefox.exe"), ("Firefox-3C4D", @"C:\Program Files\Mozilla Firefox ESR\firefox.exe")],
+            Ini = "[Profile0]\nName=alpha\n",
+        };
+
+        new BrowserCatalog(source).List().Skip(1).Select(e => (e.Id, e.Label)).ShouldBe(
+            [("firefox|alpha", "Firefox"), ("firefox-esr|alpha", "Firefox ESR")]);
+    }
+
+    [Fact]
+    public void A_stale_key_without_a_program_does_not_hide_the_one_that_has_it()
+    {
+        var source = new FakeSource { Keys = [("Google Chrome", null), ("Google Chrome", @"C:\c\chrome.exe"), ("Some Browser", null), ("SOME BROWSER", @"C:\sb\sb.exe")] };
+
+        new BrowserCatalog(source).List().Skip(1).Select(e => e.Executable).ShouldBe([@"C:\c\chrome.exe", @"C:\sb\sb.exe"]);
+    }
+
+    [Fact]
+    public void A_browser_in_both_hives_reads_its_profile_files_once()
+    {
+        var source = new FakeSource { Keys = [("Firefox-1A2B", null), ("Firefox-1A2B", @"C:\ff\firefox.exe")], Ini = Ini };
+
+        var list = new BrowserCatalog(source).List();
+
+        source.IniReads.ShouldBe(1);
+        list[1].Executable.ShouldBe(@"C:\ff\firefox.exe");
     }
 
     [Fact]
@@ -222,18 +298,26 @@ public class BrowserCatalogTests
 
     private sealed class FakeSource : IBrowserSource
     {
-        public int Reads { get; private set; }
+        private int _reads;
+        public int Reads => Volatile.Read(ref _reads);
+        public int IniReads { get; private set; }
+        public ManualResetEventSlim? Gate { get; set; }
         public bool Throws { get; set; }
-        public IReadOnlyList<(string Key, string? Executable)> Keys { get; init; } = [];
+        public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [];
         public string? Ini { get; init; }
         public Dictionary<string, string> LocalStates { get; } = [];
 
         public IReadOnlyList<(string Key, string? Executable)> Installed()
         {
-            Reads++;
+            Interlocked.Increment(ref _reads);
+            Gate?.Wait();
             return Throws ? throw new InvalidOperationException("boom") : Keys;
         }
-        public string? FirefoxProfilesIni() => Ini;
+        public string? FirefoxProfilesIni()
+        {
+            IniReads++;
+            return Ini;
+        }
         public string? ChromiumLocalState(string folder) => LocalStates.GetValueOrDefault(folder);
     }
 }

@@ -51,10 +51,12 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             return; // a later refresh is the newer answer
         }
 
+        // gh can list a login twice (or in another case): one row each.
+        logins = [.. logins.Distinct(StringComparer.OrdinalIgnoreCase)];
         // The rows are updated in place: a row whose login is still there stays, so a pick or a Test line in progress is not interrupted.
         for (var i = Accounts.Count - 1; i >= 0; i--)
         {
-            if (!logins.Contains(Accounts[i].Login))
+            if (!logins.Contains(Accounts[i].Login, StringComparer.OrdinalIgnoreCase))
             {
                 Accounts.RemoveAt(i);
             }
@@ -87,7 +89,7 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
     {
         for (var i = 0; i < Accounts.Count; i++)
         {
-            if (Accounts[i].Login == login)
+            if (Accounts[i].Login.Equals(login, StringComparison.OrdinalIgnoreCase))
             {
                 return i;
             }
@@ -148,6 +150,8 @@ public sealed partial class GitHubAccountRow : ObservableObject
         }
 
         Choices = choices;
+        // A failed Test was about the list as it was.
+        Message = null;
         OnPropertyChanged(nameof(Choices));
         // The combo box drops its selection while the list is rebuilt: it reads the pick again.
         OnPropertyChanged(nameof(SelectedId));

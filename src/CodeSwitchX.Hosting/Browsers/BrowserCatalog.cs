@@ -14,8 +14,8 @@ public interface IBrowserSource
 
 /// <summary>
 /// The browsers an account's GitHub pages can open in (#335): the Windows default first, then each installed browser with its profiles.
-/// The list is read once and kept for <see cref="KeepFor"/>, so opening a pill or a page does not read the registry and files each time;
-/// <see cref="Refresh"/> drops it.
+/// <see cref="List"/> answers with the last list at once; when it is older than <see cref="KeepFor"/> one read runs in the background,
+/// and only the very first call reads on its own thread. <see cref="Refresh"/> reads now, for a caller that is already off the UI thread.
 /// </summary>
 public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = null)
 {
@@ -39,89 +39,149 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
     private readonly object _gate = new();
     private IReadOnlyList<BrowserEntry>? _kept;
     private DateTimeOffset _readAt;
+    private bool _reading;
 
-    /// <summary>Forgets the kept list, so the next <see cref="List"/> reads what is installed now.</summary>
-    public void Refresh()
-    {
-        lock (_gate)
-        {
-            _kept = null;
-        }
-    }
+    /// <summary>Reads what is installed now and keeps it; the read runs outside the lock.</summary>
+    public void Refresh() => Keep(Read());
 
     public IReadOnlyList<BrowserEntry> List()
     {
         lock (_gate)
         {
-            if (_kept is null || _time.GetUtcNow() - _readAt >= KeepFor)
+            if (_kept is { } kept)
             {
-                // A read that throws keeps nothing, so the next call tries again.
-                _kept = Read();
-                _readAt = _time.GetUtcNow();
-            }
+                if (!_reading && _time.GetUtcNow() - _readAt >= KeepFor)
+                {
+                    _reading = true;
+                    _ = Task.Run(ReadInBackground);
+                }
 
-            return _kept;
+                return kept;
+            }
+        }
+
+        // No list yet (App start warms it, so this is rare): the one read that has to be waited for. A read that throws keeps nothing.
+        return Keep(Read());
+    }
+
+    private IReadOnlyList<BrowserEntry> Keep(IReadOnlyList<BrowserEntry> read)
+    {
+        lock (_gate)
+        {
+            _kept = read;
+            _readAt = _time.GetUtcNow();
+            return read;
+        }
+    }
+
+    private void ReadInBackground()
+    {
+        try
+        {
+            Keep(Read());
+        }
+        catch (Exception)
+        {
+            // The old list stays; the next call after KeepFor tries again.
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _reading = false;
+            }
         }
     }
 
     private List<BrowserEntry> Read()
     {
         var entries = new List<BrowserEntry> { new(BrowserEntry.DefaultId, "Windows default browser", null, []) };
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { BrowserEntry.DefaultId };
+        var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [BrowserEntry.DefaultId] = 0 };
+        // A browser in both registry hives is one key: its files are read once, and the entry that has a program wins.
+        var keys = new Dictionary<string, (string Key, string? Executable)>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, executable) in source.Installed())
         {
-            if (key.Equals("IEXPLORE.EXE", StringComparison.OrdinalIgnoreCase))
+            if (!key.Equals("IEXPLORE.EXE", StringComparison.OrdinalIgnoreCase) && (!keys.TryGetValue(key, out var have) || have.Executable is null))
             {
-                continue;
+                keys[key] = (key, executable);
             }
+        }
 
+        foreach (var (key, executable) in keys.Values)
+        {
             var added = new List<BrowserEntry>();
-            if (FirefoxChannel(key, executable) is { } channel)
+            // A per-user install registers "Google Chrome.<hash>": the part before the first dot names the browser (so does the old FIREFOX.EXE).
+            var dot = key.IndexOf('.');
+            var name = dot < 0 ? key : key[..dot];
+            if (FirefoxBuild(name, executable) is { } build)
             {
+                // Firefox builds share the one profile list of profiles.ini (accepted: a build may not use every profile).
                 var names = source.FirefoxProfilesIni() is { } ini ? BrowserProfiles.Firefox(ini) : [];
-                Add(added, channel.Prefix, channel.Label, executable, true, [.. names.Select(n => (n, n, (IReadOnlyList<string>)["-P", n]))]);
+                Add(added, build.Prefix, build.Label, executable, true, [.. names.Select(n => (n, n, (IReadOnlyList<string>)["-P", n]))]);
             }
-            else if (Chromium.TryGetValue(key, out var build))
+            else if (Chromium.TryGetValue(name, out var chromium))
             {
-                var profiles = source.ChromiumLocalState(build.Folder) is { } state
+                var profiles = source.ChromiumLocalState(chromium.Folder) is { } state
                     ? BrowserProfiles.Chromium(state).Select(p => (p.Directory, p.Name, (IReadOnlyList<string>)[$"--profile-directory={p.Directory}"])).ToList()
                     : [];
-                Add(added, build.Prefix, key, executable, false, profiles);
+                Add(added, chromium.Prefix, name, executable, false, profiles);
             }
             else
             {
                 added.Add(new(key.ToLowerInvariant(), key, executable, []));
             }
 
-            // The id is what is saved and compared, so it is what tells a browser seen twice (both registry hives) from another build.
-            entries.AddRange(added.Where(e => seen.Add(e.Id)));
+            // The id is what is saved and compared: another key of the same browser is one entry, the one with a program wins.
+            foreach (var entry in added)
+            {
+                if (!indexOf.TryGetValue(entry.Id, out var at))
+                {
+                    indexOf[entry.Id] = entries.Count;
+                    entries.Add(entry);
+                }
+                else if (entries[at].Executable is null && entry.Executable is not null)
+                {
+                    entries[at] = entry;
+                }
+            }
         }
 
         return entries;
     }
 
     /// <summary>
-    /// The Firefox build a key names: the release one is <c>Firefox-&lt;hash&gt;</c>; Developer Edition and Nightly are told by the key or by
-    /// the folder of their program. A key that merely starts with the letters, or lacks the dash, is another browser.
+    /// The Firefox build a key names: the release one is <c>Firefox-&lt;hash&gt;</c> (or the old <c>FIREFOX</c>) in a <c>Mozilla Firefox</c> folder.
+    /// Another build is told by the key or by its install folder's own name (never the rest of the path): Developer Edition and Nightly,
+    /// and any other such as <c>Mozilla Firefox ESR</c> gets a prefix built from that folder name. A key that merely starts with the letters is another browser.
     /// </summary>
-    private static (string Prefix, string Label)? FirefoxChannel(string key, string? executable)
+    private static (string Prefix, string Label)? FirefoxBuild(string name, string? executable)
     {
-        var firefox = key.StartsWith("Firefox-", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("Firefox", StringComparison.OrdinalIgnoreCase)
-            || key.StartsWith("Firefox Developer Edition", StringComparison.OrdinalIgnoreCase)
-            || key.StartsWith("Firefox Nightly", StringComparison.OrdinalIgnoreCase);
+        var firefox = name.StartsWith("Firefox-", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Firefox", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("Firefox Developer Edition", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("Firefox Nightly", StringComparison.OrdinalIgnoreCase);
         if (!firefox)
         {
             return null;
         }
 
-        var where = $"{key}|{executable}";
+        var folder = executable is null ? "" : Path.GetFileName(Path.GetDirectoryName(executable)) ?? "";
+        var where = $"{name}|{folder}";
         if (where.Contains("Developer Edition", StringComparison.OrdinalIgnoreCase))
         {
             return ("firefox-dev", "Firefox Developer Edition");
         }
 
-        return where.Contains("Nightly", StringComparison.OrdinalIgnoreCase) ? ("firefox-nightly", "Firefox Nightly") : ("firefox", "Firefox");
+        if (where.Contains("Nightly", StringComparison.OrdinalIgnoreCase))
+        {
+            return ("firefox-nightly", "Firefox Nightly");
+        }
+
+        // A folder that does not name Firefox says nothing; one that does, with more than "Mozilla Firefox", is another build.
+        var rest = folder.Contains("Firefox", StringComparison.OrdinalIgnoreCase)
+            ? folder.Replace("Mozilla", "", StringComparison.OrdinalIgnoreCase).Replace("Firefox", "", StringComparison.OrdinalIgnoreCase).Trim()
+            : "";
+        return rest.Length == 0 ? ("firefox", "Firefox") : ($"firefox-{rest.ToLowerInvariant().Replace(' ', '-')}", $"Firefox {rest}");
     }
 
     /// <summary>One profile gives the plain label, several give one entry each; none gives the browser as it opens by itself.</summary>

@@ -108,6 +108,19 @@ public partial class App : Application
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
             await shell.InitializeAsync(CancellationToken.None);
             await _host.Services.GetRequiredService<GitHubBrowsers>().LoadAsync(CancellationToken.None);
+            // The installed browsers are read now, off the UI thread, so the first pill click finds the list.
+            var browserCatalog = _host.Services.GetRequiredService<CodeSwitchX.Hosting.Browsers.BrowserCatalog>();
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    browserCatalog.Refresh();
+                }
+                catch (Exception)
+                {
+                    // The first List then reads again and reports it.
+                }
+            });
             // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
             var engine = _host.Services.GetRequiredService<SessionEngine>();
             // One it holds goes to VS Code once the Cab shows the chat's own VS Code.
