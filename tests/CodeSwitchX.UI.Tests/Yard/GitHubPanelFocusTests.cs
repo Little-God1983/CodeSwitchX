@@ -36,7 +36,7 @@ public sealed class GitHubPanelFocusTests
             Panel = new Border { Focusable = true, Visibility = Visibility.Collapsed, Child = InPanel };
             Root = new Grid { Children = { Tile, Type, Panel } };
             _source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = Root };
-            _ = new GitHubPanelFocus(Root, Panel);
+            _ = new GitHubPanelFocus(Root, Panel, () => { });
         }
 
         public Grid Root { get; }

@@ -19,14 +19,17 @@ internal sealed class GitHubPanelFocus
 {
     private readonly UIElement _root;
     private readonly UIElement _panel;
+    private readonly Action _closePreview;
     private (GitHubRepo Repo, GitHubItemKind Kind)? _opener;
 
     /// <param name="root">The Yard, whose pills open the list.</param>
     /// <param name="panel">The list's panel, whose visibility says when the list opens and closes.</param>
-    public GitHubPanelFocus(UIElement root, UIElement panel)
+    /// <param name="closePreview">Puts the hover preview away; the preview itself unless a test brings its own, since the preview is one popup shared by every thread.</param>
+    public GitHubPanelFocus(UIElement root, UIElement panel, Action? closePreview = null)
     {
         _root = root;
         _panel = panel;
+        _closePreview = closePreview ?? GitHubPillPreview.Close;
         // Raised before the pill's command opens the list, so the panel knows which pill to hand the keyboard back to.
         root.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(OnClick));
         panel.IsVisibleChanged += OnPanelVisibleChanged;
@@ -45,7 +48,7 @@ internal sealed class GitHubPanelFocus
         if (e.NewValue is true)
         {
             // The preview is topmost and would sit over the rows.
-            GitHubPillPreview.Close();
+            _closePreview();
             _panel.Focus();
             return;
         }
