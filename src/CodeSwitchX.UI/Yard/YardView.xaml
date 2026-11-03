@@ -322,7 +322,7 @@
     <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
     <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
     <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
-            Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
+            Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="False" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
             KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle"
             Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}">
       <DockPanel DataContext="{Binding GitHubList}">

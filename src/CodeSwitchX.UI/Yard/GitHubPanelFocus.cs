@@ -9,7 +9,7 @@ using CodeSwitchX.Core.GitHub;
 namespace CodeSwitchX.UI.Yard;
 
 /// <summary>
-/// Where the keyboard goes when the GitHub list opens and closes (#362). Opening takes the keyboard into the panel, so Escape
+/// Where the keyboard goes when the GitHub list opens and closes (#362). Opening takes the keyboard to the first stop in the panel, so Escape
 /// closes it, and puts the hover preview away. A list that swaps its rows loses the focused row with them, and the keyboard
 /// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the pill that opened it, as its
 /// tile has it now: a tile rebuilds its buttons when a git line changes, and may be rebuilt itself when it moves to another
@@ -53,7 +53,7 @@ internal sealed class GitHubPanelFocus
         {
             // The preview is topmost and would sit over the rows.
             _closePreview();
-            _panel.Focus();
+            FocusInside();
             return;
         }
 
@@ -72,7 +72,26 @@ internal sealed class GitHubPanelFocus
             {
                 if (_panel.IsVisible && Keyboard.FocusedElement is { } focused && ReferenceEquals(focused, PresentationSource.FromVisual(_root)?.RootVisual))
                 {
-                    _panel.Focus();
+                    FocusInside();
+                }
+            });
+        }
+    }
+
+    /// <summary>
+    /// The keyboard goes to the first stop inside the panel, not to the panel itself: Shift+Tab from the panel would leave it for
+    /// the controls under the shade. Just after the panel appears it has no layout yet and no stop to take, so that is tried again
+    /// once it has.
+    /// </summary>
+    private void FocusInside()
+    {
+        if (!_panel.MoveFocus(new TraversalRequest(FocusNavigationDirection.First)))
+        {
+            _root.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            {
+                if (_panel.IsVisible && !_panel.IsKeyboardFocusWithin)
+                {
+                    _panel.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
                 }
             });
         }

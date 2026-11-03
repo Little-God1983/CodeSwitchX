@@ -580,6 +580,37 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task A_panel_that_appears_puts_the_keyboard_on_a_stop_inside_it_and_Shift_Tab_stays_there()
+    {
+        var list = await ListWithRowsAsync(40);
+
+        await StaThread.RunAsync(() =>
+        {
+            var grid = Panel(null);
+            using var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
+            var panel = grid.Children.OfType<Border>().Single();
+            _ = new GitHubPanelFocus(grid, panel, () => { });
+            var outside = new Button();
+            grid.Children.Add(outside); // what the keyboard could fall to when it leaves the panel
+
+            panel.DataContext = new { GitHubList = list }; // the list opens: the panel appears
+            panel.UpdateLayout();
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            Keyboard.FocusedElement.ShouldNotBeSameAs(panel);
+            for (var step = 0; step < 6; step++)
+            {
+                var focused = (DependencyObject)Keyboard.FocusedElement;
+                focused.ShouldBeOfType<Button>();
+                panel.IsAncestorOf(focused).ShouldBeTrue($"step {step}");
+                ((UIElement)focused).MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous));
+                panel.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            }
+        });
+    }
+
+    [Fact]
     public async Task A_swap_of_the_rows_keeps_the_keyboard_in_the_panel()
     {
         var (activity, pill) = await PillAsync();
@@ -597,7 +628,7 @@ public class GitHubListViewModelTests
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 
             panel.IsKeyboardFocusWithin.ShouldBeTrue();
-            Keyboard.FocusedElement.ShouldBeSameAs(panel);
+            Keyboard.FocusedElement.ShouldBeOfType<Button>().ShouldNotBeNull(); // a stop in the panel, not the panel itself
         });
     }
 
