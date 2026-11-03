@@ -296,7 +296,8 @@ public partial class App : Application
         // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
-        services.AddSingleton(sp => new GitHubBrowsers(new BrowserCatalog(new InstalledBrowsers()), sp.GetRequiredService<ISettingsStore>(),
+        services.AddSingleton(new BrowserCatalog(new InstalledBrowsers()));
+        services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
             info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<GitHubReader>(),
             (path, ct) => sp.GetRequiredService<GitInspector>().RunAsync(path, "config --get remote.origin.url", ct),
@@ -314,6 +315,7 @@ public partial class App : Application
                 sp.GetRequiredService<ISessionStore>().GetLastUseByWorkspaceAsync(ct))));
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<ISoundFilePicker, SoundFilePicker>(); // "Add sound…" on the Sounds page (#307)
+        services.AddSingleton<GitHubPageViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();

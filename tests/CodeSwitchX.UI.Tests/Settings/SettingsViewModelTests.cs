@@ -637,6 +637,41 @@ public class SettingsViewModelTests : IDisposable
     }
 
     /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>
+    [Theory]
+    [InlineData("Firefox")]
+    [InlineData("PR")]
+    [InlineData("pull requests")]
+    public void A_search_for_a_browser_or_pull_requests_finds_the_GitHub_page(string search)
+    {
+        _vm.Search = search;
+
+        _vm.Pages.ShouldContain(p => p.Page == SettingsPage.GitHub);
+    }
+
+    [Fact]
+    public async Task Opening_the_page_reads_the_accounts_again()
+    {
+        var gh = Substitute.For<CodeSwitchX.Core.GitHub.IGhCli>();
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
+        var catalog = new CodeSwitchX.Hosting.Browsers.BrowserCatalog(Substitute.For<CodeSwitchX.Hosting.Browsers.IBrowserSource>());
+        var browsers = new CodeSwitchX.UI.GitHub.GitHubBrowsers(catalog, _store, _ => true, NullLogger<CodeSwitchX.UI.GitHub.GitHubBrowsers>.Instance);
+        var page = new GitHubPageViewModel(gh, browsers, catalog);
+        var engines = new SpeechEngines(_speech, [_kokoro, _qwen]);
+        var vm = new SettingsViewModel(new ClaudeHookInstaller(_claude, NullLogger<ClaudeHookInstaller>.Instance), _store, _writerOptions, _brain, _chats,
+            _speech, engines, _whisper, _voice, _paths, _claude, new FakeVoiceSamples(), new ImmediateDispatcher(), NullLogger<SettingsViewModel>.Instance,
+            sounds: _sounds, levels: _levels, picks: _picks, library: _library, soundFiles: _files, gitHub: page);
+        vm.GitHub.ShouldBeSameAs(page);
+
+        vm.OpenPage(SettingsPage.GitHub);
+        await gh.Received(1).AccountsAsync(Arg.Any<CancellationToken>());
+        gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["fresh"]));
+        vm.OpenPage(SettingsPage.Yard);
+        vm.OpenPage(SettingsPage.GitHub);
+
+        await gh.Received(2).AccountsAsync(Arg.Any<CancellationToken>());
+        page.Accounts.Select(a => a.Login).ShouldBe(["fresh"]);
+    }
+
     [Fact]
     public void A_search_is_cleared_when_the_sidebar_folds()
     {

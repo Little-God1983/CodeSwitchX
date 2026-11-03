@@ -260,8 +260,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         ChatSettings chats, SpeechSettings speech, SpeechEngines engines, IWhisperModelStore whisper, VoiceStatusViewModel voice, AppPaths paths,
         ClaudeCodePaths claude, IVoiceSamples samples, IUiDispatcher ui, ILogger<SettingsViewModel> logger, ChatHotkeys? shortcuts = null,
         IChatSounds? sounds = null, AudioLevels? levels = null, SoundPicks? picks = null, SoundLibrary? library = null,
-        ISoundFilePicker? soundFiles = null)
+        ISoundFilePicker? soundFiles = null, GitHubPageViewModel? gitHub = null)
     {
+        GitHub = gitHub;
         _sounds = sounds;
         _library = library ?? new SoundLibrary(null);
         _picks = picks ?? new SoundPicks(_library);
@@ -310,6 +311,18 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     /// <summary>The Voice page: engine cards, voices and samples.</summary>
     public VoicePageViewModel VoicePage { get; }
+
+    /// <summary>The GitHub page: each account's browser.</summary>
+    public GitHubPageViewModel? GitHub { get; }
+
+    /// <summary>The GitHub page reads the accounts each time it is opened, so a new login shows up by itself.</summary>
+    partial void OnSelectedPageChanged(SettingsPageItem value)
+    {
+        if (value.Page == SettingsPage.GitHub && GitHub is not null)
+        {
+            _ = GitHub.RefreshAsync(CancellationToken.None);
+        }
+    }
 
     /// <summary>The pages the sidebar lists: those the search finds.</summary>
     public ObservableCollection<SettingsPageItem> Pages { get; }
