@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -61,6 +62,45 @@ public class YardGitHubTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Runs the first post and holds every later one until <see cref="Release"/>: the first is the round's read of the tiles,
+    /// the later ones are the tiles' new lines, which the real UI thread runs some time after the background round posts them.
+    /// </summary>
+    private sealed class HoldingDispatcher : IUiDispatcher
+    {
+        private readonly List<Action> _held = [];
+        private int _posts;
+
+        public void Post(Action action)
+        {
+            lock (_held)
+            {
+                if (_posts++ > 0)
+                {
+                    _held.Add(action);
+                    return;
+                }
+            }
+
+            action();
+        }
+
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
+
+        public void Release()
+        {
+            lock (_held)
+            {
+                foreach (var action in _held)
+                {
+                    action();
+                }
+
+                _held.Clear();
+            }
+        }
+    }
+
     public YardGitHubTests()
     {
         _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Track>>([_general]));
@@ -89,7 +129,9 @@ public class YardGitHubTests : IDisposable
         return workspace;
     }
 
-    private YardViewModel Yard(bool withGitHub, params Workspace[] workspaces)
+    private YardViewModel Yard(bool withGitHub, params Workspace[] workspaces) => Yard(withGitHub, new ImmediateDispatcher(), workspaces);
+
+    private YardViewModel Yard(bool withGitHub, IUiDispatcher ui, params Workspace[] workspaces)
     {
         _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>(workspaces));
         var resolver = new WorkspaceResolver();
@@ -103,7 +145,7 @@ public class YardGitHubTests : IDisposable
             ? new GitHubActivity(new GitHubReader(_gh), (path, _) => Task.FromResult<string?>($"https://github.com/acme/{Path.GetFileName(path)}.git"),
                 NullLogger<GitHubActivity>.Instance)
             : null;
-        return new YardViewModel(_store, registry, engine, pricing, git, _bus, new ImmediateDispatcher(), _time, NullLogger<YardViewModel>.Instance, gitHub: activity);
+        return new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: activity);
     }
 
     private static async Task Eventually(Func<bool> condition)
@@ -172,6 +214,20 @@ public class YardGitHubTests : IDisposable
         await Eventually(() => _gh.Reads >= 1);
 
         _gh.Names.ShouldContain("name=app");
+    }
+
+    [Fact]
+    public async Task The_first_github_round_does_not_wait_for_the_tiles_to_show_their_lines()
+    {
+        var app = Add("App", Repo("app"));
+        var ui = new HoldingDispatcher();
+        var yard = Yard(true, ui, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => _gh.Reads >= 1);
+        ui.Release();
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
     }
 
     [Fact]

@@ -15,6 +15,8 @@ public class GitHubActivityTests
 
         public bool Fail { get; set; }
 
+        public string? HangOn { get; set; }
+
         public int Issues { get; set; } = 3;
 
         public TimeSpan Delay { get; set; }
@@ -32,6 +34,11 @@ public class GitHubActivityTests
 
             try
             {
+                if (HangOn is not null && slug.EndsWith("name=" + HangOn, StringComparison.Ordinal))
+                {
+                    await Task.Delay(Timeout.Infinite, ct);
+                }
+
                 if (Delay > TimeSpan.Zero)
                 {
                     await Task.Delay(Delay, ct);
@@ -176,5 +183,42 @@ public class GitHubActivityTests
         after.OpenPullRequests.ShouldBe(before.OpenPullRequests);
         after.NewestPullRequests.ShouldBe(before.NewestPullRequests);
         changes.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_slow_repository_does_not_hold_back_the_others_results()
+    {
+        var gh = new FakeGh { HangOn = "slow" };
+        var activity = Activity(gh);
+        using var stop = new CancellationTokenSource();
+
+        var round = activity.RefreshAsync([@"c:\r\slow", @"c:\r\fast"], stop.Token);
+
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (activity.ForFolder(@"c:\r\fast") is null && DateTime.UtcNow < until)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        activity.ForFolder(@"c:\r\fast").ShouldNotBeNull();
+        round.IsCompleted.ShouldBeFalse();
+        await stop.CancelAsync();
+        await Should.ThrowAsync<OperationCanceledException>(round);
+    }
+
+    [Fact]
+    public async Task A_failed_origin_lookup_keeps_the_repository_the_folder_had()
+    {
+        var gh = new FakeGh();
+        string? origin = "https://github.com/acme/tool.git";
+        var activity = Activity(gh, _ => origin);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var first = activity.ForFolder(@"c:\r\tool");
+        first.ShouldNotBeNull();
+        origin = null;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
     }
 }

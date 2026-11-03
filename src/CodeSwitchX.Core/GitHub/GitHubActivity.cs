@@ -48,23 +48,10 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
             var folderRepos = await Task.WhenAll(folders.Select(f => Key(f)).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(folder => RepoOfAsync(folder, ct))).ConfigureAwait(false);
             var repos = folderRepos.Where(p => p.Repo is not null).GroupBy(p => p.Repo!).ToList();
-            var reads = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, g.First().Folder, ct))).ConfigureAwait(false);
+            // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
+            var changes = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, g.First().Folder, ct))).ConfigureAwait(false);
 
-            var changed = false;
-            lock (_gate)
-            {
-                foreach (var (repo, activity) in reads)
-                {
-                    // Nothing read: the last result stays. A zero is a read like any other.
-                    if (activity is not null && (!_results.TryGetValue(repo, out var last) || !last.SameAs(activity)))
-                    {
-                        _results[repo] = activity;
-                        changed = true;
-                    }
-                }
-            }
-
-            if (changed)
+            if (changes.Any(c => c))
             {
                 Changed?.Invoke(this, EventArgs.Empty);
             }
@@ -108,13 +95,20 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
     {
         try
         {
-            var repo = GitHubRepo.FromRemote(await originOf(folder, ct).ConfigureAwait(false));
+            var origin = await originOf(folder, ct).ConfigureAwait(false);
             lock (_gate)
             {
-                _repoOfFolder[folder] = repo;
-            }
+                // No answer (git timed out or failed) is not an origin that is gone: the folder keeps its repository.
+                if (origin is null && _repoOfFolder.TryGetValue(folder, out var known) && known is not null)
+                {
+                    logger.LogWarning("Reading the origin of {Folder} failed; it keeps the repository it had", folder);
+                    return (folder, known);
+                }
 
-            return (folder, repo);
+                var repo = GitHubRepo.FromRemote(origin);
+                _repoOfFolder[folder] = repo;
+                return (folder, repo);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -126,7 +120,8 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
         }
     }
 
-    private async Task<(GitHubRepo Repo, RepoActivity? Activity)> ReadAsync(GitHubRepo repo, string folder, CancellationToken ct)
+    /// <summary>Reads the repository and stores what came; true when that differs from the last result.</summary>
+    private async Task<bool> ReadAsync(GitHubRepo repo, string folder, CancellationToken ct)
     {
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -137,12 +132,27 @@ public sealed class GitHubActivity(GitHubReader reader, Func<string, Cancellatio
                 logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
             }
 
-            return (repo, activity);
+            // Nothing read: the last result stays. A zero is a read like any other.
+            if (activity is null)
+            {
+                return false;
+            }
+
+            lock (_gate)
+            {
+                if (_results.TryGetValue(repo, out var last) && last.SameAs(activity))
+                {
+                    return false;
+                }
+
+                _results[repo] = activity;
+                return true;
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
-            return (repo, null);
+            return false;
         }
         finally
         {

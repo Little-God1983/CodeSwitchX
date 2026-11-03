@@ -691,11 +691,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             do
             {
                 var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
+                var paths = new List<string>();
                 foreach (var tile in tiles)
                 {
                     try
                     {
-                        await RefreshGitAsync(tile, ct).ConfigureAwait(false);
+                        await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -706,7 +707,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
                 if (_gitHub is not null)
                 {
-                    var unknown = tiles.SelectMany(t => t.GitLines).Select(l => l.Path).OfType<string>().Where(p => !_gitHub.Knows(p)).Distinct().ToList();
+                    var unknown = paths.Where(p => !_gitHub.Knows(p)).Distinct().ToList();
                     if (unknown.Count > 0)
                     {
                         _ = RefreshGitHubAsync(unknown);
@@ -732,10 +733,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, CancellationToken ct)
+    /// <param name="paths">Gets the folder of each line computed, before the lines are posted: the tile shows them later.</param>
+    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
         var lines = (await GitLinesAsync(tile, info, ct).ConfigureAwait(false)).Select(WithGitHub).ToList();
+        paths.AddRange(lines.Select(l => l.Path).OfType<string>());
         _ui.Post(() => tile.ShowGit(lines));
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
