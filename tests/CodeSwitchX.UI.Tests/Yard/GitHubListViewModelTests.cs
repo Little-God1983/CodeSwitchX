@@ -293,6 +293,7 @@ public class GitHubListViewModelTests
         yard.OpenGitHubListCommand.Execute(pill);
         var first = yard.GitHubList;
         first.ShouldNotBeNull();
+        var firstLoad = yard.GitHubLoad;
 
         yard.OpenGitHubListCommand.Execute(new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
 
@@ -301,9 +302,22 @@ public class GitHubListViewModelTests
         second.Heading.ShouldBe("app: 1 open pull request");
         // The earlier load finishes now and finds its panel gone.
         _gh.List.SetResult(ListOf(3));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await firstLoad;
         yard.GitHubList.ShouldBeSameAs(second);
         first.Rows.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Disposing_the_yard_closes_an_open_list()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+        yard.OpenGitHubListCommand.Execute(pill);
+        yard.GitHubList.ShouldNotBeNull();
+
+        yard.Dispose();
+
+        yard.GitHubList.ShouldBeNull();
     }
 
     [Fact]

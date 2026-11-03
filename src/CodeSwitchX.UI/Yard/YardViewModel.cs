@@ -928,8 +928,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
         GitHubList = list;
         // Not on the UI thread: the load starts its first gh before its first await.
-        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
+        GitHubLoad = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
     }
+
+    /// <summary>The read the last opened list started, for a test to wait for.</summary>
+    internal Task GitHubLoad { get; private set; } = Task.CompletedTask;
 
     [RelayCommand]
     private Task RefreshGit() => RefreshGitAsync(CancellationToken.None);
@@ -1123,6 +1126,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        GitHubList?.CloseCommand.Execute(null);
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
         _gitHubTimer?.Dispose();
