@@ -1,15 +1,19 @@
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Sessions;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Shell;
 using CodeSwitchX.Voice.Audio;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Shell;
@@ -27,6 +31,51 @@ public class ShellViewModelTests
         _h.Windows.TopLevelWindows().Returns([new WindowInfo(ShopHwnd, 31, "Chrome_WidgetWin_1", "Program.cs - Shop - Visual Studio Code")]);
         _h.Launcher.Launch(Arg.Any<Workspace>()).Returns(new LaunchResult(true, 1, null));
         return shop;
+    }
+
+    private static (ShellTestHarness Harness, CodeSwitchX.UI.Yard.GitHubPill Pill) HarnessWithGitHub()
+    {
+        var gh = Substitute.For<IGhCli>();
+        var source = Substitute.For<IBrowserSource>();
+        source.Installed().Returns([]);
+        var browsers = new GitHubBrowsers(new BrowserCatalog(source), Substitute.For<CodeSwitchX.Core.Persistence.ISettingsStore>(), _ => true, NullLogger<GitHubBrowsers>.Instance);
+        var reader = new GitHubReader(gh);
+        var h = new ShellTestHarness(new GitHubActivity(gh, reader, (_, _) => Task.FromResult(OriginLookup.NoOrigin), NullLogger<GitHubActivity>.Instance), reader, browsers);
+        var pill = new CodeSwitchX.UI.Yard.GitHubPill(new RepoActivity(new GitHubRepo("acme", "app"), "me", 1, 0, [], []), GitHubItemKind.Issue);
+        return (h, pill);
+    }
+
+    [Fact]
+    public void Opening_Settings_closes_the_GitHub_list_so_a_new_browser_choice_is_not_shown_stale()
+    {
+        var (h, pill) = HarnessWithGitHub();
+
+        h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
+        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.Shell.OpenSettings();
+        h.Shell.Yard.GitHubList.ShouldBeNull();
+
+        h.Shell.CloseSettings();
+        h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
+        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.Shell.OpenSettingsAt(SettingsPage.GitHub);
+        h.Shell.Yard.GitHubList.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Entering_the_Cab_closes_the_GitHub_list_so_the_Yard_does_not_come_back_with_old_rows()
+    {
+        var (h, pill) = HarnessWithGitHub();
+        await h.Shell.InitializeAsync(CancellationToken.None);
+        h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
+        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.VsCodeWindowAppears();
+        h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+
+        await h.Shell.EnterCabAsync(h.App.Id);
+
+        h.Shell.Mode.ShouldBe(ShellMode.Cab);
+        h.Shell.Yard.GitHubList.ShouldBeNull();
     }
 
     [Fact]

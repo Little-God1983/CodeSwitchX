@@ -7,7 +7,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <param name="Folder">The folder's name, as the workspace file gives it or its own; null on a tile with a single line.</param>
 /// <param name="DirtyCount">Files with uncommitted changes; null when git could not tell.</param>
 /// <param name="Path">The folder, full path: the tooltip shows it, so two folders with the same name tell apart. Null before the first git round.</param>
-public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null)
+/// <param name="Issues">The repository's open issues; null when there are none or nothing is known yet.</param>
+/// <param name="PullRequests">The repository's open pull requests; null when there are none or nothing is known yet.</param>
+public sealed record GitLine(string? Folder, string? Branch, int? DirtyCount, string? Path = null, GitHubPill? Issues = null, GitHubPill? PullRequests = null)
 {
     /// <summary>Before the first git round: "no git" and no pill.</summary>
     public static readonly GitLine Unknown = new(null, null, null);

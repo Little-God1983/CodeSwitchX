@@ -524,6 +524,13 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     /// </summary>
     partial void OnModeChanged(ShellMode oldValue, ShellMode newValue)
     {
+        // The Yard's GitHub list is loaded once, when a pill opens it: left open behind the Cab or Settings it would come back
+        // with old rows, and Settings can change the browser it names. It is opened again from a pill.
+        if (newValue != ShellMode.Yard)
+        {
+            Yard.GitHubList?.CloseCommand.Execute(null);
+        }
+
         if (oldValue == ShellMode.Settings && newValue != ShellMode.Settings)
         {
             Settings.Closed();

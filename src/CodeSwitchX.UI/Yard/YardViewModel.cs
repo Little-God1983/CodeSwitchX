@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Paths;
 using CodeSwitchX.Core.Persistence;
@@ -7,6 +8,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Telemetry;
+using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -20,6 +22,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 {
     public static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan GitRefreshInterval = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan GitHubRefreshInterval = TimeSpan.FromMinutes(10);
 
     private readonly IWorkspaceStore _store;
     private readonly WorkspaceRegistry _registry;
@@ -38,6 +41,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly Lock _gitGate = new();
     private ITimer? _tickTimer;
     private ITimer? _gitTimer;
+    private ITimer? _gitHubTimer;
+    private readonly GitHubActivity? _gitHub;
+    private readonly GitHubReader? _gitHubReader;
+    private readonly GitHubBrowsers? _gitHubBrowsers;
+    private readonly CancellationTokenSource _gitHubStop = new();
     private ITimer? _tabsTimer;
 
     /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
@@ -274,8 +282,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     public YardViewModel(IWorkspaceStore store, WorkspaceRegistry registry, SessionEngine engine, IPricingProvider pricing, GitInspector git,
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
-        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null)
+        Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null)
     {
+        _gitHub = gitHub;
+        _gitHubReader = gitHubReader;
+        _gitHubBrowsers = gitHubBrowsers;
         _storedLastUse = storedLastUse ?? (_ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(new Dictionary<Guid, DateTimeOffset>()));
         _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
@@ -371,6 +383,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ = RefreshGitAsync(CancellationToken.None);
         // The tick asks for nothing while a round runs: a round longer than the interval would otherwise repeat back to back.
         _gitTimer = _time.CreateTimer(_ => _ = RequestGitRefresh(CancellationToken.None, again: false), null, GitRefreshInterval, GitRefreshInterval);
+        if (_gitHub is not null)
+        {
+            _gitHub.Changed += OnGitHubChanged;
+            _gitHubTimer = _time.CreateTimer(_ => _ui.Post(RefreshGitHubOfAllTiles), null, GitHubRefreshInterval, GitHubRefreshInterval);
+        }
     }
 
     public WorkspaceTileViewModel? FindTile(Guid workspaceId) => Tiles.FirstOrDefault(t => t.Id == workspaceId);
@@ -679,15 +696,27 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             do
             {
-                foreach (var tile in await TilesOnUiThreadAsync().ConfigureAwait(false))
+                var tiles = await TilesOnUiThreadAsync().ConfigureAwait(false);
+                var paths = new List<string>();
+                foreach (var tile in tiles)
                 {
                     try
                     {
-                        await RefreshGitAsync(tile, ct).ConfigureAwait(false);
+                        await RefreshGitAsync(tile, paths, ct).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.LogWarning(ex, "Git refresh of {Root} failed", tile.RootPath);
+                    }
+                }
+
+                // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
+                if (_gitHub is not null)
+                {
+                    var unknown = paths.Where(p => !_gitHub.Knows(p)).Distinct().ToList();
+                    if (unknown.Count > 0)
+                    {
+                        _ = RefreshGitHubAsync(unknown);
                     }
                 }
             }
@@ -710,10 +739,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, CancellationToken ct)
+    /// <param name="paths">Gets the folder of each line computed, before the lines are posted: the tile shows them later.</param>
+    private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
+        var lines = (await GitLinesAsync(tile, info, ct).ConfigureAwait(false)).Select(WithGitHub).ToList();
+        paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         _ui.Post(() => tile.ShowGit(lines));
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
@@ -730,6 +761,49 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             await _registry.UpdateWorktreesAsync(tile.Workspace, WorkspaceProbe.ParseWorktreeList(porcelain, tile.RootPath), ct).ConfigureAwait(false);
         }
     }
+
+    /// <summary>The line with the pills of the issues and pull requests last read for its repository; a count of zero has none.</summary>
+    private GitLine WithGitHub(GitLine line)
+    {
+        var activity = HasRepository(line) && line.Path is { } path ? _gitHub?.ForFolder(path) : null;
+        return line with
+        {
+            Issues = activity is { OpenIssues: > 0 } ? new GitHubPill(activity, GitHubItemKind.Issue) : null,
+            PullRequests = activity is { OpenPullRequests: > 0 } ? new GitHubPill(activity, GitHubItemKind.PullRequest) : null,
+        };
+    }
+
+    /// <summary>"No git" on the tile: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
+    private static bool HasRepository(GitLine line) => line.Branch is not null;
+
+    /// <summary>Runs on the UI thread, which owns the tiles.</summary>
+    private void RefreshGitHubOfAllTiles() =>
+        _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList());
+
+    /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
+    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders) => Task.Run(async () =>
+    {
+        try
+        {
+            await _gitHub!.RefreshAsync(folders, _gitHubStop.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The Yard is closing.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The GitHub refresh round ended early");
+        }
+    });
+
+    private void OnGitHubChanged(object? sender, EventArgs e) => _ui.Post(() =>
+    {
+        foreach (var tile in Tiles)
+        {
+            tile.ShowGit(tile.GitLines.Select(WithGitHub).ToList());
+        }
+    });
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
@@ -836,6 +910,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// dialog adds one workspace at a time, so several are refused rather than all but one dropped silently.
     /// </summary>
     public static string? DroppedWorkspacePath(IReadOnlyList<string>? paths) => paths is [var path] && WorkspaceProbe.LooksProbeable(path) ? path : null;
+
+    /// <summary>The panel a click on a pill opens with every open item of its kind; null when closed. Another pill replaces it.</summary>
+    [ObservableProperty] private GitHubListViewModel? _gitHubList;
+
+    /// <summary>A click on a pill opens the repository's full list over the Yard. Without the readers (tests, no gh) it does nothing.</summary>
+    [RelayCommand]
+    private void OpenGitHubList(GitHubPill pill)
+    {
+        if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
+        {
+            return;
+        }
+
+        GitHubList?.CloseCommand.Execute(null);
+        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time, _logger,
+            closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
+        GitHubList = list;
+        // Not on the UI thread: the load starts its first gh before its first await.
+        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
+    }
 
     [RelayCommand]
     private Task RefreshGit() => RefreshGitAsync(CancellationToken.None);
@@ -1031,6 +1125,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         _tickTimer?.Dispose();
         _gitTimer?.Dispose();
+        _gitHubTimer?.Dispose();
+        if (_gitHub is not null)
+        {
+            _gitHub.Changed -= OnGitHubChanged;
+        }
+
+        _gitHubStop.Cancel();
         _tabsTimer?.Dispose();
         _disposed = true;
         foreach (var timer in _closedListTimers)

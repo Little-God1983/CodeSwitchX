@@ -74,7 +74,7 @@ public sealed class ShellTestHarness
     internal Raven.FakeYardDirectory YardDirectory { get; } = new();
     public Track General { get; } = new() { Name = "General" };
 
-    public ShellTestHarness()
+    public ShellTestHarness(CodeSwitchX.Core.GitHub.GitHubActivity? gitHub = null, CodeSwitchX.Core.GitHub.GitHubReader? gitHubReader = null, CodeSwitchX.UI.GitHub.GitHubBrowsers? gitHubBrowsers = null)
     {
         Time.SetLocalTimeZone(TimeZoneInfo.Utc);
         App.TrackId = General.Id;
@@ -93,7 +93,8 @@ public sealed class ShellTestHarness
         var registry = new WorkspaceRegistry(Workspaces, Resolver, Bus);
         var git = new GitInspector((_, _, _) => Task.FromResult<string?>(null));
         var dispatcher = new ImmediateDispatcher();
-        var yard = new YardViewModel(Workspaces, registry, Engine, telemetry, git, Bus, dispatcher, Time, NullLogger<YardViewModel>.Instance);
+        var yard = new YardViewModel(Workspaces, registry, Engine, telemetry, git, Bus, dispatcher, Time, NullLogger<YardViewModel>.Instance,
+            gitHub: gitHub, gitHubReader: gitHubReader, gitHubBrowsers: gitHubBrowsers);
         var cab = new CabViewModel();
         var paths = new AppPaths(Path.Combine(Path.GetTempPath(), "csx-shell-" + Guid.NewGuid().ToString("N")));
         var claude = new ClaudeCodePaths(Path.Combine(paths.Root, "home"));

@@ -1284,6 +1284,36 @@
           </Border>
         </StackPanel>
 
+        <!-- GitHub -->
+        <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=GitHub}">
+          <ItemsControl DataContext="{Binding GitHub}" ItemsSource="{Binding Accounts}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Border Style="{StaticResource Card}">
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource H3}" Text="{Binding Login}" />
+                    <DockPanel Margin="0,4,0,0">
+                      <Button DockPanel.Dock="Right" Style="{StaticResource Secondary}" Content="Test" Command="{Binding TestCommand}" Margin="8,0,0,0"
+                              AutomationProperties.Name="{Binding Login, StringFormat='Test the browser of {0}'}" />
+                      <ComboBox DockPanel.Dock="Right" Width="260" FontSize="14" Margin="16,0,0,0" VerticalAlignment="Center"
+                                AutomationProperties.Name="{Binding Login, StringFormat='Browser of {0}'}"
+                                ItemsSource="{Binding Choices}" DisplayMemberPath="Label" SelectedValuePath="Id" SelectedValue="{Binding SelectedId}" />
+                      <TextBlock Text="Opens in" FontSize="14.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource Help}" Text="{Binding Message}" Foreground="#F59E0B"
+                               Visibility="{Binding Message, Converter={StaticResource NullToCollapsed}}" />
+                  </StackPanel>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <TextBlock DataContext="{Binding GitHub}" Style="{StaticResource Help}" Margin="0,0,0,12"
+                     Visibility="{Binding HasNoAccounts, Converter={StaticResource BoolVisible}}"
+                     Text="No GitHub accounts found. Install the GitHub command line (gh) and run gh auth login." />
+          <TextBlock Style="{StaticResource Help}"
+                     Text="Accounts come from the GitHub command line (gh). To add one, run gh auth login; it shows up here by itself." />
+        </StackPanel>
+
         <!-- Usage -->
         <StackPanel Visibility="{Binding Page, Converter={StaticResource EnumVisible}, ConverterParameter=Usage}">
           <Border Style="{StaticResource Card}">

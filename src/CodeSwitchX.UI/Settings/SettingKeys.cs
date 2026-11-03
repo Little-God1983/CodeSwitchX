@@ -5,6 +5,8 @@ public static class SettingKeys
     public const string StorePayloads = "persistence.storePayloads";
     public const string FiveHourBudgetTokens = "telemetry.fiveHourBudgetTokens";
     public const string RelayExecutable = "hooks.relayExecutable";
+    /// <summary>The browser each GitHub account opens its pages in (#335): login to browser id.</summary>
+    public const string GitHubBrowsers = "github.browsers";
     public const string TileScale = "yard.tileScale";
     public const string FontScale = "yard.fontScale";
     public const string YardMaxChats = "yard.maxChats";

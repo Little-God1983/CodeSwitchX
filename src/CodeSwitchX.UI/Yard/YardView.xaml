@@ -4,6 +4,10 @@
              xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              AllowDrop="True" Background="Transparent" DragEnter="OnDragOver" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
+  <UserControl.InputBindings>
+    <!-- Closes the list a pill opened, wherever in the Yard the keyboard is. With no list the command is null, so the binding does not match and the key goes on. -->
+    <KeyBinding Key="Escape" Command="{Binding GitHubList.CloseCommand}" />
+  </UserControl.InputBindings>
   <UserControl.Resources>
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
       <!-- A click on the row opens that chat (#115). A button takes the click, so the tile's own click does not fire too. -->
@@ -172,7 +176,7 @@
             </Border>
             <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
           </DockPanel>
-          <ItemsControl ItemsSource="{Binding GitLines}" ItemTemplate="{StaticResource GitLineTemplate}" Margin="0,4,0,8" />
+          <ItemsControl ItemsSource="{Binding GitLines}" ItemTemplate="{StaticResource GitLineTemplate}" Margin="0,4,0,8" yard:GitPills.IsShown="True" />
           <ItemsControl ItemsSource="{Binding ShownChats}" ItemTemplate="{StaticResource ChatRowTemplate}" />
           <!-- the chats that do not fit (#295); a click on it opens the window, as one on the tile does -->
           <TextBlock Text="{Binding MoreChats, StringFormat='+{0} more'}" Opacity="0.7" Margin="18,4,0,0">
@@ -251,6 +255,7 @@
     </DataTemplate>
   </UserControl.Resources>
 
+  <Grid>
   <DockPanel>
     <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
       <DockPanel>
@@ -314,4 +319,33 @@
       </ItemsControl>
     </ScrollViewer>
   </DockPanel>
+  <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
+  <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
+  <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
+          Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
+          Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" IsVisibleChanged="OnGitHubPanelVisibleChanged">
+    <DockPanel DataContext="{Binding GitHubList}">
+      <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
+        <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
+        <StackPanel>
+          <TextBlock Text="{Binding Heading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+      </DockPanel>
+      <TextBlock DockPanel.Dock="Top" Text="{Binding Message}" Margin="16,0,16,8" TextWrapping="Wrap" Foreground="#F0C674"
+                 Visibility="{Binding Message, Converter={StaticResource NullToCollapsed}}" />
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                      ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+  </Grid>
 </UserControl>

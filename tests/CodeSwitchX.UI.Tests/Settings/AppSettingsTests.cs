@@ -289,6 +289,18 @@ public sealed class AppSettingsTests
     }
 
     [Fact]
+    public async Task The_github_browser_is_not_set_by_voice_and_opens_its_page()
+    {
+        await _h.Shell.InitializeAsync(CancellationToken.None);
+
+        (await _settings.ListAsync(Ct)).Single(s => s.Name == "github browser").ByVoice.ShouldBeFalse();
+        var error = await Should.ThrowAsync<YardActionException>(() => _settings.SetAsync("github browser", "Firefox", Ct));
+
+        error.Message.ShouldContain("Settings is open at GitHub");
+        (_h.Shell.Mode, _h.Shell.Settings.Page).ShouldBe((ShellMode.Settings, SettingsPage.GitHub));
+    }
+
+    [Fact]
     public async Task A_setting_not_changed_by_voice_is_explained_and_its_page_opened()
     {
         await _h.Shell.InitializeAsync(CancellationToken.None);

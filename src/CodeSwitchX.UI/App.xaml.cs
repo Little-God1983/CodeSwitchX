@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using Microsoft.Extensions.Logging;
 using Path = System.IO.Path;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
@@ -11,6 +13,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Hosting.Win32;
@@ -20,6 +23,7 @@ using CodeSwitchX.Ingest.Live;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
@@ -103,6 +107,7 @@ public partial class App : Application
 
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
             await shell.InitializeAsync(CancellationToken.None);
+            await _host.Services.GetRequiredService<GitHubBrowsers>().LoadAsync(CancellationToken.None);
             // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
             var engine = _host.Services.GetRequiredService<SessionEngine>();
             // One it holds goes to VS Code once the Cab shows the chat's own VS Code.
@@ -288,6 +293,15 @@ public partial class App : Application
             sp.GetRequiredService<ChatSettings>()));
         // The tiles show the chat tabs open in VS Code (#164), read from what VS Code restores its windows from.
         services.AddSingleton<IVsCodeOpenTabs>(_ => new VsCodeOpenTabs(VsCodeOpenTabs.DefaultDirectory));
+        // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
+        services.AddSingleton<IGhCli>(_ => new GhCli());
+        services.AddSingleton<GitHubReader>();
+        services.AddSingleton(new BrowserCatalog(new InstalledBrowsers()));
+        services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
+            info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
+        services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<IGhCli>(), sp.GetRequiredService<GitHubReader>(),
+            OriginLookup.ReadAsync,
+            sp.GetRequiredService<ILogger<GitHubActivity>>()));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
             (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
             (Func<IReadOnlyDictionary<string, bool>>)(() =>
@@ -301,6 +315,7 @@ public partial class App : Application
                 sp.GetRequiredService<ISessionStore>().GetLastUseByWorkspaceAsync(ct))));
         services.AddSingleton<CabViewModel>();
         services.AddSingleton<ISoundFilePicker, SoundFilePicker>(); // "Add sound…" on the Sounds page (#307)
+        services.AddSingleton<GitHubPageViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();

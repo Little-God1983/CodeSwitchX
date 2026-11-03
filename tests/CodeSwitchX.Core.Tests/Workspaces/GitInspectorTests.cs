@@ -191,6 +191,41 @@ public class GitInspectorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_non_zero_exit_reports_its_code_and_what_it_printed_apart_from_the_output()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c echo printed& exit 3") { WorkingDirectory = _root };
+
+        var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromSeconds(20), CancellationToken.None);
+
+        result.Output.ShouldBeNull();
+        result.ExitCode.ShouldBe(3);
+        result.FailureOutput!.Trim().ShouldBe("printed");
+    }
+
+    [Fact]
+    public async Task A_zero_exit_has_output_and_no_failure_output()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c echo printed") { WorkingDirectory = _root };
+
+        var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromSeconds(20), CancellationToken.None);
+
+        result.Output!.Trim().ShouldBe("printed");
+        result.ExitCode.ShouldBe(0);
+        result.FailureOutput.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_killed_process_reports_no_exit_code()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c ping -n 30 127.0.0.1 > nul") { WorkingDirectory = _root };
+
+        var result = await GitInspector.RunProcessAsync(info, TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        result.ExitCode.ShouldBeNull();
+        result.FailureOutput.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Large_stderr_output_does_not_stall_the_run()
     {
         var info = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c \"for /L %i in (1,1,3000) do @echo warning: line %i of a long complaint that fills the pipe 1>&2\"") { WorkingDirectory = _root };
