@@ -23,6 +23,7 @@ using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
+[Collection(KeyboardFocusCollection.Name)]
 public class GitHubListViewModelTests
 {
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
@@ -476,6 +477,59 @@ public class GitHubListViewModelTests
 
             var shown = Lines();
             shown.ShouldHaveSingleItem().Text.ShouldStartWith("Couldn't open");
+        });
+    }
+
+    /// <summary>The panel as the Yard has it, with its focus handling, under a window of its own, and the keyboard on the first row.</summary>
+    private static (Grid Grid, Border Panel, HwndSource Source) FocusedPanel(GitHubListViewModel list)
+    {
+        var grid = Panel(list);
+        var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
+        var panel = grid.Children.OfType<Border>().Single();
+        _ = new GitHubPanelFocus(grid, panel, () => { });
+        Keyboard.Focus(Descendants(panel).OfType<Button>().First(b => b.DataContext is GitHubRow));
+        return (grid, panel, source);
+    }
+
+    [Fact]
+    public async Task A_swap_of_the_rows_keeps_the_keyboard_in_the_panel()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(list);
+            using var _ = source;
+            panel.IsKeyboardFocusWithin.ShouldBeTrue();
+
+            list.Rows = list.Rows.Take(2).ToList(); // the focused button is rebuilt
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            panel.IsKeyboardFocusWithin.ShouldBeTrue();
+            Keyboard.FocusedElement.ShouldBeSameAs(panel);
+        });
+    }
+
+    [Fact]
+    public async Task A_keyboard_that_is_nowhere_without_a_swap_is_not_pulled_back()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, _, source) = FocusedPanel(list);
+            using var _ = source;
+
+            Keyboard.ClearFocus(); // as the app losing the activation leaves it
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            Keyboard.FocusedElement.ShouldBeNull();
         });
     }
 

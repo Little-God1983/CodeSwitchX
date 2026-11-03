@@ -13,6 +13,7 @@ using Shouldly;
 namespace CodeSwitchX.UI.Tests.Yard;
 
 /// <summary>#362: closing the GitHub list by the keyboard hands the keyboard back to the pill that opened it, as its tile has it now.</summary>
+[Collection(KeyboardFocusCollection.Name)]
 public sealed class GitHubPanelFocusTests
 {
     private static GitHubPill Pill(GitHubItemKind kind = GitHubItemKind.Issue) =>
@@ -67,9 +68,16 @@ public sealed class GitHubPanelFocusTests
             Keyboard.Focus(InPanel);
         }
 
-        public void Press(Key key) => InPanel.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, _source, 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+        public void Press(Key key) => UseDevice(Keyboard.PrimaryDevice);
 
-        public void ClickMouse() => InPanel.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+        public void ClickMouse() => UseDevice(Mouse.PrimaryDevice);
+
+        /// <summary>
+        /// Says which device was used last. The input manager sets that from real input only (an event raised or processed by hand
+        /// leaves it empty), and its setter is internal.
+        /// </summary>
+        private static void UseDevice(InputDevice device) =>
+            typeof(InputManager).GetProperty(nameof(InputManager.MostRecentInputDevice))!.SetMethod!.Invoke(InputManager.Current, [device]);
 
         /// <summary>A key that closes the list, which the Yard answers by collapsing the panel.</summary>
         public void Close(Key key = Key.Escape)
@@ -133,6 +141,72 @@ public sealed class GitHubPanelFocusTests
         Rig.Drain();
 
         Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
+    });
+
+    [Fact]
+    public Task A_close_without_any_input_counts_as_a_keyboard_close() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+
+        // what UI Automation does: the list closes, and no key or click came with it
+        rig.Panel.Visibility = Visibility.Collapsed;
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(rig.Pill);
+    });
+
+    [Fact]
+    public Task A_click_into_another_control_straight_after_the_close_keeps_the_caret_there() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+
+        rig.Press(Key.Escape);
+        rig.Panel.Visibility = Visibility.Collapsed;
+        Keyboard.Focus(rig.Type); // before the hand-back has run
+        Rig.Drain();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(rig.Type);
+    });
+
+    [Fact]
+    public Task A_tile_that_moved_to_another_group_while_the_list_was_open_gets_the_keyboard() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        rig.Open();
+        // a new element for the same tile, as a tile that is removed and added again gets
+        rig.Root.Children.Remove(rig.Tile);
+        var moved = new StackPanel { DataContext = rig.Tile.DataContext };
+        var pill = NewPill(Pill());
+        moved.Children.Add(pill);
+        rig.Root.Children.Add(moved);
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(pill);
+    });
+
+    [Fact]
+    public Task Two_lines_of_one_tile_on_the_same_repository_hand_the_keyboard_to_the_line_that_was_clicked() => StaThread.RunAsync(() =>
+    {
+        using var rig = new Rig();
+        var model = new WorkspaceTileViewModel(new Workspace { Name = "W", RootPath = @"c:\w" }, null!);
+        var (first, second) = (NewPill(Pill()), NewPill(Pill()));
+        rig.Root.Children.Add(new StackPanel
+        {
+            DataContext = model,
+            Children =
+            {
+                new StackPanel { DataContext = new GitLine("app", "main", 0, @"c:\w\one", Issues: Pill()), Children = { first } },
+                new StackPanel { DataContext = new GitLine("app", "main", 0, @"c:\w	wo", Issues: Pill()), Children = { second } },
+            },
+        });
+        rig.Open(second);
+
+        rig.Close();
+
+        Keyboard.FocusedElement.ShouldBeSameAs(second);
     });
 
     [Fact]
@@ -274,29 +348,5 @@ public sealed class GitHubPanelFocusTests
         rig.Close();
 
         Keyboard.FocusedElement.ShouldNotBe(rig.Pill);
-    });
-
-    [Fact]
-    public Task A_list_that_swaps_its_rows_keeps_the_keyboard_in_the_panel() => StaThread.RunAsync(() =>
-    {
-        using var rig = new Rig();
-        rig.Open();
-
-        // the rows are rebuilt: the button that had the keyboard is gone
-        rig.Panel.Child = new Button();
-        Rig.Drain();
-
-        Keyboard.FocusedElement.ShouldBeSameAs(rig.Panel);
-    });
-
-    [Fact]
-    public Task A_swap_does_not_pull_the_keyboard_back_from_another_control() => StaThread.RunAsync(() =>
-    {
-        using var rig = new Rig();
-        rig.Open();
-        Keyboard.Focus(rig.Type);
-        Rig.Drain();
-
-        Keyboard.FocusedElement.ShouldBeSameAs(rig.Type);
     });
 }

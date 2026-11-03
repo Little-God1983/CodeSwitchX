@@ -10,20 +10,19 @@ namespace CodeSwitchX.UI.Yard;
 
 /// <summary>
 /// Where the keyboard goes when the GitHub list opens and closes (#362). Opening takes the keyboard into the panel, so Escape
-/// closes it, and puts the hover preview away. A list that swaps its rows loses the focused row with them: the keyboard goes
-/// back to the panel. Closing it by the keyboard (Escape, Enter or Space on the close button) hands the keyboard back to the pill
-/// that opened the list, as its tile has it now: a tile rebuilds its buttons when a git line changes, so the pill is looked up
-/// again in its own tile, and the tile gets the keyboard when no pill of the repository is left. Nothing is handed back after a
-/// click, when the keyboard was not in the panel (it may have moved to Raven's type box), when another list took the panel's
-/// place, or when the Yard is being left.
+/// closes it, and puts the hover preview away. A list that swaps its rows loses the focused row with them, and the keyboard
+/// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the pill that opened it, as its
+/// tile has it now: a tile rebuilds its buttons when a git line changes, and may be rebuilt itself when it moves to another
+/// group, so the pill is looked up again, on the same line of the same tile. The tile gets the keyboard when no pill of the
+/// repository is left. Nothing is handed back after a mouse close, when the keyboard was not in the panel, when it has moved to
+/// a control since (Raven's type box), when another list took the panel's place, or when the Yard is being left.
 /// </summary>
 internal sealed class GitHubPanelFocus
 {
     private readonly UIElement _root;
     private readonly UIElement _panel;
     private readonly Action _closePreview;
-    private (FrameworkElement? Tile, GitHubRepo Repo, GitHubItemKind Kind)? _opener;
-    private bool _keyboardClose;
+    private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind Kind)? _opener;
 
     /// <param name="root">The Yard, whose pills open the list.</param>
     /// <param name="panel">The list's panel, whose visibility says when the list opens and closes.</param>
@@ -35,8 +34,6 @@ internal sealed class GitHubPanelFocus
         _closePreview = closePreview ?? GitHubPillPreview.Close;
         // Raised before the pill's command opens the list, so the panel knows which pill to hand the keyboard back to.
         root.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(OnClick));
-        root.AddHandler(Keyboard.PreviewKeyDownEvent, new KeyEventHandler((_, e) => _keyboardClose = e.Key is Key.Escape or Key.Enter or Key.Space));
-        root.AddHandler(Mouse.PreviewMouseDownEvent, new MouseButtonEventHandler((_, _) => _keyboardClose = false));
         panel.IsVisibleChanged += OnPanelVisibleChanged;
         panel.IsKeyboardFocusWithinChanged += OnKeyboardFocusWithinChanged;
     }
@@ -45,9 +42,8 @@ internal sealed class GitHubPanelFocus
     {
         if (e.OriginalSource is Button { DataContext: GitHubPill pill } button)
         {
-            // The outermost element with a tile for its context: the tile itself, not a part of it.
-            var tile = Ancestors(button).OfType<FrameworkElement>().LastOrDefault(element => element.DataContext is WorkspaceTileViewModel);
-            _opener = (tile, pill.Activity.Repo, pill.Kind);
+            // The outermost tile context: the tile, not a part of it.
+            _opener = (ContextsAbove<WorkspaceTileViewModel>(button).LastOrDefault(), ContextsAbove<GitLine>(button).FirstOrDefault()?.Path, pill.Activity.Repo, pill.Kind);
         }
     }
 
@@ -57,25 +53,24 @@ internal sealed class GitHubPanelFocus
         {
             // The preview is topmost and would sit over the rows.
             _closePreview();
-            _keyboardClose = false;
             _panel.Focus();
             return;
         }
 
-        // Read now: the keyboard leaves a collapsing panel a moment later.
-        var handBack = _panel.IsKeyboardFocusWithin && _keyboardClose;
+        // Read now: the keyboard leaves a collapsing panel a moment later, and what closed the list is the last input.
+        var handBack = _panel.IsKeyboardFocusWithin && InputManager.Current.MostRecentInputDevice is not MouseDevice;
         // Later, once what follows the close has happened: a replacing list shows the panel again, leaving the Yard hides it.
         _root.Dispatcher.BeginInvoke(DispatcherPriority.Background, () => HandBack(handBack));
     }
 
-    /// <summary>The list swapped its rows, and the button that had the keyboard went with them; the keyboard is left alone when it went to another control.</summary>
+    /// <summary>The list swapped its rows, and the button that had the keyboard went with them: the keyboard falls to the window. Nowhere at all is the app losing the activation, which is left alone.</summary>
     private void OnKeyboardFocusWithinChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
         if (e.NewValue is false && _panel.IsVisible)
         {
             _root.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
             {
-                if (_panel.IsVisible && Keyboard.FocusedElement is not UIElement { Focusable: true })
+                if (_panel.IsVisible && Keyboard.FocusedElement is { } focused && ReferenceEquals(focused, PresentationSource.FromVisual(_root)?.RootVisual))
                 {
                     _panel.Focus();
                 }
@@ -92,14 +87,25 @@ internal sealed class GitHubPanelFocus
 
         var opener = _opener;
         _opener = null;
-        if (!handBack || opener is not { Tile: { IsVisible: true } tile } open || !_root.IsVisible)
+        // The keyboard may have gone to a control since (a click into Raven's type box); the window and a control that is gone are nobody's.
+        var focused = Keyboard.FocusedElement as UIElement;
+        var free = focused is null || !focused.IsVisible || _panel.IsAncestorOf(focused) || ReferenceEquals(focused, PresentationSource.FromVisual(_root)?.RootVisual);
+        if (!handBack || !free || !_root.IsVisible || opener is not { Tile: { } model } open)
         {
             return;
         }
 
-        var pills = Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo).ToList();
-        // The same pill, else the repository's other one on the line, else wherever the tile starts.
-        var target = pills.FirstOrDefault(button => ((GitHubPill)button.DataContext).Kind == open.Kind) ?? pills.FirstOrDefault();
+        // The tile is looked up again: a tile that moved to another group is a new element.
+        if (Descendants(_root).OfType<FrameworkElement>().FirstOrDefault(element => ReferenceEquals(element.DataContext, model) && element.IsVisible) is not { } tile)
+        {
+            return;
+        }
+
+        // The pill of that line, else the line's other pill, else the repository's pill on another line, else wherever the tile starts.
+        var target = Descendants(tile).OfType<Button>().Where(button => button.IsVisible && button.DataContext is GitHubPill pill && pill.Activity.Repo == open.Repo)
+            .OrderBy(button => ContextsAbove<GitLine>(button).FirstOrDefault()?.Path != open.Line)
+            .ThenBy(button => ((GitHubPill)button.DataContext).Kind != open.Kind)
+            .FirstOrDefault();
         if (target is not null)
         {
             Keyboard.Focus(target);
@@ -110,11 +116,15 @@ internal sealed class GitHubPanelFocus
         }
     }
 
-    private static IEnumerable<DependencyObject> Ancestors(DependencyObject element)
+    /// <summary>The data contexts of the elements above this one, nearest first.</summary>
+    private static IEnumerable<T> ContextsAbove<T>(DependencyObject element)
     {
         for (var parent = VisualTreeHelper.GetParent(element); parent is not null; parent = VisualTreeHelper.GetParent(parent))
         {
-            yield return parent;
+            if ((parent as FrameworkElement)?.DataContext is T context)
+            {
+                yield return context;
+            }
         }
     }
 
