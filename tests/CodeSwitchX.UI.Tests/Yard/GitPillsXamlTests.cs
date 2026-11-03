@@ -35,6 +35,50 @@ public sealed class GitPillsXamlTests
     public Task A_line_with_one_kind_shows_that_pill_only() => StaThread.RunAsync(() =>
         PillButtons(Render(new GitLine(null, "main", 0, PullRequests: Pill(GitHubItemKind.PullRequest)), tile: true)).Count(IsShown).ShouldBe(1));
 
+    [Fact]
+    public Task A_narrow_line_keeps_its_pills_whole_and_the_names_give_way() => StaThread.RunAsync(() =>
+    {
+        var line = new GitLine("AVeryLongFolderNameForARepository", "feature/a-very-long-branch-name", 3,
+            Issues: Pill(GitHubItemKind.Issue), PullRequests: Pill(GitHubItemKind.PullRequest));
+        var presenter = Render(line, tile: true, width: 260);
+
+        var right = presenter.ActualWidth;
+        var pills = PillButtons(presenter);
+        pills.Count.ShouldBe(2);
+        foreach (var pill in pills)
+        {
+            pill.TranslatePoint(new Point(pill.ActualWidth, 0), presenter).X.ShouldBeLessThanOrEqualTo(right + 0.5);
+        }
+
+        var state = Descendants<TextBlock>(presenter).Single(t => t.Text == "3 changed");
+        state.TranslatePoint(new Point(state.ActualWidth, 0), presenter).X.ShouldBeLessThanOrEqualTo(right + 0.5);
+    });
+
+    [Theory]
+    [InlineData(1, GitHubItemKind.Issue, "1 open issue in SomeRepo")]
+    [InlineData(2, GitHubItemKind.Issue, "2 open issues in SomeRepo")]
+    [InlineData(1, GitHubItemKind.PullRequest, "1 open pull request in SomeRepo")]
+    [InlineData(2, GitHubItemKind.PullRequest, "2 open pull requests in SomeRepo")]
+    public void The_pill_name_is_singular_at_one(int count, GitHubItemKind kind, string expected) =>
+        new GitHubPill(new RepoActivity(new GitHubRepo("acme", "SomeRepo"), "me", count, count, [], []), kind).AutomationName.ShouldBe(expected);
+
+    private static List<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        var found = new List<T>();
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+            {
+                found.Add(match);
+            }
+
+            found.AddRange(Descendants<T>(child));
+        }
+
+        return found;
+    }
+
     /// <summary>App.xaml's resources are not reachable without the application, so they are parsed from the file, as a dictionary (the namespaces name the assembly, as the XAML compiler would).</summary>
     private static ResourceDictionary AppResources()
     {
@@ -52,19 +96,19 @@ public sealed class GitPillsXamlTests
             .Replace("\"clr-namespace:CodeSwitchX.UI.Yard\"", "\"clr-namespace:CodeSwitchX.UI.Yard;assembly=CodeSwitchX\""));
     }
 
-    private static ContentPresenter Render(GitLine line, bool tile)
+    private static ContentPresenter Render(GitLine line, bool tile, double width = 400)
     {
         var resources = AppResources();
         // a bare presenter: an ItemsControl has no template without the application's theme
-        var items = new ContentPresenter { Content = line, ContentTemplate = (DataTemplate)resources["GitLineTemplate"], Width = 400 };
+        var items = new ContentPresenter { Content = line, ContentTemplate = (DataTemplate)resources["GitLineTemplate"], Width = width };
         items.Resources.MergedDictionaries.Add(resources);
         if (tile)
         {
             GitPills.SetIsShown(items, true);
         }
 
-        items.Measure(new Size(400, 200));
-        items.Arrange(new Rect(0, 0, 400, 200));
+        items.Measure(new Size(width, 200));
+        items.Arrange(new Rect(0, 0, width, 200));
         items.UpdateLayout();
         return items;
     }

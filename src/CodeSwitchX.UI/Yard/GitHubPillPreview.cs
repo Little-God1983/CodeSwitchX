@@ -94,7 +94,7 @@ public static class GitHubPillPreview
 
     private static Popup NewPopup()
     {
-        var popup = new Popup { Placement = PlacementMode.Bottom, StaysOpen = true };
+        var popup = new Popup { AllowsTransparency = true, Placement = PlacementMode.Bottom, StaysOpen = true };
         popup.MouseEnter += (_, _) => CloseTimer.Stop();
         popup.MouseLeave += (_, _) => CloseTimer.Start();
         return popup;

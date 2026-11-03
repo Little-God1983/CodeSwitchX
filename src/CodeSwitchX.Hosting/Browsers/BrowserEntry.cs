@@ -8,6 +8,9 @@ public sealed record BrowserEntry(string Id, string Label, string? Executable, I
 {
     public const string DefaultId = "default";
 
+    /// <summary>What a combo box item reads as, to the eye and to automation: the label, not the record's fields.</summary>
+    public override string ToString() => Label;
+
     /// <summary>The command line that opens <paramref name="url"/>; each value is one entry, so a profile name with a space stays whole.</summary>
     public IReadOnlyList<string> Arguments(string url)
     {
