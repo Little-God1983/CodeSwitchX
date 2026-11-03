@@ -95,7 +95,7 @@ public class GitHubActivityTests
     private static GitHubActivity Activity(FakeGh gh, Func<string, string>? originOf = null) =>
         Activity(gh, path => new OriginLookup(originOf is null ? $"https://github.com/acme/{Path.GetFileName(path)}.git" : originOf(path)));
 
-    private static GitHubActivity Activity(FakeGh gh, Func<string, OriginLookup> originOf, ILogger<GitHubActivity>? logger = null, Func<string, CancellationToken, Task<SshAnswer>>? hostOfAlias = null) =>
+    private static GitHubActivity Activity(FakeGh gh, Func<string, OriginLookup> originOf, ILogger<GitHubActivity>? logger = null, Func<string, CancellationToken, Task<string?>>? hostOfAlias = null) =>
         new(gh, new GitHubReader(gh), (path, _) => Task.FromResult(originOf(path)), logger ?? NullLogger<GitHubActivity>.Instance, hostOfAlias);
 
     private sealed class Lines : ILogger<GitHubActivity>
@@ -280,7 +280,7 @@ public class GitHubActivityTests
         await activity.RefreshAsync([@"c:\r\one", @"c:\r\two"], CancellationToken.None);
 
         log.Entries.ShouldAllBe(e => e.Exception == null && !e.Message.Contains("secret"));
-        log.Warnings.ShouldContain(m => m.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        log.Warnings.ShouldContain(m => m.Contains(nameof(InvalidOperationException), StringComparison.Ordinal) && m.Contains("   at ", StringComparison.Ordinal), "the stack is there");
     }
 
     [Fact]
@@ -294,6 +294,7 @@ public class GitHubActivityTests
         log.Entries.ShouldAllBe(e => e.Exception == null && !e.Message.Contains("secret"));
         log.Warnings.ShouldHaveSingleItem().ShouldContain("3 of 3 repositories");
         log.Warnings.Single().ShouldContain(nameof(InvalidOperationException));
+        log.Warnings.Single().ShouldContain("   at ", Case.Sensitive);
     }
 
     [Fact]
@@ -304,7 +305,7 @@ public class GitHubActivityTests
         var activity = Activity(gh, _ => new OriginLookup("git@github-work:acme/tool.git"), null, (alias, _) =>
         {
             asked.Add(alias);
-            return Task.FromResult(new SshAnswer("github.com"));
+            return Task.FromResult<string?>("github.com");
         });
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
@@ -322,7 +323,7 @@ public class GitHubActivityTests
     public async Task An_alias_remote_that_is_not_GitHub_gets_nothing(string? resolved)
     {
         var gh = new FakeGh();
-        var activity = Activity(gh, _ => new OriginLookup("git@github-work:acme/tool.git"), null, (_, _) => Task.FromResult(new SshAnswer(resolved)));
+        var activity = Activity(gh, _ => new OriginLookup("git@github-work:acme/tool.git"), null, (_, _) => Task.FromResult(resolved));
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
@@ -352,7 +353,7 @@ public class GitHubActivityTests
         var activity = Activity(new FakeGh(), _ => new OriginLookup("ssh://git@GitHub-Work/acme/tool.git"), null, (alias, _) =>
         {
             asked.Add(alias);
-            return Task.FromResult(new SshAnswer("github.com"));
+            return Task.FromResult<string?>("github.com");
         });
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
@@ -366,7 +367,7 @@ public class GitHubActivityTests
     [InlineData(null, true)] // ssh has nothing to say: the convention counts
     public async Task A_github_com_dash_name_host_is_checked_with_ssh(string? resolved, bool pills)
     {
-        var activity = Activity(new FakeGh(), _ => new OriginLookup("git@github.com-corp:acme/tool.git"), null, (_, _) => Task.FromResult(new SshAnswer(resolved)));
+        var activity = Activity(new FakeGh(), _ => new OriginLookup("git@github.com-corp:acme/tool.git"), null, (_, _) => Task.FromResult(resolved));
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
@@ -374,36 +375,11 @@ public class GitHubActivityTests
     }
 
     [Fact]
-    public async Task A_failed_lookup_is_no_known_answer_and_is_asked_again_next_round()
-    {
-        var gh = new FakeGh();
-        var log = new Lines();
-        var failing = true;
-        var asked = 0;
-        var activity = Activity(gh, _ => new OriginLookup("git@github-work:acme/tool.git"), log, (_, _) =>
-        {
-            asked++;
-            return Task.FromResult(failing ? SshAnswer.Unknown : new SshAnswer("github.com"));
-        });
-
-        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
-
-        activity.Knows(@"c:\r\tool").ShouldBeFalse("no entry, so the folder is asked about again");
-        log.Warnings.ShouldHaveSingleItem().ShouldContain("1 of 1 folders");
-        failing = false;
-
-        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
-
-        asked.ShouldBe(2);
-        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
-    }
-
-    [Fact]
-    public async Task A_failed_lookup_keeps_the_repository_the_folder_had()
+    public async Task No_answer_from_ssh_keeps_the_repository_the_folder_had()
     {
         var gh = new FakeGh();
         var remote = "https://github.com/acme/tool.git";
-        var activity = Activity(gh, _ => new OriginLookup(remote), null, (_, _) => Task.FromResult(SshAnswer.Unknown));
+        var activity = Activity(gh, _ => new OriginLookup(remote), null, (_, _) => Task.FromResult<string?>(null));
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
         var first = activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
         remote = "git@github-work:acme/other.git";
@@ -424,6 +400,29 @@ public class GitHubActivityTests
         log.Warnings.ShouldHaveSingleItem().ShouldContain("3 of 3 folders");
         log.Entries.Where(e => e.Level >= LogLevel.Warning).ShouldAllBe(e => !e.Message.Contains("one") && !e.Message.Contains("c:"));
         log.Entries.Count(e => e.Level == LogLevel.Debug && e.Message.Contains("three")).ShouldBe(1, "the path is for Debug");
+    }
+
+    [Fact]
+    public async Task A_dash_name_host_keeps_its_pills_when_ssh_failed()
+    {
+        var activity = Activity(new FakeGh(), _ => new OriginLookup("git@github.com-corp:acme/tool.git"), null, (_, _) => Task.FromResult<string?>(null));
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task An_alias_with_no_answer_is_recorded_as_no_repository_and_is_no_failure()
+    {
+        var log = new Lines();
+        var activity = Activity(new FakeGh(), _ => new OriginLookup("git@github-work:acme/tool.git"), log, (_, _) => Task.FromResult<string?>(null));
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.Knows(@"c:\r\tool").ShouldBeTrue();
+        activity.ForFolder(@"c:\r\tool").ShouldBeNull();
+        log.Warnings.ShouldBeEmpty();
     }
 
     [Fact]

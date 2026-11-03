@@ -13,7 +13,12 @@ public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount,
 /// <param name="ExitCode">The code it exited with; null when it never got that far (did not start, timed out, cancelled, a pipe broke).</param>
 /// <param name="FailureOutput">Stdout when it exited with another code than 0; otherwise null.</param>
 /// <param name="ErrorOutput">Stderr when it ran to its end; otherwise null.</param>
-public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, int? ExitCode = null, string? FailureOutput = null, string? ErrorOutput = null);
+/// <param name="NotFound">The process did not start because there is no such program (Windows error 2 or 3). Another reason not to start, a program that is blocked say, is not this.</param>
+public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, int? ExitCode = null, string? FailureOutput = null, string? ErrorOutput = null, bool NotFound = false)
+{
+    /// <summary>The process never started: no pid, no exit code, and not killed at a timeout.</summary>
+    public bool DidNotStart => Pid is null && ExitCode is null && !TimedOut;
+}
 
 /// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
 public sealed class GitInspector
@@ -191,7 +196,7 @@ public sealed class GitInspector
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            return new ProcessRunResult(null, false, process?.Id);
+            return new ProcessRunResult(null, false, process?.Id, NotFound: ex is System.ComponentModel.Win32Exception { NativeErrorCode: 2 or 3 });
         }
         finally
         {

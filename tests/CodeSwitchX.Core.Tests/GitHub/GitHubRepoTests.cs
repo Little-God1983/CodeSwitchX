@@ -4,6 +4,10 @@ namespace CodeSwitchX.Core.Tests.GitHub;
 
 public class GitHubRepoTests
 {
+    /// <summary>What a caller does with the address: ssh is asked about a host that is not GitHub by name; <paramref name="hostOf"/> is its answer, or null for none.</summary>
+    private static GitHubRepo? Read(string? url, Func<string, string?>? hostOf = null) =>
+        GitHubRepo.Parse(url) is { } address ? address.RepoGiven(address.NeedsLookup ? hostOf?.Invoke(address.Host) : null) : null;
+
     [Theory]
     [InlineData("https://github.com/acme/tool.git", "acme/tool")]
     [InlineData("https://github.com/acme/tool", "acme/tool")]
@@ -53,8 +57,8 @@ public class GitHubRepoTests
     [InlineData(null, null)]
     public void FromRemote(string? remote, string? slug)
     {
-        GitHubRepo.FromRemote(remote)?.Slug.ShouldBe(slug);
-        (GitHubRepo.FromRemote(remote) is null).ShouldBe(slug is null);
+        Read(remote)?.Slug.ShouldBe(slug);
+        (Read(remote) is null).ShouldBe(slug is null);
     }
 
     /// <summary>What <c>ssh -G</c> says the alias is, as a function: names a test does not list resolve to nothing.</summary>
@@ -86,14 +90,14 @@ public class GitHubRepoTests
     [InlineData("file://other/acme/tool.git", "other", "github.com", null)]
     [InlineData("git@github-work:acme", "github-work", "github.com", null)]
     public void FromRemote_with_an_alias_resolved(string remote, string alias, string host, string? slug) =>
-        GitHubRepo.FromRemote(remote, Resolves(alias, host))?.Slug.ShouldBe(slug);
+        Read(remote, Resolves(alias, host))?.Slug.ShouldBe(slug);
 
     [Theory]
     [InlineData("git@github-work:acme/tool.git")]
     [InlineData("ssh://git@github-work/acme/tool.git")]
     [InlineData("github-work:acme/tool.git")]
     public void An_alias_is_nothing_without_the_answer_for_it(string remote) =>
-        GitHubRepo.FromRemote(remote).ShouldBeNull();
+        Read(remote).ShouldBeNull();
 
     [Theory]
     [InlineData("git@github-work:acme/tool.git", "github-work", true)]

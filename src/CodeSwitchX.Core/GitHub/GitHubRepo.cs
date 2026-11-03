@@ -34,17 +34,6 @@ public sealed record GitHubRepo(string Owner, string Name)
     public override int GetHashCode() =>
         HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(Owner), StringComparer.OrdinalIgnoreCase.GetHashCode(Name));
 
-    /// <summary>The repository a git remote address points at when nothing is asked of ssh; null for anything but github.com.</summary>
-    public static GitHubRepo? FromRemote(string? url) => FromRemote(url, null);
-
-    /// <summary>
-    /// The same, with <paramref name="hostOf"/> answering for an ssh host (<c>git@github-work:owner/repo</c>, <c>github.com-work</c>) what
-    /// <c>ssh -G</c> makes of it, or null for no answer. The remote is GitHub when ssh says github.com or ssh.github.com; with no answer
-    /// only the <c>github.com-name</c> convention is taken as GitHub. Any other host is not.
-    /// </summary>
-    public static GitHubRepo? FromRemote(string? url, Func<string, string?>? hostOf) =>
-        Parse(url) is { } address ? address.RepoGiven(address.NeedsLookup ? hostOf?.Invoke(address.Host) : null) : null;
-
     /// <summary>The owner, name and host of a remote address with a host (a path or another scheme is null), whatever the host is.</summary>
     public static RemoteAddress? Parse(string? url)
     {
@@ -102,6 +91,10 @@ public sealed record GitHubRepo(string Owner, string Name)
         /// <summary>An ssh host that is not GitHub by name might be an alias for it, which only <c>ssh -G</c> knows. Never one that could pass for an option.</summary>
         public bool NeedsLookup => IsSsh && !IsGitHub && !Host.StartsWith('-');
 
+        /// <summary>
+        /// The repository, when the remote is GitHub: by its name, or because ssh says an ssh host (<c>git@github-work:owner/repo</c>) is github.com
+        /// or ssh.github.com. With no answer only the <c>github.com-name</c> convention is taken as GitHub; ssh naming another host is not.
+        /// </summary>
         /// <param name="sshHost">The host <c>ssh -G</c> gave for <see cref="Host"/>; null when it gave none.</param>
         public GitHubRepo? RepoGiven(string? sshHost)
         {

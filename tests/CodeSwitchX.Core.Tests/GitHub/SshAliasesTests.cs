@@ -48,8 +48,16 @@ public class SshAliasesTests : IDisposable
     {
         var ssh = Aliases(await Ssh("echo user git\r\necho hostname ssh.github.com\r\necho port 443"));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(new SshAnswer("ssh.github.com"));
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe("ssh.github.com");
         Calls.ShouldBe(["-G -- github-work"]);
+    }
+
+    [Fact]
+    public async Task An_echo_of_the_name_is_no_answer()
+    {
+        var ssh = Aliases(await Ssh("echo hostname github.com-work"));
+
+        (await ssh.HostOfAsync("github.com-work", CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
@@ -57,9 +65,9 @@ public class SshAliasesTests : IDisposable
     {
         var ssh = Aliases(await Ssh("echo hostname github.com"));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).Host.ShouldBe("github.com");
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).Host.ShouldBe("github.com");
-        (await ssh.HostOfAsync("GitHub-Work", CancellationToken.None)).Host.ShouldBe("github.com");
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe("github.com");
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe("github.com");
+        (await ssh.HostOfAsync("GitHub-Work", CancellationToken.None)).ShouldBe("github.com");
 
         Calls.ShouldBe(["-G -- github-work", "-G -- GitHub-Work"]);
     }
@@ -80,38 +88,38 @@ public class SshAliasesTests : IDisposable
     }
 
     [Fact]
-    public async Task A_failed_ask_is_not_kept_and_is_asked_again()
+    public async Task A_failed_ask_is_no_answer_and_is_kept_as_well()
     {
         var ssh = Aliases(await Ssh("exit /b 255"));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(SshAnswer.Unknown);
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(SshAnswer.Unknown);
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBeNull();
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBeNull();
 
-        Calls.Length.ShouldBe(2);
+        Calls.Length.ShouldBe(1);
     }
 
     [Fact]
-    public async Task No_ssh_is_an_answer_without_a_host_and_no_error()
+    public async Task No_ssh_is_no_answer_and_no_error()
     {
         var ssh = Aliases(Path.Combine(_root, "no-such-ssh.exe"));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(SshAnswer.NoSsh);
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
-    public async Task Output_without_a_hostname_line_is_a_failed_ask()
+    public async Task Output_without_a_hostname_line_is_no_answer()
     {
         var ssh = Aliases(await Ssh("echo user git"));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(SshAnswer.Unknown);
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
-    public async Task A_slow_ssh_is_cut_off_at_the_timeout_and_is_a_failed_ask()
+    public async Task A_slow_ssh_is_cut_off_at_the_timeout_and_is_no_answer()
     {
         var ssh = Aliases(await Ssh("ping -n 6 127.0.0.1 >nul\r\necho hostname github.com"), TimeSpan.FromSeconds(1));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe(SshAnswer.Unknown);
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
@@ -123,7 +131,7 @@ public class SshAliasesTests : IDisposable
 
         await Should.ThrowAsync<OperationCanceledException>(ssh.HostOfAsync("github-work", stop.Token));
 
-        (await ssh.HostOfAsync("github-work", CancellationToken.None)).Host.ShouldBe("github.com");
+        (await ssh.HostOfAsync("github-work", CancellationToken.None)).ShouldBe("github.com");
     }
 
     [Fact]
@@ -136,10 +144,14 @@ public class SshAliasesTests : IDisposable
         await failing.HostOfAsync("second-alias", CancellationToken.None);
         var missing = Aliases(Path.Combine(_root, "no-such-ssh.exe"), logger: log);
         await missing.HostOfAsync("github-work", CancellationToken.None);
+        var blocked = Path.Combine(_root, "not-a-program.txt");
+        await File.WriteAllTextAsync(blocked, "text", TestContext.Current.CancellationToken);
+        await Aliases(blocked, logger: log).HostOfAsync("github-work", CancellationToken.None);
 
-        log.Warnings.Count.ShouldBe(2);
+        log.Warnings.Count.ShouldBe(3);
         log.Warnings[0].ShouldContain("exit code 255");
         log.Warnings[1].ShouldContain("ssh not found");
+        log.Warnings[2].ShouldContain("ssh could not be started");
         log.Warnings.ShouldAllBe(w => !w.Contains("github-work") && !w.Contains("second-alias"));
     }
 }

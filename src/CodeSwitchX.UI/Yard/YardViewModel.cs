@@ -810,8 +810,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            // The type only: a failure carries no titles, labels or repository names.
-            _logger.LogWarning("The GitHub refresh round ended early: {Failure}", ex.GetType().Name);
+            // The type and the stack, never the message: it could carry a title, a label or a repository name.
+            _logger.LogWarning("The GitHub refresh round ended early: {Failure}", FailureText.Of(ex));
         }
         finally
         {

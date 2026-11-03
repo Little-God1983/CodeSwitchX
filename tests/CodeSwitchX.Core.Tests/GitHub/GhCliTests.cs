@@ -276,6 +276,15 @@ public class GhCliTests : IDisposable
     }
 
     [Fact]
+    public async Task A_gh_that_cannot_be_started_for_another_reason_than_missing_is_another_failure()
+    {
+        var notAProgram = Path.Combine(_root, "gh.txt");
+        await File.WriteAllTextAsync(notAProgram, "text", TestContext.Current.CancellationToken);
+
+        (await new GhCli(notAProgram, GhCli.Timeout).AccountsAsync(CancellationToken.None)).ShouldBe(GhAccounts.Failed(GhFailure.Other));
+    }
+
+    [Fact]
     public async Task A_cancelled_accounts_read_throws_and_is_no_failure_of_gh()
     {
         var script = Path.Combine(_root, "gh.cmd");

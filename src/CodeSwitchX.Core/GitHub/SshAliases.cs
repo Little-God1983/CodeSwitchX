@@ -4,22 +4,12 @@ using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.GitHub;
 
-/// <summary>What asking ssh about a host name came to.</summary>
-/// <param name="Host">The <c>hostname</c> ssh would connect to; null when it gave none.</param>
-/// <param name="Failed">The ask went wrong (timeout, error exit, unreadable answer): it says nothing and is asked again. Not set when there is no ssh at all, which is an answer.</param>
-public sealed record SshAnswer(string? Host, bool Failed = false)
-{
-    /// <summary>There is no ssh on this machine: no answer to give, and one that stays.</summary>
-    public static readonly SshAnswer NoSsh = new(Host: null);
-
-    public static readonly SshAnswer Unknown = new(Host: null, Failed: true);
-}
-
 /// <summary>
 /// What an ssh host name in a git remote (<c>git@github-work:owner/repo</c>) stands for, as <c>ssh -G</c> reads it from
-/// <c>~/.ssh/config</c>. A name is matched as written, case included, as ssh does. Real answers (a host, or no ssh at all) are kept
-/// for <see cref="KeepFor"/>, so an edit of the config is picked up; failures are not kept, and the next ask runs ssh again. Asks run
-/// off the caller's thread, and each kind of failure is logged once per run, without the name.
+/// <c>~/.ssh/config</c>. A name is matched as written, case included, as ssh does. The answer is the host ssh names, or null for no
+/// answer: ssh is missing or blocked, it failed or timed out, or it only echoed the name (<c>ssh -G</c> does that, with exit 0, when no
+/// <c>Host</c> stanza matches). Every answer is kept for <see cref="KeepFor"/>, so nothing is asked again on every pass and an edit of the
+/// config is picked up. Asks run off the caller's thread; each kind of failure is logged once per run, without the name.
 /// </summary>
 public sealed class SshAliases
 {
@@ -32,8 +22,8 @@ public sealed class SshAliases
     private readonly Func<DateTimeOffset> _now;
     private readonly ILogger<SshAliases>? _logger;
     private readonly object _gate = new();
-    private readonly Dictionary<string, (SshAnswer Answer, DateTimeOffset Until)> _answers = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Task<SshAnswer>> _asking = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string? Host, DateTimeOffset Until)> _answers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task<string?>> _asking = new(StringComparer.Ordinal);
     private readonly HashSet<string> _logged = [];
 
     public SshAliases(ILogger<SshAliases>? logger = null) : this("ssh", Timeout, () => DateTimeOffset.UtcNow, logger)
@@ -48,15 +38,15 @@ public sealed class SshAliases
         _logger = logger;
     }
 
-    /// <summary>A caller that stops waiting does not stop the ask.</summary>
-    public Task<SshAnswer> HostOfAsync(string alias, CancellationToken ct)
+    /// <returns>The host ssh names for the alias, or null for no answer. A caller that stops waiting does not stop the ask.</returns>
+    public Task<string?> HostOfAsync(string alias, CancellationToken ct)
     {
-        Task<SshAnswer> asking;
+        Task<string?> asking;
         lock (_gate)
         {
             if (_answers.TryGetValue(alias, out var kept) && kept.Until > _now())
             {
-                return Task.FromResult(kept.Answer);
+                return Task.FromResult(kept.Host);
             }
 
             if (!_asking.TryGetValue(alias, out asking!))
@@ -68,30 +58,36 @@ public sealed class SshAliases
         return asking.WaitAsync(ct);
     }
 
-    private async Task<SshAnswer> AskAsync(string alias)
+    private async Task<string?> AskAsync(string alias)
     {
-        var (answer, failure) = await RunAsync(alias).ConfigureAwait(false);
-        lock (_gate)
+        string? host = null;
+        try
         {
-            _asking.Remove(alias);
-            if (!answer.Failed)
+            string? failure;
+            (host, failure) = await RunAsync(alias).ConfigureAwait(false);
+            if (failure is not null)
             {
-                _answers[alias] = (answer, _now() + KeepFor);
+                Report(failure);
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _asking.Remove(alias);
+                _answers[alias] = (host, _now() + KeepFor);
             }
         }
 
-        if (failure is not null)
-        {
-            Report(failure);
-        }
-
-        return answer;
+        return host;
     }
 
-    private async Task<(SshAnswer Answer, string? Failure)> RunAsync(string alias)
+    private async Task<(string? Host, string? Failure)> RunAsync(string alias)
     {
         try
         {
+            // The bare "ssh" from the path, not the ssh git itself would use (core.sshCommand, GIT_SSH): a remote that depends on those has
+            // no answer here, and gets pills only in the github.com-name form.
             // "--": an alias is a name, never an option.
             var info = new ProcessStartInfo(_executable);
             foreach (var argument in new[] { "-G", "--", alias })
@@ -102,22 +98,23 @@ public sealed class SshAliases
             var run = await GitInspector.RunProcessAsync(info, _timeout, CancellationToken.None).ConfigureAwait(false);
             if (run.Output is { } output)
             {
-                return output.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("hostname ", StringComparison.OrdinalIgnoreCase))?[9..].Trim() is { Length: > 0 } host
-                    ? (new SshAnswer(host), null)
-                    : (SshAnswer.Unknown, "no hostname in the answer");
+                var host = output.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.StartsWith("hostname ", StringComparison.OrdinalIgnoreCase))?[9..].Trim();
+                // No Host stanza matches: ssh names the alias itself, which is no answer.
+                return host is { Length: > 0 } && !host.Equals(alias, StringComparison.OrdinalIgnoreCase) ? (host, null) : (null, host is { Length: > 0 } ? null : "no hostname in the answer");
             }
 
-            return run switch
+            return (null, run switch
             {
-                { Pid: null, ExitCode: null, TimedOut: false } => (SshAnswer.NoSsh, "ssh not found"),
-                { TimedOut: true } => (SshAnswer.Unknown, "timed out"),
-                { ExitCode: { } code } => (SshAnswer.Unknown, $"exit code {code}"),
-                _ => (SshAnswer.Unknown, "stopped without an answer"),
-            };
+                { NotFound: true } => "ssh not found",
+                { DidNotStart: true } => "ssh could not be started",
+                { TimedOut: true } => "timed out",
+                { ExitCode: { } code } => $"exit code {code}",
+                _ => "stopped without an answer",
+            });
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
-            return (SshAnswer.Unknown, ex.GetType().Name);
+            return (null, ex.GetType().Name);
         }
     }
 

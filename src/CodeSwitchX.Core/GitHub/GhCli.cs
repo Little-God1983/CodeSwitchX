@@ -75,12 +75,12 @@ public sealed class GhCli : IGhCli
     }
 
     /// <summary>
-    /// Not started at all is no <c>gh</c>; one that exits with cobra's "unknown flag" does not know <c>auth status --json</c>
+    /// No such program is no <c>gh</c> (one that is blocked, or would not start, is another failure); one that exits with cobra's "unknown flag" does not know <c>auth status --json</c>
     /// (the text is only read here, never kept or logged); anything else is another failure.
     /// </summary>
     private static GhFailure FailureOf(ProcessRunResult run) => run switch
     {
-        { Pid: null, ExitCode: null, TimedOut: false } => GhFailure.NotFound,
+        { NotFound: true } => GhFailure.NotFound,
         { ErrorOutput: { } error } when error.Contains("unknown flag", StringComparison.OrdinalIgnoreCase) => GhFailure.TooOld,
         _ => GhFailure.Other,
     };
