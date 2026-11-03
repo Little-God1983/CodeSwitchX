@@ -66,7 +66,10 @@ public class GitHubListViewModelTests
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));
 
-        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null)
+        public async Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            new(await RunAsAsync(login, arguments, ct));
+
+        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
             if (arguments[0] == "api")
             {
@@ -663,7 +666,7 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task A_skipped_row_does_not_lower_the_count()
+    public async Task A_skipped_row_still_counts()
     {
         var (activity, pill) = await PillAsync();
         var list = List(activity, pill);
@@ -672,10 +675,10 @@ public class GitHubListViewModelTests
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#3"]);
-        list.Heading.ShouldBe("app: 12 open issues");
+        list.Heading.ShouldBe("app: 3 open issues", "gh returned every row, the odd one included: that is the count");
         list.CutShortMessage.ShouldBeNull();
         list.SkippedMessage.ShouldBe("1 row could not be shown.");
-        activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(3);
     }
 
     [Fact]

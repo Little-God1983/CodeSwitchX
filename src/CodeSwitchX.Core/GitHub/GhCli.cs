@@ -18,15 +18,17 @@ public sealed class GhCli : IGhCli
 
     private readonly string _executable;
     private readonly TimeSpan _timeout;
+    private readonly TimeSpan _listTimeout;
 
     public GhCli() : this("gh", Timeout)
     {
     }
 
-    internal GhCli(string executable, TimeSpan timeout)
+    internal GhCli(string executable, TimeSpan timeout, TimeSpan? listTimeout = null)
     {
         _executable = executable;
         _timeout = timeout;
+        _listTimeout = listTimeout ?? ListTimeout;
     }
 
     public async Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
@@ -55,14 +57,17 @@ public sealed class GhCli : IGhCli
                 .OfType<string>()
                 .ToList();
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        catch (JsonException)
         {
             return [];
         }
     }
 
-    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null) =>
-        (await RunAndAnswerAsync(login, arguments, timeout ?? _timeout, ct).ConfigureAwait(false)).Output;
+    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        (await RunAndAnswerAsync(login, arguments, _timeout, ct).ConfigureAwait(false)).Output;
+
+    public Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        RunAndAnswerAsync(login, arguments, _listTimeout, ct);
 
     public Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
         RunAndAnswerAsync(login, arguments, _timeout, ct);
@@ -77,7 +82,7 @@ public sealed class GhCli : IGhCli
         }
 
         var run = await GitInspector.RunProcessAsync(StartInfo(arguments, token, _executable), timeout, ct).ConfigureAwait(false);
-        return new GhAnswer(run.Output, run.FailureOutput);
+        return new GhAnswer(run.Output, run.FailureOutput, run.TimedOut);
     }
 
     private async Task<string?> RunAsync(IReadOnlyList<string> arguments, string? token, CancellationToken ct) =>

@@ -17,7 +17,6 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     private readonly SemaphoreSlim _reads = new(MostReadsAtOnce, MostReadsAtOnce);
     private readonly Dictionary<string, GitHubRepo?> _repoOfFolder = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<GitHubRepo, RepoActivity> _results = [];
-    private readonly Dictionary<GitHubRepo, long> _versions = [];
 
     /// <summary>A round changed at least one result, or <see cref="Replace"/> did; raised on whichever thread did it.</summary>
     public event EventHandler? Changed;
@@ -31,12 +30,12 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
-    /// <summary>Counts the results stored for the repository, so a caller can tell later whether one was stored since; take it before starting a long read.</summary>
-    public long VersionOf(GitHubRepo repo)
+    /// <summary>The result last stored for the repository, or null; take it before a long read and give it to <see cref="Replace"/>.</summary>
+    public RepoActivity? Latest(GitHubRepo repo)
     {
         lock (_gate)
         {
-            return _versions.GetValueOrDefault(repo);
+            return _results.GetValueOrDefault(repo);
         }
     }
 
@@ -74,14 +73,13 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     }
 
     /// <summary>
-    /// Sets one kind's newest items from a full list (the popup read it all), and its count when the list is the whole truth, so
-    /// the pill agrees with it before the next round. A list that reached the limit, or left a row out, does not know the count:
-    /// the one GraphQL gave stays. <paramref name="all"/> is newest first, as <see cref="GitHubReader.ListAsync"/> gives it.
-    /// Nothing is known of a repository no round has read, so that one is left alone.
+    /// Sets one kind's newest items from a full list (the popup read it all), and its count as <see cref="GitHubList.TotalGiven"/>
+    /// has it, so the pill agrees with it before the next round. <paramref name="all"/> is newest first, as
+    /// <see cref="GitHubReader.ListAsync"/> gives it. Nothing is known of a repository no round has read, so that one is left alone.
     /// </summary>
-    /// <param name="since">The <see cref="VersionOf"/> from before the list was read: a result stored since is newer than the list, which then changes nothing.</param>
+    /// <param name="since">The <see cref="Latest"/> from before the list was read: when another result has been stored since, the list changes nothing.</param>
     /// <returns>The count the repository now holds for that kind, which is the list's when it was applied; null when no round has read the repository.</returns>
-    public int? Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, long? since = null)
+    public int? Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all, RepoActivity? since = null)
     {
         int total;
         lock (_gate)
@@ -91,7 +89,9 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 return null;
             }
 
-            if (since is { } started && started < _versions.GetValueOrDefault(repo))
+            // A list read before a newer result was stored must not overwrite it. The other orders, and a round that changed only the
+            // other kind, are accepted: the next refresh heals them.
+            if (since is not null && !ReferenceEquals(last, since))
             {
                 return kind == GitHubItemKind.Issue ? last.OpenIssues : last.OpenPullRequests;
             }
@@ -106,17 +106,11 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 return total;
             }
 
-            Store(repo, next);
+            _results[repo] = next;
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
         return total;
-    }
-
-    private void Store(GitHubRepo repo, RepoActivity result)
-    {
-        _results[repo] = result;
-        _versions[repo] = _versions.GetValueOrDefault(repo) + 1;
     }
 
     /// <returns><c>Moved</c> is true when the folder now shows another result than before, which no read of the round would report.</returns>
@@ -186,8 +180,6 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     {
                         return false;
                     }
-
-                    _versions[repo] = _versions.GetValueOrDefault(repo) + 1;
                 }
 
                 logger.LogInformation("No account can see the repository of {Folder}; its result goes", folder);
@@ -213,7 +205,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     return false;
                 }
 
-                Store(repo, activity);
+                _results[repo] = activity;
                 return true;
             }
         }

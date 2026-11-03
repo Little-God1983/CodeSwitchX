@@ -21,8 +21,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly Action<GitHubListViewModel> _closed;
-    private bool _isClosed;
-    private CancellationTokenSource? _stop;
+    // Cancelled when the panel closes, which ends the gh run instead of leaving it to run out its timeout. It has no timer and
+    // no wait handle is taken from it, so there is nothing to dispose.
+    private readonly CancellationTokenSource _stop = new();
 
     [ObservableProperty] private string _heading;
     [ObservableProperty] private IReadOnlyList<GitHubRow> _rows;
@@ -69,24 +70,19 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Completes when the read of <see cref="LoadAsync"/> has ended, however it ended.</summary>
     internal Task Loaded => _loaded.Task;
 
-    /// <summary>Reads the full list. The tile's count follows it even when the panel was closed meanwhile; the panel does not.</summary>
+    /// <summary>Reads the full list. Closing the panel cancels the read: nothing it would have found reaches the panel or the tile.</summary>
     public async Task LoadAsync(CancellationToken ct)
     {
-        // Its own cancellation: closing the panel ends the gh run instead of leaving it to run out its timeout.
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _stop = stop;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         try
         {
-            if (_isClosed)
+            if (!linked.IsCancellationRequested)
             {
-                stop.Cancel();
+                await ReadAsync(linked.Token).ConfigureAwait(false);
             }
-
-            await ReadAsync(stop.Token).ConfigureAwait(false);
         }
         finally
         {
-            _stop = null;
             _ui.Post(() => IsLoading = false);
             _loaded.TrySetResult();
         }
@@ -96,7 +92,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     {
         var activity = _pill.Activity;
         GitHubList? all;
-        var since = _activity.VersionOf(activity.Repo);
+        var since = _activity.Latest(activity.Repo);
         try
         {
             all = await _reader.ListAsync(activity.Repo, activity.Account, _pill.Kind, ct).ConfigureAwait(false);
@@ -130,7 +126,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     private void Show(GitHubList? all, int? stored)
     {
-        if (_isClosed)
+        if (_stop.IsCancellationRequested)
         {
             return;
         }
@@ -161,16 +157,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     [RelayCommand]
     private void Close()
     {
-        _isClosed = true;
-        try
-        {
-            _stop?.Cancel();
-        }
-        catch (ObjectDisposedException)
-        {
-            // the read ended meanwhile
-        }
-
+        _stop.Cancel();
         _closed(this);
     }
 

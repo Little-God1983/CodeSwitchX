@@ -50,7 +50,10 @@ public class YardGitHubTests : IDisposable
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));
 
-        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null)
+        public async Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            new(await RunAsAsync(login, arguments, ct));
+
+        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
             lock (Names)
             {

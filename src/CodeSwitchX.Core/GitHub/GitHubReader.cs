@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.GitHub;
 
@@ -15,7 +16,7 @@ public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
 /// Reads a repository's open issues and pull requests through <see cref="IGhCli"/>, as whichever signed-in account can see
 /// it best. Nothing is remembered: which account reads is worked out again on every read, so a brief failure cannot stick.
 /// </summary>
-public sealed class GitHubReader(IGhCli gh)
+public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null)
 {
     private const string QueryTemplate = """
         query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission
@@ -78,13 +79,15 @@ public sealed class GitHubReader(IGhCli gh)
     public async Task<GitHubList?> ListAsync(GitHubRepo repo, string account, GitHubItemKind kind, CancellationToken ct)
     {
         var isPullRequest = kind == GitHubItemKind.PullRequest;
-        var output = await gh.RunAsAsync(account,
+        var answer = await gh.ListAsAsync(account,
         [
             isPullRequest ? "pr" : "issue", "list", "-R", repo.Slug, "--state", "open", "--limit", GitHubList.Limit.ToString(CultureInfo.InvariantCulture),
             "--json", isPullRequest ? "number,title,url,updatedAt,labels,headRefName,author" : "number,title,url,updatedAt,labels",
-        ], ct, GhCli.ListTimeout).ConfigureAwait(false);
-        if (output is null)
+        ], ct).ConfigureAwait(false);
+        if (answer.Output is not { } output)
         {
+            // No names: a repository's name is not for a log.
+            logger?.LogWarning(answer.TimedOut ? "Reading a GitHub list ran out of its time" : "Reading a GitHub list failed");
             return null;
         }
 
@@ -93,11 +96,12 @@ public sealed class GitHubReader(IGhCli gh)
             using var doc = JsonDocument.Parse(output);
             var rows = doc.RootElement.EnumerateArray().Select(row => ParseItem(row, graphql: false, isPullRequest)).ToList();
             var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
-            // Not one row read: the format is not what it was, which is a read that failed, not a repository with nothing in it.
-            return list.Items.Count == 0 && list.Skipped > 0 ? null : list;
+            // Two rows or more and not one read: the format is not what it was, which is a read that failed. A single odd row is a skipped one.
+            return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
+            logger?.LogWarning("A GitHub list was not in the format expected");
             return null;
         }
     }
@@ -129,8 +133,8 @@ public sealed class GitHubReader(IGhCli gh)
             var pullRequests = node.GetProperty("pullRequests");
             var issueCount = issues.GetProperty("totalCount").GetInt32();
             var pullRequestCount = pullRequests.GetProperty("totalCount").GetInt32();
-            if (Newest(issues, issueCount, isPullRequest: false) is not { } newestIssues
-                || Newest(pullRequests, pullRequestCount, isPullRequest: true) is not { } newestPullRequests)
+            if (Newest(issues, isPullRequest: false) is not { } newestIssues
+                || Newest(pullRequests, isPullRequest: true) is not { } newestPullRequests)
             {
                 return new AccountRead();
             }
@@ -145,12 +149,12 @@ public sealed class GitHubReader(IGhCli gh)
         }
     }
 
-    /// <summary>The items of a preview, odd ones left out; null when there are open items and not one could be read, which is a read that failed.</summary>
-    private static List<GitHubItem>? Newest(JsonElement kind, int total, bool isPullRequest)
+    /// <summary>The items of a preview, odd ones left out; null when two nodes or more came and not one could be read, which is a read that failed.</summary>
+    private static List<GitHubItem>? Newest(JsonElement kind, bool isPullRequest)
     {
         var nodes = kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)).ToList();
         var items = nodes.OfType<GitHubItem>().ToList();
-        return items.Count == 0 && nodes.Count > 0 && total > 0 ? null : items;
+        return items.Count == 0 && nodes.Count > 1 ? null : items;
     }
 
     /// <summary>

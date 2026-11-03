@@ -156,7 +156,7 @@ public class GhCliTests : IDisposable
 
         var answer = await new GhCli(script, TimeSpan.FromSeconds(1)).AnswerAsAsync("acme", ["api", "graphql"], CancellationToken.None);
 
-        answer.ShouldBe(new GhAnswer(null));
+        answer.ShouldBe(new GhAnswer(null, TimedOut: true));
     }
 
     [Fact]
@@ -188,31 +188,40 @@ public class GhCliTests : IDisposable
     }
 
     [Fact]
-    public async Task A_run_given_a_longer_timeout_outlasts_the_usual_one()
+    public async Task A_list_read_outlasts_the_usual_timeout()
     {
-        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1));
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
 
-        var output = await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None, TimeSpan.FromSeconds(30));
+        var answer = await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None);
 
-        output.ShouldNotBeNull().Trim().ShouldBe("done");
+        answer.Output.ShouldNotBeNull().Trim().ShouldBe("done");
+        answer.TimedOut.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task A_run_without_a_longer_timeout_is_killed_at_the_usual_one()
+    public async Task A_list_read_has_its_own_timeout_and_says_it_ran_out_of_it()
     {
-        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1));
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1));
+
+        (await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None)).ShouldBe(new GhAnswer(null, TimedOut: true));
+    }
+
+    [Fact]
+    public async Task A_single_read_is_killed_at_the_usual_timeout_whatever_the_list_timeout_is()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
 
         (await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None)).ShouldBeNull();
     }
 
     [Fact]
-    public async Task The_token_lookup_keeps_the_usual_timeout_whatever_the_run_is_given()
+    public async Task The_token_lookup_keeps_the_usual_timeout_whatever_the_list_timeout_is()
     {
         var script = Path.Combine(_root, "slowtoken.cmd");
         await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (ping -n 4 127.0.0.1 >nul& echo a-token& exit /b 0)\r\necho done\r\n", TestContext.Current.CancellationToken);
-        var gh = new GhCli(script, TimeSpan.FromSeconds(1));
+        var gh = new GhCli(script, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
 
-        (await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None, TimeSpan.FromSeconds(30))).ShouldBeNull();
+        (await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None)).Output.ShouldBeNull();
     }
 
     [Theory]
