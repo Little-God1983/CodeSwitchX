@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 using CodeSwitchX.Conductor;
@@ -12,6 +13,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
 using CodeSwitchX.Hosting;
+using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.VsCode.Companion;
 using CodeSwitchX.Hosting.Win32;
@@ -21,6 +23,7 @@ using CodeSwitchX.Ingest.Live;
 using CodeSwitchX.Ingest.Transcripts;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
+using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Raven;
 using CodeSwitchX.UI.Settings;
@@ -104,6 +107,7 @@ public partial class App : Application
 
             var shell = _host.Services.GetRequiredService<ShellViewModel>();
             await shell.InitializeAsync(CancellationToken.None);
+            await _host.Services.GetRequiredService<GitHubBrowsers>().LoadAsync(CancellationToken.None);
             // From now on Raven takes a chat's question while its panel is open (#74); before, every one goes to VS Code.
             var engine = _host.Services.GetRequiredService<SessionEngine>();
             // One it holds goes to VS Code once the Cab shows the chat's own VS Code.
@@ -292,6 +296,8 @@ public partial class App : Application
         // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
         services.AddSingleton<IGhCli>(_ => new GhCli());
         services.AddSingleton<GitHubReader>();
+        services.AddSingleton(sp => new GitHubBrowsers(new BrowserCatalog(new InstalledBrowsers()), sp.GetRequiredService<ISettingsStore>(),
+            info => Process.Start(info) is not null, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<GitHubReader>(),
             (path, ct) => sp.GetRequiredService<GitInspector>().RunAsync(path, "config --get remote.origin.url", ct),
             sp.GetRequiredService<ILogger<GitHubActivity>>()));
