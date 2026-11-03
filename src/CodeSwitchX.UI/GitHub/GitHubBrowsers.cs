@@ -12,7 +12,9 @@ namespace CodeSwitchX.UI.GitHub;
 /// </summary>
 public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settings, Func<ProcessStartInfo, bool> start, ILogger<GitHubBrowsers> logger)
 {
+    // Read on the UI thread, written there and by LoadAsync's continuation: every access holds the lock.
     private readonly Dictionary<string, string> _choices = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
 
     /// <summary>The saved choices; unreadable ones leave every account on the Windows default. Never throws.</summary>
     public async Task LoadAsync(CancellationToken ct)
@@ -21,9 +23,12 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         {
             if (await settings.GetAsync<Dictionary<string, string>>(SettingKeys.GitHubBrowsers, ct).ConfigureAwait(false) is { } stored)
             {
-                foreach (var (login, id) in stored)
+                lock (_gate)
                 {
-                    _choices[login] = id;
+                    foreach (var (login, id) in stored)
+                    {
+                        _choices[login] = id;
+                    }
                 }
             }
         }
@@ -33,12 +38,24 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         }
     }
 
-    public string ChoiceFor(string login) => _choices.TryGetValue(login, out var id) ? id : BrowserEntry.DefaultId;
+    public string ChoiceFor(string login)
+    {
+        lock (_gate)
+        {
+            return _choices.TryGetValue(login, out var id) ? id : BrowserEntry.DefaultId;
+        }
+    }
 
     public void SetChoice(string login, string id)
     {
-        _choices[login] = id;
-        _ = SaveAsync();
+        Dictionary<string, string> copy;
+        lock (_gate)
+        {
+            _choices[login] = id;
+            copy = new Dictionary<string, string>(_choices);
+        }
+
+        _ = SaveAsync(copy);
     }
 
     /// <summary>The label of the account's browser; the id itself when that browser is gone.</summary>
@@ -98,11 +115,11 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         return $"Couldn't open {entry.Label}. Pick another browser in Settings, GitHub.";
     }
 
-    private async Task SaveAsync()
+    private async Task SaveAsync(Dictionary<string, string> choices)
     {
         try
         {
-            await settings.SetAsync(SettingKeys.GitHubBrowsers, new Dictionary<string, string>(_choices), CancellationToken.None).ConfigureAwait(false);
+            await settings.SetAsync(SettingKeys.GitHubBrowsers, choices, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

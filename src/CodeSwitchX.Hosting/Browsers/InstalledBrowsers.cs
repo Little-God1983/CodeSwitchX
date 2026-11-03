@@ -14,11 +14,15 @@ public sealed class InstalledBrowsers : IBrowserSource
         {
             try
             {
-                using var root = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64).OpenSubKey(ClientsKey);
-                foreach (var name in root?.GetSubKeyNames() ?? [])
+                using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+                using var root = baseKey.OpenSubKey(ClientsKey);
+                if (root is not null)
                 {
-                    using var command = root!.OpenSubKey($@"{name}\shell\open\command");
-                    found.Add((name, ExecutableOf(command?.GetValue(null) as string)));
+                    found.AddRange(Collect(root.GetSubKeyNames(), name =>
+                    {
+                        using var command = root.OpenSubKey($@"{name}\shell\open\command");
+                        return command?.GetValue(null) as string;
+                    }));
                 }
             }
             catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
@@ -30,14 +34,29 @@ public sealed class InstalledBrowsers : IBrowserSource
         return found;
     }
 
+    /// <summary>Each name with the program of its open command; a name that cannot be read is left out, not the others.</summary>
+    internal static List<(string Key, string? Executable)> Collect(IEnumerable<string> names, Func<string, string?> commandOf)
+    {
+        var found = new List<(string, string?)>();
+        foreach (var name in names)
+        {
+            try
+            {
+                found.Add((name, ExecutableOf(commandOf(name))));
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+            {
+                // One key that cannot be read is not a reason to hide the others.
+            }
+        }
+
+        return found;
+    }
+
     public string? FirefoxProfilesIni() => ReadText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Mozilla", "Firefox", "profiles.ini"));
 
-    public string? EdgeLocalState() => LocalState("Microsoft", "Edge");
-
-    public string? ChromeLocalState() => LocalState("Google", "Chrome");
-
-    private static string? LocalState(string vendor, string product) =>
-        ReadText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), vendor, product, "User Data", "Local State"));
+    public string? ChromiumLocalState(string folder) =>
+        ReadText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), folder, "User Data", "Local State"));
 
     private static string? ReadText(string path)
     {
@@ -51,8 +70,8 @@ public sealed class InstalledBrowsers : IBrowserSource
         }
     }
 
-    /// <summary>The program of a command line: the quoted part, or up to the first space.</summary>
-    private static string? ExecutableOf(string? command)
+    /// <summary>The program of a command line: the quoted part, or an unquoted path through its <c>.exe</c> (it may hold spaces), else up to the first space.</summary>
+    internal static string? ExecutableOf(string? command)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -64,6 +83,16 @@ public sealed class InstalledBrowsers : IBrowserSource
         {
             var end = command.IndexOf('"', 1);
             return end > 1 ? command[1..end] : null;
+        }
+
+        // An unquoted path may hold spaces: the program ends at the first ".exe" that is followed by a space or the end.
+        for (var at = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase); at >= 0; at = command.IndexOf(".exe", at + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            var end = at + 4;
+            if (end == command.Length || command[end] == ' ')
+            {
+                return command[..end];
+            }
         }
 
         var space = command.IndexOf(' ');

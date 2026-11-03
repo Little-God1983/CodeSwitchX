@@ -136,13 +136,54 @@ public class GitHubBrowsersTests
         Create().Open("someone", Url).ShouldBeNull();
     }
 
+    [Fact]
+    public async Task Choices_that_cannot_be_read_leave_every_account_on_the_Windows_default()
+    {
+        _store.GetAsync<Dictionary<string, string>>(SettingKeys.GitHubBrowsers, Arg.Any<CancellationToken>())
+            .Returns<Task<Dictionary<string, string>?>>(_ => throw new InvalidOperationException("broken"));
+        var browsers = Create();
+
+        await browsers.LoadAsync(TestContext.Current.CancellationToken);
+
+        browsers.ChoiceFor("someone").ShouldBe(BrowserEntry.DefaultId);
+        browsers.Open("someone", Url).ShouldBeNull();
+        _started.ShouldHaveSingleItem().UseShellExecute.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_choice_whose_save_fails_is_still_used()
+    {
+        _store.SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException(new IOException("disk full")));
+        var browsers = Create();
+
+        browsers.SetChoice("someone", "firefox|alpha");
+        await Task.Delay(50, TestContext.Current.CancellationToken); // the save is not awaited by the caller
+
+        browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
+        browsers.Open("someone", Url).ShouldBeNull();
+        _started.ShouldHaveSingleItem().FileName.ShouldBe(@"C:\ff\firefox.exe");
+        await _store.Received(1).SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void A_save_that_throws_at_once_is_not_thrown_to_the_caller()
+    {
+        _store.SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new IOException("disk full"));
+        var browsers = Create();
+
+        Should.NotThrow(() => browsers.SetChoice("someone", "firefox|alpha"));
+
+        browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
         public IReadOnlyList<(string Key, string? Executable)> Keys { get; init; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
 
         public IReadOnlyList<(string Key, string? Executable)> Installed() => Keys;
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=name with space\n";
-        public string? EdgeLocalState() => null;
-        public string? ChromeLocalState() => null;
+        public string? ChromiumLocalState(string folder) => null;
     }
 }

@@ -636,7 +636,6 @@ public class SettingsViewModelTests : IDisposable
         await _store.Received().SetAsync(SettingKeys.FontScale, 0.9, Arg.Any<CancellationToken>());
     }
 
-    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>
     [Theory]
     [InlineData("Firefox")]
     [InlineData("PR")]
@@ -691,6 +690,7 @@ public class SettingsViewModelTests : IDisposable
         page.Accounts.Select(a => a.Login).ShouldBe(["again"]);
     }
 
+    /// <summary>#162: folded, the search box is gone, and a search left in it would filter the pages with no way to clear it.</summary>
     [Fact]
     public void A_search_is_cleared_when_the_sidebar_folds()
     {

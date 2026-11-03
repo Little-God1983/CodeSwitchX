@@ -3,8 +3,9 @@ namespace CodeSwitchX.Hosting.Browsers;
 /// <summary>
 /// One way to open an address (#335): the Windows default, or an installed browser with one of its profiles.
 /// <paramref name="Id"/> carries the profile (<c>firefox|name</c>, <c>edge|Default</c>), so a saved choice survives another profile being added.
+/// <paramref name="IsFirefox"/> is set by the catalog for every Firefox build, which opens an address as a tab.
 /// </summary>
-public sealed record BrowserEntry(string Id, string Label, string? Executable, IReadOnlyList<string> ProfileArguments)
+public sealed record BrowserEntry(string Id, string Label, string? Executable, IReadOnlyList<string> ProfileArguments, bool IsFirefox = false)
 {
     public const string DefaultId = "default";
 
@@ -14,8 +15,7 @@ public sealed record BrowserEntry(string Id, string Label, string? Executable, I
     /// <summary>The command line that opens <paramref name="url"/>; each value is one entry, so a profile name with a space stays whole.</summary>
     public IReadOnlyList<string> Arguments(string url)
     {
-        // Firefox is told by "-P": it starts a window in that profile, and needs the address marked as a tab to open.
-        var firefox = ProfileArguments.Count > 0 && ProfileArguments[0] == "-P";
-        return [.. ProfileArguments, .. firefox ? new[] { "-new-tab", url } : [url]];
+        // Firefox started with a profile opens a window in it, and needs the address marked as a tab to open.
+        return [.. ProfileArguments, .. IsFirefox ? new[] { "-new-tab", url } : [url]];
     }
 }

@@ -34,7 +34,8 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             (logins, entries) = await Task.Run(async () =>
             {
                 var accounts = await gh.AccountsAsync(ct).ConfigureAwait(false);
-                // The installed browsers are read once for all rows.
+                // The installed browsers are read again, so one installed since the page was last open is there, and once for all rows.
+                catalog.Refresh();
                 return (accounts, catalog.List());
             }, ct);
         }
@@ -50,15 +51,49 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             return; // a later refresh is the newer answer
         }
 
-        Accounts.Clear();
-        foreach (var login in logins)
+        // The rows are updated in place: a row whose login is still there stays, so a pick or a Test line in progress is not interrupted.
+        for (var i = Accounts.Count - 1; i >= 0; i--)
         {
-            Accounts.Add(new GitHubAccountRow(login, entries, browsers.ChoiceFor(login), id => browsers.SetChoice(login, id),
-                () => browsers.Open(login, "https://github.com/settings/profile")));
+            if (!logins.Contains(Accounts[i].Login))
+            {
+                Accounts.RemoveAt(i);
+            }
+        }
+
+        for (var i = 0; i < logins.Count; i++)
+        {
+            var login = logins[i];
+            var at = IndexOf(login);
+            if (at < 0)
+            {
+                Accounts.Insert(i, new GitHubAccountRow(login, entries, browsers.ChoiceFor(login), id => browsers.SetChoice(login, id),
+                    () => browsers.Open(login, "https://github.com/settings/profile")));
+                continue;
+            }
+
+            if (at != i)
+            {
+                Accounts.Move(at, i);
+            }
+
+            Accounts[i].Update(entries);
         }
 
         _read = true;
         OnPropertyChanged(nameof(HasNoAccounts));
+    }
+
+    private int IndexOf(string login)
+    {
+        for (var i = 0; i < Accounts.Count; i++)
+        {
+            if (Accounts[i].Login == login)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 }
 
@@ -74,14 +109,13 @@ public sealed partial class GitHubAccountRow : ObservableObject
         Login = login;
         _selectedId = selectedId;
         _save = save;
-        // A browser that is gone stays selected, shown as missing, so the choice is not lost behind another one.
-        Choices = entries.Any(e => e.Id == selectedId) ? entries : [.. entries, new BrowserEntry(selectedId, $"Missing: {selectedId}", null, [])];
+        Choices = ChoicesFor(entries, selectedId);
         TestCommand = new RelayCommand(() => Message = open());
     }
 
     public string Login { get; }
 
-    public IReadOnlyList<BrowserEntry> Choices { get; }
+    public IReadOnlyList<BrowserEntry> Choices { get; private set; }
 
     public string SelectedId
     {
@@ -103,6 +137,28 @@ public sealed partial class GitHubAccountRow : ObservableObject
     }
 
     public IRelayCommand TestCommand { get; }
+
+    /// <summary>Takes the browsers installed now; the list, and with it the combo box, changes only when they differ from what the row has.</summary>
+    public void Update(IReadOnlyList<BrowserEntry> entries)
+    {
+        var choices = ChoicesFor(entries, _selectedId);
+        if (choices.Count == Choices.Count && choices.Zip(Choices).All(p => Same(p.First, p.Second)))
+        {
+            return;
+        }
+
+        Choices = choices;
+        OnPropertyChanged(nameof(Choices));
+        // The combo box drops its selection while the list is rebuilt: it reads the pick again.
+        OnPropertyChanged(nameof(SelectedId));
+    }
+
+    private static bool Same(BrowserEntry a, BrowserEntry b) =>
+        a.Id == b.Id && a.Label == b.Label && a.Executable == b.Executable && a.IsFirefox == b.IsFirefox && a.ProfileArguments.SequenceEqual(b.ProfileArguments);
+
+    // A browser that is gone stays selected, shown as missing, so the choice is not lost behind another one.
+    private static IReadOnlyList<BrowserEntry> ChoicesFor(IReadOnlyList<BrowserEntry> entries, string selectedId) =>
+        entries.Any(e => e.Id == selectedId) ? entries : [.. entries, new BrowserEntry(selectedId, $"Missing: {selectedId}", null, [])];
 
     /// <summary>Why the Test could not open the browser, or none.</summary>
     [ObservableProperty] private string? _message;

@@ -885,7 +885,6 @@ public class GitHubListViewModelTests
     {
         public IReadOnlyList<(string Key, string? Executable)> Installed() => [("Firefox-1A2B", @"C:\ff\firefox.exe")];
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=beta\n";
-        public string? EdgeLocalState() => null;
-        public string? ChromeLocalState() => null;
+        public string? ChromiumLocalState(string folder) => null;
     }
 }
