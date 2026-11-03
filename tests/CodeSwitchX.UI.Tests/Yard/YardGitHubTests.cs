@@ -368,6 +368,7 @@ public class YardGitHubTests : IDisposable
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
         _bus.Publish(new WorkspaceUnregistered(app.Id));
         yard.FindTile(app.Id).ShouldBeNull();
+        await yard.RefreshGitAsync(CancellationToken.None);
         _gh.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _bus.Publish(new WorkspaceRegistered(app));
@@ -377,6 +378,60 @@ public class YardGitHubTests : IDisposable
         yard.FindTile(app.Id)!.GitLines[0].Issues.ShouldBeNull("the counts of the removed tile are old; the new read has not come back");
         _gh.Gate.SetResult();
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+    }
+
+    [Fact]
+    public async Task A_workspace_added_again_is_read_fresh_when_a_round_wrote_back_after_it_was_removed()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        using var release = new ManualResetEventSlim();
+        var lookups = 0;
+        var origin = _originOf;
+        _originOf = path =>
+        {
+            Interlocked.Increment(ref lookups);
+            release.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            return origin(path);
+        };
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => Volatile.Read(ref lookups) >= 1);
+        _bus.Publish(new WorkspaceUnregistered(app.Id));
+        await yard.RefreshGitAsync(CancellationToken.None);
+        release.Set();
+        await Eventually(() => _activity!.Knows(app.RootPath)); // the round that was in flight wrote its mapping back
+        await yard.RefreshGitAsync(CancellationToken.None); // the next pass sweeps it
+        _activity!.Knows(app.RootPath).ShouldBeFalse();
+        _gh.Issues = 7;
+
+        _bus.Publish(new WorkspaceRegistered(app));
+
+        var until = DateTime.UtcNow.AddSeconds(5);
+        while (yard.FindTile(app.Id)?.GitLines[0].Issues?.Count != 7 && DateTime.UtcNow < until)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        yard.FindTile(app.Id)!.GitLines[0].Issues!.Count.ShouldBe(7);
+    }
+
+    [Fact]
+    public async Task A_folder_that_left_the_workspace_file_is_dropped_by_the_next_git_round()
+    {
+        var sdk = Repo("sdk");
+        var nexus = Repo("nexus");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "nexus" } ] }""");
+        var full = Add("Full", sdk, file);
+        var yard = Yard(true, full);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(full.Id)!.GitLines is [{ Issues: not null }, { Issues: not null }]);
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" } ] }""");
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        _activity!.Knows(nexus).ShouldBeFalse();
+        _activity.Knows(sdk).ShouldBeTrue();
     }
 
     [Fact]

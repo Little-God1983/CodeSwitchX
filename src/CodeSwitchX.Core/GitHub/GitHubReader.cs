@@ -46,8 +46,6 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         if (owner is not null)
         {
             var own = await ReadAsAsync(repo, owner, ct).ConfigureAwait(false);
-            // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
-            ct.ThrowIfCancellationRequested();
             if (own.Activity is not null)
             {
                 return new RepoRead(own.Activity);
@@ -61,7 +59,6 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         foreach (var account in candidates)
         {
             var read = await ReadAsAsync(repo, account, ct).ConfigureAwait(false);
-            ct.ThrowIfCancellationRequested();
             everyoneSaysNotFound &= read.NotFound;
             // Strictly greater: on a tie the first login alphabetically stays.
             if (read.Activity is not null && (best is null || read.Rank > best.Rank))
@@ -127,6 +124,9 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
         [
             "api", "graphql", "-f", $"query={Query}", "-f", $"owner={repo.Owner}", "-f", $"name={repo.Name}",
         ], ct).ConfigureAwait(false);
+
+        // A cancelled run gives nothing, which is neither "cannot see it" nor a reason to start the other accounts.
+        ct.ThrowIfCancellationRequested();
         if (answer.Output is not { } output)
         {
             return new AccountRead(NotFound: IsNotFound(answer.FailureOutput));

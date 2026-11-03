@@ -37,6 +37,9 @@ public sealed class GitInspector
 
     private static string DefaultProfileDirectory => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
+    /// <summary>The git directory the folder's repository has, full path, as <see cref="GitInfo.GitDir"/> gives it; null outside a repository (or below the user profile). Reads the disk.</summary>
+    public static string? FindGitDir(string folder) => ResolveGitDir(folder, DefaultProfileDirectory) is { } gitDir ? Path.GetFullPath(gitDir) : null;
+
     public static string? ReadBranch(string root) => ReadHead(ResolveGitDir(root, DefaultProfileDirectory));
 
     private static string? ReadHead(string? gitDir)

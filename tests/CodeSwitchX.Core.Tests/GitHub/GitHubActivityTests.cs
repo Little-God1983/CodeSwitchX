@@ -521,13 +521,13 @@ public class GitHubActivityTests
     }
 
     [Fact]
-    public async Task A_forgotten_folder_is_unknown_and_its_repository_result_goes_with_it()
+    public async Task A_folder_not_retained_is_unknown_and_its_repository_result_goes_with_it()
     {
         var gh = new FakeGh();
         var activity = Activity(gh);
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
-        activity.Forget([@"c:\r\tool"]);
+        activity.Retain([]);
 
         activity.Knows(@"c:\r\tool").ShouldBeFalse();
         activity.ForFolder(@"c:\r\tool").ShouldBeNull();
@@ -535,25 +535,54 @@ public class GitHubActivityTests
     }
 
     [Fact]
-    public async Task A_repository_keeps_its_result_while_another_folder_refers_to_it()
+    public async Task A_repository_keeps_its_result_while_a_retained_folder_refers_to_it()
     {
         var gh = new FakeGh();
         var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
         await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
 
-        activity.Forget([@"c:\r\a"]);
+        activity.Retain([@"c:\r\b"]);
 
         activity.Knows(@"c:\r\a").ShouldBeFalse();
         activity.ForFolder(@"c:\r\b").ShouldNotBeNull();
     }
 
     [Fact]
-    public async Task A_folder_added_again_after_it_was_forgotten_is_read_afresh()
+    public async Task A_folder_is_retained_with_or_without_a_trailing_separator()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\x"], CancellationToken.None);
+
+        activity.Retain([@"c:\r\x\"]);
+
+        activity.Knows(@"c:\r\x").ShouldBeTrue();
+        activity.ForFolder(@"c:\r\x").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task The_old_result_of_a_moved_origin_goes_when_no_folder_refers_to_it_any_more()
+    {
+        var gh = new FakeGh();
+        var origin = new OriginLookup("https://github.com/acme/tool.git");
+        var activity = Activity(gh, _ => origin);
+        await activity.RefreshAsync([@"c:\r\a"], CancellationToken.None);
+        origin = new OriginLookup("https://github.com/acme/other.git");
+        await activity.RefreshAsync([@"c:\r\a"], CancellationToken.None);
+
+        activity.Retain([@"c:\r\a"]);
+
+        activity.Latest(new GitHubRepo("acme", "tool")).ShouldBeNull();
+        activity.ForFolder(@"c:\r\a")!.Repo.ShouldBe(new GitHubRepo("acme", "other"));
+    }
+
+    [Fact]
+    public async Task A_folder_added_again_after_it_was_dropped_is_read_afresh()
     {
         var gh = new FakeGh { Issues = 3 };
         var activity = Activity(gh);
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
-        activity.Forget([@"c:\r\tool"]);
+        activity.Retain([]);
         gh.Issues = 8;
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);

@@ -12,8 +12,31 @@ public sealed record OriginLookup(string? Url, bool Failed = false)
 
     public static readonly OriginLookup Failure = new(null, Failed: true);
 
-    public static async Task<OriginLookup> ReadAsync(string folder, CancellationToken ct) =>
-        From(await GitInspector.RunProcessAsync(GitInspector.GitStartInfo(folder, "config --get remote.origin.url"), GitInspector.DefaultTimeout, ct).ConfigureAwait(false));
+    /// <summary>
+    /// Asks the folder's own git directory, never the one git would find by walking up: a <c>.git</c> git rejects is a failure, not the
+    /// origin of a repository above it. A folder outside any repository has no origin; one that cannot be reached is a failure.
+    /// </summary>
+    public static async Task<OriginLookup> ReadAsync(string folder, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested)
+        {
+            return Failure;
+        }
+
+        var (gitDir, valid) = await Task.Run(() => GitInspector.FindGitDir(folder) is { } dir ? (dir, File.Exists(Path.Combine(dir, "HEAD"))) : (null, false), ct).ConfigureAwait(false);
+        if (gitDir is null)
+        {
+            return Directory.Exists(folder) ? NoOrigin : Failure;
+        }
+
+        // git config would read an empty directory without complaint; one without a HEAD is not a repository git accepts.
+        if (!valid)
+        {
+            return Failure;
+        }
+
+        return From(await GitInspector.RunProcessAsync(GitInspector.GitStartInfo(folder, $"--git-dir=\"{gitDir}\" config --get remote.origin.url"), GitInspector.DefaultTimeout, ct).ConfigureAwait(false));
+    }
 
     /// <summary>
     /// <c>git config --get</c> exits 1 when the key is not set. Every other way to end without an answer (timed out, did not

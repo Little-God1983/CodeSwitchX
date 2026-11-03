@@ -6,7 +6,8 @@ namespace CodeSwitchX.Core.GitHub;
 /// The open issues and pull requests of the repositories the Yard's folders belong to, in memory only. A round reads the
 /// accounts once and each repository once however many folders share it, four at a time; a read that fails keeps the last
 /// result, one every account answers with "not found" drops it, and a result that did not change keeps its instance, so the
-/// tiles built on it compare equal and stay as they are.
+/// tiles built on it compare equal and stay as they are. A round raises <see cref="Changed"/> when a result changed or a folder
+/// now belongs to another repository. <see cref="Retain"/> lets go of what no folder on the tiles needs any more.
 /// </summary>
 public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger)
 {
@@ -48,14 +49,18 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
-    /// <summary>The folders left the tiles: each entry goes, and so does the result of a repository no folder refers to any more, so a folder added again is read afresh.</summary>
-    public void Forget(IEnumerable<string> folders)
+    /// <summary>
+    /// Keeps the entry of each of <paramref name="folders"/> and drops the others, and drops the result of every repository no remaining
+    /// folder refers to: a folder that left the tiles, or the workspace file's list, or whose origin moved, is read afresh when it comes back.
+    /// </summary>
+    public void Retain(IReadOnlyCollection<string> folders)
     {
+        var keep = folders.Select(Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         lock (_gate)
         {
-            foreach (var folder in folders)
+            foreach (var folder in _repoOfFolder.Keys.Where(f => !keep.Contains(f)).ToList())
             {
-                _repoOfFolder.Remove(Key(folder));
+                _repoOfFolder.Remove(folder);
             }
 
             var referred = _repoOfFolder.Values.OfType<GitHubRepo>().ToHashSet();
@@ -132,7 +137,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         return true;
     }
 
-    /// <returns><c>Moved</c> is true when the folder now shows another result than before, which no read of the round would report.</returns>
+    /// <returns><c>Moved</c> is true when the folder now belongs to another repository than before (or to its first), which no read of the round would report when the repository was read already.</returns>
     private async Task<(string Folder, GitHubRepo? Repo, bool Moved)> RepoOfAsync(string folder, CancellationToken ct)
     {
         try
@@ -157,8 +162,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
 
                 var repo = GitHubRepo.FromRemote(origin.Url);
                 _repoOfFolder[folder] = repo;
-                // Another repository is a change whatever its result is: the folder's pills come from the mapping too.
-                return (folder, repo, known != repo || !ReferenceEquals(ResultOf(known), ResultOf(repo)));
+                return (folder, repo, known != repo);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -239,8 +243,6 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             _reads.Release();
         }
     }
-
-    private RepoActivity? ResultOf(GitHubRepo? repo) => repo is null ? null : _results.GetValueOrDefault(repo);
 
     private static string Key(string path) => Path.TrimEndingDirectorySeparator(path);
 }
