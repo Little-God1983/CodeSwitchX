@@ -19,7 +19,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     private readonly Dictionary<string, GitHubRepo?> _repoOfFolder = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<GitHubRepo, RepoActivity> _results = [];
 
-    /// <summary>A round changed at least one result, or <see cref="Replace"/> did; raised on whichever thread did it.</summary>
+    /// <summary>A round changed at least one result or moved a folder to another repository (its first included), or <see cref="Replace"/> changed a result; raised on whichever thread did it.</summary>
     public event EventHandler? Changed;
 
     /// <summary>What was last read for the repository the folder belongs to; null before the first read, when it has no GitHub origin, or when no account can see the repository.</summary>
@@ -211,14 +211,10 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             }
 
             var activity = read.Activity;
-            if (activity is null)
-            {
-                logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
-            }
-
             // Nothing read: the last result stays. A zero is a read like any other.
             if (activity is null)
             {
+                logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
                 return false;
             }
 

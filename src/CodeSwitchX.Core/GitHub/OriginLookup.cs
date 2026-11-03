@@ -13,20 +13,23 @@ public sealed record OriginLookup(string? Url, bool Failed = false)
     public static readonly OriginLookup Failure = new(null, Failed: true);
 
     /// <summary>
-    /// Asks the folder's own git directory, never the one git would find by walking up: a <c>.git</c> without a HEAD is no repository and
-    /// has no origin, not the origin of one above it. A folder that cannot be reached is a failure; a cancelled lookup throws.
+    /// Asks the folder's own git directory, never the one git would find by walking up. No origin only where that is known: no <c>.git</c>
+    /// in a folder that exists, or a git directory that can be listed and has no HEAD (git would read it without complaint). A folder or
+    /// git directory that cannot be reached, or a pointer that leads nowhere, is a failure. A cancelled lookup throws.
     /// </summary>
     public static async Task<OriginLookup> ReadAsync(string folder, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        var (gitDir, valid) = await Task.Run(() => new GitInspector().GitDirOf(folder) is { } dir ? (dir, File.Exists(Path.Combine(dir, "HEAD"))) : (null, false), ct).ConfigureAwait(false);
-        if (gitDir is null)
+        string? gitDir;
+        try
         {
-            return Directory.Exists(folder) ? NoOrigin : Failure;
+            gitDir = await Task.Run(() => GitDirWithHead(folder), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Failure;
         }
 
-        // git config would read an empty directory without complaint.
-        if (!valid)
+        if (gitDir is null)
         {
             return NoOrigin;
         }
@@ -36,9 +39,26 @@ public sealed record OriginLookup(string? Url, bool Failed = false)
         return From(run);
     }
 
+    /// <returns>The folder's git directory; null when it has none or none with a HEAD. Throws <see cref="IOException"/> when that cannot be told.</returns>
+    private static string? GitDirWithHead(string folder)
+    {
+        if (!Directory.Exists(folder))
+        {
+            throw new DirectoryNotFoundException(folder);
+        }
+
+        var gitDir = GitInspector.GitDirOfFolder(folder, out var dangling);
+        if (dangling)
+        {
+            throw new IOException("The pointer in .git leads nowhere");
+        }
+
+        return gitDir is not null && Directory.EnumerateFileSystemEntries(gitDir, "HEAD").Any() ? gitDir : null;
+    }
+
     /// <summary>
     /// <c>git config --get</c> exits 1 when the key is not set. Every other way to end without an answer (timed out, did not
-    /// start, cancelled, git gave up on a broken config with 128) says nothing about the origin.
+    /// start, git gave up on a broken config with 128) says nothing about the origin.
     /// </summary>
     internal static OriginLookup From(ProcessRunResult run) => run switch
     {

@@ -416,6 +416,32 @@ public class YardGitHubTests : IDisposable
     }
 
     [Fact]
+    public async Task A_workspace_removed_and_added_again_during_a_held_round_is_asked_for_again()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        using var release = new ManualResetEventSlim();
+        var lookups = 0;
+        var origin = _originOf;
+        _originOf = path =>
+        {
+            Interlocked.Increment(ref lookups);
+            release.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            return origin(path);
+        };
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => Volatile.Read(ref lookups) >= 1);
+        _bus.Publish(new WorkspaceUnregistered(app.Id));
+        _bus.Publish(new WorkspaceRegistered(app));
+        await Eventually(() => yard.FindTile(app.Id)?.GitLines[0].Branch == "main");
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        release.Set();
+
+        await Eventually(() => Volatile.Read(ref lookups) >= 2);
+    }
+
+    [Fact]
     public async Task A_folder_that_left_the_workspace_file_is_dropped_by_the_next_git_round()
     {
         var sdk = Repo("sdk");

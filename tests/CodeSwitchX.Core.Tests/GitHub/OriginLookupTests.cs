@@ -64,6 +64,16 @@ public class OriginLookupTests : IDisposable
     }
 
     [Fact]
+    public async Task A_pointer_file_to_a_git_directory_that_is_gone_is_a_failure_not_a_missing_origin()
+    {
+        var folder = Path.Combine(_root, "dangling");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, ".git"), "gitdir: " + Path.Combine(_root, "not-there") + "\n");
+
+        (await OriginLookup.ReadAsync(folder, TestContext.Current.CancellationToken)).ShouldBe(OriginLookup.Failure);
+    }
+
+    [Fact]
     public async Task A_pointer_file_ending_in_a_separator_still_finds_the_origin()
     {
         await Git("init");

@@ -46,7 +46,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly GitHubReader? _gitHubReader;
     private readonly GitHubBrowsers? _gitHubBrowsers;
     private readonly CancellationTokenSource _gitHubStop = new();
-    private readonly HashSet<string> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, object> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
     private ITimer? _tabsTimer;
 
     /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
@@ -728,10 +728,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
                     // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
                     // A folder already asked for waits for that round to end, so a slow one is not queued behind itself every 30 s.
-                    var unknown = paths.Where(p => !_gitHub.Knows(p)).Where(AskGitHubOf).ToList();
+                    var round = new object();
+                    var unknown = AskGitHubOf(paths.Where(p => !_gitHub.Knows(p)), round);
                     if (unknown.Count > 0)
                     {
-                        _ = RefreshGitHubAsync(unknown, asked: true);
+                        _ = RefreshGitHubAsync(unknown, round);
                     }
                 }
             }
@@ -789,7 +790,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         };
     }
 
-    /// <summary>"No git" on the tile: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
+    /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
     private static bool HasRepository(GitLine line) => line.IsRepository;
 
     /// <summary>Runs on the UI thread, which owns the tiles.</summary>
@@ -797,7 +798,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList());
 
     /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
-    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders, bool asked = false) => Task.Run(async () =>
+    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders, object? asked = null) => Task.Run(async () =>
     {
         try
         {
@@ -813,22 +814,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (asked)
+            if (asked is not null)
             {
                 lock (_gitHubAsked)
                 {
-                    _gitHubAsked.ExceptWith(folders);
+                    // Only its own asks: a folder asked for again meanwhile (removed and added back) belongs to the later round.
+                    foreach (var folder in folders.Where(f => _gitHubAsked.TryGetValue(f, out var by) && by == asked))
+                    {
+                        _gitHubAsked.Remove(folder);
+                    }
                 }
             }
         }
     });
 
     /// <summary>True the first time a folder is asked for; again only after the round that was asked to read it has ended, whatever it came to.</summary>
-    private bool AskGitHubOf(string folder)
+    private List<string> AskGitHubOf(IEnumerable<string> folders, object round)
     {
         lock (_gitHubAsked)
         {
-            return _gitHubAsked.Add(folder);
+            return folders.Where(f => _gitHubAsked.TryAdd(f, round)).ToList();
         }
     }
 
@@ -1101,8 +1106,19 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             {
                 group.Tiles.Remove(tile);
                 tile.Removed = true;
-                // Not left to the next git pass: the workspace added again within 30 s must not show the old counts.
-                _gitHub?.Retain(ShownFolders(Tiles));
+                // Not left to the next git pass: the workspace added again within 30 s must not show the old counts, nor wait for a round asked for before.
+                if (_gitHub is not null)
+                {
+                    var kept = ShownFolders(Tiles);
+                    _gitHub.Retain(kept);
+                    lock (_gitHubAsked)
+                    {
+                        foreach (var folder in ShownFolders([tile]).Except(kept, StringComparer.OrdinalIgnoreCase))
+                        {
+                            _gitHubAsked.Remove(folder);
+                        }
+                    }
+                }
                 TilesChanged?.Invoke();
                 TileRemoved?.Invoke(workspaceId);
                 return;
