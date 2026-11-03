@@ -28,6 +28,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Why the full list could not be read, or none. Kept apart from <see cref="OpenMessage"/>: each says what happened and neither hides the other.</summary>
     [ObservableProperty] private string? _loadMessage;
 
+    /// <summary>Says the list is cut short when the repository holds more than the read gave, or none. Kept apart from <see cref="LoadMessage"/>: the list did load.</summary>
+    [ObservableProperty] private string? _cutShortMessage;
+
     /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
@@ -71,7 +74,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private async Task ReadAsync(CancellationToken ct)
     {
         var activity = _pill.Activity;
-        IReadOnlyList<GitHubItem>? all;
+        GitHubList? all;
         try
         {
             all = await _reader.ListAsync(activity.Repo, activity.Account, _pill.Kind, ct).ConfigureAwait(false);
@@ -95,7 +98,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
         _ui.Post(() => Show(all));
     }
 
-    private void Show(IReadOnlyList<GitHubItem>? all)
+    private void Show(GitHubList? all)
     {
         if (_isClosed)
         {
@@ -108,8 +111,11 @@ public sealed partial class GitHubListViewModel : ObservableObject
             return;
         }
 
-        Heading = HeadingFor(all.Count);
-        Rows = RowsOf(all);
+        // A list that is not the whole truth (the limit, a row left out) keeps the count GraphQL gave.
+        var total = all.TotalGiven(_pill.Count);
+        Heading = HeadingFor(total);
+        Rows = RowsOf(all.Items);
+        CutShortMessage = all.ReachedLimit && total > all.Items.Count ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
         LoadMessage = null;
     }
 

@@ -179,6 +179,58 @@ public class GhCliTests : IDisposable
         accounts.ShouldBe(["amy", "zed", "kim", "lou"]);
     }
 
+    /// <summary>A gh that gives a token, takes about three seconds and then prints "done".</summary>
+    private async Task<string> SlowGh()
+    {
+        var script = Path.Combine(_root, "slow.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (echo a-token& exit /b 0)\r\nping -n 4 127.0.0.1 >nul\r\necho done\r\n", TestContext.Current.CancellationToken);
+        return script;
+    }
+
+    [Fact]
+    public async Task A_run_given_a_longer_timeout_outlasts_the_usual_one()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1));
+
+        var output = await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None, TimeSpan.FromSeconds(30));
+
+        output.ShouldNotBeNull().Trim().ShouldBe("done");
+    }
+
+    [Fact]
+    public async Task A_run_without_a_longer_timeout_is_killed_at_the_usual_one()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1));
+
+        (await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_token_lookup_keeps_the_usual_timeout_whatever_the_run_is_given()
+    {
+        var script = Path.Combine(_root, "slowtoken.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (ping -n 4 127.0.0.1 >nul& echo a-token& exit /b 0)\r\necho done\r\n", TestContext.Current.CancellationToken);
+        var gh = new GhCli(script, TimeSpan.FromSeconds(1));
+
+        (await gh.RunAsAsync("acme", ["issue", "list"], CancellationToken.None, TimeSpan.FromSeconds(30))).ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("""[1,2]""", new string[0])]
+    [InlineData("""{"hosts":[]}""", new string[0])]
+    [InlineData("""{"hosts":{"github.com":{"login":"amy"}}}""", new string[0])]
+    [InlineData("""{"hosts":{"github.com":[{"login":5},{"login":null},{"login":"amy"},"zed",null,{"state":"x"}]}}""", new[] { "amy" })]
+    [InlineData("""{"hosts":{"github.com":[{"login":"amy"},{"login":"kim"}]}}""", new[] { "amy", "kim" })]
+    public async Task Accounts_survive_an_unexpected_shape_and_give_what_they_can(string payload, string[] expected)
+    {
+        var file = Path.Combine(_root, "status.json");
+        await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + file + "\"\r\n", TestContext.Current.CancellationToken);
+
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(expected);
+    }
+
     [Fact]
     public async Task A_missing_gh_gives_no_accounts()
     {

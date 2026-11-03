@@ -11,7 +11,6 @@ namespace CodeSwitchX.Core.GitHub;
 public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger)
 {
     private const int MostReadsAtOnce = 4;
-    private const int PreviewCount = 5;
 
     private readonly object _gate = new();
     private readonly SemaphoreSlim _round = new(1, 1);
@@ -65,11 +64,12 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     }
 
     /// <summary>
-    /// Sets one kind's count and five newest from a full list (the popup read it all), so the pill agrees with it before the
-    /// next round. <paramref name="all"/> is newest first, as <see cref="GitHubReader.ListAsync"/> gives it. Nothing is
-    /// known of a repository no round has read, so that one is left alone.
+    /// Sets one kind's newest items from a full list (the popup read it all), and its count when the list is the whole truth, so
+    /// the pill agrees with it before the next round. A list that reached the limit, or left a row out, does not know the count:
+    /// the one GraphQL gave stays. <paramref name="all"/> is newest first, as <see cref="GitHubReader.ListAsync"/> gives it.
+    /// Nothing is known of a repository no round has read, so that one is left alone.
     /// </summary>
-    public void Replace(GitHubRepo repo, GitHubItemKind kind, IReadOnlyList<GitHubItem> all)
+    public void Replace(GitHubRepo repo, GitHubItemKind kind, GitHubList all)
     {
         lock (_gate)
         {
@@ -78,10 +78,10 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 return;
             }
 
-            var newest = all.Take(PreviewCount).ToList();
+            var newest = all.Items.Take(RepoActivity.PreviewCount).ToList();
             var next = kind == GitHubItemKind.Issue
-                ? last with { OpenIssues = all.Count, NewestIssues = newest }
-                : last with { OpenPullRequests = all.Count, NewestPullRequests = newest };
+                ? last with { OpenIssues = all.TotalGiven(last.OpenIssues), NewestIssues = newest }
+                : last with { OpenPullRequests = all.TotalGiven(last.OpenPullRequests), NewestPullRequests = newest };
             if (last.SameAs(next))
             {
                 return;

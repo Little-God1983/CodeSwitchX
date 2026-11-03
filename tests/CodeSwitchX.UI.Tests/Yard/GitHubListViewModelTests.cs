@@ -34,10 +34,15 @@ public class GitHubListViewModelTests
 
     private sealed class FakeGh : IGhCli
     {
-        /// <summary>What the pill's read finds: one issue, 12 in all.</summary>
-        private const string Graphql = """
+        /// <summary>How many open issues the pill's read counts.</summary>
+        public int IssueTotal { get; set; } = 12;
+
+        /// <summary>What the pill's read finds: one issue, <see cref="IssueTotal"/> in all.</summary>
+        private string Graphql => GraphqlTemplate.Replace("TOTAL", IssueTotal.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+
+        private const string GraphqlTemplate = """
             {"data":{"repository":{"viewerPermission":"ADMIN",
-             "issues":{"totalCount":12,"nodes":[{"number":1,"title":"First","url":"https://github.com/acme/app/issues/1","updatedAt":"2026-09-23T06:00:00Z","labels":{"nodes":[]}}]},
+             "issues":{"totalCount":TOTAL,"nodes":[{"number":1,"title":"First","url":"https://github.com/acme/app/issues/1","updatedAt":"2026-09-23T06:00:00Z","labels":{"nodes":[]}}]},
              "pullRequests":{"totalCount":1,"nodes":[{"number":9,"title":"Ninth","url":"https://github.com/acme/app/pull/9","updatedAt":"2026-09-23T06:00:00Z","headRefName":"b","author":{"login":"me"},"labels":{"nodes":[]}}]}}}}
             """;
 
@@ -57,7 +62,7 @@ public class GitHubListViewModelTests
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));
 
-        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null)
         {
             if (arguments[0] == "api")
             {
@@ -409,6 +414,9 @@ public class GitHubListViewModelTests
             new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
         var panel = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
         panel.Children.OfType<Border>().Single().DataContext = new { GitHubList = list };
+        // a size of its own: in a window that sizes to its content, a list of a thousand rows would be as tall as all of them
+        panel.Width = 560;
+        panel.Height = 600;
         panel.Measure(new Size(560, 600));
         panel.Arrange(new Rect(0, 0, 560, 600));
         panel.UpdateLayout();
@@ -530,6 +538,139 @@ public class GitHubListViewModelTests
             Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
 
             Keyboard.FocusedElement.ShouldBeNull();
+        });
+    }
+
+    [Fact]
+    public async Task A_list_at_the_limit_keeps_the_graphql_total_and_says_it_is_cut_short()
+    {
+        _gh.IssueTotal = 1500;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Heading.ShouldBe("app: 1500 open issues");
+        list.CutShortMessage.ShouldBe("Showing the newest 1000 of 1500. The rest are on GitHub.");
+        list.Rows.Count.ShouldBe(1000);
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(1500);
+    }
+
+    [Fact]
+    public async Task A_list_that_just_fits_is_not_cut_short()
+    {
+        _gh.IssueTotal = 1000;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Heading.ShouldBe("app: 1000 open issues");
+        list.CutShortMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_list_below_the_limit_sets_the_count_and_says_nothing()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(999));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Heading.ShouldBe("app: 999 open issues");
+        list.CutShortMessage.ShouldBeNull();
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(999);
+    }
+
+    [Fact]
+    public async Task A_skipped_row_does_not_lower_the_count()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#3"]);
+        list.Heading.ShouldBe("app: 12 open issues");
+        list.CutShortMessage.ShouldBeNull();
+        activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
+    }
+
+    /// <summary>A panel with that many rows, measured and arranged.</summary>
+    private async Task<GitHubListViewModel> ListWithRowsAsync(int rows)
+    {
+        _gh.IssueTotal = rows;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(rows));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+        return list;
+    }
+
+    private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>().Where(b => b.DataContext is GitHubRow).ToList();
+
+    [Fact]
+    public async Task A_thousand_rows_build_far_fewer_row_containers()
+    {
+        var list = await ListWithRowsAsync(1000);
+
+        await StaThread.RunAsync(() =>
+        {
+            var built = RowButtons(Panel(list)).Count;
+
+            built.ShouldBeGreaterThan(0);
+            built.ShouldBeLessThan(100);
+        });
+    }
+
+    [Fact]
+    public async Task Tab_past_the_visible_rows_scrolls_to_the_next_row_and_stays_in_the_panel()
+    {
+        var list = await ListWithRowsAsync(1000);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(list);
+            using var _ = source;
+            var visible = RowButtons(panel).Count;
+            visible.ShouldBeInRange(1, 99); // the rows in view only, so that the loop below goes past them
+
+            for (var step = 1; step <= visible + 5; step++)
+            {
+                ((UIElement)Keyboard.FocusedElement).MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+                panel.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+                // the keyboard stays inside the panel and lands on the next row, and the next
+                ((Button)Keyboard.FocusedElement).DataContext.ShouldBeSameAs(list.Rows[step]);
+            }
+        });
+    }
+
+    [Fact]
+    public async Task The_down_arrow_past_the_visible_rows_scrolls_to_the_next_row()
+    {
+        var list = await ListWithRowsAsync(1000);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(list);
+            using var _ = source;
+            var visible = RowButtons(panel).Count;
+            visible.ShouldBeInRange(1, 99);
+
+            for (var step = 1; step <= visible + 5; step++)
+            {
+                ((UIElement)Keyboard.FocusedElement).MoveFocus(new TraversalRequest(FocusNavigationDirection.Down));
+                panel.UpdateLayout();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+                ((Button)Keyboard.FocusedElement).DataContext.ShouldBeSameAs(list.Rows[step]);
+            }
         });
     }
 

@@ -10,8 +10,8 @@ public interface IGhCli
     /// <summary>Logins signed in to github.com; empty when <c>gh</c> is missing or fails.</summary>
     Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct);
 
-    /// <summary>Runs <c>gh</c> as that account; stdout when it exited with code 0, otherwise null.</summary>
-    Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct);
+    /// <summary>Runs <c>gh</c> as that account; stdout when it exited with code 0, otherwise null. <paramref name="timeout"/> is for a run that may take longer than the usual one; the token lookup keeps the usual one.</summary>
+    Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null);
 
     /// <summary>The same run, with what a failed one printed: for a caller that has to tell GitHub's own "no" from a read that failed.</summary>
     Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct);

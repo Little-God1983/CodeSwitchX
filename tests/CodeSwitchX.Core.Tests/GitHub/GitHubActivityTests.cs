@@ -41,7 +41,7 @@ public class GitHubActivityTests
             return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult(Accounts);
         }
 
-        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null) =>
             (await AnswerAsAsync(login, arguments, ct)).Output;
 
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
@@ -249,7 +249,7 @@ public class GitHubActivityTests
         var changes = 0;
         activity.Changed += (_, _) => changes++;
 
-        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, Enumerable.Range(1, 7).Select(Item).ToList());
+        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, new GitHubList(Enumerable.Range(1, 7).Select(Item).ToList()));
 
         var after = activity.ForFolder(@"c:\r\tool")!;
         after.OpenIssues.ShouldBe(7);
@@ -257,6 +257,35 @@ public class GitHubActivityTests
         after.OpenPullRequests.ShouldBe(before.OpenPullRequests);
         after.NewestPullRequests.ShouldBe(before.NewestPullRequests);
         changes.ShouldBe(1);
+    }
+
+    private static GitHubList ListOf(int items, int skipped = 0) =>
+        new(Enumerable.Range(1, items).Select(Item).ToList(), skipped);
+
+    /// <summary>A repository GraphQL counts 1500 open issues of.</summary>
+    private static async Task<(GitHubActivity Activity, GitHubRepo Repo)> ReadOf1500Async()
+    {
+        var gh = new FakeGh { Issues = 1500 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        return (activity, new GitHubRepo("acme", "tool"));
+    }
+
+    [Theory]
+    [InlineData(7, 0, 7)]
+    [InlineData(999, 0, 999)]
+    [InlineData(1000, 0, 1500)]
+    [InlineData(998, 2, 1500)]
+    [InlineData(7, 1, 1500)]
+    public async Task Replace_keeps_the_graphql_total_unless_the_list_is_whole(int items, int skipped, int expected)
+    {
+        var (activity, repo) = await ReadOf1500Async();
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(items, skipped));
+
+        var after = activity.ForFolder(@"c:	ool")!;
+        after.OpenIssues.ShouldBe(expected);
+        after.NewestIssues.Select(i => i.Number).ShouldBe(Enumerable.Range(1, Math.Min(5, items)));
     }
 
     [Fact]

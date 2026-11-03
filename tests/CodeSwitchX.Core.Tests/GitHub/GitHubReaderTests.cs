@@ -19,8 +19,12 @@ public class GitHubReaderTests
 
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult(accounts);
 
-        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        /// <summary>The timeout each run asked for; null is the default one.</summary>
+        public List<TimeSpan?> Timeouts { get; } = [];
+
+        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct, TimeSpan? timeout = null)
         {
+            Timeouts.Add(timeout);
             Asked.Add(login);
             Commands.Add(arguments);
             return Task.FromResult(answer(login, arguments));
@@ -266,8 +270,8 @@ public class GitHubReaderTests
 
         gh.Asked.ShouldBe(["amy"]);
         gh.Commands.Single().ShouldBe(["issue", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels"]);
-        items!.Select(i => i.Number).ShouldBe([3, 2]);
-        items![0].Labels.ShouldBe([new GitHubLabel("bug", "ff0000")]);
+        items!.Items.Select(i => i.Number).ShouldBe([3, 2]);
+        items.Items[0].Labels.ShouldBe([new GitHubLabel("bug", "ff0000")]);
     }
 
     [Fact]
@@ -281,7 +285,7 @@ public class GitHubReaderTests
         var items = await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None);
 
         gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,author"]);
-        var item = items.ShouldNotBeNull().Single();
+        var item = items.ShouldNotBeNull().Items.Single();
         item.Branch.ShouldBe("feature/x");
         item.Author.ShouldBe("amy");
     }
@@ -297,7 +301,7 @@ public class GitHubReaderTests
 
         var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
 
-        items.Select(i => i.Author).ShouldBe([null, "amy"]);
+        items.Items.Select(i => i.Author).ShouldBe([null, "amy"]);
     }
 
     [Theory]
@@ -312,7 +316,7 @@ public class GitHubReaderTests
 
         var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
 
-        items.Single().Author.ShouldBe(expected);
+        items.Items.Single().Author.ShouldBe(expected);
     }
 
     [Fact]
@@ -321,6 +325,116 @@ public class GitHubReaderTests
         var gh = new FakeGh([], (_, _) => null);
 
         (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    private const string GoodRow = """{"number":2,"title":"Fine","url":"u2","updatedAt":"2026-11-02T10:00:00Z","labels":[]}""";
+
+    [Theory]
+    [InlineData("""{"number":"1","title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1.5,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":7,"url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":null,"updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":null,"labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"last tuesday","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":7}""")]
+    [InlineData("""[1,2]""")]
+    public async Task ListAsync_skips_an_odd_row_and_keeps_the_others(string odd)
+    {
+        var gh = new FakeGh([], (_, _) => "[" + odd + "," + GoodRow + "]");
+
+        var list = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldNotBeNull();
+
+        list.Items.Select(i => i.Number).ShouldBe([2]);
+        list.Skipped.ShouldBe(1);
+        list.IsExact.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":4}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    public async Task ListAsync_skips_a_pull_request_with_an_odd_branch(string odd)
+    {
+        var good = """{"number":2,"title":"Fine","url":"u2","updatedAt":"2026-11-02T10:00:00Z","labels":[],"headRefName":"b"}""";
+        var gh = new FakeGh([], (_, _) => "[" + odd + "," + good + "]");
+
+        var list = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
+
+        list.Items.Select(i => i.Number).ShouldBe([2]);
+        list.Skipped.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("not json at all")]
+    [InlineData("""{"number":1}""")]
+    [InlineData("""[{"number":1""")]
+    [InlineData("")]
+    public async Task ListAsync_gives_null_for_malformed_JSON(string output)
+    {
+        var gh = new FakeGh([], (_, _) => output);
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ListAsync_is_given_the_long_timeout_and_the_graphql_read_is_not()
+    {
+        var gh = new FakeGh(["amy"], (_, args) => args[0] == "api" ? Graphql("ADMIN") : "[]");
+        var reader = new GitHubReader(gh);
+
+        await reader.ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None);
+        await reader.ReadAsync(Repo, ["amy"], CancellationToken.None);
+
+        gh.Timeouts.ShouldBe([GhCli.ListTimeout, null]);
+        GhCli.ListTimeout.ShouldBe(TimeSpan.FromSeconds(120));
+    }
+
+    [Fact]
+    public async Task An_odd_node_in_the_preview_is_skipped_and_the_total_stays()
+    {
+        var odd = "{\"number\":\"x\",\"title\":\"T\",\"url\":\"u\",\"updatedAt\":null,\"labels\":{\"nodes\":[]}}";
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 9, issueNodes: odd + "," + IssueNode(4, "Fine")) });
+
+        var activity = (await Read(gh)).ShouldNotBeNull();
+
+        activity.OpenIssues.ShouldBe(9);
+        activity.NewestIssues.Select(i => i.Number).ShouldBe([4]);
+    }
+
+    [Fact]
+    public async Task The_query_asks_for_as_many_as_the_preview_keeps()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN") });
+
+        await Read(gh);
+
+        RepoActivity.PreviewCount.ShouldBe(5);
+        var query = gh.Commands.Single().First(a => a.StartsWith("query=", StringComparison.Ordinal));
+        query.Split("first:" + RepoActivity.PreviewCount + ",", StringSplitOptions.None).Length.ShouldBe(3);
+    }
+
+    [Theory]
+    [InlineData(0, 0, true)]
+    [InlineData(999, 0, true)]
+    [InlineData(999, 1, false)]
+    [InlineData(1000, 0, false)]
+    [InlineData(500, 3, false)]
+    public void A_list_is_exact_only_below_the_limit_with_no_skipped_row(int items, int skipped, bool exact)
+    {
+        var list = new GitHubList(Enumerable.Range(1, items).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList(), skipped);
+
+        list.IsExact.ShouldBe(exact);
+        list.TotalGiven(known: 1500).ShouldBe(exact ? items : 1500);
+    }
+
+    [Fact]
+    public void A_list_never_totals_below_what_it_shows()
+    {
+        var list = new GitHubList(Enumerable.Range(1, 1000).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList());
+
+        list.ReachedLimit.ShouldBeTrue();
+        list.TotalGiven(known: 40).ShouldBe(1000);
     }
 
     [Fact]
