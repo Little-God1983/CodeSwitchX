@@ -20,6 +20,9 @@ public class YardGitHubTests : IDisposable
     private readonly IWorkspaceStore _store = Substitute.For<IWorkspaceStore>();
     private readonly Track _general = new() { Name = "General", SortOrder = 0 };
     private readonly FakeGh _gh = new();
+    private readonly List<YardViewModel> _yards = [];
+    private GitHubActivity? _activity;
+    private string? _profile;
 
     /// <summary>What each folder's git says its origin is: github.com/acme/&lt;folder name&gt;.</summary>
     private Func<string, OriginLookup> _originOf = path => new OriginLookup($"https://github.com/acme/{Path.GetFileName(path)}.git");
@@ -31,6 +34,9 @@ public class YardGitHubTests : IDisposable
         public int PullRequests { get; set; }
 
         public bool Hang { get; set; }
+
+        /// <summary>When set, every read waits for it.</summary>
+        public TaskCompletionSource? Gate { get; set; }
 
         public List<string> Names { get; } = [];
 
@@ -63,6 +69,11 @@ public class YardGitHubTests : IDisposable
             if (Hang)
             {
                 await Task.Delay(Timeout.Infinite, ct);
+            }
+
+            if (Gate is { } gate)
+            {
+                await gate.Task.WaitAsync(ct);
             }
 
             return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\","
@@ -110,6 +121,39 @@ public class YardGitHubTests : IDisposable
         }
     }
 
+    /// <summary>Runs every post at once but one: the Nth after <see cref="BlockNth"/> waits, on the posting thread, until <see cref="Release"/>, as a post that lands on the UI thread late.</summary>
+    private sealed class LateDispatcher : IUiDispatcher
+    {
+        private readonly ManualResetEventSlim _release = new();
+        private int _blockAt = -1;
+        private int _posts;
+
+        public bool Blocked { get; private set; }
+
+        public void BlockNth(int n)
+        {
+            _release.Reset();
+            _posts = 0;
+            Blocked = false;
+            Volatile.Write(ref _blockAt, n);
+        }
+
+        public void Release() => _release.Set();
+
+        public void Post(Action action)
+        {
+            if (Volatile.Read(ref _blockAt) > 0 && Interlocked.Increment(ref _posts) == _blockAt)
+            {
+                Blocked = true;
+                _release.Wait(TimeSpan.FromSeconds(30));
+            }
+
+            action();
+        }
+
+        public void Post<T>(Action<T> action, T state) => Post(() => action(state));
+    }
+
     public YardGitHubTests()
     {
         _store.GetTracksAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Track>>([_general]));
@@ -117,6 +161,11 @@ public class YardGitHubTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var yard in _yards)
+        {
+            yard.Dispose();
+        }
+
         if (Directory.Exists(_tempRoot))
         {
             Directory.Delete(_tempRoot, recursive: true);
@@ -149,11 +198,13 @@ public class YardGitHubTests : IDisposable
         pricing.Pricing.Returns(PricingTable.Default);
         var registry = new WorkspaceRegistry(_store, resolver, _bus);
         // Git answers "clean" to status.
-        var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(string.Empty));
-        var activity = withGitHub
+        var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(string.Empty), _profile);
+        _activity = withGitHub
             ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;
-        return new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: activity);
+        var yard = new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: _activity);
+        _yards.Add(yard);
+        return yard;
     }
 
     private static async Task Eventually(Func<bool> condition)
@@ -287,9 +338,10 @@ public class YardGitHubTests : IDisposable
     public async Task Every_ten_minutes_all_folders_are_read_again()
     {
         var app = Add("App", Repo("app"));
-        var yard = Yard(true, app);
+        var lib = Add("Lib", Repo("lib"));
+        var yard = Yard(true, app, lib);
         await yard.InitializeAsync(CancellationToken.None);
-        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null && yard.FindTile(lib.Id)!.GitLines[0].Issues is not null);
         await Quiet();
         var before = _gh.Reads;
 
@@ -298,10 +350,146 @@ public class YardGitHubTests : IDisposable
         _gh.Reads.ShouldBe(before, "not before the ten minutes are up");
         _time.Advance(TimeSpan.FromSeconds(1));
 
-        await Eventually(() => _gh.Reads > before);
+        await Eventually(() => _gh.Reads >= before + 2);
+        await Quiet();
+        _gh.Names.Count(n => n == "name=app").ShouldBeGreaterThan(1, "the first folder is read again");
+        _gh.Names.Count(n => n == "name=lib").ShouldBeGreaterThan(1, "the second folder is read again");
         _gh.Issues = 5;
         _time.Advance(YardViewModel.GitHubRefreshInterval);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues!.Count == 5 && yard.FindTile(lib.Id)!.GitLines[0].Issues!.Count == 5);
+    }
+
+    [Fact]
+    public async Task A_workspace_added_again_shows_no_old_counts()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        _bus.Publish(new WorkspaceUnregistered(app.Id));
+        yard.FindTile(app.Id).ShouldBeNull();
+        _gh.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _bus.Publish(new WorkspaceRegistered(app));
+
+        await Eventually(() => yard.FindTile(app.Id)?.GitLines[0].Branch == "main");
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        yard.FindTile(app.Id)!.GitLines[0].Issues.ShouldBeNull("the counts of the removed tile are old; the new read has not come back");
+        _gh.Gate.SetResult();
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+    }
+
+    [Fact]
+    public async Task Git_rounds_during_a_slow_origin_read_make_one_read()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        using var release = new ManualResetEventSlim();
+        var lookups = 0;
+        var origin = _originOf;
+        _originOf = path =>
+        {
+            Interlocked.Increment(ref lookups);
+            release.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            return origin(path);
+        };
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => Volatile.Read(ref lookups) >= 1);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await yard.RefreshGitAsync(CancellationToken.None);
+        }
+
+        release.Set();
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        await Quiet();
+        _gh.Reads.ShouldBe(1);
+        Volatile.Read(ref lookups).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_round_that_ended_in_failure_is_asked_for_again_by_the_next_git_round()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        var lookups = 0;
+        var origin = _originOf;
+        _originOf = path => Interlocked.Increment(ref lookups) == 1 ? OriginLookup.Failure : origin(path);
+
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => Volatile.Read(ref lookups) >= 1);
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (yard.FindTile(app.Id)!.GitLines[0].Issues is null && DateTime.UtcNow < until)
+        {
+            await yard.RefreshGitAsync(CancellationToken.None);
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        yard.FindTile(app.Id)!.GitLines[0].Issues.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_change_that_lands_between_computing_the_lines_and_posting_them_still_shows_the_newer_pills()
+    {
+        var app = Add("App", Repo("app"));
+        var late = new LateDispatcher();
+        var yard = Yard(true, late, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        await Quiet();
+        late.BlockNth(2); // the pass reads the tiles, then posts its lines
+        var pass = yard.RefreshGitAsync(CancellationToken.None);
+        await Eventually(() => late.Blocked);
+        _gh.Issues = 5;
+
+        await _activity!.RefreshAsync([app.RootPath], CancellationToken.None);
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues!.Count == 5);
+        late.Release();
+        await pass;
+
+        yard.FindTile(app.Id)!.GitLines[0].Issues!.Count.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task A_repository_whose_branch_cannot_be_read_keeps_its_pills()
+    {
+        var root = Path.Combine(_tempRoot, "headless");
+        Directory.CreateDirectory(Path.Combine(root, ".git")); // no HEAD in it
+        var app = Add("Headless", root);
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        yard.FindTile(app.Id)!.GitLines[0].Branch.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_folder_under_a_repository_at_the_user_profile_gets_no_origin_lookup_and_no_pills()
+    {
+        var home = Path.Combine(_tempRoot, "home");
+        Directory.CreateDirectory(Path.Combine(home, ".git"));
+        File.WriteAllText(Path.Combine(home, ".git", "HEAD"), "ref: refs/heads/main\n");
+        var work = Path.Combine(home, "work");
+        Directory.CreateDirectory(work);
+        _profile = home;
+        var asked = 0;
+        _originOf = _ =>
+        {
+            Interlocked.Increment(ref asked);
+            return new OriginLookup("https://github.com/acme/dotfiles.git");
+        };
+        var app = Add("Work", work);
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        Volatile.Read(ref asked).ShouldBe(0);
+        yard.FindTile(app.Id)!.GitLines[0].Text.ShouldBe("no git");
+        yard.FindTile(app.Id)!.GitLines[0].Issues.ShouldBeNull();
     }
 
     [Fact]

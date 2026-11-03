@@ -48,6 +48,24 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         }
     }
 
+    /// <summary>The folders left the tiles: each entry goes, and so does the result of a repository no folder refers to any more, so a folder added again is read afresh.</summary>
+    public void Forget(IEnumerable<string> folders)
+    {
+        lock (_gate)
+        {
+            foreach (var folder in folders)
+            {
+                _repoOfFolder.Remove(Key(folder));
+            }
+
+            var referred = _repoOfFolder.Values.OfType<GitHubRepo>().ToHashSet();
+            foreach (var repo in _results.Keys.Where(r => !referred.Contains(r)).ToList())
+            {
+                _results.Remove(repo);
+            }
+        }
+    }
+
     /// <summary>Works out the repository of each folder, reads each repository once and raises <see cref="Changed"/> once at the end if a result differs.</summary>
     public async Task RefreshAsync(IReadOnlyCollection<string> folders, CancellationToken ct)
     {
@@ -139,7 +157,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
 
                 var repo = GitHubRepo.FromRemote(origin.Url);
                 _repoOfFolder[folder] = repo;
-                return (folder, repo, !ReferenceEquals(ResultOf(known), ResultOf(repo)));
+                // Another repository is a change whatever its result is: the folder's pills come from the mapping too.
+                return (folder, repo, known != repo || !ReferenceEquals(ResultOf(known), ResultOf(repo)));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

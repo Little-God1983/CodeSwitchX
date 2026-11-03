@@ -46,6 +46,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly GitHubReader? _gitHubReader;
     private readonly GitHubBrowsers? _gitHubBrowsers;
     private readonly CancellationTokenSource _gitHubStop = new();
+    private readonly CancellationToken _gitHubStopToken;
+    private readonly HashSet<string> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
     private ITimer? _tabsTimer;
 
     /// <summary>The looks a moment after a VS Code closed (<see cref="ClosedListWait"/>), one per close; UI thread.</summary>
@@ -286,6 +288,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null)
     {
         _gitHub = gitHub;
+        _gitHubStopToken = _gitHubStop.Token;
         _gitHubReader = gitHubReader;
         _gitHubBrowsers = gitHubBrowsers;
         _storedLastUse = storedLastUse ?? (_ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(new Dictionary<Guid, DateTimeOffset>()));
@@ -713,10 +716,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
                 // A folder no GitHub round has looked at yet gets its pills now, not at the next ten minutes. Not awaited: a slow gh must not hold up git.
                 if (_gitHub is not null)
                 {
-                    var unknown = paths.Where(p => !_gitHub.Knows(p)).Distinct().ToList();
+                    // A folder already asked for waits for that round to end, so a slow one is not queued behind itself every 30 s.
+                    var unknown = paths.Where(p => !_gitHub.Knows(p)).Distinct().Where(AskGitHubOf).ToList();
                     if (unknown.Count > 0)
                     {
-                        _ = RefreshGitHubAsync(unknown);
+                        _ = RefreshGitHubAsync(unknown, asked: true);
                     }
                 }
             }
@@ -743,9 +747,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private async Task RefreshGitAsync(WorkspaceTileViewModel tile, List<string> paths, CancellationToken ct)
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
-        var lines = (await GitLinesAsync(tile, info, ct).ConfigureAwait(false)).Select(WithGitHub).ToList();
+        var lines = await GitLinesAsync(tile, info, ct).ConfigureAwait(false);
         paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
-        _ui.Post(() => tile.ShowGit(lines));
+        // The pills are taken from the GitHub side when the tile shows the lines, not before: a result stored meanwhile is not overwritten by an older one.
+        _ui.Post(() => tile.ShowGit(lines.Select(WithGitHub).ToList()));
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
         // in it lands on this tile within one refresh; a removed one stops being one. Git that fails to answer changes nothing.
@@ -774,18 +779,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>"No git" on the tile: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
-    private static bool HasRepository(GitLine line) => line.Branch is not null;
+    private static bool HasRepository(GitLine line) => line.IsRepository;
 
     /// <summary>Runs on the UI thread, which owns the tiles.</summary>
     private void RefreshGitHubOfAllTiles() =>
         _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList());
 
     /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
-    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders) => Task.Run(async () =>
+    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders, bool asked = false) => Task.Run(async () =>
     {
         try
         {
-            await _gitHub!.RefreshAsync(folders, _gitHubStop.Token).ConfigureAwait(false);
+            await _gitHub!.RefreshAsync(folders, _gitHubStopToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -795,7 +800,26 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             _logger.LogWarning(ex, "The GitHub refresh round ended early");
         }
+        finally
+        {
+            if (asked)
+            {
+                lock (_gitHubAsked)
+                {
+                    _gitHubAsked.ExceptWith(folders);
+                }
+            }
+        }
     });
+
+    /// <summary>True the first time a folder is asked for; again only after the round that was asked to read it has ended, whatever it came to.</summary>
+    private bool AskGitHubOf(string folder)
+    {
+        lock (_gitHubAsked)
+        {
+            return _gitHubAsked.Add(folder);
+        }
+    }
 
     private void OnGitHubChanged(object? sender, EventArgs e) => _ui.Post(() =>
     {
@@ -818,7 +842,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var folders = tile.Workspace.WorkspaceFile is { } file ? WorkspaceProbe.FoldersOf(file) : [];
         if (folders is null)
         {
-            return [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath }, .. previous.Skip(1)];
+            return [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository }, .. previous.Skip(1)];
         }
 
         var rootKey = PathNormalizer.Normalize(tile.RootPath);
@@ -826,7 +850,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             folders.FirstOrDefault(f => PathNormalizer.Normalize(f.Path) == rootKey)?.Label ?? WorkspaceProbe.FolderName(tile.RootPath),
             root.Branch,
             root.DirtyCount,
-            tile.RootPath);
+            tile.RootPath,
+            IsRepository: root.IsRepository);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -857,7 +882,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             try
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
-                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path);
+                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -928,7 +953,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
         GitHubList = list;
         // Not on the UI thread: the load starts its first gh before its first await.
-        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
+        _ = Task.Run(() => list.LoadAsync(_gitHubStopToken));
     }
 
     [RelayCommand]
@@ -1053,6 +1078,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>The folders of a tile that left: the GitHub side forgets them, so the workspace added again is read afresh. A folder another tile still shows stays.</summary>
+    private void ForgetGitHubOf(WorkspaceTileViewModel tile)
+    {
+        if (_gitHub is null)
+        {
+            return;
+        }
+
+        var kept = Tiles.SelectMany(t => t.GitLines).Select(l => l.Path).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _gitHub.Forget(tile.GitLines.Select(l => l.Path).OfType<string>().Where(p => !kept.Contains(p)).ToList());
+    }
+
     private void RemoveTile(Guid workspaceId)
     {
         foreach (var group in Groups)
@@ -1061,6 +1098,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             if (tile is not null)
             {
                 group.Tiles.Remove(tile);
+                ForgetGitHubOf(tile);
                 TilesChanged?.Invoke();
                 TileRemoved?.Invoke(workspaceId);
                 return;
@@ -1132,6 +1170,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _gitHubStop.Cancel();
+        _gitHubStop.Dispose();
         _tabsTimer?.Dispose();
         _disposed = true;
         foreach (var timer in _closedListTimers)

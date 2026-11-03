@@ -583,6 +583,64 @@ public class GitHubReaderTests
         Make("a").SameAs(Make("b")).ShouldBeFalse();
     }
 
+    private static GitHubItem Pr(string? branch = "feature", string? author = "amy", string label = "bug") =>
+        new(1, "t", "u", DateTimeOffset.UnixEpoch, [new GitHubLabel(label, "f00")], branch, author);
+
+    private static RepoActivity Activity(string account = "acme", int issues = 1, int pullRequests = 1, GitHubItem? pr = null, GitHubRepo? repo = null) =>
+        new(repo ?? Repo, account, issues, pullRequests, [], [pr ?? Pr()]);
+
+    [Theory]
+    [MemberData(nameof(Differences))]
+    public void SameAs_sees_every_difference(RepoActivity other)
+    {
+        Activity().SameAs(other).ShouldBeFalse();
+        Activity().SameAs(Activity()).ShouldBeTrue();
+    }
+
+    public static TheoryData<RepoActivity> Differences => new()
+    {
+        Activity(account: "other"),
+        Activity(issues: 2),
+        Activity(pullRequests: 2),
+        Activity(repo: new GitHubRepo("acme", "other")),
+        Activity(pr: Pr(label: "feature")),
+        Activity(pr: Pr(branch: "other")),
+        Activity(pr: Pr(author: "bob")),
+        Activity(pr: Pr(author: null)),
+        new RepoActivity(Repo, "acme", 1, 1, [], []),
+    };
+
+    [Fact]
+    public async Task A_cancelled_read_stops_at_the_account_it_cancelled_in()
+    {
+        using var stop = new CancellationTokenSource();
+        var gh = new FakeGh(["a", "b", "c"], (_, _) =>
+        {
+            stop.Cancel();
+            return null;
+        });
+        gh.Printed["a"] = gh.Printed["b"] = gh.Printed["c"] = NotFound;
+
+        await Should.ThrowAsync<OperationCanceledException>(new GitHubReader(gh).ReadAsync(new GitHubRepo("other", "tool"), gh.Accounts, stop.Token));
+
+        gh.Asked.ShouldBe(["a"]);
+    }
+
+    [Fact]
+    public async Task A_read_cancelled_in_the_owners_account_asks_no_other()
+    {
+        using var stop = new CancellationTokenSource();
+        var gh = new FakeGh(["acme", "b"], (_, _) =>
+        {
+            stop.Cancel();
+            return null;
+        });
+
+        await Should.ThrowAsync<OperationCanceledException>(new GitHubReader(gh).ReadAsync(Repo, gh.Accounts, stop.Token));
+
+        gh.Asked.ShouldBe(["acme"]);
+    }
+
     private static string IssueNode(int number, string title, string labels = "") =>
         "{\"number\":" + number + ",\"title\":\"" + title + "\",\"url\":\"https://github.com/acme/tool/issues/" + number
         + "\",\"updatedAt\":\"2026-11-01T10:00:00Z\",\"labels\":{\"nodes\":[" + labels + "]}}";

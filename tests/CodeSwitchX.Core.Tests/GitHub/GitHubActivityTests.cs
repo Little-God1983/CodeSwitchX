@@ -519,4 +519,61 @@ public class GitHubActivityTests
 
         activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
     }
+
+    [Fact]
+    public async Task A_forgotten_folder_is_unknown_and_its_repository_result_goes_with_it()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.Forget([@"c:\r\tool"]);
+
+        activity.Knows(@"c:\r\tool").ShouldBeFalse();
+        activity.ForFolder(@"c:\r\tool").ShouldBeNull();
+        activity.Latest(new GitHubRepo("acme", "tool")).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_repository_keeps_its_result_while_another_folder_refers_to_it()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+
+        activity.Forget([@"c:\r\a"]);
+
+        activity.Knows(@"c:\r\a").ShouldBeFalse();
+        activity.ForFolder(@"c:\r\b").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_folder_added_again_after_it_was_forgotten_is_read_afresh()
+    {
+        var gh = new FakeGh { Issues = 3 };
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        activity.Forget([@"c:\r\tool"]);
+        gh.Issues = 8;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        gh.Slugs.Count.ShouldBe(2);
+        activity.ForFolder(@"c:\r\tool")!.OpenIssues.ShouldBe(8);
+    }
+
+    [Fact]
+    public async Task A_new_folder_in_a_repository_already_read_tells_the_tiles()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\a"], CancellationToken.None);
+        var changes = 0;
+        activity.Changed += (_, _) => changes++;
+
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\b").ShouldBeSameAs(activity.ForFolder(@"c:\r\a"));
+        changes.ShouldBe(1);
+    }
 }
