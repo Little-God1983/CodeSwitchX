@@ -662,17 +662,31 @@ public class SettingsViewModelTests : IDisposable
             sounds: _sounds, levels: _levels, picks: _picks, library: _library, soundFiles: _files, gitHub: page);
         vm.GitHub.ShouldBeSameAs(page);
 
+        // The accounts are read off the UI thread, so each read is waited for.
+        Task Read()
+        {
+            var done = new TaskCompletionSource();
+            page.PropertyChanged += (_, _) => done.TrySetResult();
+            return done.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+
+        var read = Read();
         vm.OpenPage(SettingsPage.GitHub);
+        await read;
         await gh.Received(1).AccountsAsync(Arg.Any<CancellationToken>());
         gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["fresh"]));
         vm.OpenPage(SettingsPage.Yard);
+        read = Read();
         vm.OpenPage(SettingsPage.GitHub);
+        await read;
 
         await gh.Received(2).AccountsAsync(Arg.Any<CancellationToken>());
         page.Accounts.Select(a => a.Login).ShouldBe(["fresh"]);
 
         gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>(["again"]));
+        read = Read();
         vm.Refresh(); // Settings shown again on the page it was left on
+        await read;
         await gh.Received(3).AccountsAsync(Arg.Any<CancellationToken>());
         page.Accounts.Select(a => a.Login).ShouldBe(["again"]);
     }

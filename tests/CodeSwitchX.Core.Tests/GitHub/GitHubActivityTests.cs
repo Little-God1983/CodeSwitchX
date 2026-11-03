@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.GitHub;
+using CodeSwitchX.Core.Workspaces;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeSwitchX.Core.Tests.GitHub;
@@ -25,6 +26,11 @@ public class GitHubActivityTests
 
         public int AccountReads { get; private set; }
 
+        public IReadOnlyList<string> Accounts { get; set; } = ["me"];
+
+        /// <summary>What an account's read comes to, instead of the usual answer; null gives the usual one.</summary>
+        public Func<string, GhAnswer?>? AnswerOf { get; set; }
+
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
         {
             lock (Slugs)
@@ -32,10 +38,13 @@ public class GitHubActivityTests
                 AccountReads++;
             }
 
-            return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult<IReadOnlyList<string>>(["me"]);
+            return AccountsThrow ? throw new InvalidOperationException("boom") : Task.FromResult(Accounts);
         }
 
-        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            (await AnswerAsAsync(login, arguments, ct)).Output;
+
+        public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
             var slug = arguments.First(a => a.StartsWith("owner=", StringComparison.Ordinal)) + "/" + arguments.First(a => a.StartsWith("name=", StringComparison.Ordinal));
             lock (Slugs)
@@ -56,7 +65,7 @@ public class GitHubActivityTests
                     await Task.Delay(Delay, ct);
                 }
 
-                return Fail ? null : Graphql(Issues);
+                return AnswerOf?.Invoke(login) ?? new GhAnswer(Fail ? null : Graphql(Issues));
             }
             finally
             {
@@ -73,9 +82,14 @@ public class GitHubActivityTests
         + "\"issues\":{\"totalCount\":" + issues + ",\"nodes\":[]},"
         + "\"pullRequests\":{\"totalCount\":1,\"nodes\":[]}}}}";
 
-    private static GitHubActivity Activity(FakeGh gh, Func<string, string?>? originOf = null) =>
-        new(gh, new GitHubReader(gh), (path, _) => Task.FromResult(originOf is null ? $"https://github.com/acme/{Path.GetFileName(path)}.git" : originOf(path)),
-            NullLogger<GitHubActivity>.Instance);
+    /// <summary>What <c>gh api graphql</c> prints, exiting 1, for a repository the account cannot see.</summary>
+    private const string NotFound = """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository."}]}""";
+
+    private static GitHubActivity Activity(FakeGh gh, Func<string, string>? originOf = null) =>
+        Activity(gh, path => new OriginLookup(originOf is null ? $"https://github.com/acme/{Path.GetFileName(path)}.git" : originOf(path)));
+
+    private static GitHubActivity Activity(FakeGh gh, Func<string, OriginLookup> originOf) =>
+        new(gh, new GitHubReader(gh), (path, _) => Task.FromResult(originOf(path)), NullLogger<GitHubActivity>.Instance);
 
     private static GitHubItem Item(int number) => new(number, "t" + number, "https://github.com/acme/tool/issues/" + number, DateTimeOffset.UnixEpoch, []);
 
@@ -266,16 +280,140 @@ public class GitHubActivityTests
         await Should.ThrowAsync<OperationCanceledException>(round);
     }
 
-    [Fact]
-    public async Task A_failed_origin_lookup_keeps_the_repository_the_folder_had()
+    [Theory]
+    [InlineData(true, 4242)] // git timed out
+    [InlineData(false, null)] // git did not start
+    public async Task A_failed_origin_lookup_keeps_the_repository_the_folder_had(bool timedOut, int? pid)
     {
         var gh = new FakeGh();
-        string? origin = "https://github.com/acme/tool.git";
+        var origin = new OriginLookup("https://github.com/acme/tool.git");
         var activity = Activity(gh, _ => origin);
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
         var first = activity.ForFolder(@"c:\r\tool");
         first.ShouldNotBeNull();
-        origin = null;
+        var changes = 0;
+        activity.Changed += (_, _) => changes++;
+        origin = OriginLookup.From(new ProcessRunResult(null, timedOut, pid));
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
+        changes.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task An_origin_that_is_gone_clears_the_repository_and_tells_the_tiles()
+    {
+        var gh = new FakeGh();
+        var origin = new OriginLookup("https://github.com/acme/tool.git");
+        var activity = Activity(gh, _ => origin);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
+        var changes = 0;
+        activity.Changed += (_, _) => changes++;
+        origin = OriginLookup.NoOrigin;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeNull();
+        activity.Knows(@"c:\r\tool").ShouldBeTrue();
+        changes.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_folder_losing_its_origin_leaves_another_folder_in_that_repository_alone()
+    {
+        var gh = new FakeGh();
+        var origin = new OriginLookup("https://github.com/acme/tool.git");
+        var activity = Activity(gh, path => path.EndsWith('a') ? origin : new OriginLookup("https://github.com/acme/tool.git"));
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+        origin = OriginLookup.NoOrigin;
+
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\a").ShouldBeNull();
+        activity.ForFolder(@"c:\r\b").ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_folder_moved_to_a_repository_already_read_tells_the_tiles()
+    {
+        var gh = new FakeGh();
+        var origin = new OriginLookup("https://github.com/acme/tool.git");
+        var activity = Activity(gh, path => path.EndsWith('a') ? origin : new OriginLookup("https://github.com/acme/other.git"));
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+        var changes = 0;
+        activity.Changed += (_, _) => changes++;
+        origin = new OriginLookup("https://github.com/acme/other.git");
+
+        await activity.RefreshAsync([@"c:\r\a", @"c:\r\b"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\a").ShouldBeSameAs(activity.ForFolder(@"c:\r\b"));
+        changes.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_repository_every_account_says_is_not_there_loses_its_result()
+    {
+        var gh = new FakeGh { Accounts = ["me", "other"] };
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
+        var changes = 0;
+        activity.Changed += (_, _) => changes++;
+        gh.AnswerOf = _ => new GhAnswer(null, NotFound);
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeNull();
+        changes.ShouldBe(1);
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        changes.ShouldBe(1, "nothing left to lose, nothing to tell");
+    }
+
+    [Fact]
+    public async Task A_repository_that_comes_back_shows_again()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        gh.AnswerOf = _ => new GhAnswer(null, NotFound);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        gh.AnswerOf = null;
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldNotBeNull();
+    }
+
+    [Theory]
+    [InlineData("me")]
+    [InlineData("other")]
+    public async Task One_account_not_found_and_one_failed_keeps_the_last_result(string failing)
+    {
+        var gh = new FakeGh { Accounts = ["me", "other"] };
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var first = activity.ForFolder(@"c:\r\tool");
+        first.ShouldNotBeNull();
+        gh.AnswerOf = login => login == failing ? new GhAnswer(null) : new GhAnswer(null, NotFound);
+
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(first);
+    }
+
+    [Fact]
+    public async Task No_accounts_at_all_keeps_the_last_result()
+    {
+        var gh = new FakeGh();
+        var activity = Activity(gh);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var first = activity.ForFolder(@"c:\r\tool");
+        first.ShouldNotBeNull();
+        gh.Accounts = [];
 
         await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 

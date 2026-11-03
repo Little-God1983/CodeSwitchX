@@ -30,9 +30,13 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         IReadOnlyList<BrowserEntry> entries = [];
         try
         {
-            logins = await gh.AccountsAsync(ct);
-            // The installed browsers are read once for all rows.
-            entries = catalog.List();
+            // Off the UI thread, which this continues on: gh starts before its first await, and the browsers are read from the registry and files.
+            (logins, entries) = await Task.Run(async () =>
+            {
+                var accounts = await gh.AccountsAsync(ct).ConfigureAwait(false);
+                // The installed browsers are read once for all rows.
+                return (accounts, catalog.List());
+            }, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

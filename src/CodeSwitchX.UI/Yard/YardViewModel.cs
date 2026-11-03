@@ -777,7 +777,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private void RefreshGitHubOfAllTiles() =>
         _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Select(l => l.Path).OfType<string>().Distinct().ToList());
 
-    private async Task RefreshGitHubAsync(IReadOnlyCollection<string> folders)
+    /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
+    private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders) => Task.Run(async () =>
     {
         try
         {
@@ -791,7 +792,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             _logger.LogWarning(ex, "The GitHub refresh round ended early");
         }
-    }
+    });
 
     private void OnGitHubChanged(object? sender, EventArgs e) => _ui.Post(() =>
     {
@@ -923,7 +924,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
         GitHubList = list;
-        _ = list.LoadAsync(_gitHubStop.Token);
+        // Not on the UI thread: the load starts its first gh before its first await.
+        _ = Task.Run(() => list.LoadAsync(_gitHubStop.Token));
     }
 
     [RelayCommand]

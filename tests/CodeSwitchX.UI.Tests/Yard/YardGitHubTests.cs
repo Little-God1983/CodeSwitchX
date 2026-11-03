@@ -21,6 +21,9 @@ public class YardGitHubTests : IDisposable
     private readonly Track _general = new() { Name = "General", SortOrder = 0 };
     private readonly FakeGh _gh = new();
 
+    /// <summary>What each folder's git says its origin is: github.com/acme/&lt;folder name&gt;.</summary>
+    private Func<string, OriginLookup> _originOf = path => new OriginLookup($"https://github.com/acme/{Path.GetFileName(path)}.git");
+
     private sealed class FakeGh : IGhCli
     {
         public int Issues { get; set; } = 2;
@@ -43,6 +46,9 @@ public class YardGitHubTests : IDisposable
         }
 
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["me"]);
+
+        public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            new(await RunAsAsync(login, arguments, ct));
 
         public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
@@ -139,11 +145,10 @@ public class YardGitHubTests : IDisposable
         var pricing = Substitute.For<IPricingProvider>();
         pricing.Pricing.Returns(PricingTable.Default);
         var registry = new WorkspaceRegistry(_store, resolver, _bus);
-        // Git answers "clean" to status and each folder's own name as its origin: github.com/acme/<folder name>.
+        // Git answers "clean" to status.
         var git = new GitInspector((dir, args, _) => Task.FromResult<string?>(string.Empty));
         var activity = withGitHub
-            ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult<string?>($"https://github.com/acme/{Path.GetFileName(path)}.git"),
-                NullLogger<GitHubActivity>.Instance)
+            ? new GitHubActivity(_gh, new GitHubReader(_gh), (path, _) => Task.FromResult(_originOf(path)), NullLogger<GitHubActivity>.Instance)
             : null;
         return new YardViewModel(_store, registry, engine, pricing, git, _bus, ui, _time, NullLogger<YardViewModel>.Instance, gitHub: activity);
     }
@@ -279,6 +284,54 @@ public class YardGitHubTests : IDisposable
         var line = yard.FindTile(app.Id)!.GitLines.ShouldHaveSingleItem();
         line.Branch.ShouldBe("main");
         line.Issues.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_ten_minute_round_runs_off_the_ui_thread_and_a_slow_origin_does_not_hold_it_up()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        await Quiet();
+
+        // From here git blocks as it does on a folder on an offline share. The timer posts to the UI thread: here a thread
+        // of its own, whose id no task can borrow, and the immediate dispatcher runs the post on it.
+        using var release = new ManualResetEventSlim();
+        var lookup = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var origin = _originOf;
+        _originOf = path =>
+        {
+            lookup.TrySetResult(Environment.CurrentManagedThreadId);
+            release.Wait(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+            return origin(path);
+        };
+        var ui = new Thread(() => _time.Advance(YardViewModel.GitHubRefreshInterval)) { IsBackground = true, Name = "test-ui" };
+
+        try
+        {
+            ui.Start();
+            ui.Join(TimeSpan.FromSeconds(10)).ShouldBeTrue("a slow git held up the UI thread");
+            (await lookup.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).ShouldNotBe(ui.ManagedThreadId);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task An_origin_that_is_gone_takes_the_pills_off_the_line()
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(true, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+        _originOf = _ => OriginLookup.NoOrigin;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is null);
     }
 
     [Fact]

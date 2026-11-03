@@ -7,7 +7,11 @@ public sealed record GitHubRepo(string Owner, string Name)
 {
     private const string Host = "github.com";
 
-    private static readonly Regex ScpForm = new(@"^[^@/\s]+@github\.com:(?<path>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    /// <summary>GitHub's SSH over the HTTPS port, as an ssh:// address.</summary>
+    private const string SshHost = "ssh.github.com";
+
+    /// <summary><c>[user@]github.com:path</c>, or <c>github.com-name</c>: an ~/.ssh/config alias, the usual way to run two accounts. No dot in the name: that would be another domain.</summary>
+    private static readonly Regex ScpForm = new(@"^(?:[^@/\s]+@)?github\.com(?:-[\w-]+)?:(?<path>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public string Slug => $"{Owner}/{Name}";
 
@@ -34,7 +38,8 @@ public sealed record GitHubRepo(string Owner, string Name)
             path = scp.Groups["path"].Value;
         }
         else if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                 && uri.Host.Equals(Host, StringComparison.OrdinalIgnoreCase))
+                 && (uri.Host.Equals(Host, StringComparison.OrdinalIgnoreCase)
+                     || (uri.Scheme == "ssh" && uri.Host.Equals(SshHost, StringComparison.OrdinalIgnoreCase))))
         {
             path = uri.AbsolutePath;
         }

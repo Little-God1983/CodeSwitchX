@@ -4,6 +4,10 @@
              xmlns:yard="clr-namespace:CodeSwitchX.UI.Yard"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              AllowDrop="True" Background="Transparent" DragEnter="OnDragOver" DragOver="OnDragOver" DragLeave="OnDragLeave" Drop="OnDrop">
+  <UserControl.InputBindings>
+    <!-- Closes the list a pill opened, wherever in the Yard the keyboard is. With no list the command is null, so the binding does not match and the key goes on. -->
+    <KeyBinding Key="Escape" Command="{Binding GitHubList.CloseCommand}" />
+  </UserControl.InputBindings>
   <UserControl.Resources>
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
       <!-- A click on the row opens that chat (#115). A button takes the click, so the tile's own click does not fire too. -->
@@ -318,11 +322,8 @@
   <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
   <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
   <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
-          Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}"
+          Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
           Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" IsVisibleChanged="OnGitHubPanelVisibleChanged">
-    <Border.InputBindings>
-      <KeyBinding Key="Escape" Command="{Binding GitHubList.CloseCommand}" />
-    </Border.InputBindings>
     <DockPanel DataContext="{Binding GitHubList}">
       <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
         <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />

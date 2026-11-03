@@ -92,11 +92,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
         Message = null;
     }
 
-    private string HeadingFor(int count)
-    {
-        var noun = _pill.Kind == GitHubItemKind.Issue ? "issue" : "pull request";
-        return $"{_pill.Activity.Repo.Name}: {count} open {noun}{(count == 1 ? "" : "s")}";
-    }
+    private string HeadingFor(int count) => $"{_pill.Activity.Repo.Name}: {count} open {GitHubPill.NounFor(_pill.Kind, count)}";
 
     private IReadOnlyList<GitHubRow> RowsOf(IReadOnlyList<GitHubItem> items)
     {

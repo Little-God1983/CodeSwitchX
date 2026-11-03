@@ -3,6 +3,14 @@ using System.Text.Json;
 
 namespace CodeSwitchX.Core.GitHub;
 
+/// <summary>What reading a repository came to: what was read, or nothing, with <paramref name="NobodySeesIt"/> telling GitHub's own "no" from a read that failed.</summary>
+public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
+{
+    public static readonly RepoRead Failed = new(null, NobodySeesIt: false);
+
+    public static readonly RepoRead NotFound = new(null, NobodySeesIt: true);
+}
+
 /// <summary>
 /// Reads a repository's open issues and pull requests through <see cref="IGhCli"/>, as whichever signed-in account can see
 /// it best. Nothing is remembered: which account reads is worked out again on every read, so a brief failure cannot stick.
@@ -17,38 +25,48 @@ public sealed class GitHubReader(IGhCli gh)
 
     private const string AppPrefix = "app/";
 
+    private const string NotFoundType = "NOT_FOUND";
+
     private static readonly string[] PermissionOrder = ["READ", "TRIAGE", "WRITE", "MAINTAIN", "ADMIN"];
 
-    /// <summary>Counts and the newest items, read as the best of <paramref name="accounts"/>; null when none of them can see the repository or the answer is unreadable.</summary>
-    public async Task<RepoActivity?> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct)
+    /// <summary>
+    /// Counts and the newest items, read as the best of <paramref name="accounts"/>. Nothing read is <see cref="RepoRead.NotFound"/>
+    /// only when every account said so; an account that failed might be the one that can see it, and no accounts said nothing.
+    /// </summary>
+    public async Task<RepoRead> ReadAsync(GitHubRepo repo, IReadOnlyList<string> accounts, CancellationToken ct)
     {
         var candidates = accounts.Order(StringComparer.OrdinalIgnoreCase).ToList();
+        var everyoneSaysNotFound = candidates.Count > 0;
 
         // The owner's own account surely sees the repository: one request and no comparing.
         var owner = candidates.FirstOrDefault(a => a.Equals(repo.Owner, StringComparison.OrdinalIgnoreCase));
         if (owner is not null)
         {
             var own = await ReadAsAsync(repo, owner, ct).ConfigureAwait(false);
-            if (own is not null)
+            if (own.Activity is not null)
             {
-                return own.Value.Activity;
+                return new RepoRead(own.Activity);
             }
 
+            everyoneSaysNotFound &= own.NotFound;
             candidates.Remove(owner);
         }
 
-        (RepoActivity Activity, int Rank)? best = null;
+        AccountRead? best = null;
         foreach (var account in candidates)
         {
             var read = await ReadAsAsync(repo, account, ct).ConfigureAwait(false);
+            everyoneSaysNotFound &= read.NotFound;
             // Strictly greater: on a tie the first login alphabetically stays.
-            if (read is not null && (best is null || read.Value.Rank > best.Value.Rank))
+            if (read.Activity is not null && (best is null || read.Rank > best.Rank))
             {
                 best = read;
             }
         }
 
-        return best?.Activity;
+        return best is not null ? new RepoRead(best.Activity)
+            : everyoneSaysNotFound ? RepoRead.NotFound
+            : RepoRead.Failed;
     }
 
     /// <summary>Every open item of one kind, as that account; null when it cannot read them.</summary>
@@ -78,15 +96,18 @@ public sealed class GitHubReader(IGhCli gh)
         }
     }
 
-    private async Task<(RepoActivity Activity, int Rank)?> ReadAsAsync(GitHubRepo repo, string account, CancellationToken ct)
+    /// <summary>One account's read: what it found, or nothing, and whether that nothing is GitHub's own "not found".</summary>
+    private sealed record AccountRead(RepoActivity? Activity = null, int Rank = 0, bool NotFound = false);
+
+    private async Task<AccountRead> ReadAsAsync(GitHubRepo repo, string account, CancellationToken ct)
     {
-        var output = await gh.RunAsAsync(account,
+        var answer = await gh.AnswerAsAsync(account,
         [
             "api", "graphql", "-f", $"query={Query}", "-f", $"owner={repo.Owner}", "-f", $"name={repo.Name}",
         ], ct).ConfigureAwait(false);
-        if (output is null)
+        if (answer.Output is not { } output)
         {
-            return null;
+            return new AccountRead(NotFound: IsNotFound(answer.FailureOutput));
         }
 
         try
@@ -95,7 +116,7 @@ public sealed class GitHubReader(IGhCli gh)
             var node = doc.RootElement.GetProperty("data").GetProperty("repository");
             if (node.ValueKind != JsonValueKind.Object)
             {
-                return null;
+                return new AccountRead();
             }
 
             var issues = node.GetProperty("issues");
@@ -108,11 +129,37 @@ public sealed class GitHubReader(IGhCli gh)
                 issues.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, n.GetProperty("labels").GetProperty("nodes"), false)).ToList(),
                 pullRequests.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, n.GetProperty("labels").GetProperty("nodes"), true)).ToList());
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
-            return (activity, Array.IndexOf(PermissionOrder, permission));
+            return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
         {
-            return null;
+            return new AccountRead();
+        }
+    }
+
+    /// <summary>
+    /// What <c>gh api graphql</c> printed before exiting with an error says the account cannot see the repository: no repository
+    /// and nothing but NOT_FOUND errors. Any other error (forbidden, rate limit, a bad gateway) says nothing about who can.
+    /// </summary>
+    private static bool IsNotFound(string? printed)
+    {
+        if (printed is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(printed);
+            var root = doc.RootElement;
+            return root.GetProperty("data").GetProperty("repository").ValueKind == JsonValueKind.Null
+                && root.GetProperty("errors") is { } errors
+                && errors.GetArrayLength() > 0
+                && errors.EnumerateArray().All(e => e.GetProperty("type").ValueEquals(NotFoundType));
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            return false;
         }
     }
 

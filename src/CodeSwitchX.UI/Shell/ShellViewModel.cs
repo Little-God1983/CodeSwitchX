@@ -746,6 +746,8 @@ public sealed partial class ShellViewModel : ObservableObject, IRavenShell
     [RelayCommand]
     public void OpenSettings()
     {
+        // The list names the account's browser, which can change in there; it is opened again from a pill, naming the new one.
+        Yard.GitHubList?.CloseCommand.Execute(null);
         _host.HideAll();
         Settings.Refresh();
         Mode = ShellMode.Settings;

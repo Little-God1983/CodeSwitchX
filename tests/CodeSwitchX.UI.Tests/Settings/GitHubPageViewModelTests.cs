@@ -4,6 +4,7 @@ using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Settings;
+using CodeSwitchX.UI.Tests.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -131,6 +132,37 @@ public class GitHubPageViewModelTests
         await page.RefreshAsync(CancellationToken.None);
 
         page.HasNoAccounts.ShouldBeTrue();
+    }
+
+    [Fact]
+    public Task The_first_gh_and_the_browser_list_run_off_the_ui_thread()
+    {
+        int accountsThread = 0, browsersThread = 0;
+        var read = new ManualResetEventSlim();
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            accountsThread = Environment.CurrentManagedThreadId;
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        });
+        var source = Substitute.For<IBrowserSource>();
+        source.Installed().Returns(_ =>
+        {
+            browsersThread = Environment.CurrentManagedThreadId;
+            read.Set();
+            return [];
+        });
+        var catalog = new BrowserCatalog(source);
+        var page = new GitHubPageViewModel(_gh, new GitHubBrowsers(catalog, _store, _ => true, NullLogger<GitHubBrowsers>.Instance), catalog);
+
+        // A thread of its own stands in for the UI thread: a task cannot borrow its id while it waits here.
+        return StaThread.RunAsync(() =>
+        {
+            _ = page.RefreshAsync(CancellationToken.None);
+
+            read.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+            accountsThread.ShouldNotBe(Environment.CurrentManagedThreadId);
+            browsersThread.ShouldNotBe(Environment.CurrentManagedThreadId);
+        });
     }
 
     private sealed class FakeSource : IBrowserSource

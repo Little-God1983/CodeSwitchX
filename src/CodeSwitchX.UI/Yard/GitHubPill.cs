@@ -19,9 +19,9 @@ public sealed record GitHubPill(RepoActivity Activity, GitHubItemKind Kind)
     /// <summary>What the preview leaves out; null when it shows everything.</summary>
     public string? MoreText => Count > PreviewCount ? $"+{Count - PreviewCount} more. Click the pill for all of them" : null;
 
-    public string AutomationName => $"{Count} open {Noun} in {Activity.Repo.Name}";
+    public string AutomationName => $"{Count} open {NounFor(Kind, Count)} in {Activity.Repo.Name}";
 
-    private string Noun => (Kind == GitHubItemKind.Issue ? "issue" : "pull request") + (Count == 1 ? "" : "s");
+    internal static string NounFor(GitHubItemKind kind, int count) => (kind == GitHubItemKind.Issue ? "issue" : "pull request") + (count == 1 ? "" : "s");
 
     public IReadOnlyList<GitHubRow> Rows
     {

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
@@ -81,6 +82,78 @@ public sealed class GitPillsXamlTests
     [InlineData(2, GitHubItemKind.PullRequest, "2 open pull requests in SomeRepo")]
     public void The_pill_name_is_singular_at_one(int count, GitHubItemKind kind, string expected) =>
         new GitHubPill(new RepoActivity(new GitHubRepo("acme", "SomeRepo"), "me", count, count, [], []), kind).AutomationName.ShouldBe(expected);
+
+    /// <summary>The two surfaces a label chip sits on: the list panel and the hover preview.</summary>
+    private static readonly Color[] Surfaces = [Color.FromRgb(0x26, 0x26, 0x26), Color.FromRgb(0x26, 0x2B, 0x33)];
+
+    private static Color LabelColor(string? hex, string? part) =>
+        ((SolidColorBrush)new GitHubLabelBrushConverter().Convert(hex, typeof(Brush), part, CultureInfo.InvariantCulture)).Color;
+
+    private static double Luminance(Color c)
+    {
+        static double Channel(byte value)
+        {
+            var v = value / 255.0;
+            return v <= 0.03928 ? v / 12.92 : Math.Pow((v + 0.055) / 1.055, 2.4);
+        }
+
+        return (0.2126 * Channel(c.R)) + (0.7152 * Channel(c.G)) + (0.0722 * Channel(c.B));
+    }
+
+    private static double Contrast(Color a, Color b)
+    {
+        var (light, dark) = (Math.Max(Luminance(a), Luminance(b)), Math.Min(Luminance(a), Luminance(b)));
+        return (light + 0.05) / (dark + 0.05);
+    }
+
+    [Theory]
+    [InlineData("000000")]
+    [InlineData("1d1d1d")]
+    [InlineData("262626")]
+    [InlineData("0e2a47")]
+    public void Dark_label_text_is_lightened_until_it_reads_on_the_dark_surfaces(string hex)
+    {
+        var text = LabelColor(hex, "text");
+
+        text.A.ShouldBe((byte)255);
+        foreach (var surface in Surfaces)
+        {
+            Contrast(text, surface).ShouldBeGreaterThanOrEqualTo(4.5);
+        }
+    }
+
+    [Fact]
+    public void A_lightened_label_keeps_its_hue() =>
+        LabelColor("0e2a47", "text").ShouldSatisfyAllConditions(
+            c => c.B.ShouldBeGreaterThan(c.G),
+            c => c.G.ShouldBeGreaterThan(c.R));
+
+    [Theory]
+    [InlineData("a2eeef", 0xa2, 0xee, 0xef)]
+    [InlineData("ffffff", 0xff, 0xff, 0xff)]
+    public void A_light_label_keeps_its_exact_colour_as_text(string hex, byte r, byte g, byte b) =>
+        LabelColor(hex, "text").ShouldBe(Color.FromRgb(r, g, b));
+
+    [Theory]
+    [InlineData("000000", 0x00)]
+    [InlineData("1d1d1d", 0x1d)]
+    public void Border_and_tint_stay_on_the_raw_colour(string hex, byte channel)
+    {
+        LabelColor(hex, "border").ShouldBe(Color.FromArgb(102, channel, channel, channel));
+        LabelColor(hex, null).ShouldBe(Color.FromArgb(33, channel, channel, channel));
+    }
+
+    [Theory]
+    [InlineData("zzzzzz")]
+    [InlineData("abc")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void A_bad_colour_gives_the_grey_fallback_for_every_part(string? hex)
+    {
+        LabelColor(hex, "text").ShouldBe(Colors.Gray);
+        LabelColor(hex, "border").ShouldBe(Colors.Gray);
+        LabelColor(hex, null).ShouldBe(Colors.Gray);
+    }
 
     private static List<T> Descendants<T>(DependencyObject root) where T : DependencyObject
     {

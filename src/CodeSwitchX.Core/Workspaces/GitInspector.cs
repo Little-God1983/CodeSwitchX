@@ -10,7 +10,9 @@ public sealed record GitInfo(bool IsRepository, string? Branch, int? DirtyCount,
 /// <param name="Output">Stdout when the process exited with code 0; otherwise null.</param>
 /// <param name="TimedOut">The process was killed because it outlived the timeout.</param>
 /// <param name="Pid">The started process id, when it started.</param>
-public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid);
+/// <param name="ExitCode">The code it exited with; null when it never got that far (did not start, timed out, cancelled, a pipe broke).</param>
+/// <param name="FailureOutput">Stdout when it exited with another code than 0; otherwise null.</param>
+public sealed record ProcessRunResult(string? Output, bool TimedOut, int? Pid, int? ExitCode = null, string? FailureOutput = null);
 
 /// <summary>Cheap git facts for tiles: branch from HEAD (no process), dirty count from <c>git status --porcelain</c>.</summary>
 public sealed class GitInspector
@@ -170,7 +172,8 @@ public sealed class GitInspector
                 // (cmd's "start /b"); the timeout covers the reads too, and the kill takes the whole tree with it.
                 var output = await stdout.ConfigureAwait(false);
                 await stderr.ConfigureAwait(false);
-                return new ProcessRunResult(process.ExitCode == 0 ? output : null, false, process.Id);
+                var succeeded = process.ExitCode == 0;
+                return new ProcessRunResult(succeeded ? output : null, false, process.Id, process.ExitCode, succeeded ? null : output);
             }
             catch (OperationCanceledException)
             {

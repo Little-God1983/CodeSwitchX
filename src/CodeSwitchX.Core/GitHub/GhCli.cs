@@ -56,10 +56,19 @@ public sealed class GhCli : IGhCli
         }
     }
 
-    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        (await AnswerAsAsync(login, arguments, ct).ConfigureAwait(false)).Output;
+
+    public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         var token = (await RunAsync(["auth", "token", "--user", login], null, ct).ConfigureAwait(false))?.Trim();
-        return string.IsNullOrEmpty(token) ? null : await RunAsync(arguments, token, ct).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(token))
+        {
+            return new GhAnswer(null);
+        }
+
+        var run = await GitInspector.RunProcessAsync(StartInfo(arguments, token, _executable), _timeout, ct).ConfigureAwait(false);
+        return new GhAnswer(run.Output, run.FailureOutput);
     }
 
     private async Task<string?> RunAsync(IReadOnlyList<string> arguments, string? token, CancellationToken ct) =>

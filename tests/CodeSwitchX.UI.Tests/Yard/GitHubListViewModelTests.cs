@@ -1,4 +1,10 @@
 using System.Diagnostics;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Markup;
+using System.Windows.Threading;
+using System.Xml.Linq;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
@@ -7,6 +13,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.GitHub;
+using CodeSwitchX.UI.Tests.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -39,8 +46,25 @@ public class GitHubListViewModelTests
 
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(["me"]);
 
-        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
-            arguments[0] switch { "api" => Task.FromResult<string?>(Graphql), "pr" => PullRequestList.Task, _ => List.Task };
+        /// <summary>Set when a list read reaches gh, after <see cref="ListThread"/>.</summary>
+        public ManualResetEventSlim ListAsked { get; } = new();
+
+        public int ListThread { get; private set; }
+
+        public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            new(await RunAsAsync(login, arguments, ct));
+
+        public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        {
+            if (arguments[0] == "api")
+            {
+                return Task.FromResult<string?>(Graphql);
+            }
+
+            ListThread = Environment.CurrentManagedThreadId;
+            ListAsked.Set();
+            return arguments[0] == "pr" ? PullRequestList.Task : List.Task;
+        }
     }
 
     public GitHubListViewModelTests()
@@ -57,7 +81,7 @@ public class GitHubListViewModelTests
     /// <summary>An activity that has read the repository (12 issues, 1 pull request) and the pill of one kind of it.</summary>
     private async Task<(GitHubActivity Activity, GitHubPill Pill)> PillAsync(GitHubItemKind kind = GitHubItemKind.Issue)
     {
-        var activity = new GitHubActivity(_gh, new GitHubReader(_gh), (_, _) => Task.FromResult<string?>("https://github.com/acme/app.git"),
+        var activity = new GitHubActivity(_gh, new GitHubReader(_gh), (_, _) => Task.FromResult(new OriginLookup("https://github.com/acme/app.git")),
             NullLogger<GitHubActivity>.Instance);
         await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken);
         return (activity, new GitHubPill(activity.ForFolder("app")!, kind));
@@ -238,6 +262,79 @@ public class GitHubListViewModelTests
         yard.OpenGitHubListCommand.Execute(pill);
 
         yard.GitHubList.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Opening_a_list_starts_gh_off_the_ui_thread()
+    {
+        var (activity, pill) = await PillAsync();
+
+        // A thread of its own stands in for the UI thread: a task cannot borrow its id while it waits here.
+        await StaThread.RunAsync(() =>
+        {
+            NewYard(activity).OpenGitHubListCommand.Execute(pill);
+
+            _gh.ListAsked.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken).ShouldBeTrue();
+            _gh.ListThread.ShouldNotBe(Environment.CurrentManagedThreadId);
+        });
+    }
+
+    [Fact]
+    public async Task Escape_on_the_yard_closes_an_open_list_and_is_left_alone_otherwise()
+    {
+        var (activity, pill) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bindings = YardViewXaml().Element(Wpf + "UserControl.InputBindings").ShouldNotBeNull();
+            var view = (UserControl)XamlReader.Parse(new XElement(Wpf + "UserControl", bindings).ToString());
+            view.DataContext = yard;
+            // The binding attaches to its context in a task of the dispatcher's, as it would when the window shows.
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+            using var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 });
+
+            bool Escape()
+            {
+                var key = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Escape) { RoutedEvent = Keyboard.KeyDownEvent };
+                view.RaiseEvent(key);
+                return key.Handled;
+            }
+
+            Escape().ShouldBeFalse("no list open: the key belongs to whoever else wants it");
+
+            yard.OpenGitHubListCommand.Execute(pill);
+            yard.GitHubList.ShouldNotBeNull();
+
+            Escape().ShouldBeTrue();
+            yard.GitHubList.ShouldBeNull();
+            Escape().ShouldBeFalse("closed again");
+        });
+    }
+
+    [Fact]
+    public void Tab_stays_inside_the_panel()
+    {
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+        var panel = YardViewXaml().Descendants(Wpf + "Border").Single(b => (string?)b.Attribute(x + "Name") == "GitHubPanel");
+
+        ((string?)panel.Attribute("KeyboardNavigation.TabNavigation")).ShouldBe("Cycle");
+    }
+
+    private static readonly XNamespace Wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+
+    /// <summary>The view needs the application's resources to load, so its markup is read from the file.</summary>
+    private static XElement YardViewXaml()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "Yard", "YardView.xaml")))
+        {
+            dir = dir.Parent;
+        }
+
+        dir.ShouldNotBeNull();
+        return XDocument.Load(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "Yard", "YardView.xaml")).Root!;
     }
 
     private YardViewModel NewYard(GitHubActivity? activity)

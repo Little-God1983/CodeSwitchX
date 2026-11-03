@@ -39,9 +39,9 @@ public static class BrowserProfiles
             }
 
             return [.. cache.EnumerateObject().Select(p =>
-                (p.Name, p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("name", out var n) && n.GetString() is { Length: > 0 } name ? name : p.Name))];
+                (p.Name, p.Value.ValueKind == JsonValueKind.Object && p.Value.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && n.GetString() is { Length: > 0 } name ? name : p.Name))];
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
             return [];
         }

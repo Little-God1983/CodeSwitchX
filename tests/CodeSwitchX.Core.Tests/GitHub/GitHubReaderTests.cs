@@ -14,6 +14,9 @@ public class GitHubReaderTests
 
         public List<IReadOnlyList<string>> Commands { get; } = [];
 
+        /// <summary>What a login's run prints when it exits with an error.</summary>
+        public Dictionary<string, string> Printed { get; } = [];
+
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult(accounts);
 
         public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
@@ -21,6 +24,12 @@ public class GitHubReaderTests
             Asked.Add(login);
             Commands.Add(arguments);
             return Task.FromResult(answer(login, arguments));
+        }
+
+        public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        {
+            var output = await RunAsAsync(login, arguments, ct);
+            return new GhAnswer(output, Printed.GetValueOrDefault(login));
         }
     }
 
@@ -32,8 +41,12 @@ public class GitHubReaderTests
     private static FakeGh Fake(string[] accounts, Dictionary<string, string?> answers) =>
         new(accounts, (login, _) => answers.GetValueOrDefault(login));
 
-    private static Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) =>
+    private const string NotFound = """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository."}]}""";
+
+    private static Task<RepoRead> Outcome(FakeGh gh, GitHubRepo? repo = null) =>
         new GitHubReader(gh).ReadAsync(repo ?? Repo, gh.Accounts, CancellationToken.None);
+
+    private static async Task<RepoActivity?> Read(FakeGh gh, GitHubRepo? repo = null) => (await Outcome(gh, repo)).Activity;
 
     [Theory]
     [InlineData("Zed", "acme")]
@@ -99,6 +112,70 @@ public class GitHubReaderTests
     public async Task No_accounts_gives_null()
     {
         (await Read(Fake([], new()))).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_read_that_failed_is_no_verdict()
+    {
+        (await Outcome(Fake(["a", "b"], new()))).ShouldBe(RepoRead.Failed);
+    }
+
+    [Fact]
+    public async Task No_accounts_is_no_verdict()
+    {
+        (await Outcome(Fake([], new()))).ShouldBe(RepoRead.Failed);
+    }
+
+    [Fact]
+    public async Task Every_account_saying_not_found_is_a_verdict()
+    {
+        var gh = Fake(["acme", "other"], new());
+        gh.Printed["acme"] = NotFound;
+        gh.Printed["other"] = NotFound;
+
+        (await Outcome(gh)).ShouldBe(RepoRead.NotFound);
+        gh.Asked.ShouldBe(["acme", "other"]);
+    }
+
+    [Theory]
+    [InlineData("acme", "other")] // the owner's account says not found, another one failed
+    [InlineData("other", "acme")] // the other way round
+    public async Task A_failed_account_among_the_not_founds_is_no_verdict(string saysNotFound, string failed)
+    {
+        var gh = Fake([saysNotFound, failed], new());
+        gh.Printed[saysNotFound] = NotFound;
+
+        (await Outcome(gh)).ShouldBe(RepoRead.Failed);
+    }
+
+    [Fact]
+    public async Task One_account_seeing_it_outweighs_another_saying_not_found()
+    {
+        var gh = Fake(["acme", "other"], new() { ["other"] = Graphql("READ") });
+        gh.Printed["acme"] = NotFound;
+
+        (await Outcome(gh)).Activity!.Account.ShouldBe("other");
+    }
+
+    [Theory]
+    [InlineData("""{"data":{"repository":null},"errors":[{"type":"FORBIDDEN"}]}""")]
+    [InlineData("""{"data":{"repository":null},"errors":[{"type":"NOT_FOUND"},{"type":"RATE_LIMITED"}]}""")]
+    [InlineData("""{"data":{"repository":null},"errors":[{"message":"no type"}]}""")]
+    [InlineData("""{"data":{"repository":null},"errors":[{"type":5}]}""")]
+    [InlineData("""{"data":{"repository":null},"errors":[]}""")]
+    [InlineData("""{"data":{"repository":null}}""")]
+    [InlineData("""{"data":{"repository":{"viewerPermission":"READ"}},"errors":[{"type":"NOT_FOUND"}]}""")]
+    [InlineData("""{"data":null,"errors":[{"type":"NOT_FOUND"}]}""")]
+    [InlineData("""{"message":"Bad credentials"}""")]
+    [InlineData("[]")]
+    [InlineData("502 Bad Gateway")]
+    [InlineData("")]
+    public async Task Only_GitHubs_not_found_is_a_verdict(string printed)
+    {
+        var gh = Fake(["acme"], new());
+        gh.Printed["acme"] = printed;
+
+        (await Outcome(gh)).ShouldBe(RepoRead.Failed);
     }
 
     [Fact]

@@ -300,7 +300,7 @@ public partial class App : Application
         services.AddSingleton(sp => new GitHubBrowsers(sp.GetRequiredService<BrowserCatalog>(), sp.GetRequiredService<ISettingsStore>(),
             info => { using var process = Process.Start(info); return process is not null; }, sp.GetRequiredService<ILogger<GitHubBrowsers>>()));
         services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<IGhCli>(), sp.GetRequiredService<GitHubReader>(),
-            (path, ct) => sp.GetRequiredService<GitInspector>().RunAsync(path, "config --get remote.origin.url", ct),
+            OriginLookup.ReadAsync,
             sp.GetRequiredService<ILogger<GitHubActivity>>()));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
             (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),

@@ -5,9 +5,10 @@ namespace CodeSwitchX.Core.GitHub;
 /// <summary>
 /// The open issues and pull requests of the repositories the Yard's folders belong to, in memory only. A round reads the
 /// accounts once and each repository once however many folders share it, four at a time; a read that fails keeps the last
-/// result, and a result that did not change keeps its instance, so the tiles built on it compare equal and stay as they are.
+/// result, one every account answers with "not found" drops it, and a result that did not change keeps its instance, so the
+/// tiles built on it compare equal and stay as they are.
 /// </summary>
-public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<string?>> originOf, ILogger<GitHubActivity> logger)
+public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, CancellationToken, Task<OriginLookup>> originOf, ILogger<GitHubActivity> logger)
 {
     private const int MostReadsAtOnce = 4;
     private const int PreviewCount = 5;
@@ -21,7 +22,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     /// <summary>A round changed at least one result, or <see cref="Replace"/> did; raised on whichever thread did it.</summary>
     public event EventHandler? Changed;
 
-    /// <summary>What was last read for the repository the folder belongs to; null before the first read, or when it has no GitHub origin.</summary>
+    /// <summary>What was last read for the repository the folder belongs to; null before the first read, when it has no GitHub origin, or when no account can see the repository.</summary>
     public RepoActivity? ForFolder(string path)
     {
         lock (_gate)
@@ -52,7 +53,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             // Each result is stored as it arrives, so a slow repository does not hold back the others; the event waits for the round.
             var changes = await Task.WhenAll(repos.Select(g => ReadAsync(g.Key, accounts, g.First().Folder, ct))).ConfigureAwait(false);
 
-            if (changes.Any(c => c))
+            if (changes.Any(c => c) || folderRepos.Any(p => p.Moved))
             {
                 Changed?.Invoke(this, EventArgs.Empty);
             }
@@ -92,23 +93,25 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    private async Task<(string Folder, GitHubRepo? Repo)> RepoOfAsync(string folder, CancellationToken ct)
+    /// <returns><c>Moved</c> is true when the folder now shows another result than before, which no read of the round would report.</returns>
+    private async Task<(string Folder, GitHubRepo? Repo, bool Moved)> RepoOfAsync(string folder, CancellationToken ct)
     {
         try
         {
             var origin = await originOf(folder, ct).ConfigureAwait(false);
             lock (_gate)
             {
+                var known = _repoOfFolder.GetValueOrDefault(folder);
                 // No answer (git timed out or failed) is not an origin that is gone: the folder keeps its repository.
-                if (origin is null && _repoOfFolder.TryGetValue(folder, out var known) && known is not null)
+                if (origin.Failed && known is not null)
                 {
                     logger.LogWarning("Reading the origin of {Folder} failed; it keeps the repository it had", folder);
-                    return (folder, known);
+                    return (folder, known, false);
                 }
 
-                var repo = GitHubRepo.FromRemote(origin);
+                var repo = GitHubRepo.FromRemote(origin.Url);
                 _repoOfFolder[folder] = repo;
-                return (folder, repo);
+                return (folder, repo, !ReferenceEquals(ResultOf(known), ResultOf(repo)));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -116,7 +119,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             logger.LogWarning(ex, "Finding the GitHub repository of {Folder} failed", folder);
             lock (_gate)
             {
-                return (folder, _repoOfFolder.GetValueOrDefault(folder));
+                return (folder, _repoOfFolder.GetValueOrDefault(folder), false);
             }
         }
     }
@@ -141,7 +144,22 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
         await _reads.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var activity = await reader.ReadAsync(repo, accounts, ct).ConfigureAwait(false);
+            var read = await reader.ReadAsync(repo, accounts, ct).ConfigureAwait(false);
+            if (read.NobodySeesIt)
+            {
+                lock (_gate)
+                {
+                    if (!_results.Remove(repo))
+                    {
+                        return false;
+                    }
+                }
+
+                logger.LogInformation("No account can see the repository of {Folder}; its result goes", folder);
+                return true;
+            }
+
+            var activity = read.Activity;
             if (activity is null && !ct.IsCancellationRequested)
             {
                 logger.LogWarning("Reading the open issues and pull requests of {Folder} failed; the last result stays", folder);
@@ -174,6 +192,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             _reads.Release();
         }
     }
+
+    private RepoActivity? ResultOf(GitHubRepo? repo) => repo is null ? null : _results.GetValueOrDefault(repo);
 
     private static string Key(string path) => Path.TrimEndingDirectorySeparator(path);
 }

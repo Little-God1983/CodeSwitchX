@@ -28,6 +28,23 @@ public class BrowserProfilesTests
     [InlineData("not json")]
     [InlineData("{}")]
     [InlineData("""{"profile":{"info_cache":[]}}""")]
+    [InlineData("[]")]
+    [InlineData("5")]
+    [InlineData("""{"profile":5}""")]
+    [InlineData("""{"profile":null}""")]
     public void Chromium_with_a_missing_or_broken_file_gives_no_profiles(string json) =>
         BrowserProfiles.Chromium(json).ShouldBeEmpty();
+
+    [Fact]
+    public void Chromium_names_a_profile_without_a_string_name_after_its_folder()
+    {
+        const string json = """
+            {"profile":{"info_cache":{"Default":{"name":5},"Profile 1":{"name":"Side project"},"Profile 2":{"name":null},
+             "Profile 3":{"name":{"odd":true}},"Profile 4":{"name":""},"Profile 5":7}}}
+            """;
+
+        BrowserProfiles.Chromium(json).ShouldBe([
+            ("Default", "Default"), ("Profile 1", "Side project"), ("Profile 2", "Profile 2"),
+            ("Profile 3", "Profile 3"), ("Profile 4", "Profile 4"), ("Profile 5", "Profile 5")]);
+    }
 }

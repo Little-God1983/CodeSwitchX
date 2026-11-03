@@ -102,6 +102,63 @@ public class GhCliTests : IDisposable
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
     }
 
+    /// <summary>A gh that gives a token and then prints the payload and exits with that code.</summary>
+    private async Task<string> FakeGh(string payload, int exitCode)
+    {
+        var file = Path.Combine(_root, "answer.json");
+        await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (echo a-token& exit /b 0)\r\ntype \"" + file + "\"\r\nexit /b " + exitCode + "\r\n", TestContext.Current.CancellationToken);
+        return script;
+    }
+
+    [Fact]
+    public async Task A_run_that_exits_with_an_error_hands_back_what_it_printed_but_not_as_its_output()
+    {
+        const string payload = """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND"}]}""";
+        var gh = new GhCli(await FakeGh(payload, 1), GhCli.Timeout);
+
+        var answer = await gh.AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken);
+
+        answer.Output.ShouldBeNull();
+        answer.FailureOutput.ShouldBe(payload);
+        (await gh.RunAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_run_that_succeeds_has_output_and_no_failure()
+    {
+        var gh = new GhCli(await FakeGh("{}", 0), GhCli.Timeout);
+
+        var answer = await gh.AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken);
+
+        answer.ShouldBe(new GhAnswer("{}"));
+    }
+
+    [Fact]
+    public async Task An_account_without_a_token_prints_nothing_to_go_on()
+    {
+        var payload = Path.Combine(_root, "answer.json");
+        await File.WriteAllTextAsync(payload, """{"data":{"repository":null},"errors":[{"type":"NOT_FOUND"}]}""", TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + payload + "\"\r\nexit /b 1\r\n", TestContext.Current.CancellationToken);
+
+        var answer = await new GhCli(script, GhCli.Timeout).AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken);
+
+        answer.ShouldBe(new GhAnswer(null));
+    }
+
+    [Fact]
+    public async Task A_run_that_times_out_prints_nothing_to_go_on()
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (echo a-token& exit /b 0)\r\necho partial\r\nping -n 30 127.0.0.1 >nul\r\nexit /b 1\r\n", TestContext.Current.CancellationToken);
+
+        var answer = await new GhCli(script, TimeSpan.FromSeconds(1)).AnswerAsAsync("acme", ["api", "graphql"], CancellationToken.None);
+
+        answer.ShouldBe(new GhAnswer(null));
+    }
+
     [Fact]
     public async Task Accounts_are_every_login_on_github_com_whatever_its_state()
     {
