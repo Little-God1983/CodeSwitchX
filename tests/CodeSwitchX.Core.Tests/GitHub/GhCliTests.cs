@@ -176,7 +176,7 @@ public class GhCliTests : IDisposable
 
         var accounts = await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken);
 
-        accounts.ShouldBe(["amy", "zed", "kim", "lou"]);
+        accounts.Logins.ShouldBe(["amy", "zed", "kim", "lou"]);
     }
 
     /// <summary>A gh that gives a token, takes about three seconds and then prints "done".</summary>
@@ -237,7 +237,7 @@ public class GhCliTests : IDisposable
         var script = Path.Combine(_root, "gh.cmd");
         await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + file + "\"\r\n", TestContext.Current.CancellationToken);
 
-        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(expected);
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).Logins.ShouldBe(expected);
     }
 
     [Theory]
@@ -252,7 +252,7 @@ public class GhCliTests : IDisposable
         var script = Path.Combine(_root, "gh.cmd");
         await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + file + "\"\r\n", TestContext.Current.CancellationToken);
 
-        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(GhAccounts.Failed());
     }
 
     [Fact]
@@ -260,6 +260,85 @@ public class GhCliTests : IDisposable
     {
         var gh = new GhCli(Path.Combine(_root, "no-such-gh.exe"), GhCli.Timeout);
 
-        (await gh.AccountsAsync(CancellationToken.None)).ShouldBeNull();
+        (await gh.AccountsAsync(CancellationToken.None)).ShouldBe(GhAccounts.Failed(GhFailure.NotFound));
+    }
+
+    [Theory]
+    [InlineData("unknown flag: --json", GhFailure.TooOld)]
+    [InlineData("Unknown Flag: --json", GhFailure.TooOld)]
+    [InlineData("something else went wrong", GhFailure.Other)]
+    public async Task A_gh_that_exits_with_an_error_is_told_apart_by_what_it_says(string stderr, GhFailure expected)
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\necho " + stderr + " 1>&2\r\nexit /b 1\r\n", TestContext.Current.CancellationToken);
+
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(GhAccounts.Failed(expected));
+    }
+
+    [Fact]
+    public async Task A_gh_that_cannot_be_started_for_another_reason_than_missing_is_another_failure()
+    {
+        var notAProgram = Path.Combine(_root, "gh.txt");
+        await File.WriteAllTextAsync(notAProgram, "text", TestContext.Current.CancellationToken);
+
+        (await new GhCli(notAProgram, GhCli.Timeout).AccountsAsync(CancellationToken.None)).ShouldBe(GhAccounts.Failed(GhFailure.Other));
+    }
+
+    [Fact]
+    public void Failure_text_has_the_type_and_stack_of_the_exception_and_of_its_cause_and_no_message()
+    {
+        Exception thrown;
+        try
+        {
+            try
+            {
+                throw new InvalidOperationException("secret inner");
+            }
+            catch (InvalidOperationException inner)
+            {
+                throw new IOException("secret outer", inner);
+            }
+        }
+        catch (IOException ex)
+        {
+            thrown = ex;
+        }
+
+        var text = FailureText.Of(thrown);
+
+        text.ShouldContain(nameof(IOException));
+        text.ShouldContain(nameof(InvalidOperationException));
+        text.ShouldContain("   at ", Case.Sensitive);
+        text.ShouldNotContain("secret");
+    }
+
+    [Fact]
+    public async Task A_cancelled_accounts_read_throws_and_is_no_failure_of_gh()
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nexit /b 1\r\n", TestContext.Current.CancellationToken);
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+
+        await Should.ThrowAsync<OperationCanceledException>(new GhCli(script, GhCli.Timeout).AccountsAsync(stop.Token));
+    }
+
+    [Fact]
+    public async Task A_gh_that_runs_out_of_time_is_another_failure()
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nping -n 6 127.0.0.1 >nul\r\necho {}\r\n", TestContext.Current.CancellationToken);
+        var gh = new GhCli(script, TimeSpan.FromSeconds(1));
+
+        (await gh.AccountsAsync(CancellationToken.None)).ShouldBe(GhAccounts.Failed(GhFailure.Other));
+    }
+
+    [Fact]
+    public async Task A_gh_that_exits_with_an_error_and_says_nothing_is_another_failure()
+    {
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nexit /b 4\r\n", TestContext.Current.CancellationToken);
+
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(GhAccounts.Failed(GhFailure.Other));
     }
 }

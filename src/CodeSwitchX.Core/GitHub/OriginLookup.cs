@@ -34,7 +34,7 @@ public sealed record OriginLookup(string? Url, bool Failed = false)
             return NoOrigin;
         }
 
-        var run = await GitInspector.RunProcessAsync(GitInspector.GitStartInfo(folder, $"--git-dir=\"{gitDir}\" config --get remote.origin.url"), GitInspector.DefaultTimeout, ct).ConfigureAwait(false);
+        var run = await GitInspector.RunProcessAsync(GitInspector.GitStartInfo(folder, $"--git-dir=\"{gitDir}\" ls-remote --get-url origin"), GitInspector.DefaultTimeout, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
         return From(run);
     }
@@ -57,13 +57,13 @@ public sealed record OriginLookup(string? Url, bool Failed = false)
     }
 
     /// <summary>
-    /// <c>git config --get</c> exits 1 when the key is not set. Every other way to end without an answer (timed out, did not
-    /// start, git gave up on a broken config with 128) says nothing about the origin.
+    /// <c>git ls-remote --get-url</c> applies <c>insteadOf</c> rules, reads an origin from any config (the global one, an include) and, with no such
+    /// remote, prints the name <c>origin</c> itself with exit 0. (<c>git remote get-url</c> sees only the repository's own config and exits 2.)
+    /// Every other way to end without an answer (timed out, did not start, git gave up on a broken config with 128) says nothing about the origin.
     /// </summary>
     internal static OriginLookup From(ProcessRunResult run) => run switch
     {
-        { Output: { } url } => new OriginLookup(url),
-        { ExitCode: 1 } => NoOrigin,
+        { Output: { } url } => url.Trim() == "origin" ? NoOrigin : new OriginLookup(url),
         _ => Failure,
     };
 }

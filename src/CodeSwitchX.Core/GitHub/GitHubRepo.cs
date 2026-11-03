@@ -7,11 +7,22 @@ public sealed record GitHubRepo(string Owner, string Name)
 {
     private const string Host = "github.com";
 
-    /// <summary>GitHub's SSH over the HTTPS port, as an ssh:// address.</summary>
+    /// <summary>GitHub's SSH over the HTTPS port; an ssh or scp address may name it, an https one may not.</summary>
     private const string SshHost = "ssh.github.com";
 
-    /// <summary><c>[user@]github.com:path</c>, or <c>github.com-name</c>: an ~/.ssh/config alias, the usual way to run two accounts. No dot in the name: that would be another domain.</summary>
-    private static readonly Regex ScpForm = new(@"^(?:[^@/\s]+@)?github\.com(?:-[\w-]+)?:(?<path>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly string[] SshSchemes = ["ssh", "git+ssh", "ssh+git"];
+
+    /// <summary>The schemes of an address with a host. Not <c>file</c>: <c>file://github.com/x</c> is a path on a share named like that.</summary>
+    private static readonly string[] Schemes = ["https", "http", "git", .. SshSchemes];
+
+    /// <summary><c>scheme://[user@]host[:port]/path</c>, the host as written (a <see cref="Uri"/> would lower-case it, and ssh matches <c>Host</c> case-sensitively).</summary>
+    private static readonly Regex UrlForm = new(@"^(?<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?:[^/@]*@)?(?<host>[^/:@\s]+)(?::\d*)?(?<path>/[^?#]*)?(?:[?#].*)?$", RegexOptions.CultureInvariant);
+
+    /// <summary><c>[user@]host:path</c>, the form git writes for ssh. The host has two letters or more (<c>C:/dir</c> is a drive) and the path at most one leading slash and no backslash.</summary>
+    private static readonly Regex ScpForm = new(@"^(?:[^@/\s]+@)?(?<host>[^@/\x5C\s:]{2,}):(?<path>/?[^/\x5C].*)$", RegexOptions.CultureInvariant);
+
+    /// <summary><c>github.com-name</c>: the usual name of an ~/.ssh/config alias for a second account. No dot in the name: that would be another domain.</summary>
+    private static readonly Regex GitHubAlias = new(@"^github\.com-[\w-]+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public string Slug => $"{Owner}/{Name}";
 
@@ -23,8 +34,8 @@ public sealed record GitHubRepo(string Owner, string Name)
     public override int GetHashCode() =>
         HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(Owner), StringComparer.OrdinalIgnoreCase.GetHashCode(Name));
 
-    /// <summary>The repository a git remote address points at; null for anything but github.com.</summary>
-    public static GitHubRepo? FromRemote(string? url)
+    /// <summary>The owner, name and host of a remote address with a host (a path or another scheme is null), whatever the host is.</summary>
+    public static RemoteAddress? Parse(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
@@ -32,29 +43,76 @@ public sealed record GitHubRepo(string Owner, string Name)
         }
 
         url = url.Trim();
-        string path;
-        if (ScpForm.Match(url) is { Success: true } scp)
+        string? scheme = null;
+        string host, rawPath;
+        if (url.Contains("://", StringComparison.Ordinal))
         {
-            path = scp.Groups["path"].Value;
+            if (UrlForm.Match(url) is not { Success: true } m || !Schemes.Contains(m.Groups["scheme"].Value.ToLowerInvariant()))
+            {
+                return null;
+            }
+
+            scheme = m.Groups["scheme"].Value.ToLowerInvariant();
+            host = m.Groups["host"].Value;
+            rawPath = m.Groups["path"].Value;
         }
-        else if (Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                 && (uri.Host.Equals(Host, StringComparison.OrdinalIgnoreCase)
-                     || (uri.Scheme == "ssh" && uri.Host.Equals(SshHost, StringComparison.OrdinalIgnoreCase))))
+        else if (ScpForm.Match(url) is { Success: true } scp)
         {
-            path = uri.AbsolutePath;
+            host = scp.Groups["host"].Value;
+            rawPath = scp.Groups["path"].Value;
         }
         else
         {
             return null;
         }
 
-        path = path.Trim('/');
+        var path = rawPath.Trim('/');
         if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
         {
             path = path[..^4];
         }
 
         var parts = path.Split('/');
-        return parts.Length == 2 && parts.All(p => p.Length > 0) ? new GitHubRepo(parts[0], parts[1]) : null;
+        return parts.Length == 2 && parts.All(p => p.Length > 0)
+            ? new RemoteAddress(new GitHubRepo(parts[0], parts[1]), host, scheme is null || SshSchemes.Contains(scheme))
+            : null;
+    }
+
+    /// <summary>The one host rule: github.com, or ssh.github.com where ssh is spoken.</summary>
+    internal static bool IsGitHubHost(string host, bool ssh) =>
+        host.Equals(Host, StringComparison.OrdinalIgnoreCase) || (ssh && host.Equals(SshHost, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A remote address read once: the host as written, and whether it is spoken over ssh (an ssh URL or the scp form). Its repository, whatever the host, is handed out only by <see cref="RepoGiven"/>.</summary>
+    public sealed class RemoteAddress(GitHubRepo repo, string host, bool isSsh)
+    {
+        public string Host { get; } = host;
+
+        public bool IsSsh { get; } = isSsh;
+
+        /// <summary>The host is GitHub by its name.</summary>
+        public bool IsGitHub => IsGitHubHost(Host, IsSsh);
+
+        /// <summary>An ssh host that is not GitHub by name might be an alias for it, which only <c>ssh -G</c> knows. Never one that could pass for an option.</summary>
+        public bool NeedsLookup => IsSsh && !IsGitHub && !Host.StartsWith('-');
+
+        /// <summary>
+        /// The repository, when the remote is GitHub: by its name, or because ssh says an ssh host (<c>git@github-work:owner/repo</c>) is github.com
+        /// or ssh.github.com. With no answer only the <c>github.com-name</c> convention is taken as GitHub; ssh naming another host is not.
+        /// </summary>
+        /// <param name="sshHost">The host <c>ssh -G</c> gave for <see cref="Host"/>; null when it gave none.</param>
+        public GitHubRepo? RepoGiven(string? sshHost)
+        {
+            if (IsGitHub)
+            {
+                return repo;
+            }
+
+            if (!NeedsLookup)
+            {
+                return null;
+            }
+
+            return (sshHost is null ? GitHubAlias.IsMatch(Host) : IsGitHubHost(sshHost, ssh: true)) ? repo : null;
+        }
     }
 }

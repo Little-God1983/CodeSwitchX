@@ -810,7 +810,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "The GitHub refresh round ended early");
+            // The type and the stack, never the message: it could carry a title, a label or a repository name.
+            _logger.LogWarning("The GitHub refresh round ended early: {Failure}", FailureText.Of(ex));
         }
         finally
         {
