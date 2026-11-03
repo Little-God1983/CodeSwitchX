@@ -256,96 +256,111 @@
   </UserControl.Resources>
 
   <Grid>
-  <DockPanel>
-    <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
-      <DockPanel>
-        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-          <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
-          <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
-          <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
-                  TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Tile size"
-                  Value="{Binding TileScale}" />
-          <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
-                     Margin="0,0,16,0" />
-          <TextBlock Text="Font size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
-          <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinFontScale}" Maximum="{x:Static yard:YardViewModel.MaxFontScale}"
-                  TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Font size"
-                  Value="{Binding FontScale}" />
-          <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
-                     Margin="0,0,16,0" />
-          <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
-          <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
-          <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-        </StackPanel>
-        <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
-        <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
-                   Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
-      </DockPanel>
-    </Border>
-    <!-- The tiles keep their places while the pointer is over the board (#276): none slides under a click. -->
-    <ScrollViewer VerticalScrollBarVisibility="Auto" MouseMove="OnBoardMouseMove" MouseLeave="OnBoardMouseLeave"
-                  ContextMenuOpening="OnTileMenuOpening" ContextMenuClosing="OnTileMenuClosing">
-      <!-- Now & today, This week, Older (#276): each in a panel of its own, its header with how many tiles it holds; a group
-           without tiles is not shown -->
-      <ItemsControl ItemsSource="{Binding Groups}" Margin="12,12,12,4">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate DataType="{x:Type yard:LastUseGroupViewModel}">
-            <Border Margin="0,0,0,16" Padding="8,10,8,4" CornerRadius="14" BorderThickness="1" BorderBrush="#2EFFFFFF" Background="#0FFFFFFF">
-              <Border.Style>
-                <Style TargetType="Border">
-                  <Style.Triggers>
-                    <DataTrigger Binding="{Binding Tiles.Count}" Value="0">
-                      <Setter Property="Visibility" Value="Collapsed" />
-                    </DataTrigger>
-                  </Style.Triggers>
-                </Style>
-              </Border.Style>
-              <StackPanel>
-              <StackPanel Orientation="Horizontal" Margin="10,0,0,2">
-                <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding Tiles.Count, StringFormat='· {0}'}" FontSize="16" Opacity="0.5" Margin="8,0,0,0" VerticalAlignment="Center" />
-              </StackPanel>
-              <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate>
-                    <WrapPanel />
-                  </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-              </ItemsControl>
-              </StackPanel>
-            </Border>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </ScrollViewer>
-  </DockPanel>
-  <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
-  <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
-  <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
-          Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
-          Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" IsVisibleChanged="OnGitHubPanelVisibleChanged">
-    <DockPanel DataContext="{Binding GitHubList}">
-      <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
-        <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
-        <StackPanel>
-          <TextBlock Text="{Binding Heading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
-          <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
-        </StackPanel>
-      </DockPanel>
-      <TextBlock DockPanel.Dock="Top" Text="{Binding Message}" Margin="16,0,16,8" TextWrapping="Wrap" Foreground="#F0C674"
-                 Visibility="{Binding Message, Converter={StaticResource NullToCollapsed}}" />
-      <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8">
+    <DockPanel>
+      <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+            <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+            <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
+            <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
+                    TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Tile size"
+                    Value="{Binding TileScale}" />
+            <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                       Margin="0,0,16,0" />
+            <TextBlock Text="Font size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+            <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinFontScale}" Maximum="{x:Static yard:YardViewModel.MaxFontScale}"
+                    TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Font size"
+                    Value="{Binding FontScale}" />
+            <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                       Margin="0,0,16,0" />
+            <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
+            <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
+            <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
+          </StackPanel>
+          <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
+                     Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
+        </DockPanel>
+      </Border>
+      <!-- The tiles keep their places while the pointer is over the board (#276): none slides under a click. -->
+      <ScrollViewer VerticalScrollBarVisibility="Auto" MouseMove="OnBoardMouseMove" MouseLeave="OnBoardMouseLeave"
+                    ContextMenuOpening="OnTileMenuOpening" ContextMenuClosing="OnTileMenuClosing">
+        <!-- Now & today, This week, Older (#276): each in a panel of its own, its header with how many tiles it holds; a group
+             without tiles is not shown -->
+        <ItemsControl ItemsSource="{Binding Groups}" Margin="12,12,12,4">
           <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
-                      ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+            <DataTemplate DataType="{x:Type yard:LastUseGroupViewModel}">
+              <Border Margin="0,0,0,16" Padding="8,10,8,4" CornerRadius="14" BorderThickness="1" BorderBrush="#2EFFFFFF" Background="#0FFFFFFF">
+                <Border.Style>
+                  <Style TargetType="Border">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding Tiles.Count}" Value="0">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </Border.Style>
+                <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="10,0,0,2">
+                  <TextBlock Text="{Binding Name}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <TextBlock Text="{Binding Tiles.Count, StringFormat='· {0}'}" FontSize="16" Opacity="0.5" Margin="8,0,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+                <ItemsControl ItemsSource="{Binding Tiles}" ItemTemplate="{StaticResource TileTemplate}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <WrapPanel />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                </ItemsControl>
+                </StackPanel>
+              </Border>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
       </ScrollViewer>
     </DockPanel>
-  </Border>
+    <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
+    <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
+    <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
+            Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
+            KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle"
+            Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}">
+      <DockPanel DataContext="{Binding GitHubList}">
+        <DockPanel.Resources>
+          <!-- why the list could not be read, why a row could not be opened: each shows only while it has something to say -->
+          <Style x:Key="GitHubFailureLine" TargetType="TextBlock">
+            <Setter Property="DockPanel.Dock" Value="Top" />
+            <Setter Property="Margin" Value="16,0,16,8" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="#F0C674" />
+            <Style.Triggers>
+              <Trigger Property="Text" Value="">
+                <Setter Property="Visibility" Value="Collapsed" />
+              </Trigger>
+            </Style.Triggers>
+          </Style>
+        </DockPanel.Resources>
+        <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
+          <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
+          <StackPanel>
+            <TextBlock Text="{Binding Heading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
+          </StackPanel>
+        </DockPanel>
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8" Focusable="False">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                        ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+      </DockPanel>
+    </Border>
   </Grid>
 </UserControl>

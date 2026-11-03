@@ -96,6 +96,8 @@ public sealed partial class GitHubAccountRow : ObservableObject
 
             _selectedId = value;
             _save(value);
+            // The failed Test was about the browser that was picked before.
+            Message = null;
             OnPropertyChanged();
         }
     }

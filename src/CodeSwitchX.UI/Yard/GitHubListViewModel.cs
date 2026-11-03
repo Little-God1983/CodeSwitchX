@@ -25,7 +25,11 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     [ObservableProperty] private string _heading;
     [ObservableProperty] private IReadOnlyList<GitHubRow> _rows;
-    [ObservableProperty] private string? _message;
+    /// <summary>Why the full list could not be read, or none. Kept apart from <see cref="OpenMessage"/>: each says what happened and neither hides the other.</summary>
+    [ObservableProperty] private string? _loadMessage;
+
+    /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
+    [ObservableProperty] private string? _openMessage;
 
     public GitHubListViewModel(GitHubPill pill, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers, IUiDispatcher ui,
         TimeProvider time, ILogger logger, Action<GitHubListViewModel> closed)
@@ -46,8 +50,25 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     public string AccountLine { get; }
 
+    private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes when the read of <see cref="LoadAsync"/> has ended, however it ended.</summary>
+    internal Task Loaded => _loaded.Task;
+
     /// <summary>Reads the full list. The tile's count follows it even when the panel was closed meanwhile; the panel does not.</summary>
     public async Task LoadAsync(CancellationToken ct)
+    {
+        try
+        {
+            await ReadAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _loaded.TrySetResult();
+        }
+    }
+
+    private async Task ReadAsync(CancellationToken ct)
     {
         var activity = _pill.Activity;
         IReadOnlyList<GitHubItem>? all;
@@ -83,13 +104,13 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
         if (all is null)
         {
-            Message = "Couldn't load the latest list. Showing what was last read.";
+            LoadMessage = "Couldn't load the latest list. Showing what was last read.";
             return;
         }
 
         Heading = HeadingFor(all.Count);
         Rows = RowsOf(all);
-        Message = null;
+        LoadMessage = null;
     }
 
     private string HeadingFor(int count) => $"{_pill.Activity.Repo.Name}: {count} open {GitHubPill.NounFor(_pill.Kind, count)}";
@@ -111,9 +132,6 @@ public sealed partial class GitHubListViewModel : ObservableObject
     [RelayCommand]
     private void OpenRow(GitHubRow row)
     {
-        if (_browsers.Open(_pill.Activity.Account, row.Item.Url) is { } line)
-        {
-            Message = line;
-        }
+        OpenMessage = _browsers.Open(_pill.Activity.Account, row.Item.Url);
     }
 }

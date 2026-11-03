@@ -1146,5 +1146,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         _subscriptions.Clear();
+        // Last: it runs the UI's close logic, and a subscriber that throws there must not skip the cleanup above.
+        GitHubList?.CloseCommand.Execute(null);
     }
 }

@@ -55,7 +55,8 @@
           <TextBlock Text="{Binding Item.Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
         </DockPanel>
         <WrapPanel Margin="0,2,0,0" VerticalAlignment="Center">
-          <ItemsControl ItemsSource="{Binding Item.Labels}">
+          <!-- not focusable: inside a row's button it would be a Tab stop of its own -->
+          <ItemsControl ItemsSource="{Binding Item.Labels}" Focusable="False">
             <ItemsControl.ItemsPanel>
               <ItemsPanelTemplate>
                 <WrapPanel />

@@ -78,6 +78,20 @@ public class GitHubPageViewModelTests
     }
 
     [Fact]
+    public async Task Picking_another_browser_clears_a_failed_test_line()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        _page.Accounts[0].SelectedId = "firefox|alpha";
+        _start = _ => false;
+        _page.Accounts[0].TestCommand.Execute(null);
+        _page.Accounts[0].Message.ShouldNotBeNull();
+
+        _page.Accounts[0].SelectedId = "firefox|beta";
+
+        _page.Accounts[0].Message.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_gone_browser_stays_selected_and_shows_as_missing()
     {
         _browsers.SetChoice("someone", "chrome|Default");

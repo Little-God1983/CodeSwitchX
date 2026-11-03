@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Markup;
+using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using CodeSwitchX.Core.GitHub;
@@ -21,6 +23,7 @@ using NSubstitute;
 
 namespace CodeSwitchX.UI.Tests.Yard;
 
+[Collection(KeyboardFocusCollection.Name)]
 public class GitHubListViewModelTests
 {
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
@@ -105,7 +108,7 @@ public class GitHubListViewModelTests
 
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1", "#2", "#3"]);
         list.Rows[0].AgeText.ShouldBe("updated today");
-        list.Message.ShouldBeNull();
+        list.LoadMessage.ShouldBeNull();
     }
 
     [Fact]
@@ -152,7 +155,7 @@ public class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Message.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
     }
@@ -166,7 +169,7 @@ public class GitHubListViewModelTests
         list.OpenRowCommand.Execute(list.Rows[0]);
 
         _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app/issues/1");
-        list.Message.ShouldBeNull();
+        list.OpenMessage.ShouldBeNull();
         _closedLists.ShouldBeEmpty();
     }
 
@@ -181,8 +184,59 @@ public class GitHubListViewModelTests
 
         list.OpenRowCommand.Execute(list.Rows[0]);
 
-        list.Message.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
         _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_row_that_opens_clears_an_earlier_open_failure()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _start = _ => false;
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        list.OpenMessage.ShouldNotBeNull();
+
+        _start = info => { _started.Add(info); return true; };
+        list.OpenRowCommand.Execute(list.Rows[0]);
+
+        list.OpenMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_load_failure_and_an_open_failure_each_keep_their_own_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _gh.List.SetResult(null);
+        _start = _ => false;
+
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.OpenMessage.ShouldStartWith("Couldn't open");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+    }
+
+    [Fact]
+    public async Task A_load_that_works_clears_the_load_line_and_leaves_the_open_line()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _start = _ => false;
+        list.OpenRowCommand.Execute(list.Rows[0]);
+        _gh.List.SetResult(ListOf(3));
+
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.LoadMessage.ShouldBeNull();
+        list.OpenMessage.ShouldStartWith("Couldn't open");
     }
 
     [Fact]
@@ -215,7 +269,7 @@ public class GitHubListViewModelTests
         await load;
 
         list.Rows.Count.ShouldBe(1);
-        list.Message.ShouldBeNull();
+        list.LoadMessage.ShouldBeNull();
         activity.ForFolder("app")!.OpenIssues.ShouldBe(12);
     }
 
@@ -228,7 +282,7 @@ public class GitHubListViewModelTests
 
         await list.LoadAsync(TestContext.Current.CancellationToken);
 
-        list.Message.ShouldBe("Couldn't load the latest list. Showing what was last read.");
+        list.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
         list.Rows.Select(r => r.NumberText).ShouldBe(["#1"]);
     }
 
@@ -248,9 +302,25 @@ public class GitHubListViewModelTests
         second.Heading.ShouldBe("app: 1 open pull request");
         // The earlier load finishes now and finds its panel gone.
         _gh.List.SetResult(ListOf(3));
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await first.Loaded;
         yard.GitHubList.ShouldBeSameAs(second);
         first.Rows.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Disposing_the_yard_closes_an_open_list()
+    {
+        var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+        yard.OpenGitHubListCommand.Execute(pill);
+        var list = yard.GitHubList.ShouldNotBeNull();
+
+        yard.Dispose();
+        _gh.List.SetResult(ListOf(3));
+        await list.Loaded;
+
+        yard.GitHubList.ShouldBeNull();
+        list.Rows.Count.ShouldBe(1, "a load that finishes later leaves the closed list alone");
     }
 
     [Fact]
@@ -319,7 +389,161 @@ public class GitHubListViewModelTests
 
         var panel = YardViewXaml().Descendants(Wpf + "Border").Single(b => (string?)b.Attribute(x + "Name") == "GitHubPanel");
 
+        // Tab, Ctrl+Tab and the arrow keys: none may reach the controls under the shade
         ((string?)panel.Attribute("KeyboardNavigation.TabNavigation")).ShouldBe("Cycle");
+        ((string?)panel.Attribute("KeyboardNavigation.ControlTabNavigation")).ShouldBe("Cycle");
+        ((string?)panel.Attribute("KeyboardNavigation.DirectionalNavigation")).ShouldBe("Cycle");
+    }
+
+    /// <summary>
+    /// The list panel as the Yard shows it: its markup from the file, on the application's resources, with the list as the context
+    /// of the Yard.
+    /// </summary>
+    private static Grid Panel(GitHubListViewModel? list)
+    {
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var root = YardViewXaml();
+        var markup = new XElement(root.Descendants(Wpf + "Border").Single(b => (string?)b.Attribute(x + "Name") == "GitHubPanel"));
+        // in a Grid of its own: the panel's attributes look their resources up outside it
+        var grid = new XElement(Wpf + "Grid", root.Attributes().Where(a => a.IsNamespaceDeclaration),
+            new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
+        var panel = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
+        panel.Children.OfType<Border>().Single().DataContext = new { GitHubList = list };
+        panel.Measure(new Size(560, 600));
+        panel.Arrange(new Rect(0, 0, 560, 600));
+        panel.UpdateLayout();
+        return panel;
+    }
+
+    /// <summary>What Tab can land on, in the order of the tree: focusable, a tab stop, enabled, and not collapsed by the markup.</summary>
+    private static List<UIElement> TabStops(DependencyObject root)
+    {
+        var found = new List<UIElement>();
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is UIElement { Visibility: not Visibility.Visible })
+            {
+                continue;
+            }
+
+            if (child is UIElement { IsEnabled: true, Focusable: true } element && KeyboardNavigation.GetIsTabStop(element))
+            {
+                found.Add(element);
+            }
+
+            found.AddRange(TabStops(child));
+        }
+
+        return found;
+    }
+
+    [Fact]
+    public async Task Each_row_is_one_tab_stop()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
+
+            // the close button, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button"]);
+        });
+    }
+
+    [Fact]
+    public async Task The_panel_shows_each_failure_line_only_while_it_has_something_to_say()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        var list = List(activity, pill, browsers);
+        _start = _ => false;
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = Panel(list);
+            // the failure lines are the amber ones
+            List<TextBlock> Lines() => Descendants(panel).OfType<TextBlock>().Where(t => t.Visibility == Visibility.Visible && t.Foreground is SolidColorBrush b && b.Color == Color.FromRgb(0xF0, 0xC6, 0x74)).ToList();
+
+            Lines().ShouldBe([], "nothing to say, nothing shown");
+
+            list.OpenRowCommand.Execute(list.Rows[0]);
+            panel.UpdateLayout();
+
+            var shown = Lines();
+            shown.ShouldHaveSingleItem().Text.ShouldStartWith("Couldn't open");
+        });
+    }
+
+    /// <summary>The panel as the Yard has it, with its focus handling, under a window of its own, and the keyboard on the first row.</summary>
+    private static (Grid Grid, Border Panel, HwndSource Source) FocusedPanel(GitHubListViewModel list)
+    {
+        var grid = Panel(list);
+        var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
+        var panel = grid.Children.OfType<Border>().Single();
+        _ = new GitHubPanelFocus(grid, panel, () => { });
+        Keyboard.Focus(Descendants(panel).OfType<Button>().First(b => b.DataContext is GitHubRow));
+        return (grid, panel, source);
+    }
+
+    [Fact]
+    public async Task A_swap_of_the_rows_keeps_the_keyboard_in_the_panel()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, panel, source) = FocusedPanel(list);
+            using var _ = source;
+            panel.IsKeyboardFocusWithin.ShouldBeTrue();
+
+            list.Rows = list.Rows.Take(2).ToList(); // the focused button is rebuilt
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            panel.IsKeyboardFocusWithin.ShouldBeTrue();
+            Keyboard.FocusedElement.ShouldBeSameAs(panel);
+        });
+    }
+
+    [Fact]
+    public async Task A_keyboard_that_is_nowhere_without_a_swap_is_not_pulled_back()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var (_, _, source) = FocusedPanel(list);
+            using var _ = source;
+
+            Keyboard.ClearFocus(); // as the app losing the activation leaves it
+            Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            Keyboard.FocusedElement.ShouldBeNull();
+        });
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var deeper in Descendants(child))
+            {
+                yield return deeper;
+            }
+        }
     }
 
     private static readonly XNamespace Wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
