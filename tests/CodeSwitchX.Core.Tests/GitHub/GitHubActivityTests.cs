@@ -44,6 +44,8 @@ public class GitHubActivityTests
         public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             (await AnswerAsAsync(login, arguments, ct)).Output;
 
+        public Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) => AnswerAsAsync(login, arguments, ct);
+
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
             var slug = arguments.First(a => a.StartsWith("owner=", StringComparison.Ordinal)) + "/" + arguments.First(a => a.StartsWith("name=", StringComparison.Ordinal));
@@ -249,7 +251,7 @@ public class GitHubActivityTests
         var changes = 0;
         activity.Changed += (_, _) => changes++;
 
-        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, Enumerable.Range(1, 7).Select(Item).ToList());
+        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, new GitHubList(Enumerable.Range(1, 7).Select(Item).ToList()), before, out _);
 
         var after = activity.ForFolder(@"c:\r\tool")!;
         after.OpenIssues.ShouldBe(7);
@@ -257,6 +259,86 @@ public class GitHubActivityTests
         after.OpenPullRequests.ShouldBe(before.OpenPullRequests);
         after.NewestPullRequests.ShouldBe(before.NewestPullRequests);
         changes.ShouldBe(1);
+    }
+
+    private static GitHubList ListOf(int items, int skipped = 0) =>
+        new(Enumerable.Range(1, items).Select(Item).ToList(), skipped);
+
+    /// <summary>A repository GraphQL counts 1500 open issues of.</summary>
+    private static async Task<(GitHubActivity Activity, GitHubRepo Repo)> ReadOf1500Async()
+    {
+        var gh = new FakeGh { Issues = 1500 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        return (activity, new GitHubRepo("acme", "tool"));
+    }
+
+    [Theory]
+    [InlineData(7, 0, 7)]
+    [InlineData(999, 0, 999)]
+    [InlineData(1000, 0, 1500)]
+    [InlineData(998, 2, 1500)]
+    [InlineData(7, 1, 8)]
+    public async Task Replace_keeps_the_graphql_total_unless_the_list_is_whole(int items, int skipped, int expected)
+    {
+        var (activity, repo) = await ReadOf1500Async();
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(items, skipped), activity.Latest(repo), out _).ShouldBeTrue();
+
+        var after = activity.ForFolder(@"c:\r\tool")!;
+        after.OpenIssues.ShouldBe(expected);
+        after.NewestIssues.Select(i => i.Number).ShouldBe(Enumerable.Range(1, Math.Min(5, items)));
+    }
+
+    [Fact]
+    public async Task A_list_started_before_a_newer_result_is_ignored_and_the_stored_total_comes_back()
+    {
+        var gh = new FakeGh { Issues = 3 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var repo = new GitHubRepo("acme", "tool");
+        var started = activity.Latest(repo);
+        gh.Issues = 20;
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var before = activity.ForFolder(@"c:\r\tool")!;
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), started, out _).ShouldBeFalse();
+        activity.ForFolder(@"c:\r\tool").ShouldBeSameAs(before);
+    }
+
+    [Fact]
+    public async Task A_list_started_after_the_latest_result_is_applied_and_its_total_comes_back()
+    {
+        var gh = new FakeGh { Issues = 3 };
+        var activity = Activity(gh, _ => "https://github.com/acme/tool.git");
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
+        var repo = new GitHubRepo("acme", "tool");
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), activity.Latest(repo), out var total).ShouldBeTrue();
+
+        total.ShouldBe(7);
+        activity.ForFolder(@"c:\r\tool")!.OpenIssues.ShouldBe(7);
+    }
+
+    [Fact]
+    public void A_repository_no_round_has_read_has_no_total_to_give()
+    {
+        var activity = Activity(new FakeGh(), _ => "https://github.com/acme/tool.git");
+
+        activity.Replace(new GitHubRepo("acme", "tool"), GitHubItemKind.Issue, ListOf(2), null, out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_list_read_when_nothing_was_stored_does_not_overwrite_what_was_stored_during_the_read()
+    {
+        var activity = Activity(new FakeGh { Issues = 3 }, _ => "https://github.com/acme/tool.git");
+        var repo = new GitHubRepo("acme", "tool");
+        var started = activity.Latest(repo); // null
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+
+        activity.Replace(repo, GitHubItemKind.Issue, ListOf(7), started, out _).ShouldBeFalse();
+
+        activity.ForFolder(@"c:	ool")!.OpenIssues.ShouldBe(3);
     }
 
     [Fact]
@@ -308,15 +390,15 @@ public class GitHubActivityTests
         var origin = OriginLookup.Failure;
         var activity = Activity(gh, _ => origin);
 
-        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
-        activity.Knows(@"c:	ool").ShouldBeFalse();
+        activity.Knows(@"c:\r\tool").ShouldBeFalse();
         origin = new OriginLookup("https://github.com/acme/tool.git");
 
-        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+        await activity.RefreshAsync([@"c:\r\tool"], CancellationToken.None);
 
-        activity.Knows(@"c:	ool").ShouldBeTrue();
-        activity.ForFolder(@"c:	ool")!.Repo.ShouldBe(new GitHubRepo("acme", "tool"));
+        activity.Knows(@"c:\r\tool").ShouldBeTrue();
+        activity.ForFolder(@"c:\r\tool")!.Repo.ShouldBe(new GitHubRepo("acme", "tool"));
     }
 
     [Fact]

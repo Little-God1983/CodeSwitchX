@@ -50,6 +50,9 @@ public class YardGitHubTests : IDisposable
         public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
             new(await RunAsAsync(login, arguments, ct));
 
+        public async Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+            new(await RunAsAsync(login, arguments, ct));
+
         public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
             lock (Names)
@@ -409,11 +412,16 @@ public class YardGitHubTests : IDisposable
     }
 
     [Theory]
-    [InlineData(19, "+14 more. Click the pill for all of them")]
-    [InlineData(5, null)]
-    public void More_text_counts_what_the_preview_leaves_out(int count, string? expected)
+    [InlineData(19, 5, "+14 more. Click the pill for all of them")]
+    [InlineData(5, 5, null)]
+    [InlineData(12, 4, "+8 more. Click the pill for all of them")]
+    [InlineData(5, 4, "+1 more. Click the pill for all of them")]
+    [InlineData(4, 4, null)]
+    public void More_text_counts_what_the_preview_leaves_out(int count, int shown, string? expected)
     {
-        Pill(count).MoreText.ShouldBe(expected);
+        var items = Enumerable.Range(1, shown).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList();
+
+        Pill(count, items: items).MoreText.ShouldBe(expected);
     }
 
     [Theory]

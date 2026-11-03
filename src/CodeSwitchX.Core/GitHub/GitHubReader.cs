@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.GitHub;
 
@@ -15,13 +16,15 @@ public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
 /// Reads a repository's open issues and pull requests through <see cref="IGhCli"/>, as whichever signed-in account can see
 /// it best. Nothing is remembered: which account reads is worked out again on every read, so a brief failure cannot stick.
 /// </summary>
-public sealed class GitHubReader(IGhCli gh)
+public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null)
 {
-    private const string Query = """
+    private const string QueryTemplate = """
         query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission
-         issues(states:OPEN,first:5,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
-         pullRequests(states:OPEN,first:5,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName author{login} labels(first:10){nodes{name color}}}}}}
+         issues(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
+         pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName author{login} labels(first:10){nodes{name color}}}}}}
         """;
+
+    private static readonly string Query = QueryTemplate.Replace("PREVIEW", RepoActivity.PreviewCount.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
     private const string AppPrefix = "app/";
 
@@ -69,29 +72,45 @@ public sealed class GitHubReader(IGhCli gh)
             : RepoRead.Failed;
     }
 
-    /// <summary>Every open item of one kind, as that account; null when it cannot read them.</summary>
-    public async Task<IReadOnlyList<GitHubItem>?> ListAsync(GitHubRepo repo, string account, GitHubItemKind kind, CancellationToken ct)
+    /// <summary>
+    /// The newest open items of one kind (at most <see cref="GitHubList.Limit"/>), as that account; null when it cannot read them.
+    /// A row with an odd value is left out and counted in <see cref="GitHubList.Skipped"/>.
+    /// </summary>
+    public async Task<GitHubList?> ListAsync(GitHubRepo repo, string account, GitHubItemKind kind, CancellationToken ct)
     {
         var isPullRequest = kind == GitHubItemKind.PullRequest;
-        var output = await gh.RunAsAsync(account,
+        var answer = await gh.ListAsAsync(account,
         [
-            isPullRequest ? "pr" : "issue", "list", "-R", repo.Slug, "--state", "open", "--limit", "1000",
+            isPullRequest ? "pr" : "issue", "list", "-R", repo.Slug, "--state", "open", "--limit", GitHubList.Limit.ToString(CultureInfo.InvariantCulture),
             "--json", isPullRequest ? "number,title,url,updatedAt,labels,headRefName,author" : "number,title,url,updatedAt,labels",
         ], ct).ConfigureAwait(false);
-        if (output is null)
+        if (answer.Output is not { } output)
         {
+            // A read the caller cancelled is no failure.
+            if (ct.IsCancellationRequested)
+            {
+                return null;
+            }
+
+            // No names: a repository's name is not for a log.
+            logger?.LogWarning(answer.TimedOut ? "Reading a GitHub list ran out of its time" : "Reading a GitHub list failed");
             return null;
         }
 
         try
         {
             using var doc = JsonDocument.Parse(output);
-            return doc.RootElement.EnumerateArray()
-                .Select(row => ParseItem(row, row.GetProperty("labels"), isPullRequest))
-                .ToList();
+            var list = Split(doc.RootElement.EnumerateArray().Select(row => ParseItem(row, graphql: false, isPullRequest)));
+            if (list is null)
+            {
+                logger?.LogWarning("No row of a GitHub list could be read");
+            }
+
+            return list;
         }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
+            logger?.LogWarning("A GitHub list was not in the format expected");
             return null;
         }
     }
@@ -121,13 +140,15 @@ public sealed class GitHubReader(IGhCli gh)
 
             var issues = node.GetProperty("issues");
             var pullRequests = node.GetProperty("pullRequests");
-            var activity = new RepoActivity(
-                repo,
-                account,
-                issues.GetProperty("totalCount").GetInt32(),
-                pullRequests.GetProperty("totalCount").GetInt32(),
-                issues.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, n.GetProperty("labels").GetProperty("nodes"), false)).ToList(),
-                pullRequests.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, n.GetProperty("labels").GetProperty("nodes"), true)).ToList());
+            var issueCount = issues.GetProperty("totalCount").GetInt32();
+            var pullRequestCount = pullRequests.GetProperty("totalCount").GetInt32();
+            if (Newest(issues, isPullRequest: false) is not { } newestIssues
+                || Newest(pullRequests, isPullRequest: true) is not { } newestPullRequests)
+            {
+                return new AccountRead();
+            }
+
+            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests);
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
@@ -135,6 +156,21 @@ public sealed class GitHubReader(IGhCli gh)
         {
             return new AccountRead();
         }
+    }
+
+    /// <summary>The items of a preview, odd ones left out; null when the read failed (see <see cref="Split"/>).</summary>
+    private static IReadOnlyList<GitHubItem>? Newest(JsonElement kind, bool isPullRequest) =>
+        Split(kind.GetProperty("nodes").EnumerateArray().Select(n => ParseItem(n, graphql: true, isPullRequest)))?.Items;
+
+    /// <summary>
+    /// The parsed rows (null for an odd one) as the items read and the count left out. Two rows or more and not one read means the
+    /// format is not what it was, which is a read that failed: null. A single odd row is a skipped one.
+    /// </summary>
+    private static GitHubList? Split(IEnumerable<GitHubItem?> parsed)
+    {
+        var rows = parsed.ToList();
+        var list = new GitHubList(rows.OfType<GitHubItem>().ToList(), rows.Count(item => item is null));
+        return list.Items.Count == 0 && list.Skipped > 1 ? null : list;
     }
 
     /// <summary>
@@ -163,35 +199,55 @@ public sealed class GitHubReader(IGhCli gh)
         }
     }
 
-    /// <param name="labelRows">The label array: GraphQL wraps it in <c>nodes</c>, <c>gh issue list</c> does not.</param>
-    private static GitHubItem ParseItem(JsonElement row, JsonElement labelRows, bool isPullRequest)
+    /// <summary>The item a row makes, or null when a value in it is odd: the row is left out, not the list.</summary>
+    /// <param name="graphql">GraphQL wraps the label array in <c>nodes</c>, <c>gh issue list</c> does not.</param>
+    private static GitHubItem? ParseItem(JsonElement row, bool graphql, bool isPullRequest)
     {
-        var labels = labelRows.EnumerateArray()
-            .Select(l => new GitHubLabel(l.GetProperty("name").GetString() ?? "", l.GetProperty("color").GetString() ?? ""))
-            .ToList();
-        string? branch = null;
-        string? author = null;
-        if (isPullRequest)
+        try
         {
-            branch = row.GetProperty("headRefName").GetString();
-            if (row.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object)
+            var labelRows = row.GetProperty("labels");
+            var labels = (graphql ? labelRows.GetProperty("nodes") : labelRows).EnumerateArray()
+                .Select(l => new GitHubLabel(l.GetProperty("name").GetString() ?? "", l.GetProperty("color").GetString() ?? ""))
+                .ToList();
+            string? branch = null;
+            string? author = null;
+            if (isPullRequest)
             {
-                // gh pr list can give an author without a login, and spells a bot app/name where GraphQL says name.
-                author = a.TryGetProperty("login", out var login) ? login.GetString() : null;
-                if (author is not null && author.StartsWith(AppPrefix, StringComparison.Ordinal))
+                var head = row.GetProperty("headRefName");
+                if (head.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
                 {
-                    author = author[AppPrefix.Length..];
+                    return null;
+                }
+
+                branch = head.GetString();
+                if (row.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.Object)
+                {
+                    // gh pr list can give an author without a login, and spells a bot app/name where GraphQL says name.
+                    author = a.TryGetProperty("login", out var login) ? login.GetString() : null;
+                    if (author is not null && author.StartsWith(AppPrefix, StringComparison.Ordinal))
+                    {
+                        author = author[AppPrefix.Length..];
+                    }
                 }
             }
-        }
 
-        return new GitHubItem(
-            row.GetProperty("number").GetInt32(),
-            row.GetProperty("title").GetString() ?? "",
-            row.GetProperty("url").GetString() ?? "",
-            DateTimeOffset.Parse(row.GetProperty("updatedAt").GetString()!, CultureInfo.InvariantCulture),
-            labels,
-            branch,
-            author);
+            var title = row.GetProperty("title");
+            var url = row.GetProperty("url");
+            var updated = row.GetProperty("updatedAt");
+            if (!row.GetProperty("number").TryGetInt32(out var number)
+                || title.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)
+                || url.ValueKind != JsonValueKind.String
+                || updated.ValueKind != JsonValueKind.String
+                || !DateTimeOffset.TryParse(updated.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var updatedAt))
+            {
+                return null;
+            }
+
+            return new GitHubItem(number, title.GetString() ?? "", url.GetString()!, updatedAt, labels, branch, author);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or FormatException)
+        {
+            return null;
+        }
     }
 }

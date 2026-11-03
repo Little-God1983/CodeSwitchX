@@ -56,7 +56,7 @@ public class GhCliTests : IDisposable
         await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + payload + "\"\r\n", TestContext.Current.CancellationToken);
         var gh = new GhCli(script, GhCli.Timeout);
 
-        (await gh.RunAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).ShouldBe(json);
+        (await gh.AnswerAsAsync("acme", ["api", "user"], TestContext.Current.CancellationToken)).Output.ShouldBe(json);
     }
 
     private static void WithInheritedEnvironment(Action action)
@@ -96,7 +96,7 @@ public class GhCliTests : IDisposable
         var gh = new GhCli(script, TimeSpan.FromSeconds(1));
 
         var watch = Stopwatch.StartNew();
-        var result = await gh.RunAsAsync("acme", ["api", "user"], CancellationToken.None);
+        var result = (await gh.AnswerAsAsync("acme", ["api", "user"], CancellationToken.None)).Output;
 
         result.ShouldBeNull();
         watch.Elapsed.ShouldBeLessThan(TimeSpan.FromSeconds(10));
@@ -122,7 +122,7 @@ public class GhCliTests : IDisposable
 
         answer.Output.ShouldBeNull();
         answer.FailureOutput.ShouldBe(payload);
-        (await gh.RunAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken)).ShouldBeNull();
+        (await gh.AnswerAsAsync("acme", ["api", "graphql"], TestContext.Current.CancellationToken)).Output.ShouldBeNull();
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class GhCliTests : IDisposable
 
         var answer = await new GhCli(script, TimeSpan.FromSeconds(1)).AnswerAsAsync("acme", ["api", "graphql"], CancellationToken.None);
 
-        answer.ShouldBe(new GhAnswer(null));
+        answer.ShouldBe(new GhAnswer(null, TimedOut: true));
     }
 
     [Fact]
@@ -177,6 +177,67 @@ public class GhCliTests : IDisposable
         var accounts = await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken);
 
         accounts.ShouldBe(["amy", "zed", "kim", "lou"]);
+    }
+
+    /// <summary>A gh that gives a token, takes about three seconds and then prints "done".</summary>
+    private async Task<string> SlowGh()
+    {
+        var script = Path.Combine(_root, "slow.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (echo a-token& exit /b 0)\r\nping -n 4 127.0.0.1 >nul\r\necho done\r\n", TestContext.Current.CancellationToken);
+        return script;
+    }
+
+    [Fact]
+    public async Task A_list_read_outlasts_the_usual_timeout()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+
+        var answer = await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None);
+
+        answer.Output.ShouldNotBeNull().Trim().ShouldBe("done");
+        answer.TimedOut.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_list_read_has_its_own_timeout_and_says_it_ran_out_of_it()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(1));
+
+        (await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None)).ShouldBe(new GhAnswer(null, TimedOut: true));
+    }
+
+    [Fact]
+    public async Task A_single_read_is_killed_at_the_usual_timeout_whatever_the_list_timeout_is()
+    {
+        var gh = new GhCli(await SlowGh(), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+
+        (await gh.AnswerAsAsync("acme", ["issue", "list"], CancellationToken.None)).Output.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_token_lookup_keeps_the_usual_timeout_whatever_the_list_timeout_is()
+    {
+        var script = Path.Combine(_root, "slowtoken.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\nif \"%1\"==\"auth\" (ping -n 4 127.0.0.1 >nul& echo a-token& exit /b 0)\r\necho done\r\n", TestContext.Current.CancellationToken);
+        var gh = new GhCli(script, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
+
+        (await gh.ListAsAsync("acme", ["issue", "list"], CancellationToken.None)).Output.ShouldBeNull();
+    }
+
+    [Theory]
+    [InlineData("""[1,2]""", new string[0])]
+    [InlineData("""{"hosts":[]}""", new string[0])]
+    [InlineData("""{"hosts":{"github.com":{"login":"amy"}}}""", new string[0])]
+    [InlineData("""{"hosts":{"github.com":[{"login":5},{"login":null},{"login":"amy"},"zed",null,{"state":"x"}]}}""", new[] { "amy" })]
+    [InlineData("""{"hosts":{"github.com":[{"login":"amy"},{"login":"kim"}]}}""", new[] { "amy", "kim" })]
+    public async Task Accounts_survive_an_unexpected_shape_and_give_what_they_can(string payload, string[] expected)
+    {
+        var file = Path.Combine(_root, "status.json");
+        await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
+        var script = Path.Combine(_root, "gh.cmd");
+        await File.WriteAllTextAsync(script, "@echo off\r\ntype \"" + file + "\"\r\n", TestContext.Current.CancellationToken);
+
+        (await new GhCli(script, GhCli.Timeout).AccountsAsync(TestContext.Current.CancellationToken)).ShouldBe(expected);
     }
 
     [Fact]

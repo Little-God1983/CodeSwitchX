@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.GitHub;
+using Microsoft.Extensions.Logging;
 
 namespace CodeSwitchX.Core.Tests.GitHub;
 
@@ -18,6 +19,19 @@ public class GitHubReaderTests
         public Dictionary<string, string> Printed { get; } = [];
 
         public Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct) => Task.FromResult(accounts);
+
+        /// <summary>The commands that were run as list reads.</summary>
+        public List<IReadOnlyList<string>> ListCommands { get; } = [];
+
+        /// <summary>A list read that gives nothing ran out of its time.</summary>
+        public bool ListTimedOut { get; set; }
+
+        public async Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+        {
+            ListCommands.Add(arguments);
+            var output = await RunAsAsync(login, arguments, ct);
+            return new GhAnswer(output, TimedOut: output is null && ListTimedOut);
+        }
 
         public Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
         {
@@ -266,8 +280,8 @@ public class GitHubReaderTests
 
         gh.Asked.ShouldBe(["amy"]);
         gh.Commands.Single().ShouldBe(["issue", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels"]);
-        items!.Select(i => i.Number).ShouldBe([3, 2]);
-        items![0].Labels.ShouldBe([new GitHubLabel("bug", "ff0000")]);
+        items!.Items.Select(i => i.Number).ShouldBe([3, 2]);
+        items.Items[0].Labels.ShouldBe([new GitHubLabel("bug", "ff0000")]);
     }
 
     [Fact]
@@ -281,7 +295,7 @@ public class GitHubReaderTests
         var items = await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None);
 
         gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,author"]);
-        var item = items.ShouldNotBeNull().Single();
+        var item = items.ShouldNotBeNull().Items.Single();
         item.Branch.ShouldBe("feature/x");
         item.Author.ShouldBe("amy");
     }
@@ -297,7 +311,7 @@ public class GitHubReaderTests
 
         var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
 
-        items.Select(i => i.Author).ShouldBe([null, "amy"]);
+        items.Items.Select(i => i.Author).ShouldBe([null, "amy"]);
     }
 
     [Theory]
@@ -312,7 +326,7 @@ public class GitHubReaderTests
 
         var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
 
-        items.Single().Author.ShouldBe(expected);
+        items.Items.Single().Author.ShouldBe(expected);
     }
 
     [Fact]
@@ -321,6 +335,242 @@ public class GitHubReaderTests
         var gh = new FakeGh([], (_, _) => null);
 
         (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    private const string GoodRow = """{"number":2,"title":"Fine","url":"u2","updatedAt":"2026-11-02T10:00:00Z","labels":[]}""";
+
+    [Theory]
+    [InlineData("""{"number":"1","title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1.5,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":7,"url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":null,"updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":null,"labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"last tuesday","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","labels":[]}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":7}""")]
+    [InlineData("""[1,2]""")]
+    public async Task ListAsync_skips_an_odd_row_and_keeps_the_others(string odd)
+    {
+        var gh = new FakeGh([], (_, _) => "[" + odd + "," + GoodRow + "]");
+
+        var list = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldNotBeNull();
+
+        list.Items.Select(i => i.Number).ShouldBe([2]);
+        list.Skipped.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":4}""")]
+    [InlineData("""{"number":1,"title":"T","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[]}""")]
+    public async Task ListAsync_skips_a_pull_request_with_an_odd_branch(string odd)
+    {
+        var good = """{"number":2,"title":"Fine","url":"u2","updatedAt":"2026-11-02T10:00:00Z","labels":[],"headRefName":"b"}""";
+        var gh = new FakeGh([], (_, _) => "[" + odd + "," + good + "]");
+
+        var list = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull();
+
+        list.Items.Select(i => i.Number).ShouldBe([2]);
+        list.Skipped.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("not json at all")]
+    [InlineData("""{"number":1}""")]
+    [InlineData("""[{"number":1""")]
+    [InlineData("")]
+    public async Task ListAsync_gives_null_for_malformed_JSON(string output)
+    {
+        var gh = new FakeGh([], (_, _) => output);
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task ListAsync_is_read_as_a_list_and_the_graphql_read_is_not()
+    {
+        var gh = new FakeGh(["amy"], (_, args) => args[0] == "api" ? Graphql("ADMIN") : "[]");
+        var reader = new GitHubReader(gh);
+
+        await reader.ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None);
+        await reader.ReadAsync(Repo, ["amy"], CancellationToken.None);
+
+        gh.ListCommands.Single()[0].ShouldBe("issue");
+        gh.Commands.Count.ShouldBe(2);
+        GhCli.ListTimeout.ShouldBe(TimeSpan.FromSeconds(120));
+    }
+
+    private sealed class Lines : ILogger<GitHubReader>
+    {
+        public List<string> Warnings { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Warnings.Add(logLevel + ": " + formatter(state, exception));
+    }
+
+    [Fact]
+    public async Task A_list_in_no_readable_format_is_logged_without_names()
+    {
+        var gh = new FakeGh([], (_, _) => """[{"number":"a"},{"title":1}]""");
+        var log = new Lines();
+
+        (await new GitHubReader(gh, log).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+
+        log.Warnings.ShouldHaveSingleItem().ShouldStartWith("Warning: No row of a GitHub list");
+    }
+
+    [Fact]
+    public async Task A_read_cancelled_by_the_caller_is_no_failure_and_logs_nothing()
+    {
+        var gh = new FakeGh([], (_, _) => null);
+        var log = new Lines();
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+
+        (await new GitHubReader(gh, log).ListAsync(Repo, "amy", GitHubItemKind.Issue, stop.Token)).ShouldBeNull();
+
+        log.Warnings.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true, "ran out of its time")]
+    [InlineData(false, "failed")]
+    public async Task A_list_read_that_gives_nothing_is_logged_by_why_and_without_names(bool timedOut, string said)
+    {
+        var gh = new FakeGh([], (_, _) => null) { ListTimedOut = timedOut };
+        var log = new Lines();
+
+        (await new GitHubReader(gh, log).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+
+        var line = log.Warnings.ShouldHaveSingleItem();
+        line.ShouldStartWith("Warning: Reading a GitHub list");
+        line.ShouldContain(said);
+        line.ShouldNotContain("tool");
+    }
+
+    [Fact]
+    public async Task An_odd_node_in_the_preview_is_skipped_and_the_total_stays()
+    {
+        var odd = "{\"number\":\"x\",\"title\":\"T\",\"url\":\"u\",\"updatedAt\":null,\"labels\":{\"nodes\":[]}}";
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 9, issueNodes: odd + "," + IssueNode(4, "Fine")) });
+
+        var activity = (await Read(gh)).ShouldNotBeNull();
+
+        activity.OpenIssues.ShouldBe(9);
+        activity.NewestIssues.Select(i => i.Number).ShouldBe([4]);
+    }
+
+    [Fact]
+    public async Task The_query_asks_for_as_many_as_the_preview_keeps()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN") });
+
+        await Read(gh);
+
+        RepoActivity.PreviewCount.ShouldBe(5);
+        var query = gh.Commands.Single().First(a => a.StartsWith("query=", StringComparison.Ordinal));
+        query.Split("first:" + RepoActivity.PreviewCount + ",", StringSplitOptions.None).Length.ShouldBe(3);
+    }
+
+    [Theory]
+    [InlineData(0, 0, 0)]
+    [InlineData(999, 0, 999)]
+    [InlineData(999, 1, 1500)]
+    [InlineData(1000, 0, 1500)]
+    [InlineData(500, 3, 503)]
+    [InlineData(3, 1, 4)]
+    public void A_list_below_the_limit_knows_the_count_skipped_rows_included_and_at_the_limit_keeps_the_known_one(int items, int skipped, int expected)
+    {
+        var list = new GitHubList(Enumerable.Range(1, items).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList(), skipped);
+
+        list.TotalGiven(known: 1500).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void A_list_never_totals_below_what_it_shows()
+    {
+        var list = new GitHubList(Enumerable.Range(1, 1000).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList());
+
+        list.ReachedLimit.ShouldBeTrue();
+        list.TotalGiven(known: 40).ShouldBe(1000);
+    }
+
+    [Fact]
+    public async Task ListAsync_gives_null_when_no_row_can_be_read()
+    {
+        var gh = new FakeGh([], (_, _) => """[{"number":"a"},{"title":1}]""");
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task An_empty_list_is_still_a_list()
+    {
+        var gh = new FakeGh([], (_, _) => "[]");
+
+        (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldNotBeNull().Items.ShouldBeEmpty();
+    }
+
+    private const string OddNode = "{\"number\":\"x\",\"title\":\"T\",\"url\":\"u\",\"updatedAt\":null,\"labels\":{\"nodes\":[]},\"headRefName\":\"b\"}";
+
+    [Fact]
+    public async Task A_read_whose_issue_nodes_are_all_odd_is_a_failed_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 9, issueNodes: OddNode + "," + OddNode) });
+
+        var read = await Outcome(gh);
+
+        read.Activity.ShouldBeNull();
+        read.NobodySeesIt.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_read_whose_pull_request_nodes_are_all_odd_is_a_failed_read()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", pullRequests: 2, prNodes: OddNode + "," + OddNode) });
+
+        (await Read(gh)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_single_odd_issue_is_a_skipped_one_and_the_pull_requests_stay()
+    {
+        var gh = Fake(["acme"], new() { ["acme"] = Graphql("ADMIN", issues: 1, issueNodes: OddNode, pullRequests: 1, prNodes: PullRequestNode(7)) });
+
+        var activity = (await Read(gh)).ShouldNotBeNull();
+
+        activity.OpenIssues.ShouldBe(1);
+        activity.NewestIssues.ShouldBeEmpty();
+        activity.NewestPullRequests.Select(i => i.Number).ShouldBe([7]);
+    }
+
+    [Fact]
+    public async Task A_single_odd_row_in_a_list_is_a_skipped_one()
+    {
+        var gh = new FakeGh([], (_, _) => """[{"number":"a"}]""");
+
+        var list = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.Issue, CancellationToken.None)).ShouldNotBeNull();
+
+        list.Items.ShouldBeEmpty();
+        list.Skipped.ShouldBe(1);
+        list.TotalGiven(known: 12).ShouldBe(1);
+    }
+
+    private static string PullRequestNode(int number) =>
+        "{\"number\":" + number + ",\"title\":\"PR\",\"url\":\"u\",\"updatedAt\":\"2026-11-01T10:00:00Z\",\"headRefName\":\"b\",\"labels\":{\"nodes\":[]}}";
+
+    [Theory]
+    [InlineData(3, 4, 1, 5)]
+    [InlineData(900, 998, 2, 1000)]
+    public void A_list_never_totals_below_what_it_read_skipped_rows_included(int known, int items, int skipped, int expected)
+    {
+        var list = new GitHubList(Enumerable.Range(1, items).Select(n => new GitHubItem(n, "t", "u", DateTimeOffset.UnixEpoch, [])).ToList(), skipped);
+
+        list.TotalGiven(known).ShouldBe(expected);
     }
 
     [Fact]

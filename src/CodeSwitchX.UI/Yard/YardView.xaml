@@ -322,7 +322,7 @@
     <!-- The list a pill opens (#335): a shade that closes it on a click, and the panel at the right edge. -->
     <Rectangle Fill="#88000000" Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}" MouseLeftButtonDown="OnGitHubShadeClick" />
     <Border x:Name="GitHubPanel" HorizontalAlignment="Right" Width="560" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=UserControl}}"
-            Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="True" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
+            Background="#262626" BorderThickness="1,0,0,0" BorderBrush="#40FFFFFF" Focusable="False" FocusVisualStyle="{x:Null}" KeyboardNavigation.TabNavigation="Cycle"
             KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle"
             Visibility="{Binding GitHubList, Converter={StaticResource NullToCollapsed}}">
       <DockPanel DataContext="{Binding GitHubList}">
@@ -339,6 +339,10 @@
               </Trigger>
             </Style.Triggers>
           </Style>
+          <!-- the same line, dim: not a failure -->
+          <Style x:Key="GitHubDimLine" TargetType="TextBlock" BasedOn="{StaticResource GitHubFailureLine}">
+            <Setter Property="Foreground" Value="#B0B0B0" />
+          </Style>
         </DockPanel.Resources>
         <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
           <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
@@ -349,17 +353,32 @@
         </DockPanel>
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <ItemsControl ItemsSource="{Binding Rows}" Margin="8,0,8,8" Focusable="False">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate>
-                <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
-                        ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </ScrollViewer>
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding CutShortMessage}" />
+        <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding SkippedMessage}" />
+        <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding LoadingMessage}" />
+        <!-- A large repository has up to a thousand rows: only the ones in view are built (#363). -->
+        <ItemsControl ItemsSource="{Binding Rows}" Focusable="False" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
+                      VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel">
+          <ItemsControl.Template>
+            <ControlTemplate TargetType="ItemsControl">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
+                <ItemsPresenter Margin="8,0,8,8" />
+              </ScrollViewer>
+            </ControlTemplate>
+          </ItemsControl.Template>
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                      ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
       </DockPanel>
     </Border>
   </Grid>

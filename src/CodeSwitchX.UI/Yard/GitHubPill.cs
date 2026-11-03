@@ -9,15 +9,14 @@ namespace CodeSwitchX.UI.Yard;
 /// </summary>
 public sealed record GitHubPill(RepoActivity Activity, GitHubItemKind Kind)
 {
-    /// <summary>How many rows the preview shows at most; the reader fetches the same number.</summary>
-    private const int PreviewCount = 5;
-
     public int Count => Kind == GitHubItemKind.Issue ? Activity.OpenIssues : Activity.OpenPullRequests;
 
     public string Heading => $"{Activity.Repo.Name} {Count} open";
 
-    /// <summary>What the preview leaves out; null when it shows everything.</summary>
-    public string? MoreText => Count > PreviewCount ? $"+{Count - PreviewCount} more. Click the pill for all of them" : null;
+    /// <summary>What the preview leaves out: the count less the rows it actually holds (a read can leave odd ones out, so it may hold fewer than <see cref="RepoActivity.PreviewCount"/>); null when it shows everything.</summary>
+    public string? MoreText => Count > Preview.Count ? $"+{Count - Preview.Count} more. Click the pill for all of them" : null;
+
+    private IReadOnlyList<GitHubItem> Preview => Kind == GitHubItemKind.Issue ? Activity.NewestIssues : Activity.NewestPullRequests;
 
     public string AutomationName => $"{Count} open {NounFor(Kind, Count)} in {Activity.Repo.Name}";
 
@@ -28,7 +27,7 @@ public sealed record GitHubPill(RepoActivity Activity, GitHubItemKind Kind)
         get
         {
             var now = DateTimeOffset.Now;
-            return (Kind == GitHubItemKind.Issue ? Activity.NewestIssues : Activity.NewestPullRequests)
+            return Preview
                 .Select(item => GitHubRow.From(item, Activity.Account, now))
                 .ToList();
         }

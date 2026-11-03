@@ -33,7 +33,7 @@ public sealed class GitHubPanelFocusTests
         {
             Type = new TextBox();
             InPanel = new Button();
-            Panel = new Border { Focusable = true, Visibility = Visibility.Collapsed, Child = InPanel };
+            Panel = new Border { Focusable = false, Visibility = Visibility.Collapsed, Child = InPanel };
             Root = new Grid { Children = { Type, Panel } };
             _source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = Root };
             _ = new GitHubPanelFocus(Root, Panel, () => { });
@@ -98,8 +98,9 @@ public sealed class GitHubPanelFocusTests
     {
         using var rig = new Rig();
         rig.Panel.Visibility = Visibility.Visible;
+        Rig.Drain(); // a panel that just appeared has no layout yet: the keyboard is taken in once it has
 
-        Keyboard.FocusedElement.ShouldBeSameAs(rig.Panel);
+        Keyboard.FocusedElement.ShouldBeSameAs(rig.InPanel);
     });
 
     [Theory]

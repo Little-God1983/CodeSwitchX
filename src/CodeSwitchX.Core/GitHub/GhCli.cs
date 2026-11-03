@@ -13,17 +13,22 @@ public sealed class GhCli : IGhCli
 {
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);
 
+    /// <summary>What reading a whole list may take: a large repository's thousand rows come slower than a single read.</summary>
+    public static readonly TimeSpan ListTimeout = TimeSpan.FromSeconds(120);
+
     private readonly string _executable;
     private readonly TimeSpan _timeout;
+    private readonly TimeSpan _listTimeout;
 
     public GhCli() : this("gh", Timeout)
     {
     }
 
-    internal GhCli(string executable, TimeSpan timeout)
+    internal GhCli(string executable, TimeSpan timeout, TimeSpan? listTimeout = null)
     {
         _executable = executable;
         _timeout = timeout;
+        _listTimeout = listTimeout ?? ListTimeout;
     }
 
     public async Task<IReadOnlyList<string>> AccountsAsync(CancellationToken ct)
@@ -37,7 +42,9 @@ public sealed class GhCli : IGhCli
         try
         {
             using var doc = JsonDocument.Parse(output);
-            if (!doc.RootElement.TryGetProperty("hosts", out var hosts)
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("hosts", out var hosts)
+                || hosts.ValueKind != JsonValueKind.Object
                 || !hosts.TryGetProperty("github.com", out var accounts)
                 || accounts.ValueKind != JsonValueKind.Array)
             {
@@ -46,7 +53,7 @@ public sealed class GhCli : IGhCli
 
             // Whatever each login's state: gh exits 0 on an auth issue too, and offline every check fails. A read as a login that cannot read fails safely.
             return accounts.EnumerateArray()
-                .Select(a => a.TryGetProperty("login", out var l) ? l.GetString() : null)
+                .Select(a => a.ValueKind == JsonValueKind.Object && a.TryGetProperty("login", out var l) && l.ValueKind == JsonValueKind.String ? l.GetString() : null)
                 .OfType<string>()
                 .ToList();
         }
@@ -56,10 +63,14 @@ public sealed class GhCli : IGhCli
         }
     }
 
-    public async Task<string?> RunAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
-        (await AnswerAsAsync(login, arguments, ct).ConfigureAwait(false)).Output;
+    public Task<GhAnswer> ListAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        RunAndAnswerAsync(login, arguments, _listTimeout, ct);
 
-    public async Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct)
+    public Task<GhAnswer> AnswerAsAsync(string login, IReadOnlyList<string> arguments, CancellationToken ct) =>
+        RunAndAnswerAsync(login, arguments, _timeout, ct);
+
+    /// <param name="timeout">For the run itself; the token lookup before it keeps the usual one.</param>
+    private async Task<GhAnswer> RunAndAnswerAsync(string login, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken ct)
     {
         var token = (await RunAsync(["auth", "token", "--user", login], null, ct).ConfigureAwait(false))?.Trim();
         if (string.IsNullOrEmpty(token))
@@ -67,8 +78,8 @@ public sealed class GhCli : IGhCli
             return new GhAnswer(null);
         }
 
-        var run = await GitInspector.RunProcessAsync(StartInfo(arguments, token, _executable), _timeout, ct).ConfigureAwait(false);
-        return new GhAnswer(run.Output, run.FailureOutput);
+        var run = await GitInspector.RunProcessAsync(StartInfo(arguments, token, _executable), timeout, ct).ConfigureAwait(false);
+        return new GhAnswer(run.Output, run.FailureOutput, run.TimedOut);
     }
 
     private async Task<string?> RunAsync(IReadOnlyList<string> arguments, string? token, CancellationToken ct) =>
