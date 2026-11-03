@@ -191,6 +191,37 @@ public class YardGitHubTests : IDisposable
     }
 
     [Fact]
+    public async Task A_folder_that_is_no_repository_gets_no_origin_lookup_and_no_pills()
+    {
+        // A git above the user profile would answer for it; GitInspector stops there, so the tile reads "no git".
+        var plain = Path.Combine(_tempRoot, "plain");
+        Directory.CreateDirectory(plain);
+        var asked = new List<string>();
+        _originOf = path =>
+        {
+            lock (asked)
+            {
+                asked.Add(path);
+            }
+
+            return new OriginLookup("https://github.com/acme/other.git");
+        };
+        var app = Add("Plain", plain);
+        var yard = Yard(true, app);
+
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Text == "no git");
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+
+        lock (asked)
+        {
+            asked.ShouldBeEmpty();
+        }
+
+        yard.FindTile(app.Id)!.GitLines[0].Issues.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task Each_repository_line_gets_its_own_pills()
     {
         var sdk = Repo("sdk");

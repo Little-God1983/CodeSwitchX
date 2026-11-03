@@ -302,6 +302,24 @@ public class GitHubActivityTests
     }
 
     [Fact]
+    public async Task A_failed_first_lookup_leaves_the_folder_unknown_for_the_next_round()
+    {
+        var gh = new FakeGh();
+        var origin = OriginLookup.Failure;
+        var activity = Activity(gh, _ => origin);
+
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+
+        activity.Knows(@"c:	ool").ShouldBeFalse();
+        origin = new OriginLookup("https://github.com/acme/tool.git");
+
+        await activity.RefreshAsync([@"c:	ool"], CancellationToken.None);
+
+        activity.Knows(@"c:	ool").ShouldBeTrue();
+        activity.ForFolder(@"c:	ool")!.Repo.ShouldBe(new GitHubRepo("acme", "tool"));
+    }
+
+    [Fact]
     public async Task An_origin_that_is_gone_clears_the_repository_and_tells_the_tiles()
     {
         var gh = new FakeGh();

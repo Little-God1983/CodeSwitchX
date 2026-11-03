@@ -744,7 +744,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         var info = await _git.InspectAsync(tile.RootPath, ct).ConfigureAwait(false);
         var lines = (await GitLinesAsync(tile, info, ct).ConfigureAwait(false)).Select(WithGitHub).ToList();
-        paths.AddRange(lines.Select(l => l.Path).OfType<string>());
+        paths.AddRange(lines.Where(HasRepository).Select(l => l.Path).OfType<string>());
         _ui.Post(() => tile.ShowGit(lines));
 
         // A worktree added next to the repository after the registration is a child root from here on, so the chat started
@@ -765,7 +765,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The line with the pills of the issues and pull requests last read for its repository; a count of zero has none.</summary>
     private GitLine WithGitHub(GitLine line)
     {
-        var activity = line.Path is { } path ? _gitHub?.ForFolder(path) : null;
+        var activity = HasRepository(line) && line.Path is { } path ? _gitHub?.ForFolder(path) : null;
         return line with
         {
             Issues = activity is { OpenIssues: > 0 } ? new GitHubPill(activity, GitHubItemKind.Issue) : null,
@@ -773,9 +773,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         };
     }
 
+    /// <summary>"No git" on the tile: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
+    private static bool HasRepository(GitLine line) => line.Branch is not null;
+
     /// <summary>Runs on the UI thread, which owns the tiles.</summary>
     private void RefreshGitHubOfAllTiles() =>
-        _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Select(l => l.Path).OfType<string>().Distinct().ToList());
+        _ = RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList());
 
     /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
     private Task RefreshGitHubAsync(IReadOnlyCollection<string> folders) => Task.Run(async () =>

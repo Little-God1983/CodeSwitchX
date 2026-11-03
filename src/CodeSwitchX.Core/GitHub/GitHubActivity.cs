@@ -109,6 +109,13 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                     return (folder, known, false);
                 }
 
+                // Nothing known and no answer: no entry either, so the next git round asks again instead of waiting ten minutes.
+                if (origin.Failed)
+                {
+                    logger.LogWarning("Reading the origin of {Folder} failed; it is asked again next round", folder);
+                    return (folder, null, false);
+                }
+
                 var repo = GitHubRepo.FromRemote(origin.Url);
                 _repoOfFolder[folder] = repo;
                 return (folder, repo, !ReferenceEquals(ResultOf(known), ResultOf(repo)));

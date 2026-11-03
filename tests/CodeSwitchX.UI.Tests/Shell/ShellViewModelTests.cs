@@ -33,8 +33,7 @@ public class ShellViewModelTests
         return shop;
     }
 
-    [Fact]
-    public void Opening_Settings_closes_the_GitHub_list_so_a_new_browser_choice_is_not_shown_stale()
+    private static (ShellTestHarness Harness, CodeSwitchX.UI.Yard.GitHubPill Pill) HarnessWithGitHub()
     {
         var gh = Substitute.For<IGhCli>();
         var source = Substitute.For<IBrowserSource>();
@@ -43,6 +42,13 @@ public class ShellViewModelTests
         var reader = new GitHubReader(gh);
         var h = new ShellTestHarness(new GitHubActivity(gh, reader, (_, _) => Task.FromResult(OriginLookup.NoOrigin), NullLogger<GitHubActivity>.Instance), reader, browsers);
         var pill = new CodeSwitchX.UI.Yard.GitHubPill(new RepoActivity(new GitHubRepo("acme", "app"), "me", 1, 0, [], []), GitHubItemKind.Issue);
+        return (h, pill);
+    }
+
+    [Fact]
+    public void Opening_Settings_closes_the_GitHub_list_so_a_new_browser_choice_is_not_shown_stale()
+    {
+        var (h, pill) = HarnessWithGitHub();
 
         h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
         h.Shell.Yard.GitHubList.ShouldNotBeNull();
@@ -53,6 +59,22 @@ public class ShellViewModelTests
         h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
         h.Shell.Yard.GitHubList.ShouldNotBeNull();
         h.Shell.OpenSettingsAt(SettingsPage.GitHub);
+        h.Shell.Yard.GitHubList.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Entering_the_Cab_closes_the_GitHub_list_so_the_Yard_does_not_come_back_with_old_rows()
+    {
+        var (h, pill) = HarnessWithGitHub();
+        await h.Shell.InitializeAsync(CancellationToken.None);
+        h.Shell.Yard.OpenGitHubListCommand.Execute(pill);
+        h.Shell.Yard.GitHubList.ShouldNotBeNull();
+        h.VsCodeWindowAppears();
+        h.Shell.Cab.LastHostRect = ScreenRect.FromSize(0, 28, 1600, 900);
+
+        await h.Shell.EnterCabAsync(h.App.Id);
+
+        h.Shell.Mode.ShouldBe(ShellMode.Cab);
         h.Shell.Yard.GitHubList.ShouldBeNull();
     }
 
