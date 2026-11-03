@@ -4,6 +4,7 @@ using CodeSwitchX.Conductor;
 using CodeSwitchX.Core;
 using Microsoft.Extensions.Logging;
 using Path = System.IO.Path;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
@@ -288,6 +289,12 @@ public partial class App : Application
             sp.GetRequiredService<ChatSettings>()));
         // The tiles show the chat tabs open in VS Code (#164), read from what VS Code restores its windows from.
         services.AddSingleton<IVsCodeOpenTabs>(_ => new VsCodeOpenTabs(VsCodeOpenTabs.DefaultDirectory));
+        // The open issues and pull requests on the tiles (#335), read through gh for any signed-in account.
+        services.AddSingleton<IGhCli>(_ => new GhCli());
+        services.AddSingleton<GitHubReader>();
+        services.AddSingleton(sp => new GitHubActivity(sp.GetRequiredService<GitHubReader>(),
+            (path, ct) => sp.GetRequiredService<GitInspector>().RunAsync(path, "config --get remote.origin.url", ct),
+            sp.GetRequiredService<ILogger<GitHubActivity>>()));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
             (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
             (Func<IReadOnlyDictionary<string, bool>>)(() =>
