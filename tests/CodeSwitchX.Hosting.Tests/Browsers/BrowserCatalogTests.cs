@@ -285,6 +285,50 @@ public class BrowserCatalogTests
     }
 
     [Fact]
+    public async Task A_background_read_that_finishes_after_a_refresh_does_not_overwrite_the_newer_list()
+    {
+        var clock = new FakeTimeProvider();
+        var source = new FakeSource { Keys = [("Old Browser", @"C:\o\o.exe")] };
+        var catalog = new BrowserCatalog(source, clock);
+        catalog.List();
+        using var gate = new ManualResetEventSlim(false);
+        source.HoldNext = gate;
+        clock.Advance(TimeSpan.FromSeconds(31));
+        catalog.List(); // starts the background read, which holds the old keys
+        SpinWait.SpinUntil(() => source.Reads == 2, TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        source.Keys = [("New Browser", @"C:\n\n.exe")];
+
+        var refreshed = catalog.Refresh();
+        gate.Set();
+        await Task.Delay(300, TestContext.Current.CancellationToken); // the older read finishes meanwhile
+
+        refreshed.Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId, "new browser"]);
+        catalog.List().Select(e => e.Id).ShouldBe([BrowserEntry.DefaultId, "new browser"]);
+    }
+
+    [Fact]
+    public void An_unknown_browser_registered_per_user_is_the_same_as_the_machine_wide_one()
+    {
+        var source = new FakeSource { Keys = [("Brave", null), ("Brave.ABC123", @"C:\b\brave.exe")] };
+
+        var entry = new BrowserCatalog(source).List().Skip(1).ShouldHaveSingleItem();
+
+        (entry.Id, entry.Label, entry.Executable).ShouldBe(("brave", "Brave", @"C:\b\brave.exe"));
+    }
+
+    [Fact]
+    public void Profiles_that_differ_only_in_case_are_both_listed()
+    {
+        var source = new FakeSource
+        {
+            Keys = [("Google Chrome", @"C:\c\chrome.exe")],
+            LocalStates = { [ChromeFolder] = """{"profile":{"info_cache":{"Work":{"name":"One"},"work":{"name":"Two"}}}}""" },
+        };
+
+        new BrowserCatalog(source).List().Skip(1).Select(e => e.Id).ShouldBe(["chrome|Work", "chrome|work"]);
+    }
+
+    [Fact]
     public void A_failed_read_is_not_kept()
     {
         var source = new FakeSource { Throws = true };
@@ -302,6 +346,7 @@ public class BrowserCatalogTests
         public int Reads => Volatile.Read(ref _reads);
         public int IniReads { get; private set; }
         public ManualResetEventSlim? Gate { get; set; }
+        public ManualResetEventSlim? HoldNext { get; set; }
         public bool Throws { get; set; }
         public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [];
         public string? Ini { get; init; }
@@ -310,8 +355,12 @@ public class BrowserCatalogTests
         public IReadOnlyList<(string Key, string? Executable)> Installed()
         {
             Interlocked.Increment(ref _reads);
+            var keys = Keys;
             Gate?.Wait();
-            return Throws ? throw new InvalidOperationException("boom") : Keys;
+            var hold = HoldNext;
+            HoldNext = null;
+            hold?.Wait();
+            return Throws ? throw new InvalidOperationException("boom") : keys;
         }
         public string? FirefoxProfilesIni()
         {

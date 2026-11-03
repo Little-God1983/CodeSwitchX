@@ -28,6 +28,7 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
         var round = ++_round;
         IReadOnlyList<string> logins = [];
         IReadOnlyList<BrowserEntry> entries = [];
+        var failed = false;
         try
         {
             // Off the UI thread, which this continues on: gh starts before its first await, and the browsers are read from the registry and files.
@@ -35,20 +36,29 @@ public sealed class GitHubPageViewModel(IGhCli gh, GitHubBrowsers browsers, Brow
             {
                 var accounts = await gh.AccountsAsync(ct).ConfigureAwait(false);
                 // The installed browsers are read again, so one installed since the page was last open is there, and once for all rows.
-                catalog.Refresh();
-                return (accounts, catalog.List());
+                return (accounts, catalog.Refresh());
             }, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // The page then says how to log in; only the kind of failure is logged.
             logger?.LogWarning("The GitHub accounts could not be read: {Failure}", ex.GetType().Name);
-            logins = [];
+            failed = true;
         }
 
         if (round != _round)
         {
             return; // a later refresh is the newer answer
+        }
+
+        // IGhCli.AccountsAsync gives an empty list when gh failed, and gh does not lose every login at once: with rows shown, an empty answer is
+        // taken as a failed read, and a failed read leaves the rows (and a pick or Test line in them) alone. A login really logged out
+        // stays listed until the app restarts; accepted.
+        if (failed || (logins.Count == 0 && Accounts.Count > 0))
+        {
+            _read = true;
+            OnPropertyChanged(nameof(HasNoAccounts));
+            return;
         }
 
         // gh can list a login twice (or in another case): one row each.

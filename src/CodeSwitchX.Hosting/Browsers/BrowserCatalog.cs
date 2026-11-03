@@ -40,9 +40,17 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
     private IReadOnlyList<BrowserEntry>? _kept;
     private DateTimeOffset _readAt;
     private bool _reading;
+    private long _started;
+    private long _keptRead;
 
-    /// <summary>Reads what is installed now and keeps it; the read runs outside the lock.</summary>
-    public void Refresh() => Keep(Read());
+    /// <summary>Reads what is installed now, keeps it and returns it; the read runs outside the lock.</summary>
+    public IReadOnlyList<BrowserEntry> Refresh()
+    {
+        var number = Begin();
+        var read = Read();
+        Keep(read, number);
+        return read;
+    }
 
     public IReadOnlyList<BrowserEntry> List()
     {
@@ -53,7 +61,8 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
                 if (!_reading && _time.GetUtcNow() - _readAt >= KeepFor)
                 {
                     _reading = true;
-                    _ = Task.Run(ReadInBackground);
+                    var number = ++_started;
+                    _ = Task.Run(() => ReadInBackground(number));
                 }
 
                 return kept;
@@ -61,24 +70,39 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
         }
 
         // No list yet (App start warms it, so this is rare): the one read that has to be waited for. A read that throws keeps nothing.
-        return Keep(Read());
+        var first = Begin();
+        var read = Read();
+        Keep(read, first);
+        return read;
     }
 
-    private IReadOnlyList<BrowserEntry> Keep(IReadOnlyList<BrowserEntry> read)
+    private long Begin()
     {
         lock (_gate)
         {
-            _kept = read;
-            _readAt = _time.GetUtcNow();
-            return read;
+            return ++_started;
         }
     }
 
-    private void ReadInBackground()
+    // Reads are numbered when they start: one that started before the kept list's read is older and never replaces it.
+    private void Keep(IReadOnlyList<BrowserEntry> read, long number)
+    {
+        lock (_gate)
+        {
+            if (number > _keptRead)
+            {
+                _kept = read;
+                _keptRead = number;
+                _readAt = _time.GetUtcNow();
+            }
+        }
+    }
+
+    private void ReadInBackground(long number)
     {
         try
         {
-            Keep(Read());
+            Keep(Read(), number);
         }
         catch (Exception)
         {
@@ -96,7 +120,7 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
     private List<BrowserEntry> Read()
     {
         var entries = new List<BrowserEntry> { new(BrowserEntry.DefaultId, "Windows default browser", null, []) };
-        var indexOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [BrowserEntry.DefaultId] = 0 };
+        var indexOf = new Dictionary<string, int>(StringComparer.Ordinal) { [BrowserEntry.DefaultId] = 0 };
         // A browser in both registry hives is one key: its files are read once, and the entry that has a program wins.
         var keys = new Dictionary<string, (string Key, string? Executable)>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, executable) in source.Installed())
@@ -128,7 +152,7 @@ public sealed class BrowserCatalog(IBrowserSource source, TimeProvider? time = n
             }
             else
             {
-                added.Add(new(key.ToLowerInvariant(), key, executable, []));
+                added.Add(new(name.ToLowerInvariant(), name, executable, []));
             }
 
             // The id is what is saved and compared: another key of the same browser is one entry, the one with a program wins.

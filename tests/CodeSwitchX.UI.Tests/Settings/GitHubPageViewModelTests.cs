@@ -232,6 +232,48 @@ public class GitHubPageViewModelTests
     }
 
     [Fact]
+    public async Task A_failed_read_leaves_the_rows_and_their_lines_alone()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        var row = _page.Accounts[0];
+        row.SelectedId = "firefox|alpha";
+        _start = _ => false;
+        row.TestCommand.Execute(null);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>>>(_ => throw new InvalidOperationException("boom"));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Count.ShouldBe(2);
+        _page.Accounts[0].ShouldBeSameAs(row);
+        row.Message.ShouldNotBeNull();
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_empty_answer_while_rows_are_shown_is_taken_as_a_failed_read()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<string>>([]));
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Select(a => a.Login).ShouldBe(["someone", "other"]);
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_failing_browser_read_leaves_the_rows_alone()
+    {
+        await _page.RefreshAsync(CancellationToken.None);
+        _source.Throws = true;
+
+        await _page.RefreshAsync(CancellationToken.None);
+
+        _page.Accounts.Count.ShouldBe(2);
+        _page.HasNoAccounts.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task A_failing_gh_read_says_how_to_log_in_instead_of_throwing()
     {
         _gh.AccountsAsync(Arg.Any<CancellationToken>()).Returns<Task<IReadOnlyList<string>>>(_ => throw new InvalidOperationException("boom"));
@@ -289,7 +331,9 @@ public class GitHubPageViewModelTests
     {
         public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
 
-        public IReadOnlyList<(string Key, string? Executable)> Installed() => Keys;
+        public bool Throws { get; set; }
+
+        public IReadOnlyList<(string Key, string? Executable)> Installed() => Throws ? throw new InvalidOperationException("boom") : Keys;
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=beta\n";
         public string? ChromiumLocalState(string folder) => null;
     }

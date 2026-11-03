@@ -15,6 +15,7 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
     // Read on the UI thread, written there and by LoadAsync's continuation: every access holds the lock.
     private readonly Dictionary<string, string> _choices = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
+    private Task _saving = Task.CompletedTask;
 
     /// <summary>The saved choices; unreadable ones leave every account on the Windows default. Never throws.</summary>
     public async Task LoadAsync(CancellationToken ct)
@@ -48,14 +49,12 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
 
     public void SetChoice(string login, string id)
     {
-        Dictionary<string, string> copy;
         lock (_gate)
         {
             _choices[login] = id;
-            copy = new Dictionary<string, string>(_choices);
+            // Saves run one after another, each writing the choices as they are when it runs, so an earlier pick never lands over a later one.
+            _saving = SaveAfterAsync(_saving);
         }
-
-        _ = SaveAsync(copy);
     }
 
     /// <summary>The label of the account's browser; the id itself when that browser is gone.</summary>
@@ -75,6 +74,32 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
 
         var id = ChoiceFor(login);
         var entry = catalog.List().FirstOrDefault(e => e.Id == id);
+        var problem = OpenIn(entry, id, uri);
+        if (problem is null)
+        {
+            return null;
+        }
+
+        // The list may be older than the browser's move or install: look once more at what is installed now, and report only what is still wrong.
+        BrowserEntry? fresh;
+        try
+        {
+            fresh = catalog.Refresh().FirstOrDefault(e => e.Id == id);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning("The installed browsers could not be read again: {Failure}", ex.GetType().Name);
+            return problem;
+        }
+
+        return fresh is not null && !Same(fresh, entry) ? OpenIn(fresh, id, uri) : problem;
+    }
+
+    private static bool Same(BrowserEntry a, BrowserEntry? b) =>
+        b is not null && a.Executable == b.Executable && a.ProfileArguments.SequenceEqual(b.ProfileArguments);
+
+    private string? OpenIn(BrowserEntry? entry, string id, Uri uri)
+    {
         if (entry is null)
         {
             return $"Couldn't find {id}. Pick a browser in Settings, GitHub.";
@@ -115,10 +140,17 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         return $"Couldn't open {entry.Label}. Pick another browser in Settings, GitHub.";
     }
 
-    private async Task SaveAsync(Dictionary<string, string> choices)
+    private async Task SaveAfterAsync(Task previous)
     {
+        await previous.ConfigureAwait(false); // never faults: a failed save is logged below
         try
         {
+            Dictionary<string, string> choices;
+            lock (_gate)
+            {
+                choices = new Dictionary<string, string>(_choices);
+            }
+
             await settings.SetAsync(SettingKeys.GitHubBrowsers, choices, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)

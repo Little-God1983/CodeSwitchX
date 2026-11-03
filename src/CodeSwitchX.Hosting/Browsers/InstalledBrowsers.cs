@@ -10,11 +10,12 @@ public sealed class InstalledBrowsers : IBrowserSource
     public IReadOnlyList<(string Key, string? Executable)> Installed()
     {
         var found = new List<(string, string?)>();
-        foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+        // A 32-bit browser registers under WOW6432Node, the 32-bit view of the machine hive; one in both views is absorbed by the catalog's key merge.
+        foreach (var (hive, view) in new[] { (RegistryHive.LocalMachine, RegistryView.Registry64), (RegistryHive.LocalMachine, RegistryView.Registry32), (RegistryHive.CurrentUser, RegistryView.Registry64) })
         {
             try
             {
-                using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
                 using var root = baseKey.OpenSubKey(ClientsKey);
                 if (root is not null)
                 {

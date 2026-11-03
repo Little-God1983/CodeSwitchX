@@ -178,9 +178,70 @@ public class GitHubBrowsersTests
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
     }
 
+    [Fact]
+    public void A_browser_that_moved_since_the_list_was_read_is_found_on_the_second_look()
+    {
+        var source = new FakeSource();
+        var browsers = new GitHubBrowsers(new BrowserCatalog(source), _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+        browsers.SetChoice("someone", "firefox|alpha");
+        browsers.Open("someone", Url).ShouldBeNull(); // the list is read and kept
+        source.Keys = [("Firefox-1A2B", @"C:\moved\firefox.exe")];
+        _start = info => info.FileName == @"C:\moved\firefox.exe" ? true : throw new FileNotFoundException("gone");
+        _started.Clear();
+
+        browsers.Open("someone", Url).ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_browser_installed_since_the_list_was_read_is_found_on_the_second_look()
+    {
+        var source = new FakeSource();
+        var browsers = new GitHubBrowsers(new BrowserCatalog(source), _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+        browsers.SetChoice("someone", "brave");
+        browsers.Open("someone", Url).ShouldBe("Couldn't find brave. Pick a browser in Settings, GitHub.");
+        source.Keys = [("Firefox-1A2B", @"C:\ff\firefox.exe"), ("Brave", @"C:\b\brave.exe")];
+        _started.Clear();
+
+        browsers.Open("someone", Url).ShouldBeNull();
+
+        _started.ShouldHaveSingleItem().FileName.ShouldBe(@"C:\b\brave.exe");
+    }
+
+    [Fact]
+    public async Task Saves_run_one_after_another_and_the_last_one_holds_every_pick()
+    {
+        var first = new TaskCompletionSource();
+        var saved = new List<Dictionary<string, string>>();
+        _store.SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                lock (saved)
+                {
+                    saved.Add(new Dictionary<string, string>(call.Arg<Dictionary<string, string>>()));
+                    return saved.Count == 1 ? first.Task : Task.CompletedTask;
+                }
+            });
+        var browsers = Create();
+
+        browsers.SetChoice("someone", "firefox|alpha");
+        browsers.SetChoice("another", "firefox|beta");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        lock (saved)
+        {
+            saved.Count.ShouldBe(1, "the second save waits for the first");
+        }
+
+        first.SetResult();
+        SpinWait.SpinUntil(() => { lock (saved) { return saved.Count == 2; } }, TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        lock (saved)
+        {
+            saved[^1].ShouldBe(new Dictionary<string, string> { ["someone"] = "firefox|alpha", ["another"] = "firefox|beta" });
+        }
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
-        public IReadOnlyList<(string Key, string? Executable)> Keys { get; init; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
+        public IReadOnlyList<(string Key, string? Executable)> Keys { get; set; } = [("Firefox-1A2B", @"C:\ff\firefox.exe")];
 
         public IReadOnlyList<(string Key, string? Executable)> Installed() => Keys;
         public string? FirefoxProfilesIni() => "[Profile0]\nName=alpha\n[Profile1]\nName=name with space\n";
