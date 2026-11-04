@@ -123,13 +123,17 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     {
         var next = now + ReadInterval;
         DateTimeOffset?[] resets = [_limits?.FiveHour?.ResetsAt, _limits?.Week?.ResetsAt];
-        if (resets.Any(r => r <= now))
+        if (!resets.Any(r => r <= now))
         {
-            return _resetRetries++ < MaxResetRetries ? now + RetryAfterReset : next;
+            _resetRetries = 0;
+        }
+        else if (_resetRetries++ < MaxResetRetries)
+        {
+            next = now + RetryAfterReset;
         }
 
-        _resetRetries = 0;
-        return resets.Where(r => r < next).Min() ?? next;
+        // Whatever the other limit does: a reset coming up is read right after it passes.
+        return resets.Where(r => r > now && r < next).Min() ?? next;
     }
 
     private void Show(DateTimeOffset now)

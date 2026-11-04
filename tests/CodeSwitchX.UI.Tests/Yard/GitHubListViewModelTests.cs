@@ -929,6 +929,66 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task Copying_all_after_a_failed_load_says_it_is_not_all_of_them()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(null);
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied 1 link. The full list could not be loaded.");
+    }
+
+    [Fact]
+    public async Task Copying_all_of_a_list_with_skipped_rows_says_they_are_missing()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied 2 links. 1 row could not be shown.");
+    }
+
+    /// <summary>Runs what is posted only when asked, as a busy UI thread does.</summary>
+    private sealed class QueueDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _queue = new();
+
+        public void Post(Action action) => _queue.Enqueue(action);
+
+        public void Post<T>(Action<T> action, T state) => _queue.Enqueue(() => action(state));
+
+        public void Run()
+        {
+            while (_queue.TryDequeue(out var action))
+            {
+                action();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_clear_already_on_its_way_does_not_take_the_line_of_a_newer_copy()
+    {
+        var (activity, pill) = await PillAsync();
+        var ui = new QueueDispatcher();
+        var list = new GitHubListViewModel(pill, new GitHubReader(_gh), activity, Browsers(), _clipboard, ui, _time, NullLogger.Instance, _closedLists.Add);
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+
+        _time.Advance(GitHubListViewModel.CopyMessageLifetime); // its clear is posted, the UI thread is in the next copy: a held clipboard takes it up to a second
+        _clipboard.Works = false;
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        ui.Run();
+
+        list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
+    }
+
+    [Fact]
     public async Task An_empty_list_has_nothing_to_copy()
     {
         var list = await ListWithRowsAsync(0);

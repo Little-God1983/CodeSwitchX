@@ -76,10 +76,11 @@
             </StackPanel>
           </infra:GiveWay>
           <infra:GiveWay Step="4">
-            <StackPanel Orientation="Horizontal">
+            <!-- The group's margin is the gap that stays when the progress bar is gone, so this figure never runs into the real limit. -->
+            <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
               <TextBlock Style="{StaticResource Label}" Text="5-hour window" />
               <TextBlock Style="{StaticResource Value}" Text="{Binding FiveHourText}" Margin="0,0,6,0" />
-              <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,20,0" VerticalAlignment="Center"
+              <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,6,0" VerticalAlignment="Center"
                            Visibility="{Binding HasBudget, Converter={StaticResource BoolVisible}}" />
             </StackPanel>
           </infra:GiveWay>

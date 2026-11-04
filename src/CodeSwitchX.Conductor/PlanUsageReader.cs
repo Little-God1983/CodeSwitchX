@@ -8,7 +8,8 @@ namespace CodeSwitchX.Conductor;
 /// <summary>
 /// Reads the plan's real limits with <c>claude -p "/usage"</c> (#370), through the shared package. Claude Code answers that
 /// itself, with no model turn and no tokens, so reading the limits does not use them up. The user's settings stay out, and so
-/// do their hooks: those would make the reading a chat on the Yard, and take longer. Nothing is saved.
+/// do their hooks: those would make the reading a chat on the Yard, and take longer. The account's connectors stay out too:
+/// the command needs none, and they would connect at every reading. Nothing is saved.
 /// </summary>
 /// <param name="claude">The package's <see cref="ClaudeCliChatClient"/>, made with <see cref="Options"/>.</param>
 public sealed class PlanUsageReader(IChatClient claude, TimeProvider time, ILogger<PlanUsageReader> logger) : IPlanUsageReader
@@ -35,7 +36,7 @@ public sealed class PlanUsageReader(IChatClient claude, TimeProvider time, ILogg
 
     public async Task<PlanReading> ReadAsync(CancellationToken ct)
     {
-        var options = new ChatOptions().WithClaudeCli(c => c.ExtraArguments = ["--setting-sources", "project,local"]);
+        var options = new ChatOptions().WithClaudeCli(c => c.ExtraArguments = ["--setting-sources", "project,local", "--strict-mcp-config"]);
         ChatResponse response;
         try
         {

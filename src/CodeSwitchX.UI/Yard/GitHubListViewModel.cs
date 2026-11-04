@@ -27,6 +27,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     // no wait handle is taken from it, so there is nothing to dispose.
     private readonly CancellationTokenSource _stop = new();
     private ITimer? _copyMessageTimer;
+    private int _copies;
 
     [ObservableProperty] private string _heading;
 
@@ -207,13 +208,31 @@ public sealed partial class GitHubListViewModel : ObservableObject
         }
 
         var copied = Rows.Count == 1 ? "Copied 1 link." : $"Copied {count} links.";
-        return IsLoading ? $"{copied} The full list is still loading." : copied;
+        if (IsLoading)
+        {
+            return $"{copied} The full list is still loading.";
+        }
+
+        if (LoadMessage is not null)
+        {
+            return $"{copied} The full list could not be loaded.";
+        }
+
+        return SkippedMessage is null ? copied : $"{copied} {SkippedMessage}";
     }
 
     private void Copy(string text, string done)
     {
         CopyMessage = _clipboard.TrySetText(text) ? done : "Couldn't reach the clipboard. Try again.";
         _copyMessageTimer?.Dispose();
-        _copyMessageTimer = _time.CreateTimer(_ => _ui.Post(() => CopyMessage = null), null, CopyMessageLifetime, Timeout.InfiniteTimeSpan);
+        // Disposing does not call back a clear already posted: a held clipboard keeps the UI thread here long enough for one.
+        var copy = ++_copies;
+        _copyMessageTimer = _time.CreateTimer(_ => _ui.Post(() =>
+        {
+            if (copy == _copies)
+            {
+                CopyMessage = null;
+            }
+        }), null, CopyMessageLifetime, Timeout.InfiniteTimeSpan);
     }
 }

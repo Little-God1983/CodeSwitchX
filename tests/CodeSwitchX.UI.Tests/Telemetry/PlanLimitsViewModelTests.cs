@@ -179,6 +179,19 @@ public sealed class PlanLimitsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_stuck_reset_does_not_make_the_other_limit_s_reset_wait()
+    {
+        var stale = Start.AddHours(-1);
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(18), weekAt: stale)); // the week's reset stays past, and its retries run out
+        await PassAsync(TimeSpan.FromMinutes(17));
+        _reader.Next = Reading(fiveHour: 0, inFive: TimeSpan.FromHours(5), weekAt: stale);
+
+        await PassAsync(TimeSpan.FromMinutes(1));
+
+        _vm.FiveHourText!.ShouldStartWith("5h 0%", Case.Sensitive);
+    }
+
+    [Fact]
     public async Task A_failed_reading_keeps_the_last_figures()
     {
         await StartedAsync(Reading());

@@ -34,7 +34,7 @@ public sealed class PlanUsageReaderTests
         reading.Limits.Week!.Percent.ShouldBe(38);
         var (messages, options) = _claude.Calls.ShouldHaveSingleItem();
         messages.ShouldHaveSingleItem().Text.ShouldBe("/usage", "the command alone: it must be the whole prompt");
-        options.GetClaudeCli().ShouldNotBeNull().ExtraArguments.ShouldBe(["--setting-sources", "project,local"], "the user's hooks would start a Yard chat, and take longer");
+        options.GetClaudeCli().ShouldNotBeNull().ExtraArguments.ShouldBe(["--setting-sources", "project,local", "--strict-mcp-config"], "the user's hooks would start a Yard chat; the account's connectors would connect for nothing");
     }
 
     [Fact]
