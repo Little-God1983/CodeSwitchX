@@ -228,6 +228,38 @@ public class TranscriptIndexerTests : IDisposable
     private static string JobEnd(string session, string job, string ts = "2026-09-23T10:00:09.000Z") =>
         $$"""{"type":"queue-operation","operation":"enqueue","sessionId":"{{session}}","timestamp":"{{ts}}","content":"<task-notification>\n<task-id>{{job}}</task-id>\n<status>completed</status>\n</task-notification>"}""";
 
+    /// <summary>The chat stopped the job itself with TaskStop (#379): no task notification follows.</summary>
+    private static string JobStop(string session, string job, string ts = "2026-09-23T10:00:09.000Z") =>
+        $$"""{"type":"user","sessionId":"{{session}}","timestamp":"{{ts}}","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"{\"message\":\"Successfully stopped task: {{job}}\"}"}]},"toolUseResult":{"message":"Successfully stopped task: {{job}} (sleep 600)","task_id":"{{job}}","task_type":"local_bash","command":"sleep 600"} }""";
+
+    [Fact]
+    public async Task A_job_the_chat_stops_itself_ends_with_its_stop()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "m1", ToolBlock), JobStart("s1", "b1"), Assistant("s1", "m2", ToolBlock), JobStop("s1", "b1")]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.JobsStarted.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 6, TimeSpan.Zero))]);
+        update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
+    }
+
+    [Fact]
+    public async Task A_stop_read_after_the_start_went_out_is_that_job_s_end()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "m1", ToolBlock), JobStart("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().JobsStarted.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 6, TimeSpan.Zero))]);
+        _updates.Clear();
+
+        File.AppendAllLines(Transcript("s1"), [Assistant("s1", "m2", ToolBlock), JobStop("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.JobsStarted.ShouldBeEmpty();
+        update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
+    }
+
     [Fact]
     public async Task A_job_s_start_and_end_go_out_with_their_times()
     {
@@ -244,19 +276,20 @@ public class TranscriptIndexerTests : IDisposable
         update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
     }
 
+    /// <summary>A sub-agent's own jobs are not the chat's, but a stop it makes may end the chat's job (#379).</summary>
     [Fact]
-    public async Task A_sub_agent_s_file_tells_no_job_of_the_chat()
+    public async Task A_sub_agent_s_file_tells_no_job_start_of_the_chat_but_a_stop_counts()
     {
         File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
         var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
         Directory.CreateDirectory(subagentDir);
-        File.WriteAllLines(Path.Combine(subagentDir, "agent-abc.jsonl"), [JobStart("parent", "b1"), JobEnd("parent", "b2")]);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-abc.jsonl"), [JobStart("parent", "b1"), JobEnd("parent", "b2"), JobStop("parent", "b3")]);
 
         await _indexer.ScanAsync(CancellationToken.None);
 
         var subagent = _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl"));
         subagent.JobsStarted.ShouldBeEmpty();
-        subagent.JobsEnded.ShouldBeEmpty();
+        subagent.JobsEnded.ShouldBe([new BackgroundJobEvent("b3", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
     }
 
     [Fact]

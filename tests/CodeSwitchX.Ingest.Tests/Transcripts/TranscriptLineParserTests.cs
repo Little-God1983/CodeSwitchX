@@ -18,6 +18,26 @@ public class TranscriptLineParserTests
         TranscriptLineParser.TryParse(line).ShouldBeOfType<UserLine>().BackgroundJob.ShouldBe(job);
     }
 
+    /// <summary>
+    /// The first row is the shape every TaskStop result in the transcripts has; the agent, remote and not-running rows are
+    /// the other shapes the CLI's TaskStop writes, read from its source as of 2.1.316, since none has been seen on this machine.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"message":"Successfully stopped task: b1 (sleep 600)","task_id":"b1","task_type":"local_bash","command":"sleep 600"}""", "b1")]
+    [InlineData("""{"message":"Successfully stopped task: a1 (Explore)","task_id":"a1","task_type":"local_agent","command":"Explore"}""", "a1")]
+    [InlineData("""{"message":"Successfully stopped background command b1 on PC","task_id":"b1","task_type":"local_bash"}""", "b1")]
+    [InlineData("""{"message":"No background command with ID b1 is running on PC for this session","task_id":"b1","task_type":"local_bash"}""", "b1")]
+    [InlineData("""{"message":"Successfully stopped task: b1 (sleep 600)"}""", null)]
+    [InlineData("""{"task_id":"b1","stdout":"a result of some other tool"}""", null)]
+    [InlineData("""{"backgroundTaskId":"b1","stdout":""}""", null)]
+    [InlineData("\"plain text\"", null)]
+    public void A_tool_result_names_the_background_job_a_stop_left_not_running(string result, string? job)
+    {
+        var line = $$"""{"type":"user","sessionId":"s1","timestamp":"2026-11-04T10:00:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]},"toolUseResult":{{result}} }""";
+
+        TranscriptLineParser.TryParse(line).ShouldBeOfType<UserLine>().EndedJob.ShouldBe(job);
+    }
+
     private static string Queue(string operation, string content) =>
         $$"""{"type":"queue-operation","operation":"{{operation}}","sessionId":"s1","timestamp":"2026-11-02T10:05:00.000Z","content":"{{content}}"}""";
 
