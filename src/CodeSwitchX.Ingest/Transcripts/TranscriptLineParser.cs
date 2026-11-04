@@ -66,7 +66,8 @@ public static class TranscriptLineParser
                         isMeta = true;
                     }
 
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, BackgroundJobOf(root), StoppedJobOf(root));
+                    var (startedJob, stoppedJob) = JobsOf(root);
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, startedJob, stoppedJob);
                 }
 
                 // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
@@ -100,33 +101,26 @@ public static class TranscriptLineParser
         }
     }
 
-    /// <summary>The background job a tool result started: a command's task id, or the agent id of an agent that runs on by itself.</summary>
-    private static string? BackgroundJobOf(JsonElement root)
-    {
-        if (!root.TryGetProperty("toolUseResult", out var result) || result.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        return GetString(result, "backgroundTaskId")
-            ?? (result.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True ? GetString(result, "agentId") : null);
-    }
-
     /// <summary>
-    /// The background job a tool result stopped (#379): TaskStop's result names the task and says it was stopped. A stop that
-    /// failed stopped nothing; a job that was not running any more had its end told before.
+    /// The background job a tool result started (a command's task id, or the agent id of an agent that runs on by itself) and
+    /// the one it stopped (#379). TaskStop names the task in <c>task_id</c> and says it was stopped, in one wording for a task
+    /// of this machine and another for a command on a remote one; a stop that failed names the task too but stopped nothing,
+    /// and a task that was not running any more had its end told before.
     /// </summary>
-    private static string? StoppedJobOf(JsonElement root)
+    private static (string? Started, string? Stopped) JobsOf(JsonElement root)
     {
         if (!root.TryGetProperty("toolUseResult", out var result) || result.ValueKind != JsonValueKind.Object)
         {
-            return null;
+            return (null, null);
         }
 
-        return GetString(result, "message")?.StartsWith(StoppedTaskPrefix, StringComparison.Ordinal) == true ? GetString(result, "task_id") : null;
+        var started = GetString(result, "backgroundTaskId")
+            ?? (result.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True ? GetString(result, "agentId") : null);
+        var stopped = GetString(result, "message")?.StartsWith(StoppedTaskPrefix, StringComparison.Ordinal) == true ? GetString(result, "task_id") : null;
+        return (started, stopped);
     }
 
-    private const string StoppedTaskPrefix = "Successfully stopped task";
+    private const string StoppedTaskPrefix = "Successfully stopped ";
 
     private static string? JobEndedIn(string? content)
     {

@@ -245,6 +245,22 @@ public class TranscriptIndexerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_stop_read_after_the_start_went_out_is_that_job_s_end()
+    {
+        File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "m1", ToolBlock), JobStart("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+        _updates.ShouldHaveSingleItem().JobsStarted.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 6, TimeSpan.Zero))]);
+        _updates.Clear();
+
+        File.AppendAllLines(Transcript("s1"), [Assistant("s1", "m2", ToolBlock), JobStop("s1", "b1")]);
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var update = _updates.ShouldHaveSingleItem();
+        update.JobsStarted.ShouldBeEmpty();
+        update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
+    }
+
+    [Fact]
     public async Task A_job_s_start_and_end_go_out_with_their_times()
     {
         File.WriteAllLines(Transcript("s1"), [User("s1", "go"), Assistant("s1", "m1", ToolBlock), JobStart("s1", "b1")]);
