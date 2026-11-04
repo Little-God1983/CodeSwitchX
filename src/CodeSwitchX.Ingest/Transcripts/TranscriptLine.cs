@@ -9,7 +9,7 @@ public sealed record AssistantLine(string Type, DateTimeOffset? Timestamp, strin
 
 /// <summary>
 /// A prompt or a tool result. <paramref name="BackgroundJob"/> is the job the result started (#332); <paramref name="EndedJob"/>
-/// the job it stopped (#379): the chat's own TaskStop, which Claude Code queues no task notification for.
+/// the job a TaskStop left not running (#379), which Claude Code queues no task notification for.
 /// </summary>
 public sealed record UserLine(string Type, DateTimeOffset? Timestamp, string? SessionId, string? Cwd,
     string? Text, bool IsToolResult, bool IsMeta, bool IsInterrupt = false, string? BackgroundJob = null, string? EndedJob = null)

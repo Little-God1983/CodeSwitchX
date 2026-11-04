@@ -276,8 +276,9 @@ public class TranscriptIndexerTests : IDisposable
         update.JobsEnded.ShouldBe([new BackgroundJobEvent("b1", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
     }
 
+    /// <summary>A sub-agent's own jobs are not the chat's, but a stop it makes may end the chat's job (#379).</summary>
     [Fact]
-    public async Task A_sub_agent_s_file_tells_no_job_of_the_chat()
+    public async Task A_sub_agent_s_file_tells_no_job_start_of_the_chat_but_a_stop_counts()
     {
         File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
         var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
@@ -288,7 +289,7 @@ public class TranscriptIndexerTests : IDisposable
 
         var subagent = _updates.Single(u => u.TranscriptPath.EndsWith("agent-abc.jsonl"));
         subagent.JobsStarted.ShouldBeEmpty();
-        subagent.JobsEnded.ShouldBeEmpty();
+        subagent.JobsEnded.ShouldBe([new BackgroundJobEvent("b3", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
     }
 
     [Fact]

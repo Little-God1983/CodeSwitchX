@@ -599,8 +599,9 @@ public sealed class TranscriptIndexer : BackgroundService
                         jobsStarted.Add(new BackgroundJobEvent(job, startedAt));
                     }
 
-                    // The chat stopped a job itself (#379): no task notification follows, so this is the end the engine waits for.
-                    if (!subagent && user.EndedJob is { } stopped && user.Timestamp is { } stoppedAt)
+                    // A job was stopped with TaskStop (#379): no task notification follows, so this is the end the engine waits
+                    // for. A sub-agent may stop the chat's job too; the end of one it started itself ends nothing the chat holds.
+                    if (user.EndedJob is { } stopped && user.Timestamp is { } stoppedAt)
                     {
                         jobsEnded.Add(new BackgroundJobEvent(stopped, stoppedAt));
                     }
@@ -687,6 +688,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 Usage = usage,
                 MessageIds = newMessageIds,
                 InferredSignal = recentlyWritten ? SessionSignal.ToolUse : null,
+                JobsEnded = jobsEnded,
                 Historical = historical,
             };
         }

@@ -67,7 +67,7 @@ public static class TranscriptLineParser
                     }
 
                     var (startedJob, stoppedJob) = JobsOf(root);
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, startedJob, stoppedJob);
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, BackgroundJob: startedJob, EndedJob: stoppedJob);
                 }
 
                 // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
@@ -103,9 +103,10 @@ public static class TranscriptLineParser
 
     /// <summary>
     /// The background job a tool result started (a command's task id, or the agent id of an agent that runs on by itself) and
-    /// the one it stopped (#379). TaskStop names the task in <c>task_id</c> and says it was stopped, in one wording for a task
-    /// of this machine and another for a command on a remote one; a stop that failed names the task too but stopped nothing,
-    /// and a task that was not running any more had its end told before.
+    /// the one it stopped (#379). TaskStop's result is the only one with <c>task_id</c> and <c>task_type</c>, and it always
+    /// means the task runs no more: stopped by it, in one wording for a task of this machine and another for a command on a
+    /// remote one, or found not running. A stop that fails otherwise throws and leaves no such result. The id is the task's
+    /// own, the same the start told, even when the chat named the task by its name.
     /// </summary>
     private static (string? Started, string? Stopped) JobsOf(JsonElement root)
     {
@@ -116,11 +117,9 @@ public static class TranscriptLineParser
 
         var started = GetString(result, "backgroundTaskId")
             ?? (result.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True ? GetString(result, "agentId") : null);
-        var stopped = GetString(result, "message")?.StartsWith(StoppedTaskPrefix, StringComparison.Ordinal) == true ? GetString(result, "task_id") : null;
+        var stopped = result.TryGetProperty("task_type", out _) ? GetString(result, "task_id") : null;
         return (started, stopped);
     }
-
-    private const string StoppedTaskPrefix = "Successfully stopped ";
 
     private static string? JobEndedIn(string? content)
     {
