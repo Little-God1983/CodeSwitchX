@@ -1319,7 +1319,7 @@
           <Border Style="{StaticResource Card}">
             <StackPanel>
               <TextBlock Style="{StaticResource H3}" Text="5-hour soft budget" />
-              <TextBlock Style="{StaticResource Help}" Text="A reminder line on the bottom bar's 5-hour window, not a hard limit: CodeSwitchX cannot read your real plan limit. Leave it empty for no budget." />
+              <TextBlock Style="{StaticResource Help}" Text="A reminder line on the bottom bar's 5-hour window of counted tokens, not a hard limit: your plan's real limits stand beside it. Leave it empty for no budget." />
               <StackPanel Orientation="Horizontal">
                 <TextBox Text="{Binding FiveHourBudgetTokens, UpdateSourceTrigger=LostFocus, TargetNullValue=''}" Width="200" FontFamily="{StaticResource Mono}" FontSize="14"
                          AutomationProperties.Name="5-hour soft budget in tokens" />

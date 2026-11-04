@@ -9,6 +9,7 @@ using CodeSwitchX.Hosting;
 using CodeSwitchX.Hosting.VsCode;
 using CodeSwitchX.Hosting.Win32;
 using CodeSwitchX.Ingest.Hooks;
+using CodeSwitchX.Core.Usage;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.Cab;
 using CodeSwitchX.UI.Raven;
@@ -104,7 +105,8 @@ public sealed class ShellTestHarness
         var settings = new SettingsViewModel(new ClaudeHookInstaller(claude, NullLogger<ClaudeHookInstaller>.Instance), Settings, new PersistenceWriterOptions(), new BrainSettings(), Chats,
             Speech, Engines, Models, VoiceStatus, paths, claude, Samples, dispatcher, NullLogger<SettingsViewModel>.Instance, sounds: Sounds, levels: Levels,
             library: Library);
-        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus);
+        var bar = new PerformanceBarViewModel(telemetry, Engine, Bus, dispatcher, Settings, Time, VoiceStatus,
+            new PlanLimitsViewModel(PlanUsage, dispatcher, Time, NullLogger<PlanLimitsViewModel>.Instance));
         Microphones.List().Returns([]);
         Speakers.List().Returns([]);
         var raven = new RavenPanelViewModel(Microphones, Recorder, Dictation, Models,
@@ -112,6 +114,16 @@ public sealed class ShellTestHarness
             asks: Asks = new CodeSwitchX.Core.Sessions.ChatAsks(Bus, Time) { Takes = _ => true }, yard: YardDirectory,
             speakers: new SpeakerChoice(Speakers, AudioOutput, dispatcher, Time, NullLogger<SpeakerChoice>.Instance));
         Shell = new ShellViewModel(yard, cab, settings, bar, raven, Chats, Host, NullLogger<ShellViewModel>.Instance, VsCode);
+    }
+
+    /// <summary>The plan's limits the bar reads (#370): none, unless a test gives some.</summary>
+    public IPlanUsageReader PlanUsage { get; } = NoPlanLimits();
+
+    private static IPlanUsageReader NoPlanLimits()
+    {
+        var reader = Substitute.For<IPlanUsageReader>();
+        reader.ReadAsync(Arg.Any<CancellationToken>()).Returns(new PlanReading(PlanReadingKind.NoFigures));
+        return reader;
     }
 
     /// <summary>The chats the shell asked VS Code to show (#115).</summary>

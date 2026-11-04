@@ -1,3 +1,4 @@
+using System.Globalization;
 using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Infrastructure;
@@ -17,6 +18,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly GitHubReader _reader;
     private readonly GitHubActivity _activity;
     private readonly GitHubBrowsers _browsers;
+    private readonly ITextClipboard _clipboard;
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
@@ -24,9 +26,14 @@ public sealed partial class GitHubListViewModel : ObservableObject
     // Cancelled when the panel closes, which ends the gh run instead of leaving it to run out its timeout. It has no timer and
     // no wait handle is taken from it, so there is nothing to dispose.
     private readonly CancellationTokenSource _stop = new();
+    private ITimer? _copyMessageTimer;
 
     [ObservableProperty] private string _heading;
-    [ObservableProperty] private IReadOnlyList<GitHubRow> _rows;
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CopyAllLinksCommand))]
+    private IReadOnlyList<GitHubRow> _rows;
+
     /// <summary>Why the full list could not be read, or none. Kept apart from <see cref="OpenMessage"/>: each says what happened and neither hides the other.</summary>
     [ObservableProperty] private string? _loadMessage;
 
@@ -46,13 +53,20 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
-    public GitHubListViewModel(GitHubPill pill, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers, IUiDispatcher ui,
-        TimeProvider time, ILogger logger, Action<GitHubListViewModel> closed)
+    /// <summary>What the last copy did, for a moment. It has a place of its own in the header, so the rows do not move under the pointer.</summary>
+    [ObservableProperty] private string? _copyMessage;
+
+    /// <summary>How long <see cref="CopyMessage"/> stays.</summary>
+    internal static readonly TimeSpan CopyMessageLifetime = TimeSpan.FromSeconds(4);
+
+    public GitHubListViewModel(GitHubPill pill, GitHubReader reader, GitHubActivity activity, GitHubBrowsers browsers, ITextClipboard clipboard,
+        IUiDispatcher ui, TimeProvider time, ILogger logger, Action<GitHubListViewModel> closed)
     {
         _pill = pill;
         _reader = reader;
         _activity = activity;
         _browsers = browsers;
+        _clipboard = clipboard;
         _ui = ui;
         _time = time;
         _logger = logger;
@@ -162,6 +176,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private void Close()
     {
         _stop.Cancel();
+        _copyMessageTimer?.Dispose();
         _closed(this);
     }
 
@@ -170,5 +185,35 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private void OpenRow(GitHubRow row)
     {
         OpenMessage = _browsers.Open(_pill.Activity.Account, row.Item.Url);
+    }
+
+    /// <summary>The row's address on the clipboard; opens nothing.</summary>
+    [RelayCommand]
+    private void CopyRowLink(GitHubRow row) => Copy(row.Item.Url, $"Copied the link to {row.NumberText}.");
+
+    /// <summary>The address of every row shown, one to a line, in the list's order.</summary>
+    [RelayCommand(CanExecute = nameof(HasRows))]
+    private void CopyAllLinks() => Copy(string.Join(Environment.NewLine, Rows.Select(r => r.Item.Url)), CopiedAllText());
+
+    private bool HasRows() => Rows.Count > 0;
+
+    /// <summary>Says so when the rows are not the whole list, since a pasted list looks complete.</summary>
+    private string CopiedAllText()
+    {
+        var count = Rows.Count.ToString(CultureInfo.InvariantCulture);
+        if (CutShortMessage is not null)
+        {
+            return $"Copied the newest {count} links. The rest are on GitHub.";
+        }
+
+        var copied = Rows.Count == 1 ? "Copied 1 link." : $"Copied {count} links.";
+        return IsLoading ? $"{copied} The full list is still loading." : copied;
+    }
+
+    private void Copy(string text, string done)
+    {
+        CopyMessage = _clipboard.TrySetText(text) ? done : "Couldn't reach the clipboard. Try again.";
+        _copyMessageTimer?.Dispose();
+        _copyMessageTimer = _time.CreateTimer(_ => _ui.Post(() => CopyMessage = null), null, CopyMessageLifetime, Timeout.InfiniteTimeSpan);
     }
 }

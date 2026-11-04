@@ -39,9 +39,10 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     [ObservableProperty] private bool _isExpanded = true;
 
     public PerformanceBarViewModel(TelemetryService telemetry, SessionEngine engine, IEventBus bus, IUiDispatcher ui, ISettingsStore settings, TimeProvider time,
-        VoiceStatusViewModel voice)
+        VoiceStatusViewModel voice, PlanLimitsViewModel limits)
     {
         Voice = voice;
+        Limits = limits;
         _telemetry = telemetry;
         _engine = engine;
         _bus = bus;
@@ -53,6 +54,9 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     /// <summary>The dots of Raven's models.</summary>
     public VoiceStatusViewModel Voice { get; }
 
+    /// <summary>The real limits of the plan (#370), beside the tokens counted here.</summary>
+    public PlanLimitsViewModel Limits { get; }
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         _budget = await _settings.GetAsync<long?>(SettingKeys.FiveHourBudgetTokens, ct);
@@ -63,6 +67,7 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
         _tickTimer = _time.CreateTimer(_ => _ui.Post(RecountSessions), null, YardViewModel.TickInterval, YardViewModel.TickInterval);
         Apply(_telemetry.Current);
         RecountSessions();
+        Limits.Start();
     }
 
     public void SetBudget(long? budget)
@@ -106,6 +111,7 @@ public sealed partial class PerformanceBarViewModel : ObservableObject, IDisposa
     public void Dispose()
     {
         _tickTimer?.Dispose();
+        Limits.Dispose();
         foreach (var subscription in _subscriptions)
         {
             subscription.Dispose();

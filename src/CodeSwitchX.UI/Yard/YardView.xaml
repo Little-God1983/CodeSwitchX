@@ -351,6 +351,12 @@
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
+        <!-- Always there, so a copy line does not move the rows under the pointer. -->
+        <DockPanel DockPanel.Dock="Top" Margin="16,0,16,8">
+          <Button DockPanel.Dock="Left" Content="Copy all links" Command="{Binding CopyAllLinksCommand}" Padding="8,2" VerticalAlignment="Top"
+                  AutomationProperties.Name="Copy all links" ToolTip="Puts the link of every row on the clipboard, one to a line" />
+          <TextBlock Text="{Binding CopyMessage}" Margin="8,0,0,0" Opacity="0.7" VerticalAlignment="Center" TextWrapping="Wrap" />
+        </DockPanel>
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding CutShortMessage}" />
@@ -373,9 +379,16 @@
           </ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
-                      ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+              <DockPanel>
+                <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
+                     and the keyboard stays where it was. -->
+                <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                        Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
+                        VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
+                <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                        ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+              </DockPanel>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
