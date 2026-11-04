@@ -132,7 +132,7 @@ public class GitHubBrowsersTests
     }
 
     [Fact]
-    public void A_choice_is_saved_under_the_login()
+    public async Task A_choice_is_saved_under_the_login()
     {
         var browsers = Create();
 
@@ -140,7 +140,8 @@ public class GitHubBrowsersTests
 
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
         browsers.ChoiceFor("another").ShouldBe(BrowserEntry.DefaultId);
-        _store.Received().SetAsync(SettingKeys.GitHubBrowsers,
+        await browsers.PendingSave; // not awaited by the caller: a look before it ends fails on a busy machine
+        await _store.Received().SetAsync(SettingKeys.GitHubBrowsers,
             Arg.Is<Dictionary<string, string>>(d => d.Count == 1 && d["someone"] == "firefox|alpha"), Arg.Any<CancellationToken>());
     }
 
@@ -207,7 +208,7 @@ public class GitHubBrowsersTests
         var browsers = Create();
 
         browsers.SetChoice("someone", "firefox|alpha");
-        await Task.Delay(50, TestContext.Current.CancellationToken); // the save is not awaited by the caller
+        await browsers.PendingSave; // the save is not awaited by the caller
 
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
         browsers.Open("someone", Url).ShouldBeNull();

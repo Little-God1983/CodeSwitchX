@@ -63,6 +63,19 @@ public sealed class PlanLimitsViewModelTests : IDisposable
         _vm.WeekText.ShouldBe("week 38% · resets Tue 05:00");
     }
 
+    [Theory]
+    [InlineData(5, 59, "Mon 06:00")] // the same reset read "5:59am" and "6am" within the hour: it must not flip on the bar
+    [InlineData(6, 0, "Mon 06:00")]
+    [InlineData(6, 2, "Mon 06:00")]
+    [InlineData(22, 39, "Mon 22:40")]
+    [InlineData(23, 58, "Tue 00:00")]
+    public async Task The_week_s_time_is_shown_to_the_nearest_five_minutes(int hour, int minute, string shown)
+    {
+        await StartedAsync(Reading(weekAt: new DateTimeOffset(2026, 11, 9, hour, minute, 0, TimeSpan.Zero)));
+
+        _vm.WeekText.ShouldBe($"week 38% · resets {shown}");
+    }
+
     [Fact]
     public async Task The_detail_says_when_the_figures_were_read()
     {

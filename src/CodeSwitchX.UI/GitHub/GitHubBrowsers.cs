@@ -18,6 +18,18 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
     private readonly object _gate = new();
     private Task _saving = Task.CompletedTask;
 
+    /// <summary>The saves asked for so far. Never faults.</summary>
+    internal Task PendingSave
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _saving;
+            }
+        }
+    }
+
     /// <summary>The saved choices; unreadable ones leave every account on the Windows default. Never throws.</summary>
     public async Task LoadAsync(CancellationToken ct)
     {

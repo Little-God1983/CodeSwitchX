@@ -155,7 +155,14 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
         return minutes >= 60 ? $"in {minutes / 60}h {minutes % 60}m" : $"in {minutes}m";
     }
 
-    private string DayOf(DateTimeOffset at, DateTimeOffset now) => time.ToLocal(at).ToString("ddd HH:mm", CultureInfo.InvariantCulture);
+    /// <summary>To the nearest five minutes: the text's time wavers around the real one, and the same reset read "5:59am" and "6am" within the hour. A day and a time need no more than that.</summary>
+    private string DayOf(DateTimeOffset at, DateTimeOffset now)
+    {
+        var local = time.ToLocal(at);
+        var five = TimeSpan.FromMinutes(5).Ticks;
+        var nearest = new DateTimeOffset((local.Ticks + five / 2) / five * five, local.Offset);
+        return nearest.ToString("ddd HH:mm", CultureInfo.InvariantCulture);
+    }
 
     public void Dispose()
     {

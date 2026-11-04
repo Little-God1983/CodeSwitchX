@@ -28,6 +28,15 @@ public class PlanUsageTextTests
         Current week (Fable): 11% used · resets Nov 9, 5:59am (Europe/Berlin)
         """;
 
+    /// <summary>With an API key, and with nobody logged in: captured with a fake key and an empty config folder.</summary>
+    private const string NoSubscription = """
+        Total cost:            $0.0000
+        Total duration (API):  0s
+        Total duration (wall): 0s
+        Total code changes:    0 lines added, 0 lines removed
+        Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+        """;
+
     private static DateTimeOffset Utc(int year, int month, int day, int hour, int minute = 0) => new(year, month, day, hour, minute, 0, TimeSpan.Zero);
 
     [Fact]
@@ -138,7 +147,7 @@ public class PlanUsageTextTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("Total cost: $0.0000\nTotal duration (API): 0s")] // an API key user: no limits
+    [InlineData(NoSubscription)]
     public void A_text_without_the_lines_has_no_limits(string text)
     {
         var limits = PlanUsageText.Parse(text, Now);
