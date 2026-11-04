@@ -1009,13 +1009,15 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task The_longest_copy_line_does_not_move_the_rows_under_the_pointer()
+    public async Task On_a_narrow_panel_a_long_copy_line_does_not_move_the_rows_under_the_pointer()
     {
         var list = await ListCutShortWithASkippedRowAsync();
 
         await StaThread.RunAsync(() =>
         {
             var panel = Panel(list);
+            panel.Children.OfType<Border>().Single().Width = 300; // the panel gives way to a narrow Yard
+            panel.UpdateLayout();
             double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
             var before = FirstRowTop();
 
