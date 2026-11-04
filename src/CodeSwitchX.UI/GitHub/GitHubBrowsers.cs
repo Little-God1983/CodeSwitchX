@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.Settings;
@@ -16,6 +17,18 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
     private readonly Dictionary<string, string> _choices = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _gate = new();
     private Task _saving = Task.CompletedTask;
+
+    /// <summary>The saves asked for so far. Never faults.</summary>
+    internal Task PendingSave
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _saving;
+            }
+        }
+    }
 
     /// <summary>The saved choices; unreadable ones leave every account on the Windows default. Never throws.</summary>
     public async Task LoadAsync(CancellationToken ct)
@@ -35,7 +48,7 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            logger.LogWarning(ex, "The GitHub browser choices could not be read; the Windows default is used");
+            logger.LogWarning("The GitHub browser choices could not be read; the Windows default is used: {Failure}", FailureText.Of(ex));
         }
     }
 
@@ -153,7 +166,7 @@ public sealed class GitHubBrowsers(BrowserCatalog catalog, ISettingsStore settin
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "The GitHub browser choices could not be saved");
+            logger.LogWarning("The GitHub browser choices could not be saved: {Failure}", FailureText.Of(ex));
         }
     }
 }

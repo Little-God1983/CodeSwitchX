@@ -9,6 +9,7 @@ using CodeSwitchX.Core.GitHub;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Core.Sessions;
+using CodeSwitchX.Core.Usage;
 using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Core.Yard;
 using CodeSwitchX.Data;
@@ -325,6 +326,10 @@ public partial class App : Application
         services.AddSingleton<GitHubPageViewModel>();
         services.AddSingleton<SettingsViewModel>();
         services.AddSingleton<VoiceStatusViewModel>();
+        // The plan's real limits on the bar (#370), through the shared package.
+        services.AddSingleton<IPlanUsageReader>(sp => new PlanUsageReader(new ClaudeCliChatClient(PlanUsageReader.Options()), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<PlanUsageReader>>()));
+        services.AddSingleton<PlanLimitsViewModel>();
         services.AddSingleton<PerformanceBarViewModel>();
         services.AddSingleton(sp => new ChatNews(sp.GetRequiredService<IEventBus>(), sp.GetRequiredService<IYardDirectory>(),
             sp.GetRequiredService<TimeProvider>(), path => TranscriptLastReply.Read(path), sp.GetRequiredService<TurnStops>().StoppedLately,

@@ -45,6 +45,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     private readonly GitHubActivity? _gitHub;
     private readonly GitHubReader? _gitHubReader;
     private readonly GitHubBrowsers? _gitHubBrowsers;
+    private readonly ITextClipboard _clipboard;
     private readonly CancellationTokenSource _gitHubStop = new();
     private readonly Dictionary<string, object> _gitHubAsked = new(StringComparer.OrdinalIgnoreCase);
     private ITimer? _tabsTimer;
@@ -284,11 +285,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
-        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null)
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null)
     {
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
         _gitHubBrowsers = gitHubBrowsers;
+        _clipboard = clipboard ?? new WpfTextClipboard();
         _storedLastUse = storedLastUse ?? (_ => Task.FromResult<IReadOnlyDictionary<Guid, DateTimeOffset>>(new Dictionary<Guid, DateTimeOffset>()));
         _runningTabs = runningTabs ?? (() => new Dictionary<string, bool>());
         _openTabs = openTabs;
@@ -966,7 +968,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubList?.CloseCommand.Execute(null);
-        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _ui, _time, _logger,
+        var list = new GitHubListViewModel(pill, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubList, closed)) { GitHubList = null; } });
         GitHubList = list;
         // Not on the UI thread: the load starts its first gh before its first await.

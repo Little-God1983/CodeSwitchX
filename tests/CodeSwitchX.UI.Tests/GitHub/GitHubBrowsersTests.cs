@@ -4,6 +4,7 @@ using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Settings;
 using CodeSwitchX.UI.Tests.Infrastructure;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -24,6 +25,53 @@ public class GitHubBrowsersTests
 
     private GitHubBrowsers Create() => new(
         new BrowserCatalog(new FakeSource()), _store, info => _start(info), NullLogger<GitHubBrowsers>.Instance);
+
+    /// <summary>What was logged, with the exception handed to the logger: its message could carry a login or a browser's profile.</summary>
+    private sealed class ExceptionLogger : ILogger<GitHubBrowsers>
+    {
+        private readonly TaskCompletionSource<(string Text, Exception? Exception)> _first = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<(string Text, Exception? Exception)> First => _first.Task;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            _first.TrySetResult((formatter(state, exception), exception));
+    }
+
+    [Fact]
+    public async Task Choices_that_cannot_be_read_are_logged_without_the_exception_s_message()
+    {
+        var log = new ExceptionLogger();
+        _store.GetAsync<Dictionary<string, string>>(SettingKeys.GitHubBrowsers, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<Dictionary<string, string>?>(new InvalidOperationException("private-login")));
+        var browsers = new GitHubBrowsers(new BrowserCatalog(new FakeSource()), _store, info => _start(info), log);
+
+        await browsers.LoadAsync(TestContext.Current.CancellationToken);
+
+        var (text, exception) = await log.First;
+        exception.ShouldBeNull();
+        text.ShouldContain(nameof(InvalidOperationException));
+        text.ShouldNotContain("private-login");
+    }
+
+    [Fact]
+    public async Task Choices_that_cannot_be_saved_are_logged_without_the_exception_s_message()
+    {
+        var log = new ExceptionLogger();
+        _store.SetAsync(SettingKeys.GitHubBrowsers, Arg.Any<Dictionary<string, string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("private-login")));
+        var browsers = new GitHubBrowsers(new BrowserCatalog(new FakeSource()), _store, info => _start(info), log);
+
+        browsers.SetChoice("someone", "firefox|alpha");
+
+        var (text, exception) = await log.First.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        exception.ShouldBeNull();
+        text.ShouldContain(nameof(InvalidOperationException));
+        text.ShouldNotContain("private-login");
+    }
 
     [Fact]
     public void An_account_without_a_choice_uses_the_Windows_default()
@@ -84,7 +132,7 @@ public class GitHubBrowsersTests
     }
 
     [Fact]
-    public void A_choice_is_saved_under_the_login()
+    public async Task A_choice_is_saved_under_the_login()
     {
         var browsers = Create();
 
@@ -92,7 +140,8 @@ public class GitHubBrowsersTests
 
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
         browsers.ChoiceFor("another").ShouldBe(BrowserEntry.DefaultId);
-        _store.Received().SetAsync(SettingKeys.GitHubBrowsers,
+        await browsers.PendingSave; // not awaited by the caller: a look before it ends fails on a busy machine
+        await _store.Received().SetAsync(SettingKeys.GitHubBrowsers,
             Arg.Is<Dictionary<string, string>>(d => d.Count == 1 && d["someone"] == "firefox|alpha"), Arg.Any<CancellationToken>());
     }
 
@@ -159,7 +208,7 @@ public class GitHubBrowsersTests
         var browsers = Create();
 
         browsers.SetChoice("someone", "firefox|alpha");
-        await Task.Delay(50, TestContext.Current.CancellationToken); // the save is not awaited by the caller
+        await browsers.PendingSave; // the save is not awaited by the caller
 
         browsers.ChoiceFor("someone").ShouldBe("firefox|alpha");
         browsers.Open("someone", Url).ShouldBeNull();

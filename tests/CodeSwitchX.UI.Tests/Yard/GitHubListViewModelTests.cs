@@ -16,6 +16,7 @@ using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.Telemetry;
 using CodeSwitchX.UI.GitHub;
+using CodeSwitchX.UI.Infrastructure;
 using CodeSwitchX.UI.Tests.Infrastructure;
 using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,6 +30,7 @@ public class GitHubListViewModelTests
 {
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 9, 23, 12, 0, 0, TimeSpan.Zero));
     private readonly FakeGh _gh = new();
+    private readonly FakeClipboard _clipboard = new();
     private readonly List<ProcessStartInfo> _started = [];
     private readonly List<GitHubListViewModel> _closedLists = [];
     private Func<ProcessStartInfo, bool> _start;
@@ -104,7 +106,7 @@ public class GitHubListViewModelTests
     }
 
     private GitHubListViewModel List(GitHubActivity activity, GitHubPill pill, GitHubBrowsers? browsers = null) =>
-        new(pill, new GitHubReader(_gh), activity, browsers ?? Browsers(), new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
+        new(pill, new GitHubReader(_gh), activity, browsers ?? Browsers(), _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
 
     [Fact]
     public async Task Opening_shows_last_known_rows_at_once_then_the_fresh_list()
@@ -297,7 +299,7 @@ public class GitHubListViewModelTests
             var activity = new GitHubActivity(gh, new GitHubReader(gh), (_, _) => Task.FromResult(new OriginLookup("https://github.com/acme/app.git")), NullLogger<GitHubActivity>.Instance);
             await activity.RefreshAsync(["app"], TestContext.Current.CancellationToken);
             var list = new GitHubListViewModel(new GitHubPill(activity.ForFolder("app")!, GitHubItemKind.Issue), new GitHubReader(gh), activity, Browsers(),
-                new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
+                _clipboard, new ImmediateDispatcher(), _time, NullLogger.Instance, _closedLists.Add);
             list.LoadingMessage.ShouldBe("Loading the full list...");
 
             var load = list.LoadAsync(TestContext.Current.CancellationToken);
@@ -538,8 +540,8 @@ public class GitHubListViewModelTests
         {
             var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
 
-            // the close button, then one button a row
-            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button"]);
+            // the close button, copy all, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button"]);
         });
     }
 
@@ -575,7 +577,7 @@ public class GitHubListViewModelTests
         var source = new HwndSource(new HwndSourceParameters("test") { WindowStyle = 0 }) { RootVisual = grid };
         var panel = grid.Children.OfType<Border>().Single();
         _ = new GitHubPanelFocus(grid, panel, () => { });
-        Keyboard.Focus(Descendants(panel).OfType<Button>().First(b => b.DataContext is GitHubRow));
+        Keyboard.Focus(RowButtons(panel).First());
         return (grid, panel, source);
     }
 
@@ -753,7 +755,7 @@ public class GitHubListViewModelTests
         return list;
     }
 
-    private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>().Where(b => b.DataContext is GitHubRow).ToList();
+    private static List<Button> RowButtons(DependencyObject panel) => Descendants(panel).OfType<Button>().Where(b => b.DataContext is GitHubRow && b.Focusable).ToList();
 
     [Fact]
     public async Task A_thousand_rows_build_far_fewer_row_containers()
@@ -867,6 +869,264 @@ public class GitHubListViewModelTests
 
         dir.ShouldNotBeNull();
         return XDocument.Load(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "Yard", "YardView.xaml")).Root!;
+    }
+
+    [Fact]
+    public async Task A_row_s_copy_button_puts_its_link_on_the_clipboard_and_opens_nothing()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+
+        _clipboard.Text.ShouldBe("https://github.com/acme/app/issues/1");
+        list.CopyMessage.ShouldBe("Copied the link to #1.");
+        _started.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Copy_all_puts_every_link_on_the_clipboard_one_to_a_line_in_the_list_s_order()
+    {
+        var list = await ListWithRowsAsync(3);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        _clipboard.Text.ShouldBe(string.Join(Environment.NewLine,
+            "https://github.com/acme/app/issues/1", "https://github.com/acme/app/issues/2", "https://github.com/acme/app/issues/3"));
+        list.CopyMessage.ShouldBe("Copied 3 links.");
+    }
+
+    [Fact]
+    public async Task One_link_copied_is_said_in_the_singular()
+    {
+        var list = await ListWithRowsAsync(1);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        _clipboard.Text.ShouldBe("https://github.com/acme/app/issues/1");
+        list.CopyMessage.ShouldBe("Copied 1 link.");
+    }
+
+    [Fact]
+    public async Task Copying_all_while_the_list_still_loads_says_it_is_not_all_of_them()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied 1 link. The full list is still loading.");
+    }
+
+    [Fact]
+    public async Task Copying_all_of_a_list_cut_short_says_the_rest_are_not_in_it()
+    {
+        var list = await ListCutShortAsync();
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied the newest 1000 links. The rest are on GitHub.");
+    }
+
+    [Fact]
+    public async Task Copying_all_after_a_failed_load_says_it_is_not_all_of_them()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(null);
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied 1 link. The full list could not be loaded.");
+    }
+
+    [Fact]
+    public async Task Copying_all_of_a_list_with_skipped_rows_says_they_are_missing()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(3).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied 2 links. 1 row could not be shown.");
+    }
+
+    /// <summary>Runs what is posted only when asked, as a busy UI thread does.</summary>
+    private sealed class QueueDispatcher : IUiDispatcher
+    {
+        private readonly Queue<Action> _queue = new();
+
+        public void Post(Action action) => _queue.Enqueue(action);
+
+        public void Post<T>(Action<T> action, T state) => _queue.Enqueue(() => action(state));
+
+        public void Run()
+        {
+            while (_queue.TryDequeue(out var action))
+            {
+                action();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task A_clear_already_on_its_way_does_not_take_the_line_of_a_newer_copy()
+    {
+        var (activity, pill) = await PillAsync();
+        var ui = new QueueDispatcher();
+        var list = new GitHubListViewModel(pill, new GitHubReader(_gh), activity, Browsers(), _clipboard, ui, _time, NullLogger.Instance, _closedLists.Add);
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+
+        _time.Advance(GitHubListViewModel.CopyMessageLifetime); // its clear is posted, the UI thread is in the next copy: a held clipboard takes it up to a second
+        _clipboard.Works = false;
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+        ui.Run();
+
+        list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
+    }
+
+    private async Task<GitHubListViewModel> ListCutShortWithASkippedRowAsync()
+    {
+        _gh.IssueTotal = 1500;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+        return list;
+    }
+
+    [Fact]
+    public async Task Copying_all_of_a_list_cut_short_with_a_skipped_row_says_both()
+    {
+        var list = await ListCutShortWithASkippedRowAsync();
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied the newest 999 links. The rest are on GitHub. 1 row could not be shown.");
+    }
+
+    [Fact]
+    public async Task On_a_narrow_panel_a_long_copy_line_does_not_move_the_rows_under_the_pointer()
+    {
+        var list = await ListCutShortWithASkippedRowAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = Panel(list);
+            panel.Children.OfType<Border>().Single().Width = 300; // the panel gives way to a narrow Yard
+            panel.UpdateLayout();
+            double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
+            var before = FirstRowTop();
+
+            list.CopyAllLinksCommand.Execute(null);
+            panel.UpdateLayout();
+
+            FirstRowTop().ShouldBe(before);
+        });
+    }
+
+    [Fact]
+    public async Task An_empty_list_has_nothing_to_copy()
+    {
+        var list = await ListWithRowsAsync(0);
+
+        list.CopyAllLinksCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_clipboard_another_program_holds_says_so()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _clipboard.Works = false;
+
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+
+        list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
+    }
+
+    [Fact]
+    public async Task The_copy_line_goes_away_after_a_moment_counted_from_the_last_copy()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        list.CopyRowLinkCommand.Execute(list.Rows[0]);
+
+        _time.Advance(GitHubListViewModel.CopyMessageLifetime - TimeSpan.FromSeconds(1));
+        list.CopyAllLinksCommand.Execute(null);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        list.CopyMessage.ShouldNotBeNull("the second copy's line has its own time");
+
+        _time.Advance(GitHubListViewModel.CopyMessageLifetime);
+        list.CopyMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_panel_has_a_copy_button_on_each_row_and_one_for_all_with_the_row_still_one_tab_stop()
+    {
+        var list = await ListWithRowsAsync(3);
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = Panel(list);
+            var buttons = Descendants(panel).OfType<Button>().ToList();
+
+            buttons.Single(b => AutomationProperties.GetName(b) == "Copy all links").Command.ShouldBe(list.CopyAllLinksCommand);
+            var copy = buttons.Single(b => AutomationProperties.GetName(b) == "Copy the link to #2");
+            copy.Command.ShouldBe(list.CopyRowLinkCommand);
+            copy.CommandParameter.ShouldBe(list.Rows[1]);
+            copy.Focusable.ShouldBeFalse("the row stays one stop, and a click leaves the keyboard where it was");
+            copy.Visibility.ShouldBe(Visibility.Visible);
+            copy.ActualWidth.ShouldBeGreaterThan(0);
+        });
+    }
+
+    [Fact]
+    public async Task A_copy_line_does_not_move_the_rows_under_the_pointer()
+    {
+        var list = await ListWithRowsAsync(3);
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = Panel(list);
+            double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
+            var before = FirstRowTop();
+
+            list.CopyRowLinkCommand.Execute(list.Rows[0]);
+            panel.UpdateLayout();
+
+            FirstRowTop().ShouldBe(before);
+        });
+    }
+
+    private async Task<GitHubListViewModel> ListCutShortAsync()
+    {
+        _gh.IssueTotal = 1500;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+        return list;
+    }
+
+    private sealed class FakeClipboard : ITextClipboard
+    {
+        public bool Works { get; set; } = true;
+
+        public string? Text { get; private set; }
+
+        public bool TrySetText(string text)
+        {
+            if (Works)
+            {
+                Text = text;
+            }
+
+            return Works;
+        }
     }
 
     private YardViewModel NewYard(GitHubActivity? activity)
