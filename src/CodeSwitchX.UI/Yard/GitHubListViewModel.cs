@@ -202,12 +202,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private string CopiedAllText()
     {
         var count = Rows.Count.ToString(CultureInfo.InvariantCulture);
-        if (CutShortMessage is not null)
-        {
-            return $"Copied the newest {count} links. The rest are on GitHub.";
-        }
-
-        var copied = Rows.Count == 1 ? "Copied 1 link." : $"Copied {count} links.";
+        var copied = CutShortMessage is not null ? $"Copied the newest {count} links. The rest are on GitHub."
+            : Rows.Count == 1 ? "Copied 1 link."
+            : $"Copied {count} links.";
         if (IsLoading)
         {
             return $"{copied} The full list is still loading.";

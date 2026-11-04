@@ -988,6 +988,44 @@ public class GitHubListViewModelTests
         list.CopyMessage.ShouldBe("Couldn't reach the clipboard. Try again.");
     }
 
+    private async Task<GitHubListViewModel> ListCutShortWithASkippedRowAsync()
+    {
+        _gh.IssueTotal = 1500;
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+        _gh.List.SetResult(ListOf(GitHubList.Limit).Replace("\"number\":2,", "\"number\":\"2\",", StringComparison.Ordinal));
+        await list.LoadAsync(TestContext.Current.CancellationToken);
+        return list;
+    }
+
+    [Fact]
+    public async Task Copying_all_of_a_list_cut_short_with_a_skipped_row_says_both()
+    {
+        var list = await ListCutShortWithASkippedRowAsync();
+
+        list.CopyAllLinksCommand.Execute(null);
+
+        list.CopyMessage.ShouldBe("Copied the newest 999 links. The rest are on GitHub. 1 row could not be shown.");
+    }
+
+    [Fact]
+    public async Task The_longest_copy_line_does_not_move_the_rows_under_the_pointer()
+    {
+        var list = await ListCutShortWithASkippedRowAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var panel = Panel(list);
+            double FirstRowTop() => RowButtons(panel)[0].TranslatePoint(new Point(0, 0), panel).Y;
+            var before = FirstRowTop();
+
+            list.CopyAllLinksCommand.Execute(null);
+            panel.UpdateLayout();
+
+            FirstRowTop().ShouldBe(before);
+        });
+    }
+
     [Fact]
     public async Task An_empty_list_has_nothing_to_copy()
     {

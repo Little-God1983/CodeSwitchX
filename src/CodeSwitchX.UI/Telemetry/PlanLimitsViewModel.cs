@@ -140,9 +140,16 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     {
         FiveHourText = _limits?.FiveHour is { } fiveHour ? Line("5h", fiveHour, now, CountdownOf) : null;
         WeekText = _limits?.Week is { } week ? Line("week", week, now, DayOf) : null;
-        Detail = _limits is null
-            ? null
-            : string.Create(CultureInfo.InvariantCulture, $"The real limits of your plan, as Claude Code's /usage says them. Read at {time.ToLocal(_readAt):HH:mm}.");
+        Detail = _limits is null ? null : $"The real limits of your plan, as Claude Code's /usage says them. Read {ReadText(now)}.";
+    }
+
+    /// <summary>With the day when it was another: failed readings leave old figures standing, and this is where their age shows.</summary>
+    private string ReadText(DateTimeOffset now)
+    {
+        var read = time.ToLocal(_readAt);
+        return read.Date == time.ToLocal(now).Date
+            ? read.ToString("'at' HH:mm", CultureInfo.InvariantCulture)
+            : read.ToString("ddd HH:mm", CultureInfo.InvariantCulture);
     }
 
     private string Line(string name, PlanLimit limit, DateTimeOffset now, Func<DateTimeOffset, DateTimeOffset, string> resets) => limit.ResetsAt switch

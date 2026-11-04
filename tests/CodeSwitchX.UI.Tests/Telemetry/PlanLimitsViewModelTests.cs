@@ -85,6 +85,17 @@ public sealed class PlanLimitsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Figures_from_another_day_say_which_day()
+    {
+        await StartedAsync(Reading());
+        _reader.Next = new PlanReading(PlanReadingKind.Failed);
+
+        await PassAsync(TimeSpan.FromHours(25));
+
+        _vm.Detail.ShouldBe("The real limits of your plan, as Claude Code's /usage says them. Read Wed 12:00.");
+    }
+
+    [Fact]
     public async Task The_countdown_ticks_without_a_new_reading()
     {
         await StartedAsync(Reading());

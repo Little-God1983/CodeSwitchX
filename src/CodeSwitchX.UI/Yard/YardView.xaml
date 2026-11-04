@@ -355,7 +355,8 @@
         <DockPanel DockPanel.Dock="Top" Margin="16,0,16,8">
           <Button DockPanel.Dock="Left" Content="Copy all links" Command="{Binding CopyAllLinksCommand}" Padding="8,2" VerticalAlignment="Top"
                   AutomationProperties.Name="Copy all links" ToolTip="Puts the link of every row on the clipboard, one to a line" />
-          <TextBlock Text="{Binding CopyMessage}" Margin="8,0,0,0" Opacity="0.7" VerticalAlignment="Center" TextWrapping="Wrap" />
+          <!-- One line: a second would push the rows down, and back when it goes. -->
+          <TextBlock Text="{Binding CopyMessage}" ToolTip="{Binding CopyMessage}" Margin="8,0,0,0" Opacity="0.7" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
         </DockPanel>
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding OpenMessage}" />
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding LoadMessage}" />
