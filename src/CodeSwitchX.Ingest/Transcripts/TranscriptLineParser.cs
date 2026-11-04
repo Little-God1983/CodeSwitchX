@@ -66,7 +66,7 @@ public static class TranscriptLineParser
                         isMeta = true;
                     }
 
-                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, BackgroundJobOf(root));
+                    return new UserLine(type, timestamp, sessionId, cwd, text, isToolResult, isMeta, isInterrupt, BackgroundJobOf(root), StoppedJobOf(root));
                 }
 
                 // Claude Code's generated chat title: older versions wrote `summary` lines, current ones write `ai-title`.
@@ -111,6 +111,22 @@ public static class TranscriptLineParser
         return GetString(result, "backgroundTaskId")
             ?? (result.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True ? GetString(result, "agentId") : null);
     }
+
+    /// <summary>
+    /// The background job a tool result stopped (#379): TaskStop's result names the task and says it was stopped. A stop that
+    /// failed stopped nothing; a job that was not running any more had its end told before.
+    /// </summary>
+    private static string? StoppedJobOf(JsonElement root)
+    {
+        if (!root.TryGetProperty("toolUseResult", out var result) || result.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return GetString(result, "message")?.StartsWith(StoppedTaskPrefix, StringComparison.Ordinal) == true ? GetString(result, "task_id") : null;
+    }
+
+    private const string StoppedTaskPrefix = "Successfully stopped task";
 
     private static string? JobEndedIn(string? content)
     {

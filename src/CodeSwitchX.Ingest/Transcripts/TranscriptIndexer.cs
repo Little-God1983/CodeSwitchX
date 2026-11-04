@@ -599,6 +599,12 @@ public sealed class TranscriptIndexer : BackgroundService
                         jobsStarted.Add(new BackgroundJobEvent(job, startedAt));
                     }
 
+                    // The chat stopped a job itself (#379): no task notification follows, so this is the end the engine waits for.
+                    if (!subagent && user.EndedJob is { } stopped && user.Timestamp is { } stoppedAt)
+                    {
+                        jobsEnded.Add(new BackgroundJobEvent(stopped, stoppedAt));
+                    }
+
                     if (user.IsInterrupt)
                     {
                         // Esc: the turn is over and no tool result will come; Claude Code fires no Stop hook for this.
