@@ -20,6 +20,8 @@
           </Style>
           <!-- A model's name and dot, as a link to the Settings page where that model is chosen. -->
           <Style TargetType="Button" x:Key="DotLink">
+            <!-- Replacing the theme's button style loses its text colour: without this the text falls back to the system's black. -->
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Template">
               <Setter.Value>

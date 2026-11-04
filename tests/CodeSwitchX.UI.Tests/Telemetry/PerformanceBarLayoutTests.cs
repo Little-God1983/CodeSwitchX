@@ -51,6 +51,8 @@ public sealed class PerformanceBarLayoutTests
 
         public bool HasBudget => hasBudget;
 
+        public object Voice => new { SpeechName = "voice · Kokoro", ListeningName = "speech to text · Whisper Tiny" };
+
         public object Limits => new { FiveHourText = "5h 13% · resets in 3h 36m", WeekText = "week 47% · resets Mon 06:00", Detail = "detail" };
     }
 
@@ -74,6 +76,42 @@ public sealed class PerformanceBarLayoutTests
     }
 
     private static TextBlock Text(Grid bar, string text) => Descendants(bar).OfType<TextBlock>().Single(t => t.Text == text);
+
+    private const string ThemeText = "TextFillColorPrimaryBrush";
+
+    private static double Brightness(Brush brush) => ((SolidColorBrush)brush).Color switch
+    {
+        var c => ((0.2126 * c.R) + (0.7152 * c.G) + (0.0722 * c.B)) / 255,
+    };
+
+    /// <summary>The style replaces the theme's button style, so without a colour of its own its text falls back to the system's black (#377).</summary>
+    [Fact]
+    public async Task The_model_names_take_the_theme_s_text_colour()
+    {
+        await StaThread.RunAsync(() =>
+        {
+            var bar = Bar(hasBudget: false);
+            var light = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+            bar.Resources[ThemeText] = light;
+            bar.UpdateLayout();
+
+            Text(bar, "voice · Kokoro").Foreground.ShouldBe(light);
+            Text(bar, "speech to text · Whisper Tiny").Foreground.ShouldBe(light);
+        });
+    }
+
+    [Fact]
+    public async Task The_dark_theme_s_text_colour_is_light()
+    {
+        await StaThread.RunAsync(() =>
+        {
+#pragma warning disable WPF0001 // the API App.xaml sets the same way; still marked for evaluation
+            var window = new Window { ThemeMode = ThemeMode.Dark };
+#pragma warning restore WPF0001
+
+            Brightness((Brush)window.FindResource(ThemeText)).ShouldBeGreaterThan(0.7);
+        });
+    }
 
     [Fact]
     public async Task Without_a_budget_the_counted_figure_and_the_real_limit_stand_apart()
