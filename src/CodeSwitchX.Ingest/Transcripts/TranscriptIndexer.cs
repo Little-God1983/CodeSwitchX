@@ -588,7 +588,8 @@ public sealed class TranscriptIndexer : BackgroundService
 
                     break;
 
-                // A sub-agent's jobs are not the chat's; and its file is no place for theirs to end.
+                // A sub-agent's jobs are not the chat's, and a task notification reaches the agent that started the job, so one
+                // in a sub-agent's file ends a job of the sub-agent's own. Its TaskStop below is another matter: it may stop any task.
                 case JobEndLine end when !subagent && end.Timestamp is { } endedAt:
                     jobsEnded.Add(new BackgroundJobEvent(end.Job, endedAt));
                     break;

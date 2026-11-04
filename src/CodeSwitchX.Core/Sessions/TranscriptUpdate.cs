@@ -19,7 +19,10 @@ public sealed record TranscriptUpdate
     /// <summary>When the newest request of these lines began, by the first line of its reply; null when they hold none (a sub-agent's never do).</summary>
     public DateTimeOffset? LastRequestAt { get; init; }
 
-    /// <summary>Background jobs these lines start, and those they end (#332), in order; none from a sub-agent's file.</summary>
+    /// <summary>
+    /// Background jobs these lines start, and those they end (#332), in order. A sub-agent's file starts none of the chat's and
+    /// ends them only by a TaskStop (#379), which may stop any task; its task notifications are its own jobs' ends.
+    /// </summary>
     public IReadOnlyList<BackgroundJobEvent> JobsStarted { get; init; } = [];
     public IReadOnlyList<BackgroundJobEvent> JobsEnded { get; init; } = [];
 

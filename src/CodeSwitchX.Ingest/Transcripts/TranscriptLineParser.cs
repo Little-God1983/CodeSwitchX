@@ -103,10 +103,11 @@ public static class TranscriptLineParser
 
     /// <summary>
     /// The background job a tool result started (a command's task id, or the agent id of an agent that runs on by itself) and
-    /// the one it stopped (#379). TaskStop's result is the only one with <c>task_id</c> and <c>task_type</c>, and it always
-    /// means the task runs no more: stopped by it, in one wording for a task of this machine and another for a command on a
-    /// remote one, or found not running. A stop that fails otherwise throws and leaves no such result. The id is the task's
-    /// own, the same the start told, even when the chat named the task by its name.
+    /// the one it stopped (#379). TaskStop's result is the only one with <c>task_id</c> and <c>task_type</c> (every such result
+    /// in a month of transcripts, and the CLI's source as of 2.1.316), and it always means the task runs no more: stopped by
+    /// it, in one wording for a task of this machine and another for a command on a remote one, or found not running. A stop
+    /// that fails otherwise throws and leaves no such result. The id is the task's own, the same the start told, even when the
+    /// chat named the task by its name.
     /// </summary>
     private static (string? Started, string? Stopped) JobsOf(JsonElement root)
     {

@@ -18,6 +18,10 @@ public class TranscriptLineParserTests
         TranscriptLineParser.TryParse(line).ShouldBeOfType<UserLine>().BackgroundJob.ShouldBe(job);
     }
 
+    /// <summary>
+    /// The first row is the shape every TaskStop result in the transcripts has; the agent, remote and not-running rows are
+    /// the other shapes the CLI's TaskStop writes, read from its source as of 2.1.316, since none has been seen on this machine.
+    /// </summary>
     [Theory]
     [InlineData("""{"message":"Successfully stopped task: b1 (sleep 600)","task_id":"b1","task_type":"local_bash","command":"sleep 600"}""", "b1")]
     [InlineData("""{"message":"Successfully stopped task: a1 (Explore)","task_id":"a1","task_type":"local_agent","command":"Explore"}""", "a1")]
