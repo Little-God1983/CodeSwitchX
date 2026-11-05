@@ -189,6 +189,53 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task Clicking_the_heading_opens_the_repository_and_keeps_the_panel_open()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var heading = Descendants(Panel(list)).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Open acme/app on GitHub");
+
+            heading.Command.Execute(heading.CommandParameter);
+        });
+
+        _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app");
+        list.OpenMessage.ShouldBeNull();
+        _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_browser_that_cannot_open_the_repository_shows_its_line_in_the_panel()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        _start = _ => false;
+        var list = List(activity, pill, browsers);
+
+        list.OpenRepositoryCommand.Execute(null);
+
+        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_close_button_stays_the_panel_s_first_stop()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var first = TabStops(Panel(list))[0].ShouldBeOfType<Button>();
+
+            AutomationProperties.GetName(first).ShouldBe("Close the list");
+        });
+    }
+
+    [Fact]
     public async Task A_browser_that_cannot_open_shows_its_line_in_the_panel()
     {
         var (activity, pill) = await PillAsync();
@@ -482,6 +529,44 @@ public class GitHubListViewModelTests
         ((string?)panel.Attribute("KeyboardNavigation.DirectionalNavigation")).ShouldBe("Cycle");
     }
 
+    [Fact]
+    public async Task The_top_bar_has_the_refresh_button_and_shows_the_failure_line_only_while_there_is_one()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+
+            var refresh = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Refresh"));
+            refresh.Command.ShouldBeSameAs(yard.RefreshCommand);
+            const string Line = "Couldn't read GitHub.";
+            bar.UpdateLayout();
+            Descendants(bar).OfType<TextBlock>().ShouldNotContain(t => t.Text == Line);
+
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            Descendants(bar).OfType<TextBlock>().Single(t => t.Text == Line).Visibility.ShouldBe(Visibility.Visible);
+        });
+    }
+
+    /// <summary>The Yard's top bar as it shows it: its markup from the file, on the application's resources.</summary>
+    private static Grid TopBar(YardViewModel yard)
+    {
+        var root = YardViewXaml();
+        var markup = new XElement(root.Elements(Wpf + "Grid").Single().Elements(Wpf + "DockPanel").Single().Elements(Wpf + "Border").First());
+        var grid = new XElement(Wpf + "Grid", root.Attributes().Where(a => a.IsNamespaceDeclaration),
+            new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
+        var bar = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
+        bar.DataContext = yard;
+        bar.Measure(new Size(1600, 80));
+        bar.Arrange(new Rect(0, 0, 1600, 80));
+        bar.UpdateLayout();
+        return bar;
+    }
+
     /// <summary>
     /// The list panel as the Yard shows it: its markup from the file, on the application's resources, with the list as the context
     /// of the Yard.
@@ -540,8 +625,8 @@ public class GitHubListViewModelTests
         {
             var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
 
-            // the close button, copy all, then one button a row
-            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button"]);
+            // the close button, the heading, copy all, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button", "Button"]);
         });
     }
 

@@ -131,6 +131,41 @@ public class GitHubActivityTests
     private static GitHubItem Item(int number) => new(number, "t" + number, "https://github.com/acme/tool/issues/" + number, DateTimeOffset.UnixEpoch, []);
 
     [Fact]
+    public async Task A_round_that_read_every_repository_comes_back_true()
+    {
+        (await Activity(new FakeGh()).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_round_with_a_read_that_failed_comes_back_false()
+    {
+        (await Activity(new FakeGh { Fail = true }).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_round_whose_accounts_could_not_be_read_comes_back_false()
+    {
+        (await Activity(new FakeGh { AccountsNull = true }).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBeFalse();
+        (await Activity(new FakeGh { AccountsThrow = true }).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_round_is_not_failed_by_a_repository_nobody_can_see()
+    {
+        var gh = new FakeGh { AnswerOf = _ => new GhAnswer(null, NotFound) };
+
+        (await Activity(gh).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_round_is_not_failed_by_a_folder_git_could_not_answer_for()
+    {
+        var round = Activity(new FakeGh(), _ => OriginLookup.Failure).RefreshAsync(ThreeFolders, CancellationToken.None);
+
+        (await round).ShouldBeTrue("that is git's answer, and GitHub was not asked");
+    }
+
+    [Fact]
     public async Task Two_folders_in_one_repo_make_one_read()
     {
         var gh = new FakeGh();

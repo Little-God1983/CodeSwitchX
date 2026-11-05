@@ -75,7 +75,11 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     }
 
     /// <summary>Works out the repository of each folder, reads each repository once and raises <see cref="Changed"/> once at the end if a result differs.</summary>
-    public async Task RefreshAsync(IReadOnlyCollection<string> folders, CancellationToken ct)
+    /// <returns>
+    /// Whether GitHub answered for every repository: false when the accounts or a repository could not be read. "No account can see it" is an answer,
+    /// and a folder git could not tell the origin of never reached GitHub, so neither makes it false.
+    /// </returns>
+    public async Task<bool> RefreshAsync(IReadOnlyCollection<string> folders, CancellationToken ct)
     {
         await _round.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -101,6 +105,8 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
             {
                 Changed?.Invoke(this, EventArgs.Empty);
             }
+
+            return accounts is not null && reads.All(r => r.Failure is null);
         }
         finally
         {

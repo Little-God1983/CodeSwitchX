@@ -26,6 +26,9 @@ public sealed record GitHubRepo(string Owner, string Name)
 
     public string Slug => $"{Owner}/{Name}";
 
+    /// <summary>The repository's main page.</summary>
+    public string Url => $"https://{Host}/{Slug}";
+
     public bool Equals(GitHubRepo? other) =>
         other is not null
         && string.Equals(Owner, other.Owner, StringComparison.OrdinalIgnoreCase)

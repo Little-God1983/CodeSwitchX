@@ -274,12 +274,18 @@
             <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
                        Margin="0,0,16,0" />
             <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
+            <!-- Wide enough for "Refreshing…", so the bar does not move when the text changes. -->
+            <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}" MinWidth="104" Margin="0,0,8,0"
+                    ToolTip="Reads the git info and the GitHub issues and pull requests of every tile now" />
             <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
             <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
           </StackPanel>
           <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
           <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
                      Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
+          <!-- In the free space beside the controls: it takes no room from them, so none moves when it comes and goes. -->
+          <TextBlock Text="{Binding RefreshMessage}" ToolTip="{Binding RefreshMessage}" Foreground="#F59E0B" Margin="16,0,16,0" VerticalAlignment="Center" HorizontalAlignment="Right"
+                     TextTrimming="CharacterEllipsis" Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
         </DockPanel>
       </Border>
       <!-- The tiles keep their places while the pointer is over the board (#276): none slides under a click. -->
@@ -347,7 +353,26 @@
         <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
           <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
           <StackPanel>
-            <TextBlock Text="{Binding Heading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <!-- The heading opens the repository's main page (#382): a link, so it keeps the look of a heading and is underlined under the pointer. -->
+            <Button Command="{Binding OpenRepositoryCommand}" HorizontalAlignment="Left" Cursor="Hand" ToolTip="{Binding OpenRepositoryText}"
+                    AutomationProperties.Name="{Binding OpenRepositoryText}">
+              <Button.Template>
+                <ControlTemplate TargetType="Button">
+                  <ContentPresenter />
+                </ControlTemplate>
+              </Button.Template>
+              <TextBlock Text="{Binding Heading}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Button}}" Value="True">
+                        <Setter Property="TextDecorations" Value="Underline" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+              </TextBlock>
+            </Button>
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
