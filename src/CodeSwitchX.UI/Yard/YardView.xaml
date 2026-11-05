@@ -261,9 +261,10 @@
         <DockPanel>
           <!-- Laid over the board's top edge. Beside the controls a window that is not maximized leaves it no room, and as a row of its own it would move every tile
                when a late failure arrives (#276). The canvas has no height, and the bar's ZIndex draws it above the board. It covers what is under it,
-               so a click puts it away instead of reaching a tile it hides; one repository that always fails would otherwise keep it there for good. -->
+               so a click puts it away instead of reaching a tile it hides; one repository that always fails would otherwise keep it there for good.
+               Not focusable: it collapses when clicked, and the keyboard would fall to the window with it. -->
           <Canvas DockPanel.Dock="Bottom" Height="0">
-            <Button Canvas.Right="0" Canvas.Top="12" Command="{Binding DismissRefreshMessageCommand}" Cursor="Hand" ToolTip="Click to put this away"
+            <Button Canvas.Right="0" Canvas.Top="12" Command="{Binding DismissRefreshMessageCommand}" Focusable="False" Cursor="Hand" ToolTip="Click to put this away"
                     AutomationProperties.Name="{Binding RefreshMessage}" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
                     Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}">
               <Button.Template>
@@ -315,7 +316,7 @@
             <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
           </WrapPanel>
           <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
-                     TextTrimming="CharacterEllipsis" ToolTip="Hooks not installed — states are inferred from transcripts"
+                     TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"
                      Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
         </DockPanel>
       </Border>

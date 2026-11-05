@@ -574,6 +574,24 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task The_failure_line_never_takes_the_keyboard()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            const string Line = "Couldn't read GitHub.";
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            // It collapses when clicked: with the keyboard on it, the keyboard would fall to the window. And it comes first in the bar's markup, so it would be the first Tab stop.
+            TabStops(bar).ShouldNotContain(stop => AutomationProperties.GetName(stop) == Line);
+        });
+    }
+
+    [Fact]
     public async Task A_wrapped_bar_keeps_each_size_control_together()
     {
         var (activity, _) = await PillAsync();
