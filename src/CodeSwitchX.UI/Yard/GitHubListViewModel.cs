@@ -10,7 +10,8 @@ namespace CodeSwitchX.UI.Yard;
 
 /// <summary>
 /// The panel a click on a GitHub pill opens (#335): every open issue or pull request of the repository. It shows what the
-/// pill knew at once and swaps in the full list when the account has read it; a row opens its item in the account's browser.
+/// pill knew at once and swaps in the full list when the account has read it; a row opens its item in the account's browser,
+/// and the heading the repository's main page (#382).
 /// </summary>
 public sealed partial class GitHubListViewModel : ObservableObject
 {
@@ -51,7 +52,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     public string? LoadingMessage => IsLoading ? "Loading the full list..." : null;
 
-    /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
+    /// <summary>Why the browser could not open a row or the repository, or none; either one that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
     /// <summary>What the last copy did, for a moment. It has a place of its own in the header, so the rows do not move under the pointer.</summary>
@@ -79,6 +80,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     }
 
     public string AccountLine { get; }
+
+    /// <summary>What the heading does when clicked: its tooltip, and its name for a screen reader.</summary>
+    public string OpenRepositoryText => $"Open {_pill.Activity.Repo.Slug} on GitHub";
 
     private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -186,6 +190,13 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private void OpenRow(GitHubRow row)
     {
         OpenMessage = _browsers.Open(_pill.Activity.Account, row.Item.Url);
+    }
+
+    /// <summary>Opens the repository's main page and keeps the panel open; a browser that cannot open it says why in the panel.</summary>
+    [RelayCommand]
+    private void OpenRepository()
+    {
+        OpenMessage = _browsers.Open(_pill.Activity.Account, _pill.Activity.Repo.Url);
     }
 
     /// <summary>The row's address on the clipboard; opens nothing.</summary>

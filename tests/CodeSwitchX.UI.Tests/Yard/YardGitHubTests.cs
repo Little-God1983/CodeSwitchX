@@ -36,6 +36,12 @@ public class YardGitHubTests : IDisposable
 
         public bool Hang { get; set; }
 
+        /// <summary>Every read comes back with no answer, as when gh is logged out or offline.</summary>
+        public bool Fail { get; set; }
+
+        /// <summary>The one repository, as gh's <c>name=</c> argument, whose reads come back with no answer.</summary>
+        public string? FailName { get; set; }
+
         /// <summary>When set, every read waits for it.</summary>
         public TaskCompletionSource? Gate { get; set; }
 
@@ -75,6 +81,11 @@ public class YardGitHubTests : IDisposable
             if (Gate is { } gate)
             {
                 await gate.Task.WaitAsync(ct);
+            }
+
+            if (Fail || arguments.Contains(FailName))
+            {
+                return null;
             }
 
             return "{\"data\":{\"repository\":{\"viewerPermission\":\"ADMIN\","
@@ -333,6 +344,201 @@ public class YardGitHubTests : IDisposable
         _bus.Publish(new WorkspaceRegistered(later));
 
         await Eventually(() => yard.FindTile(later.Id)?.GitLines[0].Issues is not null);
+    }
+
+    /// <summary>A Yard whose one tile has its first pills and no read still running.</summary>
+    private async Task<(YardViewModel Yard, Workspace App)> SettledYard(bool withGitHub = true)
+    {
+        var app = Add("App", Repo("app"));
+        var yard = Yard(withGitHub, app);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Branch is not null);
+        if (withGitHub)
+        {
+            await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null);
+            await Quiet();
+        }
+
+        return (yard, app);
+    }
+
+    private void GitSaysOneFileChanged() =>
+        _gitRunner = args => args.StartsWith("status", StringComparison.Ordinal) ? " M a.txt\n" : string.Empty;
+
+    [Fact]
+    public async Task Refresh_reads_the_git_info_and_the_pills_without_waiting_for_the_timers()
+    {
+        var (yard, app) = await SettledYard();
+        _gh.Issues = 5;
+        GitSaysOneFileChanged();
+
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+        line.DirtyCount.ShouldBe(1);
+        line.Issues!.Count.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task Refresh_reads_the_git_info_when_there_is_no_github_side()
+    {
+        var (yard, app) = await SettledYard(withGitHub: false);
+        GitSaysOneFileChanged();
+
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        yard.FindTile(app.Id)!.GitLines[0].DirtyCount.ShouldBe(1);
+        yard.RefreshMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task While_a_refresh_runs_the_button_says_so_and_a_second_press_reads_nothing_more()
+    {
+        var (yard, _) = await SettledYard();
+        var before = _gh.Reads;
+        _gh.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        yard.RefreshButtonText.ShouldBe("Refresh");
+
+        var running = yard.RefreshCommand.ExecuteAsync(null);
+        await Eventually(() => _gh.Reads == before + 1);
+
+        yard.RefreshButtonText.ShouldBe("Refreshing…");
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        _gh.Gate.SetResult();
+        await running;
+        await Quiet();
+
+        _gh.Reads.ShouldBe(before + 1, "the second press was ignored");
+        yard.RefreshButtonText.ShouldBe("Refresh");
+    }
+
+    [Fact]
+    public async Task A_refresh_keeps_the_button_enabled_so_the_keyboard_stays_on_it()
+    {
+        var (yard, _) = await SettledYard();
+        _gh.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var before = _gh.Reads;
+
+        var running = yard.RefreshCommand.ExecuteAsync(null);
+        await Eventually(() => _gh.Reads == before + 1);
+
+        // A button WPF disables while it has the keyboard drops it to the window.
+        yard.RefreshCommand.CanExecute(null).ShouldBeTrue();
+
+        _gh.Gate.SetResult();
+        await running;
+    }
+
+    [Fact]
+    public async Task A_refresh_gh_cannot_answer_says_where_to_look_and_keeps_the_last_counts()
+    {
+        var (yard, app) = await SettledYard();
+        _gh.Fail = true;
+
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        yard.RefreshMessage.ShouldBe("Couldn't read GitHub. Check gh in Settings, GitHub. Any pills show what was last read.");
+        yard.FindTile(app.Id)!.GitLines[0].Issues!.Count.ShouldBe(2);
+    }
+
+    /// <summary>A Yard of two tiles with their first pills; the second repository's reads can be made to fail.</summary>
+    private async Task<YardViewModel> SettledYardOfTwo()
+    {
+        var app = Add("App", Repo("app"));
+        var lib = Add("Lib", Repo("lib"));
+        var yard = Yard(true, app, lib);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues is not null && yard.FindTile(lib.Id)!.GitLines[0].Issues is not null);
+        await Quiet();
+        return yard;
+    }
+
+    [Fact]
+    public async Task A_refresh_with_one_unread_repository_says_how_many_and_updates_the_others()
+    {
+        var yard = await SettledYardOfTwo();
+        var app = yard.Tiles.Single(t => t.RootPath.EndsWith("app", StringComparison.Ordinal));
+        _gh.FailName = "name=lib";
+        _gh.Issues = 5;
+
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        yard.RefreshMessage.ShouldBe("Couldn't read 1 of 2 repositories. Any pills show what was last read.");
+        app.GitLines[0].Issues!.Count.ShouldBe(5);
+    }
+
+    [Fact]
+    public async Task A_line_put_away_stays_away_through_timed_rounds_that_fail()
+    {
+        var (yard, _) = await SettledYard();
+        _gh.Fail = true;
+        await yard.RefreshCommand.ExecuteAsync(null);
+        yard.DismissRefreshMessageCommand.Execute(null);
+        var before = _gh.Reads;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+        await Eventually(() => _gh.Reads > before);
+        await Quiet();
+
+        yard.RefreshMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_timed_round_brings_a_line_already_shown_up_to_date()
+    {
+        var yard = await SettledYardOfTwo();
+        _gh.Fail = true;
+        await yard.RefreshCommand.ExecuteAsync(null);
+        yard.RefreshMessage.ShouldStartWith("Couldn't read GitHub.");
+        _gh.Fail = false;
+        _gh.FailName = "name=lib";
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+
+        await Eventually(() => yard.RefreshMessage == "Couldn't read 1 of 2 repositories. Any pills show what was last read.");
+    }
+
+    [Fact]
+    public async Task A_refresh_that_reads_takes_the_failure_line_away()
+    {
+        var (yard, _) = await SettledYard();
+        _gh.Fail = true;
+        await yard.RefreshCommand.ExecuteAsync(null);
+        yard.RefreshMessage.ShouldNotBeNull();
+        _gh.Fail = false;
+
+        await yard.RefreshCommand.ExecuteAsync(null);
+
+        yard.RefreshMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_timed_round_that_fails_shows_no_failure_line()
+    {
+        var (yard, _) = await SettledYard();
+        var before = _gh.Reads;
+        _gh.Fail = true;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+        await Eventually(() => _gh.Reads > before);
+        await Quiet();
+
+        yard.RefreshMessage.ShouldBeNull("nobody pressed anything");
+    }
+
+    [Fact]
+    public async Task A_timed_round_that_reads_takes_the_failure_line_away()
+    {
+        var (yard, _) = await SettledYard();
+        _gh.Fail = true;
+        await yard.RefreshCommand.ExecuteAsync(null);
+        yard.RefreshMessage.ShouldNotBeNull();
+        _gh.Fail = false;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+
+        await Eventually(() => yard.RefreshMessage is null);
     }
 
     [Fact]

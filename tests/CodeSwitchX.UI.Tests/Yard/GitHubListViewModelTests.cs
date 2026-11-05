@@ -189,6 +189,53 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task Clicking_the_heading_opens_the_repository_and_keeps_the_panel_open()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var heading = Descendants(Panel(list)).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Open acme/app on GitHub");
+
+            heading.Command.Execute(heading.CommandParameter);
+        });
+
+        _started.ShouldHaveSingleItem().FileName.ShouldBe("https://github.com/acme/app");
+        list.OpenMessage.ShouldBeNull();
+        _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_browser_that_cannot_open_the_repository_shows_its_line_in_the_panel()
+    {
+        var (activity, pill) = await PillAsync();
+        var browsers = Browsers();
+        browsers.SetChoice("me", "firefox|alpha");
+        _start = _ => false;
+        var list = List(activity, pill, browsers);
+
+        list.OpenRepositoryCommand.Execute(null);
+
+        list.OpenMessage.ShouldBe("Couldn't open Firefox (alpha). Pick another browser in Settings, GitHub.");
+        _closedLists.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_close_button_stays_the_panel_s_first_stop()
+    {
+        var (activity, pill) = await PillAsync();
+        var list = List(activity, pill);
+
+        await StaThread.RunAsync(() =>
+        {
+            var first = TabStops(Panel(list))[0].ShouldBeOfType<Button>();
+
+            AutomationProperties.GetName(first).ShouldBe("Close the list");
+        });
+    }
+
+    [Fact]
     public async Task A_browser_that_cannot_open_shows_its_line_in_the_panel()
     {
         var (activity, pill) = await PillAsync();
@@ -482,6 +529,185 @@ public class GitHubListViewModelTests
         ((string?)panel.Attribute("KeyboardNavigation.DirectionalNavigation")).ShouldBe("Cycle");
     }
 
+    [Fact]
+    public async Task The_top_bar_has_the_refresh_button_and_shows_the_failure_line_only_while_there_is_one()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+
+            var refresh = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Refresh"));
+            refresh.Command.ShouldBeSameAs(yard.RefreshCommand);
+            const string Line = "Couldn't read GitHub.";
+            bar.UpdateLayout();
+            Descendants(bar).OfType<TextBlock>().ShouldNotContain(t => t.Text == Line);
+
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            Descendants(bar).OfType<TextBlock>().Single(t => t.Text == Line).Visibility.ShouldBe(Visibility.Visible);
+        });
+    }
+
+    [Fact]
+    public async Task A_click_on_the_failure_line_puts_it_away_and_reaches_nothing_under_it()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            const string Line = "Couldn't read GitHub.";
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            var line = Descendants(bar).OfType<Button>().Single(b => AutomationProperties.GetName(b) == Line);
+            line.IsHitTestVisible.ShouldBeTrue("a click through it would land on a tile it hides");
+            line.Command.Execute(line.CommandParameter);
+
+            yard.RefreshMessage.ShouldBeNull();
+        });
+    }
+
+    [Fact]
+    public async Task The_failure_line_never_takes_the_keyboard()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            const string Line = "Couldn't read GitHub.";
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            // It collapses when clicked: with the keyboard on it, the keyboard would fall to the window. And it comes first in the bar's markup, so it would be the first Tab stop.
+            TabStops(bar).ShouldNotContain(stop => AutomationProperties.GetName(stop) == Line);
+        });
+    }
+
+    [Fact]
+    public async Task A_wrapped_bar_keeps_each_size_control_together()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            for (var width = 300; width <= 900; width += 20)
+            {
+                var bar = TopBar(NewYard(activity), width);
+                var texts = Descendants(bar).OfType<TextBlock>().ToList();
+                var percents = texts.Where(t => t.Text.Contains('%', StringComparison.Ordinal)).ToList();
+                foreach (var (name, percent) in new[] { ("Tile size", percents[0]), ("Font size", percents[1]) })
+                {
+                    var label = texts.Single(t => t.Text == name);
+                    var slider = Descendants(bar).OfType<Slider>().Single(s => AutomationProperties.GetName(s) == name);
+
+                    double Middle(FrameworkElement e) => e.TranslatePoint(new Point(0, e.ActualHeight / 2), bar).Y;
+                    Middle(label).ShouldBe(Middle(slider), 1, $"{name}: its label beside its slider at width {width}");
+                    Middle(percent).ShouldBe(Middle(slider), 1, $"{name}: its percentage beside its slider at width {width}");
+                }
+            }
+        });
+    }
+
+    [Fact]
+    public async Task The_failure_line_has_room_when_the_controls_fill_the_bar()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard, width: 1000);
+            const string Line = "Couldn't read GitHub. The pills show what was last read.";
+
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            // The sentence runs to well over 300 units at the bar's font; the controls beside it leave less than 100.
+            Descendants(bar).OfType<TextBlock>().Single(t => t.Text == Line).ActualWidth.ShouldBeGreaterThan(250);
+        });
+    }
+
+    [Fact]
+    public async Task A_failure_line_that_comes_late_does_not_move_the_board()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            var border = bar.Children.OfType<Border>().Single();
+            var height = border.DesiredSize.Height;
+            height.ShouldBeGreaterThan(0);
+
+            yard.RefreshMessage = "Couldn't read GitHub.";
+            bar.UpdateLayout();
+
+            border.DesiredSize.Height.ShouldBe(height, "the board sits under the bar, so any change moves every tile");
+        });
+    }
+
+    [Theory]
+    [InlineData(900)] // the window's MinWidth
+    [InlineData(700)]
+    public async Task A_bar_too_narrow_for_one_row_keeps_the_title_and_every_control_in_view(double width)
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var bar = TopBar(NewYard(activity), width);
+            var settings = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Settings"));
+            var title = Descendants(bar).OfType<TextBlock>().Single(t => t.Text == "Yard");
+
+            settings.TranslatePoint(new Point(settings.ActualWidth, 0), bar).X.ShouldBeLessThanOrEqualTo(width);
+            title.RenderSize.Width.ShouldBe(title.DesiredSize.Width, 0.5, "the title is not cut");
+        });
+    }
+
+    [Fact]
+    public async Task The_refresh_button_looks_off_while_it_runs()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            var refresh = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Refresh"));
+            refresh.Opacity.ShouldBe(1);
+
+            yard.IsRefreshing = true;
+
+            refresh.Opacity.ShouldBeLessThan(1);
+        });
+    }
+
+    /// <summary>The Yard's top bar as it shows it: its markup from the file, on the application's resources.</summary>
+    private static Grid TopBar(YardViewModel yard, double width = 1600)
+    {
+        var root = YardViewXaml();
+        var markup = new XElement(root.Elements(Wpf + "Grid").Single().Elements(Wpf + "DockPanel").Single().Elements(Wpf + "Border").First());
+        var grid = new XElement(Wpf + "Grid", root.Attributes().Where(a => a.IsNamespaceDeclaration),
+            new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
+        var bar = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
+        bar.DataContext = yard;
+        bar.Width = width;
+        bar.Height = 120;
+        bar.Measure(new Size(width, 120));
+        bar.Arrange(new Rect(0, 0, width, 120));
+        bar.UpdateLayout();
+        return bar;
+    }
+
     /// <summary>
     /// The list panel as the Yard shows it: its markup from the file, on the application's resources, with the list as the context
     /// of the Yard.
@@ -540,8 +766,8 @@ public class GitHubListViewModelTests
         {
             var stops = TabStops(Panel(list).Children.OfType<Border>().Single());
 
-            // the close button, copy all, then one button a row
-            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button"]);
+            // the close button, the heading, copy all, then one button a row
+            stops.Select(s => s.GetType().Name).ShouldBe(["Button", "Button", "Button", "Button", "Button", "Button"]);
         });
     }
 

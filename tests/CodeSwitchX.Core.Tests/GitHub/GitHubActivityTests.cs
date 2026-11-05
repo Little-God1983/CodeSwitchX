@@ -17,6 +17,9 @@ public class GitHubActivityTests
 
         public bool Fail { get; set; }
 
+        /// <summary>The one repository, by name, whose reads come back with no answer.</summary>
+        public string? FailOn { get; set; }
+
         public string? HangOn { get; set; }
 
         public int Issues { get; set; } = 3;
@@ -72,7 +75,8 @@ public class GitHubActivityTests
                     await Task.Delay(Delay, ct);
                 }
 
-                return AnswerOf?.Invoke(login) ?? new GhAnswer(Fail ? null : Graphql(Issues));
+                var fails = Fail || (FailOn is not null && slug.EndsWith("name=" + FailOn, StringComparison.Ordinal));
+                return AnswerOf?.Invoke(login) ?? new GhAnswer(fails ? null : Graphql(Issues));
             }
             finally
             {
@@ -129,6 +133,45 @@ public class GitHubActivityTests
     private static readonly string[] ThreeFolders = [@"c:\r\one", @"c:\r\two", @"c:\r\three"];
 
     private static GitHubItem Item(int number) => new(number, "t" + number, "https://github.com/acme/tool/issues/" + number, DateTimeOffset.UnixEpoch, []);
+
+    [Fact]
+    public async Task A_round_that_read_every_repository_counts_none_unread()
+    {
+        var round = await Activity(new FakeGh()).RefreshAsync(ThreeFolders, CancellationToken.None);
+
+        round.ShouldBe(new GitHubRoundResult(3, 0));
+    }
+
+    [Fact]
+    public async Task A_round_counts_the_one_repository_it_could_not_read()
+    {
+        var round = await Activity(new FakeGh { FailOn = "two" }).RefreshAsync(ThreeFolders, CancellationToken.None);
+
+        round.ShouldBe(new GitHubRoundResult(3, 1));
+    }
+
+    [Fact]
+    public async Task A_round_whose_accounts_could_not_be_read_counts_every_repository_unread()
+    {
+        (await Activity(new FakeGh { AccountsNull = true }).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBe(new GitHubRoundResult(3, 3));
+        (await Activity(new FakeGh { AccountsThrow = true }).RefreshAsync(ThreeFolders, CancellationToken.None)).ShouldBe(new GitHubRoundResult(3, 3));
+    }
+
+    [Fact]
+    public async Task A_repository_nobody_can_see_is_not_unread()
+    {
+        var gh = new FakeGh { AnswerOf = _ => new GhAnswer(null, NotFound) };
+
+        (await Activity(gh).RefreshAsync(ThreeFolders, CancellationToken.None)).Unread.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_folder_git_could_not_answer_for_is_not_unread()
+    {
+        var round = await Activity(new FakeGh(), _ => OriginLookup.Failure).RefreshAsync(ThreeFolders, CancellationToken.None);
+
+        round.Unread.ShouldBe(0, "that is git's answer, and GitHub was not asked");
+    }
 
     [Fact]
     public async Task Two_folders_in_one_repo_make_one_read()
