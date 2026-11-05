@@ -552,8 +552,27 @@ public class GitHubListViewModelTests
         });
     }
 
+    [Fact]
+    public async Task The_failure_line_has_room_when_the_controls_fill_the_bar()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard, width: 1000);
+            const string Line = "Couldn't read GitHub. The pills show what was last read.";
+
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            // The sentence runs to well over 300 units at the bar's font; the controls beside it leave less than 100.
+            Descendants(bar).OfType<TextBlock>().Single(t => t.Text == Line).ActualWidth.ShouldBeGreaterThan(250);
+        });
+    }
+
     /// <summary>The Yard's top bar as it shows it: its markup from the file, on the application's resources.</summary>
-    private static Grid TopBar(YardViewModel yard)
+    private static Grid TopBar(YardViewModel yard, double width = 1600)
     {
         var root = YardViewXaml();
         var markup = new XElement(root.Elements(Wpf + "Grid").Single().Elements(Wpf + "DockPanel").Single().Elements(Wpf + "Border").First());
@@ -561,8 +580,10 @@ public class GitHubListViewModelTests
             new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), markup);
         var bar = (Grid)XamlReader.Parse(GitPillsXamlTests.AssemblyQualified(grid.ToString()));
         bar.DataContext = yard;
-        bar.Measure(new Size(1600, 80));
-        bar.Arrange(new Rect(0, 0, 1600, 80));
+        bar.Width = width;
+        bar.Height = 120;
+        bar.Measure(new Size(width, 120));
+        bar.Arrange(new Rect(0, 0, width, 120));
         bar.UpdateLayout();
         return bar;
     }

@@ -259,6 +259,9 @@
     <DockPanel>
       <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
         <DockPanel>
+          <!-- A row of its own under the controls, first so it takes the whole width: beside them, a window that is not maximized leaves it no room. -->
+          <TextBlock DockPanel.Dock="Bottom" Text="{Binding RefreshMessage}" Foreground="#F59E0B" Margin="0,6,0,0" HorizontalAlignment="Right" TextWrapping="Wrap"
+                     Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
             <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
             <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
@@ -283,9 +286,6 @@
           <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
           <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
                      Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
-          <!-- In the free space beside the controls: it takes no room from them, so none moves when it comes and goes. -->
-          <TextBlock Text="{Binding RefreshMessage}" ToolTip="{Binding RefreshMessage}" Foreground="#F59E0B" Margin="16,0,16,0" VerticalAlignment="Center" HorizontalAlignment="Right"
-                     TextTrimming="CharacterEllipsis" Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
         </DockPanel>
       </Border>
       <!-- The tiles keep their places while the pointer is over the board (#276): none slides under a click. -->
