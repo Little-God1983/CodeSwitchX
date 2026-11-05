@@ -795,26 +795,38 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The line's folder is in a repository of its own, whatever its branch: a git above the user profile is not this folder's repository, and its origin is not the folder's.</summary>
     private static bool HasRepository(GitLine line) => line.IsRepository;
 
-    /// <summary>Called on the UI thread, which owns the tiles. Only a round the button asked for says it failed; any round that reads takes that line away.</summary>
+    /// <summary>
+    /// Called on the UI thread, which owns the tiles. Only a round the button asked for starts the failure line; once it shows, every round
+    /// brings it up to date, so it says what the last round found and goes when nothing is left unread.
+    /// </summary>
     private async Task RefreshGitHubOfAllTilesAsync(bool pressed)
     {
-        var read = await RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList()).ConfigureAwait(false);
+        var round = await RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList()).ConfigureAwait(false);
         _ui.Post(() =>
         {
-            if (read)
+            if (pressed || RefreshMessage is not null)
             {
-                RefreshMessage = null;
-            }
-            else if (pressed)
-            {
-                RefreshMessage = "Couldn't read GitHub. The pills show what was last read.";
+                RefreshMessage = FailureLine(round);
             }
         });
     }
 
+    /// <summary>One repository that cannot be read is no failure of GitHub, and "any pills": a gh that never answered has read none.</summary>
+    private static string? FailureLine(GitHubRoundResult round)
+    {
+        if (round.Unread == 0)
+        {
+            return null;
+        }
+
+        return round.Unread == round.Repositories
+            ? "Couldn't read GitHub. Check gh in Settings, GitHub. Any pills show what was last read."
+            : $"Couldn't read {round.Unread} of {round.Repositories} repositories. Any pills show what was last read.";
+    }
+
     /// <summary>Off the caller's thread from the start: up to its first await a round starts one git per folder, and starting one for a folder on an offline share blocks for about 20 s.</summary>
-    /// <returns>Whether GitHub answered for every repository; true when the Yard closed first, since there is then nothing to say.</returns>
-    private Task<bool> RefreshGitHubAsync(IReadOnlyCollection<string> folders, object? asked = null) => Task.Run(async () =>
+    /// <returns>What the round came to; nothing unread when the Yard closed first, since there is then nothing to say, and everything unread when the round ended early.</returns>
+    private Task<GitHubRoundResult> RefreshGitHubAsync(IReadOnlyCollection<string> folders, object? asked = null) => Task.Run(async () =>
     {
         try
         {
@@ -823,13 +835,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException)
         {
             // The Yard is closing.
-            return true;
+            return default;
         }
         catch (Exception ex)
         {
             // The type and the stack, never the message: it could carry a title, a label or a repository name.
             _logger.LogWarning("The GitHub refresh round ended early: {Failure}", FailureText.Of(ex));
-            return false;
+            return new GitHubRoundResult(1, 1);
         }
         finally
         {
@@ -1003,11 +1015,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// The button on the Yard's top bar (#382): the git info of every tile, then the GitHub pills of the lines that gives, without waiting
-    /// for the timers, which keep running. The command is off until this ends, so a second press starts nothing.
+    /// for the timers, which keep running. A second press while this runs starts nothing. The command stays enabled for it: WPF would drop
+    /// the keyboard to the window from a button it disables while focused, and it would not come back.
     /// </summary>
-    [RelayCommand]
+    [RelayCommand(AllowConcurrentExecutions = true)]
     private async Task Refresh()
     {
+        if (IsRefreshing)
+        {
+            return;
+        }
+
         IsRefreshing = true;
         try
         {

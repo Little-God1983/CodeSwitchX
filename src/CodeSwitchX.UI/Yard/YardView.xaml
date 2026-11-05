@@ -257,12 +257,19 @@
 
   <Grid>
     <DockPanel>
-      <Border DockPanel.Dock="Top" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
+      <Border DockPanel.Dock="Top" Panel.ZIndex="1" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
         <DockPanel>
-          <!-- A row of its own under the controls, first so it takes the whole width: beside them, a window that is not maximized leaves it no room. -->
-          <TextBlock DockPanel.Dock="Bottom" Text="{Binding RefreshMessage}" Foreground="#F59E0B" Margin="0,6,0,0" HorizontalAlignment="Right" TextWrapping="Wrap"
-                     Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
-          <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+          <!-- Laid over the board's top edge. Beside the controls a window that is not maximized leaves it no room, and as a row of its own it would move every tile
+               when a late failure arrives (#276). The canvas has no height, clicks go through it, and the bar's ZIndex draws it above the board. -->
+          <Canvas DockPanel.Dock="Bottom" Height="0" IsHitTestVisible="False">
+            <TextBlock Canvas.Right="0" Canvas.Top="12" Text="{Binding RefreshMessage}" Foreground="#F59E0B" Background="#262626" Padding="8,4" TextWrapping="Wrap"
+                       MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
+                       Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
+          </Canvas>
+          <!-- Before the controls, so it keeps its width when they run out of room. -->
+          <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <!-- One row while they fit; in a narrower window they wrap, and none is cut off. -->
+          <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
             <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
             <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
             <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
@@ -277,13 +284,22 @@
             <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
                        Margin="0,0,16,0" />
             <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
-            <!-- Wide enough for "Refreshing…", so the bar does not move when the text changes. -->
+            <!-- Wide enough for "Refreshing…", so the bar does not move when the text changes. It only looks off while it runs: a button WPF disables loses the keyboard. -->
             <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}" MinWidth="104" Margin="0,0,8,0"
-                    ToolTip="Reads the git info and the GitHub issues and pull requests of every tile now" />
+                    ToolTip="Reads the git info and the GitHub issues and pull requests of every tile now">
+              <Button.Style>
+                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsRefreshing}" Value="True">
+                      <Setter Property="Opacity" Value="0.5" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Button.Style>
+            </Button>
             <Button Content="Add workspace" Command="{Binding AddWorkspaceCommand}" Margin="0,0,8,0" />
             <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
-          </StackPanel>
-          <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          </WrapPanel>
           <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
                      Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
         </DockPanel>

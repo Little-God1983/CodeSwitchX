@@ -3,6 +3,12 @@ using Microsoft.Extensions.Logging;
 namespace CodeSwitchX.Core.GitHub;
 
 /// <summary>
+/// What a round came to: how many repositories it went for and how many of them GitHub gave no answer on. "No account can see it" is an answer,
+/// and a folder git could not tell the origin of never reached GitHub, so neither counts as unread.
+/// </summary>
+public readonly record struct GitHubRoundResult(int Repositories, int Unread);
+
+/// <summary>
 /// The open issues and pull requests of the repositories the Yard's folders belong to, in memory only. A round reads the
 /// accounts once and each repository once however many folders share it, four at a time; a read that fails keeps the last
 /// result, one every account answers with "not found" drops it, and a result that did not change keeps its instance, so the
@@ -75,11 +81,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
     }
 
     /// <summary>Works out the repository of each folder, reads each repository once and raises <see cref="Changed"/> once at the end if a result differs.</summary>
-    /// <returns>
-    /// Whether GitHub answered for every repository: false when the accounts or a repository could not be read. "No account can see it" is an answer,
-    /// and a folder git could not tell the origin of never reached GitHub, so neither makes it false.
-    /// </returns>
-    public async Task<bool> RefreshAsync(IReadOnlyCollection<string> folders, CancellationToken ct)
+    public async Task<GitHubRoundResult> RefreshAsync(IReadOnlyCollection<string> folders, CancellationToken ct)
     {
         await _round.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -106,7 +108,7 @@ public sealed class GitHubActivity(IGhCli gh, GitHubReader reader, Func<string, 
                 Changed?.Invoke(this, EventArgs.Empty);
             }
 
-            return accounts is not null && reads.All(r => r.Failure is null);
+            return new GitHubRoundResult(repos.Count, accounts is null ? repos.Count : reads.Count(r => r.Failure is not null));
         }
         finally
         {

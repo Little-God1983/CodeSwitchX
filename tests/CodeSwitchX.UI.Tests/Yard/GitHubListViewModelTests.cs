@@ -571,6 +571,62 @@ public class GitHubListViewModelTests
         });
     }
 
+    [Fact]
+    public async Task A_failure_line_that_comes_late_does_not_move_the_board()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            var border = bar.Children.OfType<Border>().Single();
+            var height = border.DesiredSize.Height;
+            height.ShouldBeGreaterThan(0);
+
+            yard.RefreshMessage = "Couldn't read GitHub.";
+            bar.UpdateLayout();
+
+            border.DesiredSize.Height.ShouldBe(height, "the board sits under the bar, so any change moves every tile");
+        });
+    }
+
+    [Theory]
+    [InlineData(900)] // the window's MinWidth
+    [InlineData(700)]
+    public async Task A_bar_too_narrow_for_one_row_keeps_the_title_and_every_control_in_view(double width)
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var bar = TopBar(NewYard(activity), width);
+            var settings = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Settings"));
+            var title = Descendants(bar).OfType<TextBlock>().Single(t => t.Text == "Yard");
+
+            settings.TranslatePoint(new Point(settings.ActualWidth, 0), bar).X.ShouldBeLessThanOrEqualTo(width);
+            title.RenderSize.Width.ShouldBe(title.DesiredSize.Width, 0.5, "the title is not cut");
+        });
+    }
+
+    [Fact]
+    public async Task The_refresh_button_looks_off_while_it_runs()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            var refresh = Descendants(bar).OfType<Button>().Single(b => Equals(b.Content, "Refresh"));
+            refresh.Opacity.ShouldBe(1);
+
+            yard.IsRefreshing = true;
+
+            refresh.Opacity.ShouldBeLessThan(1);
+        });
+    }
+
     /// <summary>The Yard's top bar as it shows it: its markup from the file, on the application's resources.</summary>
     private static Grid TopBar(YardViewModel yard, double width = 1600)
     {
