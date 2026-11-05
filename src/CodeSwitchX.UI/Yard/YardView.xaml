@@ -260,29 +260,43 @@
       <Border DockPanel.Dock="Top" Panel.ZIndex="1" Padding="12,8" BorderThickness="0,0,0,1" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}">
         <DockPanel>
           <!-- Laid over the board's top edge. Beside the controls a window that is not maximized leaves it no room, and as a row of its own it would move every tile
-               when a late failure arrives (#276). The canvas has no height, clicks go through it, and the bar's ZIndex draws it above the board. -->
-          <Canvas DockPanel.Dock="Bottom" Height="0" IsHitTestVisible="False">
-            <TextBlock Canvas.Right="0" Canvas.Top="12" Text="{Binding RefreshMessage}" Foreground="#F59E0B" Background="#262626" Padding="8,4" TextWrapping="Wrap"
-                       MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
-                       Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}" />
+               when a late failure arrives (#276). The canvas has no height, and the bar's ZIndex draws it above the board. It covers what is under it,
+               so a click puts it away instead of reaching a tile it hides; one repository that always fails would otherwise keep it there for good. -->
+          <Canvas DockPanel.Dock="Bottom" Height="0">
+            <Button Canvas.Right="0" Canvas.Top="12" Command="{Binding DismissRefreshMessageCommand}" Cursor="Hand" ToolTip="Click to put this away"
+                    AutomationProperties.Name="{Binding RefreshMessage}" MaxWidth="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=Canvas}}"
+                    Visibility="{Binding RefreshMessage, Converter={StaticResource NullToCollapsed}}">
+              <Button.Template>
+                <ControlTemplate TargetType="Button">
+                  <Border Background="#262626" Padding="8,4" CornerRadius="4">
+                    <ContentPresenter />
+                  </Border>
+                </ControlTemplate>
+              </Button.Template>
+              <TextBlock Text="{Binding RefreshMessage}" Foreground="#F59E0B" TextWrapping="Wrap" />
+            </Button>
           </Canvas>
           <!-- Before the controls, so it keeps its width when they run out of room. -->
           <TextBlock Text="Yard" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <!-- One row while they fit; in a narrower window they wrap, and none is cut off. -->
+          <!-- One row while they fit; in a narrower window they wrap, each label with its slider and percentage, and none is cut off. -->
           <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
-            <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
-            <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
-            <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
-                    TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Tile size"
-                    Value="{Binding TileScale}" />
-            <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
-                       Margin="0,0,16,0" />
-            <TextBlock Text="Font size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
-            <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinFontScale}" Maximum="{x:Static yard:YardViewModel.MaxFontScale}"
-                    TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Font size"
-                    Value="{Binding FontScale}" />
-            <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
-                       Margin="0,0,16,0" />
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="Tile size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+              <!-- 5% a tick, an arrow key or a snap; a quarter a page or a click on the track -->
+              <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinTileScale}" Maximum="{x:Static yard:YardViewModel.MaxTileScale}"
+                      TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Tile size"
+                      Value="{Binding TileScale}" />
+              <TextBlock Text="{Binding TileScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                         Margin="0,0,16,0" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="Font size" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,8,0" />
+              <Slider Width="120" VerticalAlignment="Center" Minimum="{x:Static yard:YardViewModel.MinFontScale}" Maximum="{x:Static yard:YardViewModel.MaxFontScale}"
+                      TickFrequency="0.05" SmallChange="0.05" LargeChange="0.25" IsSnapToTickEnabled="True" AutomationProperties.Name="Font size"
+                      Value="{Binding FontScale}" />
+              <TextBlock Text="{Binding FontScale, StringFormat={}{0:P0}}" VerticalAlignment="Center" MinWidth="40" TextAlignment="Right" Opacity="0.7"
+                         Margin="0,0,16,0" />
+            </StackPanel>
             <CheckBox Content="Needs me first" IsChecked="{Binding NeedsMeFirst}" VerticalAlignment="Center" Margin="0,0,16,0" />
             <!-- Wide enough for "Refreshing…", so the bar does not move when the text changes. It only looks off while it runs: a button WPF disables loses the keyboard. -->
             <Button Content="{Binding RefreshButtonText}" Command="{Binding RefreshCommand}" MinWidth="104" Margin="0,0,8,0"
@@ -301,6 +315,7 @@
             <Button Content="Settings" Command="{Binding DataContext.OpenSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}" />
           </WrapPanel>
           <TextBlock Margin="16,0,0,0" VerticalAlignment="Center" Foreground="#F59E0B" Text="Hooks not installed — states are inferred from transcripts"
+                     TextTrimming="CharacterEllipsis" ToolTip="Hooks not installed — states are inferred from transcripts"
                      Visibility="{Binding HooksInferredOnly, Converter={StaticResource BoolVisible}}" />
         </DockPanel>
       </Border>

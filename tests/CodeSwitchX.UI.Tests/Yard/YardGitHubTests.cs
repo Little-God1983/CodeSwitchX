@@ -469,6 +469,22 @@ public class YardGitHubTests : IDisposable
     }
 
     [Fact]
+    public async Task A_line_put_away_stays_away_through_timed_rounds_that_fail()
+    {
+        var (yard, _) = await SettledYard();
+        _gh.Fail = true;
+        await yard.RefreshCommand.ExecuteAsync(null);
+        yard.DismissRefreshMessageCommand.Execute(null);
+        var before = _gh.Reads;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+        await Eventually(() => _gh.Reads > before);
+        await Quiet();
+
+        yard.RefreshMessage.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task A_timed_round_brings_a_line_already_shown_up_to_date()
     {
         var yard = await SettledYardOfTwo();

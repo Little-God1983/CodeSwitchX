@@ -52,7 +52,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     public string? LoadingMessage => IsLoading ? "Loading the full list..." : null;
 
-    /// <summary>Why the browser could not open a row, or none; a row that opens clears it.</summary>
+    /// <summary>Why the browser could not open a row or the repository, or none; either one that opens clears it.</summary>
     [ObservableProperty] private string? _openMessage;
 
     /// <summary>What the last copy did, for a moment. It has a place of its own in the header, so the rows do not move under the pointer.</summary>

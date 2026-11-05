@@ -811,6 +811,10 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         });
     }
 
+    /// <summary>A click on the failure line puts it away; only another press can bring it back.</summary>
+    [RelayCommand]
+    private void DismissRefreshMessage() => RefreshMessage = null;
+
     /// <summary>One repository that cannot be read is no failure of GitHub, and "any pills": a gh that never answered has read none.</summary>
     private static string? FailureLine(GitHubRoundResult round)
     {
@@ -1010,7 +1014,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     public string RefreshButtonText => IsRefreshing ? "Refreshing…" : "Refresh";
 
-    /// <summary>Says GitHub could not be read when the button asked; the next round that reads takes it away, the button's or the timer's.</summary>
+    /// <summary>Says what could not be read when the button asked. A round that reads everything takes it away, the button's or the timer's, and so does a click on it.</summary>
     [ObservableProperty] private string? _refreshMessage;
 
     /// <summary>

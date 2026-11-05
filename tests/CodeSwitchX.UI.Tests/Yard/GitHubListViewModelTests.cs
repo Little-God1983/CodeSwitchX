@@ -553,6 +553,52 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public async Task A_click_on_the_failure_line_puts_it_away_and_reaches_nothing_under_it()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            var yard = NewYard(activity);
+            var bar = TopBar(yard);
+            const string Line = "Couldn't read GitHub.";
+            yard.RefreshMessage = Line;
+            bar.UpdateLayout();
+
+            var line = Descendants(bar).OfType<Button>().Single(b => AutomationProperties.GetName(b) == Line);
+            line.IsHitTestVisible.ShouldBeTrue("a click through it would land on a tile it hides");
+            line.Command.Execute(line.CommandParameter);
+
+            yard.RefreshMessage.ShouldBeNull();
+        });
+    }
+
+    [Fact]
+    public async Task A_wrapped_bar_keeps_each_size_control_together()
+    {
+        var (activity, _) = await PillAsync();
+
+        await StaThread.RunAsync(() =>
+        {
+            for (var width = 300; width <= 900; width += 20)
+            {
+                var bar = TopBar(NewYard(activity), width);
+                var texts = Descendants(bar).OfType<TextBlock>().ToList();
+                var percents = texts.Where(t => t.Text.Contains('%', StringComparison.Ordinal)).ToList();
+                foreach (var (name, percent) in new[] { ("Tile size", percents[0]), ("Font size", percents[1]) })
+                {
+                    var label = texts.Single(t => t.Text == name);
+                    var slider = Descendants(bar).OfType<Slider>().Single(s => AutomationProperties.GetName(s) == name);
+
+                    double Middle(FrameworkElement e) => e.TranslatePoint(new Point(0, e.ActualHeight / 2), bar).Y;
+                    Middle(label).ShouldBe(Middle(slider), 1, $"{name}: its label beside its slider at width {width}");
+                    Middle(percent).ShouldBe(Middle(slider), 1, $"{name}: its percentage beside its slider at width {width}");
+                }
+            }
+        });
+    }
+
+    [Fact]
     public async Task The_failure_line_has_room_when_the_controls_fill_the_bar()
     {
         var (activity, _) = await PillAsync();
