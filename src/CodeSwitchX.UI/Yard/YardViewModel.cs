@@ -142,6 +142,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The time the tiles go by.</summary>
     internal DateTimeOffset Now => _time.GetUtcNow();
 
+    /// <summary>What a chat row's right-click does (#386); null where the rows have no menu.</summary>
+    internal IChatRowMenu? RowMenu { get; }
+
     private void Rearrange()
     {
         var now = Now;
@@ -285,8 +288,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
-        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null)
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null)
     {
+        RowMenu = rowMenu;
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
         _gitHubBrowsers = gitHubBrowsers;

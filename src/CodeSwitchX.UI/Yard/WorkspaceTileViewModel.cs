@@ -355,7 +355,7 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
     }
 
     private ChatRowViewModel NewRow(string sessionId) =>
-        new(sessionId, id => _owner.RequestOpenChat(Id, id)) { VoiceLabel = _owner.VoiceLabelOf(sessionId) };
+        new(sessionId, id => _owner.RequestOpenChat(Id, id), _owner.RowMenu) { VoiceLabel = _owner.VoiceLabelOf(sessionId) };
 
     /// <summary>
     /// Whether the chat has a row. A chat with a tab in the workspace's VS Code window has one, whatever it said so far. One

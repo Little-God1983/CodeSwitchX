@@ -62,12 +62,87 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     private readonly Action<string>? _open;
 
+    private readonly IChatRowMenu? _menu;
+
+    /// <summary>Whether anything was ever said in the chat the engine knows (<see cref="SessionSnapshot.HeldConversation"/>): one nothing was said in has nothing to compact.</summary>
+    private bool _held;
+
+    /// <summary>Until when the chat is kept warm (#386); null for one that is not. The row shows a flame for it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsKeptWarm), nameof(KeepWarmHeader), nameof(KeptWarmTip))]
+    private DateTimeOffset? _keptWarmUntil;
+
+    /// <summary>The chat is being compacted (#386): the row says so in place of its time.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CompactNowCommand))]
+    private bool _isCompacting;
+
+    /// <summary>Why the chat cannot be kept warm, as the menu found it when it last opened; null when it can.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanKeepWarm))]
+    private string? _keepWarmBlock;
+
     /// <param name="open">Opens the chat with this session id in its workspace's VS Code (#115); null where a row opens nothing.</param>
-    public ChatRowViewModel(string sessionId, Action<string>? open = null)
+    /// <param name="menu">What the row's right-click does (#386); null where a row has no menu.</param>
+    public ChatRowViewModel(string sessionId, Action<string>? open = null, IChatRowMenu? menu = null)
     {
         SessionId = sessionId;
         _open = open;
+        _menu = menu;
     }
+
+    /// <summary>Whether a right-click on the row opens its own menu (#386).</summary>
+    public bool HasMenu => _menu is not null;
+
+    public bool IsKeptWarm => KeptWarmUntil is not null;
+
+    /// <summary>The menu's entry: "Keep warm", with the time it ends while it is on.</summary>
+    public string KeepWarmHeader => KeptWarmUntil is { } until ? $"Keep warm (until {Clock(until)})" : "Keep warm";
+
+    /// <summary>The flame's tooltip; null while the chat is not kept warm.</summary>
+    public string? KeptWarmTip => KeptWarmUntil is { } until
+        ? $"Kept warm until {Clock(until)}: a keep-alive message is sent to it before its cache runs out"
+        : null;
+
+    public bool CanKeepWarm => _menu is not null && KeepWarmBlock is null;
+
+    /// <summary>A chat something was said in, not being compacted already.</summary>
+    private bool CanCompact => _menu is not null && !IsCompacting && (_hasSession ? _held : _timed);
+
+    /// <summary>
+    /// The row's menu opens: what it offers is found out now. Whether a chat can be kept warm takes a look at Claude Code's
+    /// own records, which is not done for every row each second.
+    /// </summary>
+    public void MenuOpening()
+    {
+        KeepWarmBlock = _menu?.WhyNotKeptWarm(SessionId);
+        KeptWarmUntil = _menu?.KeptWarmUntil(SessionId);
+        CompactNowCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCompact))]
+    private Task CompactNowAsync() => _menu!.CompactAsync(SessionId);
+
+    /// <param name="hours">How long, as the menu's entry gives it: "2", "4" or "8".</param>
+    [RelayCommand]
+    private void KeepWarm(string? hours)
+    {
+        if (double.TryParse(hours, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var count) && count > 0)
+        {
+            _menu?.KeepWarm(SessionId, TimeSpan.FromHours(count));
+            KeptWarmUntil = _menu?.KeptWarmUntil(SessionId);
+        }
+    }
+
+    [RelayCommand]
+    private void StopKeepingWarm()
+    {
+        _menu?.StopKeepingWarm(SessionId);
+        KeptWarmUntil = _menu?.KeptWarmUntil(SessionId);
+    }
+
+    /// <summary>A time of day as the user reads it: "16:40".</summary>
+    private static string Clock(DateTimeOffset at) => at.ToLocalTime().ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     public string SessionId { get; }
     public bool IsLive => SessionStateMachine.IsLive(State);
@@ -96,6 +171,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
         Version = snapshot.Version;
         _hasSession = true;
+        _held = snapshot.HeldConversation;
         _ownTitle = snapshot.Title ?? _ownTitle;
         ShowTitle();
         State = snapshot.State;
@@ -157,7 +233,13 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     public void Tick(DateTimeOffset now)
     {
-        ElapsedText = _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+        if (_menu is not null)
+        {
+            KeptWarmUntil = _menu.KeptWarmUntil(SessionId);
+            IsCompacting = _menu.IsCompacting(SessionId);
+        }
+
+        ElapsedText = IsCompacting ? "compacting…" : _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
         ShowCache(now);
     }
 
@@ -172,7 +254,9 @@ public sealed partial class ChatRowViewModel : ObservableObject
             : (TimeSpan?)null;
         CacheWarmth = left is { } known ? CacheWarmthCalculator.Level(known) : CacheWarmth.Unknown;
         CacheFill = left is { } shown ? CacheWarmthCalculator.Fill(shown) : 0;
-        CacheTip = left is { } told ? FormatCacheTip(CacheWarmth, told) : null;
+        CacheTip = left is { } told
+            ? FormatCacheTip(CacheWarmth, told) + (KeptWarmUntil is { } until ? Environment.NewLine + $"Kept warm until {Clock(until)}" : "")
+            : null;
     }
 
     private static string FormatCacheTip(CacheWarmth warmth, TimeSpan left)

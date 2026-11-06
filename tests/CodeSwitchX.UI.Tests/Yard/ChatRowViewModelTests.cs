@@ -61,6 +61,185 @@ public class ChatRowViewModelTests
         row.LastTurnAt.ShouldBe(used);
     }
 
+    private static SessionSnapshot Idle(DateTimeOffset? lastRequest = null) => new()
+    {
+        SessionId = "s1", Title = "Fix build", State = SessionState.Idle, StartedAt = Now.AddHours(-2), LastEventAt = Now, StateSince = Now.AddMinutes(-5),
+        LastRequestAt = lastRequest,
+    };
+
+    private static string Clock(DateTimeOffset at) => at.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture);
+
+    /// <summary>#386: a row with no menu behind it (a test's, a preview's) offers none.</summary>
+    [Fact]
+    public void A_row_without_a_menu_offers_none()
+    {
+        var row = new ChatRowViewModel("s1");
+        row.Update(Idle(), Pricing);
+
+        row.HasMenu.ShouldBeFalse();
+        row.CompactNowCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_chat_kept_warm_says_until_when_on_its_gauge_and_in_its_menu()
+    {
+        var menu = new FakeRowMenu { Until = Now.AddHours(4) };
+        var row = new ChatRowViewModel("s1", menu: menu);
+        row.Update(Idle(Now.AddMinutes(-10)), Pricing);
+
+        row.Tick(Now);
+
+        row.IsKeptWarm.ShouldBeTrue();
+        row.KeepWarmHeader.ShouldBe($"Keep warm (until {Clock(Now.AddHours(4))})");
+        row.KeptWarmTip.ShouldBe($"Kept warm until {Clock(Now.AddHours(4))}: a keep-alive message is sent to it before its cache runs out");
+        row.CacheTip.ShouldBe($"Cache hot: 50 minutes left{Environment.NewLine}Kept warm until {Clock(Now.AddHours(4))}");
+    }
+
+    [Fact]
+    public void A_chat_not_kept_warm_shows_no_mark()
+    {
+        var row = new ChatRowViewModel("s1", menu: new FakeRowMenu());
+        row.Update(Idle(Now.AddMinutes(-10)), Pricing);
+
+        row.Tick(Now);
+
+        row.HasMenu.ShouldBeTrue();
+        row.IsKeptWarm.ShouldBeFalse();
+        row.KeepWarmHeader.ShouldBe("Keep warm");
+        row.KeptWarmTip.ShouldBeNull();
+        row.CacheTip.ShouldBe("Cache hot: 50 minutes left");
+    }
+
+    [Fact]
+    public void The_mark_goes_when_keeping_warm_ends()
+    {
+        var menu = new FakeRowMenu { Until = Now.AddHours(4) };
+        var row = new ChatRowViewModel("s1", menu: menu);
+        row.Update(Idle(Now.AddMinutes(-10)), Pricing);
+        row.Tick(Now);
+
+        menu.Until = null;
+        row.Tick(Now.AddSeconds(1));
+
+        row.IsKeptWarm.ShouldBeFalse();
+    }
+
+    [Theory]
+    [InlineData("2", 2)]
+    [InlineData("4", 4)]
+    [InlineData("8", 8)]
+    public void Keep_warm_is_asked_for_the_hours_picked(string picked, int hours)
+    {
+        var menu = new FakeRowMenu();
+        var row = new ChatRowViewModel("s1", menu: menu);
+
+        row.KeepWarmCommand.Execute(picked);
+
+        menu.Kept.ShouldBe([("s1", TimeSpan.FromHours(hours))]);
+    }
+
+    [Fact]
+    public void Stop_keeping_warm_stops_it()
+    {
+        var menu = new FakeRowMenu { Until = Now.AddHours(4) };
+        var row = new ChatRowViewModel("s1", menu: menu);
+
+        row.StopKeepingWarmCommand.Execute(null);
+
+        menu.Stopped.ShouldBe(["s1"]);
+    }
+
+    [Fact]
+    public void An_opening_menu_asks_whether_the_chat_can_be_kept_warm()
+    {
+        var menu = new FakeRowMenu { WhyNot = "Its cache is cold already." };
+        var row = new ChatRowViewModel("s1", menu: menu);
+        row.Update(Idle(Now.AddMinutes(-61)), Pricing);
+
+        row.MenuOpening();
+
+        row.CanKeepWarm.ShouldBeFalse();
+        row.KeepWarmBlock.ShouldBe("Its cache is cold already.");
+
+        menu.WhyNot = null;
+        row.MenuOpening();
+
+        row.CanKeepWarm.ShouldBeTrue();
+        row.KeepWarmBlock.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Compact_now_compacts_the_chat()
+    {
+        var menu = new FakeRowMenu();
+        var row = new ChatRowViewModel("s1", menu: menu);
+        row.Update(Idle(), Pricing);
+
+        row.CompactNowCommand.CanExecute(null).ShouldBeTrue();
+        row.CompactNowCommand.Execute(null);
+
+        menu.Compacted.ShouldBe(["s1"]);
+    }
+
+    [Fact]
+    public void A_chat_being_compacted_says_so_in_place_of_its_time_and_is_not_compacted_twice()
+    {
+        var menu = new FakeRowMenu { Compacting = true };
+        var row = new ChatRowViewModel("s1", menu: menu);
+        row.Update(Idle(), Pricing);
+
+        row.Tick(Now);
+
+        row.ElapsedText.ShouldBe("compacting…");
+        row.CompactNowCommand.CanExecute(null).ShouldBeFalse();
+
+        menu.Compacting = false;
+        row.Tick(Now);
+
+        row.ElapsedText.ShouldBe("5m");
+        row.CompactNowCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void A_tab_nothing_was_said_in_has_nothing_to_compact()
+    {
+        var row = new ChatRowViewModel("s1", menu: new FakeRowMenu());
+        row.ShowTab(new OpenChatTab("s1", "Claude Code"), notRunning: false);
+
+        row.CompactNowCommand.CanExecute(null).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void A_tab_whose_conversation_is_on_disk_can_be_compacted()
+    {
+        var row = new ChatRowViewModel("s1", menu: new FakeRowMenu());
+        row.ShowTab(new OpenChatTab("s1", "Claude Code"), notRunning: true, new TabConversation(Now.AddHours(-3), "Fix build"));
+
+        row.CompactNowCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    private sealed class FakeRowMenu : IChatRowMenu
+    {
+        public DateTimeOffset? Until { get; set; }
+        public string? WhyNot { get; set; }
+        public bool Compacting { get; set; }
+        public List<string> Compacted { get; } = [];
+        public List<(string Id, TimeSpan For)> Kept { get; } = [];
+        public List<string> Stopped { get; } = [];
+
+        public Task CompactAsync(string sessionId)
+        {
+            Compacted.Add(sessionId);
+            return Task.CompletedTask;
+        }
+
+        public bool IsCompacting(string sessionId) => Compacting;
+        public DateTimeOffset? KeptWarmUntil(string sessionId) => Until;
+        public string? WhyNotKeptWarm(string sessionId) => WhyNot;
+        public void KeepWarm(string sessionId, TimeSpan duration) => Kept.Add((sessionId, duration));
+        public void StopKeepingWarm(string sessionId) => Stopped.Add(sessionId);
+    }
+
     [Fact]
     public void A_chat_on_the_1M_context_option_measures_its_fill_against_a_million()
     {
