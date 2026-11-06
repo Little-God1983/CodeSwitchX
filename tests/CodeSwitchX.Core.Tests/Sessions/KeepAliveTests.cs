@@ -45,10 +45,13 @@ public class KeepAliveTests
         KeepAlive.IsPing(Ping()).ShouldBeTrue();
     }
 
-    [Fact]
-    public void A_ping_is_told_by_its_opening_words_however_the_sender_worded_the_rest()
+    [Theory]
+    [InlineData("Keep-alive from CodeSwitchX. Please just say ok.")]
+    [InlineData("\"Keep-alive from CodeSwitchX: reply with only ok.\"")]
+    [InlineData("Message from CodeSwitchX: keep-alive from CodeSwitchX, reply with only ok.")]
+    public void A_ping_is_told_by_its_opening_words_however_the_sender_worded_the_rest(string text)
     {
-        KeepAlive.IsPing(Ping("Keep-alive from CodeSwitchX. Please just say ok.")).ShouldBeTrue();
+        KeepAlive.IsPing(Ping(text)).ShouldBeTrue("the sender is a model told to copy the message, and may quote or preface it");
     }
 
     [Theory]

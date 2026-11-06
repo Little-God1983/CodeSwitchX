@@ -158,8 +158,9 @@ public sealed class ChatNews : IDisposable
             return null;
         }
 
-        // The app's own ping, which keeps the chat's cache warm (#386): the user asked the chat nothing. A chat that is gone is news.
-        if (change.Current.KeepAliveTurn && change.Current.State != SessionState.Errored)
+        // The app's own ping, which keeps the chat's cache warm (#386): the user asked the chat nothing, so its end is no news.
+        // A chat that stops to ask during it, or is gone, is.
+        if (change.Current.KeepAliveTurn && change.Current.State == SessionState.Idle)
         {
             return null;
         }

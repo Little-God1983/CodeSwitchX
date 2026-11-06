@@ -55,6 +55,12 @@ public sealed partial class ChatRowViewModel : ObservableObject
     /// <summary>When the chat last sent a request; null while none was seen.</summary>
     private DateTimeOffset? _lastRequestAt;
 
+    /// <summary>
+    /// What the row's time counts from (#386): a chat idle after a keep-alive ping counts from the user's last use of it, not
+    /// from the ping's end, which restarted <see cref="StateSince"/>.
+    /// </summary>
+    private DateTimeOffset _timedSince;
+
     /// <summary>For a tab alone: when its conversation was last written in. A write need not be a request, but no request is later.</summary>
     private DateTimeOffset? _writtenAt;
 
@@ -179,6 +185,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
         ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
+        _timedSince = snapshot.KeepAliveTurn && snapshot.State == SessionState.Idle ? snapshot.LastUseAt ?? snapshot.StateSince : snapshot.StateSince;
         // The app's own ping (#386) is no turn of the user's: the row stays where it was.
         LastTurnAt = snapshot.State == SessionState.Working && !snapshot.KeepAliveTurn ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
         Inferred = snapshot.Inferred;
@@ -214,6 +221,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
             _ownTitle = conversation?.Title;
             _writtenAt = conversation?.WrittenAt;
             StateSince = conversation?.WrittenAt ?? listedAt;
+            _timedSince = StateSince;
             LastTurnAt = conversation?.WrittenAt ?? DateTimeOffset.MinValue; // a list's writing is no use of the chat
             _timed = conversation is not null;
             var state = notRunning ? SessionState.Ended : waits ? SessionState.Waiting : SessionState.Idle;
@@ -242,7 +250,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
             IsCompacting = _menu.IsCompacting(SessionId);
         }
 
-        ElapsedText = IsCompacting ? "compacting…" : _hasSession || _timed ? FormatElapsed(now - StateSince) : string.Empty;
+        ElapsedText = IsCompacting ? "compacting…" : _hasSession || _timed ? FormatElapsed(now - _timedSince) : string.Empty;
         ShowCache(now);
     }
 

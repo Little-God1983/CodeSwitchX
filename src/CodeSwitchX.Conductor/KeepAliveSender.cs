@@ -36,7 +36,7 @@ public sealed class KeepAliveSender(IChatClient claude, string folder, ILogger<K
     {
         Isolation = ClaudeIsolation.UserSettingsNoHooks,
         DefaultSystemPrompt = SystemPrompt,
-        DefaultModel = "claude-haiku-5-5",
+        DefaultModel = BrainSettings.DefaultModel, // the cheapest: passing a message on needs no more
         KeepApiKeyEnvironment = true,
         PersistSessions = false,
         WallClockTimeout = Limit,
@@ -61,8 +61,10 @@ public sealed class KeepAliveSender(IChatClient claude, string folder, ILogger<K
         {
             throw;
         }
-        catch (Exception ex) when (ex is LlmException or OperationCanceledException or IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
+            // Whatever kept it from being sent (Claude Code missing, its start failing, the folder unwritable): the mark stays,
+            // and it is tried again while the cache lasts.
             logger.LogWarning(ex, "The keep-alive ping to {Name} could not be sent", sendName);
             return false;
         }

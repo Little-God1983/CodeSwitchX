@@ -26,6 +26,30 @@ public sealed class TranscriptLastReplyTests : IDisposable
         TranscriptLastReply.Read(_path).ShouldBe("The retry now backs off and the test passes.");
     }
 
+    private static string Prompt(string text) =>
+        $$$"""{"type":"user","message":{"role":"user","content":"{{{text}}}"}}""";
+
+    /// <summary>#386: the "ok" a chat answers a keep-alive ping with is not what it last said to the user.</summary>
+    [Fact]
+    public void The_answer_to_a_keep_alive_ping_is_not_the_last_reply()
+    {
+        File.WriteAllLines(_path, [Prompt("Fix the retry"), Assistant("The retry now backs off and the test passes."),
+            Prompt("""Another Claude session sent a message:\n<cross-session-message from=\"uds:x\" from-name=\"keepwarm-3f\">\nKeep-alive from CodeSwitchX: reply with only ok.\n</cross-session-message>"""),
+            Assistant("ok"), ToolUse, ToolResult]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("The retry now backs off and the test passes.");
+    }
+
+    [Fact]
+    public void A_chat_that_only_ever_answered_pings_said_nothing()
+    {
+        File.WriteAllLines(_path, [
+            Prompt("""<cross-session-message from=\"uds:x\" from-name=\"keepwarm-3f\">Keep-alive from CodeSwitchX: reply with only ok.</cross-session-message>"""),
+            Assistant("ok")]);
+
+        TranscriptLastReply.Read(_path).ShouldBeNull();
+    }
+
     [Fact]
     public void A_long_reply_keeps_its_end_cut_at_a_word()
     {

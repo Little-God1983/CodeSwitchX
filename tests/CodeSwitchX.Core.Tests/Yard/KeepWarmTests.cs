@@ -14,13 +14,11 @@ public class KeepWarmTests
     private readonly Dictionary<string, string> _names = new(StringComparer.Ordinal);
     private readonly Sender _sender = new();
     private readonly Settings _settings = new();
-    private readonly List<string> _changed = [];
 
     private KeepWarm New()
     {
         var keep = new KeepWarm(id => _chats.GetValueOrDefault(id), id => _names.GetValueOrDefault(id), _sender, _settings, _time,
             NullLogger<KeepWarm>.Instance);
-        keep.Changed += _changed.Add;
         return keep;
     }
 
@@ -50,7 +48,6 @@ public class KeepWarmTests
         keep.Start("a", TimeSpan.FromHours(4)).ShouldBeTrue();
 
         keep.Until("a").ShouldBe(Start.AddHours(4));
-        _changed.ShouldBe(["a"]);
     }
 
     [Fact]
@@ -96,6 +93,30 @@ public class KeepWarmTests
         await keep.CheckAsync(CancellationToken.None);
 
         _sender.Sent.ShouldBe(["ws-a"]);
+    }
+
+    [Fact]
+    public async Task The_pings_of_several_chats_go_out_together()
+    {
+        Chat("a", Minutes(55));
+        Chat("b", Minutes(55));
+        Chat("c", Minutes(55));
+        _sender.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var keep = New();
+        keep.Start("a", TimeSpan.FromHours(2));
+        keep.Start("b", TimeSpan.FromHours(2));
+        keep.Start("c", TimeSpan.FromHours(2));
+
+        var check = keep.CheckAsync(CancellationToken.None);
+        for (var i = 0; i < 100 && _sender.Sent.Count < 3; i++)
+        {
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        _sender.Sent.ShouldBe(["ws-a", "ws-b", "ws-c"], "a slow send must not hold the next chat's ping past its hour");
+        check.IsCompleted.ShouldBeFalse();
+        _sender.Hold.SetResult();
+        await check;
     }
 
     [Fact]
@@ -151,7 +172,6 @@ public class KeepWarmTests
         Chat("a", Minutes(10));
         var keep = New();
         keep.Start("a", TimeSpan.FromHours(2));
-        _changed.Clear();
 
         _time.Advance(TimeSpan.FromHours(2));
         Chat("a", Minutes(57));
@@ -159,7 +179,6 @@ public class KeepWarmTests
 
         keep.Until("a").ShouldBeNull();
         _sender.Sent.ShouldBeEmpty("its time is up: the chat goes cold as it would have");
-        _changed.ShouldBe(["a"]);
     }
 
     [Fact]
@@ -227,12 +246,10 @@ public class KeepWarmTests
         Chat("a", Minutes(10));
         var keep = New();
         keep.Start("a", TimeSpan.FromHours(2));
-        _changed.Clear();
 
         keep.Stop("a");
 
         keep.Until("a").ShouldBeNull();
-        _changed.ShouldBe(["a"]);
     }
 
     [Fact]
@@ -321,10 +338,22 @@ public class KeepWarmTests
         public List<string> Sent { get; } = [];
         public bool Works { get; set; } = true;
 
-        public Task<bool> SendAsync(string sendName, CancellationToken ct)
+        /// <summary>When set, every send waits for it.</summary>
+        public TaskCompletionSource? Hold { get; set; }
+
+        public async Task<bool> SendAsync(string sendName, CancellationToken ct)
         {
-            Sent.Add(sendName);
-            return Task.FromResult(Works);
+            lock (Sent)
+            {
+                Sent.Add(sendName);
+            }
+
+            if (Hold is { } hold)
+            {
+                await hold.Task;
+            }
+
+            return Works;
         }
     }
 

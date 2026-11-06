@@ -2,12 +2,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Sessions;
 
 namespace CodeSwitchX.Ingest.Transcripts;
 
 /// <summary>
 /// What a chat last said: the text of the last assistant message of the main chat (no subagent's) in its transcript,
-/// read from the end of the file, so a long transcript costs no more than a short one.
+/// read from the end of the file, so a long transcript costs no more than a short one. Not the "ok" it answered a keep-alive
+/// ping with (#386).
 /// </summary>
 public static partial class TranscriptLastReply
 {
@@ -39,18 +41,51 @@ public static partial class TranscriptLastReply
             return null;
         }
 
-        var lines = tail.Split('\n');
-        for (var i = lines.Length - 1; i >= 0; i--)
+        // Forwards, so that each reply is known to answer the user or a keep-alive ping (#386): the "ok" a chat answers the
+        // app's ping with is not what it last said to the user.
+        string? last = null;
+        var ping = false;
+        foreach (var line in tail.Split('\n'))
         {
-            if (TextOf(lines[i]) is { } text)
+            if (PromptOf(line) is { } prompt)
             {
-                // A reply that is all table or code says nothing: an earlier one ("Now the tests.") would be older news.
-                var said = Prose(text);
-                return said.Length > 0 ? Shorten(said, maxChars) : null;
+                ping = KeepAlive.IsPing(prompt);
+            }
+            else if (!ping && TextOf(line) is { } text)
+            {
+                last = text;
             }
         }
 
-        return null;
+        // A reply that is all table or code says nothing: an earlier one ("Now the tests.") would be older news.
+        var said = last is null ? "" : Prose(last);
+        return said.Length > 0 ? Shorten(said, maxChars) : null;
+    }
+
+    /// <summary>The prompt of a main-chat user line (its content is one string; a tool result's is an array); null for every other line.</summary>
+    private static string? PromptOf(string line)
+    {
+        if (!line.Contains("\"user\"", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("type", out var type) && type.GetString() == "user"
+                && !(root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)
+                && root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
+                && message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
+                ? content.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The text of a main-chat assistant line; null for every other line, a partial first one too.</summary>

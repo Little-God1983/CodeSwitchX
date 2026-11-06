@@ -52,7 +52,7 @@ public sealed class KeepAliveSenderTests : IDisposable
         var options = KeepAliveSender.Options();
 
         options.Isolation.ShouldBe(ClaudeIsolation.UserSettingsNoHooks, "with hooks it would show as a chat on the Yard");
-        options.DefaultModel.ShouldBe("claude-haiku-5-5", "passing a message on needs no more");
+        options.DefaultModel.ShouldBe(BrainSettings.DefaultModel, "the cheapest, as the brain's: passing a message on needs no more");
         options.DefaultSystemPrompt.ShouldNotBeNullOrWhiteSpace("Claude Code's own prompt would be read, and paid for, at every ping");
         options.PersistSessions.ShouldBeFalse();
         options.WallClockTimeout.ShouldBe(KeepAliveSender.Limit);
@@ -94,6 +94,14 @@ public sealed class KeepAliveSenderTests : IDisposable
         _claude.Failure = new LlmException("claude exited with code 1", ClaudeCliChatClient.ProviderKey);
 
         (await Sender().SendAsync("codeswitchx-52", Ct)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_Claude_Code_that_cannot_start_sent_nothing()
+    {
+        _claude.Failure = new System.ComponentModel.Win32Exception("The system cannot find the file specified");
+
+        (await Sender().SendAsync("codeswitchx-52", Ct)).ShouldBeFalse("the keep-warm check must go on with its other chats");
     }
 
     [Fact]

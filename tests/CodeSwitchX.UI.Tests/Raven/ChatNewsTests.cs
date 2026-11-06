@@ -60,21 +60,30 @@ public sealed class ChatNewsTests : IDisposable
     private Task<IReadOnlyList<ChatNewsLine>> TakeAsync() => _news.TakeAsync(TestContext.Current.CancellationToken);
 
     /// <summary>#386: the app's own ping keeps a chat's cache warm; the user asked the chat nothing.</summary>
-    [Theory]
-    [InlineData(SessionState.Idle)]
-    [InlineData(SessionState.Waiting)]
-    public void What_a_keep_alive_turn_comes_to_is_no_news(SessionState end)
+    [Fact]
+    public void The_end_of_a_keep_alive_turn_is_no_news()
     {
         var raised = 0;
         _news.Arrived += (_, _) => raised++;
         _news.Noted += (_, _) => raised++;
-        _yard.Now("a", end, needsYou: end == SessionState.Waiting);
+        _yard.Now("a", SessionState.Idle);
 
         _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
-            Chat("a", end, _time.GetUtcNow()) with { KeepAliveTurn = true }));
+            Chat("a", SessionState.Idle, _time.GetUtcNow()) with { KeepAliveTurn = true }));
 
         _news.HasNews.ShouldBeFalse();
         raised.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_chat_that_stops_to_ask_during_a_keep_alive_turn_needs_the_user_all_the_same()
+    {
+        _yard.Now("a", SessionState.Waiting, needsYou: true);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Waiting, _time.GetUtcNow(), "Claude needs your permission to use Bash") with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeTrue("the ping asked for one word, and the chat blocks on a prompt instead");
     }
 
     [Fact]

@@ -23,9 +23,6 @@ public interface IKeepAliveSender
 /// </summary>
 public sealed class KeepWarm : BackgroundService
 {
-    /// <summary>What the user picks from: a forgotten mark must not ping for days.</summary>
-    public static readonly IReadOnlyList<TimeSpan> Durations = [TimeSpan.FromHours(2), TimeSpan.FromHours(4), TimeSpan.FromHours(8)];
-
     /// <summary>How long a chat's cache lasts from its last request (measured for #331; <c>CacheWarmthCalculator.Lifetime</c>).</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
 
@@ -67,9 +64,6 @@ public sealed class KeepWarm : BackgroundService
         _time = time;
         _logger = logger;
     }
-
-    /// <summary>A chat's mark was set or taken off (its id). Raised on the thread that changed it.</summary>
-    public event Action<string>? Changed;
 
     /// <summary>Done once every change so far is saved.</summary>
     public Task Saved
@@ -127,7 +121,6 @@ public sealed class KeepWarm : BackgroundService
         }
 
         _logger.LogInformation("Chat {Id} is kept warm until {Until:u}", sessionId, until);
-        Changed?.Invoke(sessionId);
         return true;
     }
 
@@ -147,7 +140,6 @@ public sealed class KeepWarm : BackgroundService
         }
 
         _logger.LogInformation("Chat {Id} is kept warm no more: {Why}", sessionId, why);
-        Changed?.Invoke(sessionId);
     }
 
     /// <summary>Reads the saved marks; one whose time ran out meanwhile is left out.</summary>
@@ -160,26 +152,21 @@ public sealed class KeepWarm : BackgroundService
         }
 
         var now = _time.GetUtcNow();
-        List<string> restored = [];
         lock (_gate)
         {
+            var restored = 0;
             foreach (var (id, until) in saved.Where(m => m.Value > now))
             {
                 if (_marks.TryAdd(id, new Mark(until, null)))
                 {
-                    restored.Add(id);
+                    restored++;
                 }
             }
 
-            if (restored.Count != saved.Count)
+            if (restored != saved.Count)
             {
                 SaveLocked();
             }
-        }
-
-        foreach (var id in restored)
-        {
-            Changed?.Invoke(id);
         }
     }
 
@@ -225,10 +212,13 @@ public sealed class KeepWarm : BackgroundService
         }
     }
 
-    /// <summary>Looks at every marked chat once: ends what is over, and pings what is about to go cold.</summary>
+    /// <summary>
+    /// Looks at every marked chat once: ends what is over, and pings what is about to go cold. The pings go out together: one
+    /// takes seconds, and a slow one (up to <c>KeepAliveSender.Limit</c>) must not hold the next chat's past its hour.
+    /// </summary>
     internal async Task CheckAsync(CancellationToken ct)
     {
-        // One pass at a time: a ping takes seconds, and a second pass meanwhile would send it twice.
+        // One pass at a time: a second pass while a ping is on its way would send it twice.
         if (Interlocked.Exchange(ref _checking, 1) == 1)
         {
             return;
@@ -242,6 +232,7 @@ public sealed class KeepWarm : BackgroundService
                 marks = [.. _marks];
             }
 
+            List<Task> pings = [];
             foreach (var (id, mark) in marks)
             {
                 var now = _time.GetUtcNow();
@@ -266,23 +257,28 @@ public sealed class KeepWarm : BackgroundService
                             _marks[id] = mark with { PingedAt = now };
                         }
 
-                        var sent = await _sender.SendAsync(name!, ct).ConfigureAwait(false);
-                        if (sent)
-                        {
-                            _logger.LogInformation("Chat {Id} was pinged to keep its cache warm", id);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("The keep-alive ping for chat {Id} was not sent; it is tried again while its cache lasts", id);
-                        }
-
+                        pings.Add(PingAsync(id, name!, ct));
                         break;
                 }
             }
+
+            await Task.WhenAll(pings).ConfigureAwait(false);
         }
         finally
         {
             Volatile.Write(ref _checking, 0);
+        }
+    }
+
+    private async Task PingAsync(string id, string name, CancellationToken ct)
+    {
+        if (await _sender.SendAsync(name, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation("Chat {Id} was pinged to keep its cache warm", id);
+        }
+        else
+        {
+            _logger.LogWarning("The keep-alive ping for chat {Id} was not sent; it is tried again while its cache lasts", id);
         }
     }
 
