@@ -9,8 +9,14 @@ namespace CodeSwitchX.UI.Telemetry;
 /// </summary>
 public sealed record LimitBarState(double Percent, double? Pace, string Text)
 {
-    /// <summary>Spent faster than the window passes: at this rate the limit runs out before it resets.</summary>
-    public bool IsAhead => Pace is { } pace && Percent > pace;
+    /// <summary>
+    /// How many points past the pace the spent part may run before it counts as ahead: work comes in bursts, and early in a
+    /// window one ordinary turn runs past the mark (4 % spent ten minutes into five hours) without the limit being at risk.
+    /// </summary>
+    public const double AheadMargin = 10;
+
+    /// <summary>Spent clearly faster than the window passes: at this rate the limit runs out before it resets.</summary>
+    public bool IsAhead => Pace is { } pace && Percent > pace + AheadMargin;
 }
 
 /// <summary>

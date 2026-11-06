@@ -86,9 +86,10 @@ public sealed class PlanLimitsViewModelTests : IDisposable
     }
 
     [Theory]
-    [InlineData(54, true)] // 46% of the window passed, 54% spent
+    [InlineData(57, true)] // 46.3% of the window passed: more than ten points past it
+    [InlineData(56, false)] // past the mark, but within the margin
     [InlineData(40, false)]
-    public async Task A_limit_spent_faster_than_its_window_passes_is_ahead(int percent, bool ahead)
+    public async Task A_limit_spent_clearly_faster_than_its_window_passes_is_ahead(int percent, bool ahead)
     {
         await StartedAsync(Reading(fiveHour: percent));
 

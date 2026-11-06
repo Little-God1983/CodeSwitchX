@@ -101,14 +101,14 @@
             </infra:GiveWay>
           </StackPanel>
           <!-- The plan's real limits as bars (#370, #384): spent, and a mark for how much of the window has passed; amber when
-               spent faster than that. Nothing at all without a subscription or while none could be read. The bars never fold;
+               spent more than 10 points ahead of it. Nothing at all without a subscription or while none could be read. The bars never fold;
                of their short texts only the week's does: the 5-hour limit stops the work soonest. -->
           <StackPanel Orientation="Horizontal" Margin="0,0,20,0" Background="Transparent"
                       Visibility="{Binding Limits.FiveHourBar, Converter={StaticResource NullToCollapsed}}">
             <StackPanel.ToolTip>
               <StackPanel>
                 <TextBlock Text="{Binding Limits.FiveHourText}" FontWeight="SemiBold" />
-                <TextBlock Text="The mark is how much of the 5 hours has passed; amber: spent faster than that." />
+                <TextBlock Text="The mark is how much of the 5 hours has passed; amber: spent more than 10 points ahead of it." />
                 <TextBlock Text="{Binding Limits.Detail}" Opacity="0.7" />
               </StackPanel>
             </StackPanel.ToolTip>
@@ -124,7 +124,7 @@
             <StackPanel.ToolTip>
               <StackPanel>
                 <TextBlock Text="{Binding Limits.WeekText}" FontWeight="SemiBold" />
-                <TextBlock Text="The mark is how much of the week has passed; amber: spent faster than that." />
+                <TextBlock Text="The mark is how much of the week has passed; amber: spent more than 10 points ahead of it." />
                 <TextBlock Text="{Binding Limits.Detail}" Opacity="0.7" />
               </StackPanel>
             </StackPanel.ToolTip>

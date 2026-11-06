@@ -58,7 +58,7 @@ public sealed class LimitBarTests
     {
         await StaThread.RunAsync(() =>
         {
-            var bar = Draw(new LimitBarState(54, 46, "54%"));
+            var bar = Draw(new LimitBarState(60, 46, "60%"));
 
             bar[20, 5].ShouldBe(Ahead);
             bar[52, 5].ShouldBe(Ahead);
@@ -87,6 +87,25 @@ public sealed class LimitBarTests
             bar[50, 5].ShouldBe(Track);
         });
     }
+
+    [Fact]
+    public async Task A_bar_just_past_its_mark_stays_in_its_colour()
+    {
+        await StaThread.RunAsync(() =>
+        {
+            var bar = Draw(new LimitBarState(54, 46, "54%")); // eight points past: within the margin
+
+            bar[20, 5].ShouldBe(Fill);
+        });
+    }
+
+    [Theory]
+    [InlineData(4, 3.3, false)] // one ordinary turn ten minutes into a five-hour window
+    [InlineData(13.3, 3.3, false)] // exactly at the margin
+    [InlineData(13.4, 3.3, true)]
+    [InlineData(100, null, false)] // no pace: never ahead
+    public void Ahead_means_more_than_the_margin_past_the_pace(double percent, double? pace, bool ahead) =>
+        new LimitBarState(percent, pace, "").IsAhead.ShouldBe(ahead);
 
     [Theory]
     [InlineData(-5, 0)]
