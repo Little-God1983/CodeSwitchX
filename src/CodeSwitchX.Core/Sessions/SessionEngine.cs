@@ -208,6 +208,7 @@ public sealed class SessionEngine : IDisposable
             }
 
             var cwd = e.Cwd ?? s.Cwd;
+            var ping = e.EventName == "UserPromptSubmit" && KeepAlive.IsPing(e.Prompt);
             var claudePid = chainPid ?? s.ClaudePid;
             var window = WindowOfLocked(s, claudePid, lookup);
             var windowChanged = !SameFolders(window, s.WindowFolders);
@@ -223,7 +224,8 @@ public sealed class SessionEngine : IDisposable
                 StateSince = state == s.State && previous is not null ? s.StateSince : e.At,
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
                 // The event's own signal: a tool use the agents make no progress of is still the chat at work.
-                LastUseAt = UsedAt(s, e.Signal, state, e.At),
+                // A keep-alive ping is the app's own, not the user's (#386).
+                LastUseAt = ping ? s.LastUseAt : UsedAt(s, e.Signal, state, e.At),
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
                     : cwd != s.Cwd || s.WorkspaceId is null || windowChanged ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
@@ -244,6 +246,7 @@ public sealed class SessionEngine : IDisposable
                     _ => s.TurnFailed,
                 },
                 TurnStartedAt = e.EventName == "UserPromptSubmit" ? e.At : s.TurnStartedAt,
+                KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : s.KeepAliveTurn,
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = signal is null ? s.JobsEndedAt : null,
