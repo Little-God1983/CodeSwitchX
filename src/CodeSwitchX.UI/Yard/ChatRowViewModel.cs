@@ -106,8 +106,11 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     public bool CanKeepWarm => _menu is not null && KeepWarmBlock is null;
 
-    /// <summary>A chat something was said in, not being compacted already.</summary>
-    private bool CanCompact => _menu is not null && !IsCompacting && (_hasSession ? _held : _timed);
+    /// <summary>
+    /// A chat something was said in, not being compacted already. Not a tab the app knows no chat of: it does not know the
+    /// folder that one runs in, which Claude Code finds its conversation by.
+    /// </summary>
+    private bool CanCompact => _menu is not null && !IsCompacting && _hasSession && _held;
 
     /// <summary>
     /// The row's menu opens: what it offers is found out now. Whether a chat can be kept warm takes a look at Claude Code's

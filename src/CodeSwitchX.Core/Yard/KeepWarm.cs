@@ -29,8 +29,11 @@ public sealed class KeepWarm : BackgroundService
     /// <summary>How long a chat's cache lasts from its last request (measured for #331; <c>CacheWarmthCalculator.Lifetime</c>).</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
 
-    /// <summary>How old a chat's last request is when it is pinged: five minutes of the hour are left for the ping to land, and to try again.</summary>
-    public static readonly TimeSpan PingAfter = TimeSpan.FromMinutes(55);
+    /// <summary>
+    /// How old a chat's last request is when it is pinged: five minutes of the hour are left for the ping to land, and to
+    /// try again. Set shorter only by a debug build's on-screen check, which cannot wait 55 minutes for each ping.
+    /// </summary>
+    public TimeSpan PingAfter { get; init; } = TimeSpan.FromMinutes(55);
 
     /// <summary>How long a ping is given to show as a request of the chat before another is sent.</summary>
     public static readonly TimeSpan PingGap = TimeSpan.FromMinutes(2);
@@ -244,7 +247,7 @@ public sealed class KeepWarm : BackgroundService
                 var now = _time.GetUtcNow();
                 var chat = _sessionOf(id);
                 var name = _sendNameOf(id);
-                switch (Next(now, mark, chat, name))
+                switch (Next(now, mark, chat, name, PingAfter))
                 {
                     case Step.TimeUp:
                         End(id, "its time is up");
@@ -291,7 +294,7 @@ public sealed class KeepWarm : BackgroundService
         Cold,
     }
 
-    private static Step Next(DateTimeOffset now, Mark mark, SessionSnapshot? chat, string? sendName)
+    private static Step Next(DateTimeOffset now, Mark mark, SessionSnapshot? chat, string? sendName, TimeSpan pingAfter)
     {
         if (now >= mark.Until)
         {
@@ -313,7 +316,7 @@ public sealed class KeepWarm : BackgroundService
         // At its prompt: idle, or working only through a background job (#332).
         var atPrompt = chat.State == SessionState.Idle || (chat.State == SessionState.Working && chat.TurnOverAt is not null);
         var pingedLately = mark.PingedAt is { } pinged && now - pinged < PingGap;
-        return age >= PingAfter && atPrompt && sendName is not null && !pingedLately ? Step.Ping : Step.Wait;
+        return age >= pingAfter && atPrompt && sendName is not null && !pingedLately ? Step.Ping : Step.Wait;
     }
 
     /// <param name="PingedAt">When the chat was last sent a ping; null before the first.</param>

@@ -317,7 +317,15 @@ public partial class App : Application
             Path.Combine(sp.GetRequiredService<AppPaths>().Root, "keepwarm"), sp.GetRequiredService<ILogger<KeepAliveSender>>()));
         services.AddSingleton(sp => new KeepWarm(sp.GetRequiredService<SessionEngine>().Get, sp.GetRequiredService<ClaudeLiveSessions>().NameOf,
             sp.GetRequiredService<IKeepAliveSender>(), sp.GetRequiredService<ISettingsStore>(), sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<KeepWarm>>()));
+            sp.GetRequiredService<ILogger<KeepWarm>>())
+#if DEBUG
+        {
+            // The on-screen check of the ping: nobody waits 55 minutes for each one, so a debug build can ping sooner.
+            PingAfter = double.TryParse(Environment.GetEnvironmentVariable("CODESWITCHX_KEEPWARM_PING_AFTER_MINUTES"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var minutes) && minutes > 0 ? TimeSpan.FromMinutes(minutes) : TimeSpan.FromMinutes(55),
+        }
+#endif
+        );
         services.AddHostedService(sp => sp.GetRequiredService<KeepWarm>());
         services.AddSingleton<IYardDialogs, YardDialogs>();
         services.AddSingleton<IChatRowMenu>(sp => new ChatRowMenu(() => sp.GetRequiredService<IYardDirectory>(), () => sp.GetRequiredService<IYardActions>(),

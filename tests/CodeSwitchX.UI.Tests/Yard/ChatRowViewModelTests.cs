@@ -210,12 +210,21 @@ public class ChatRowViewModelTests
     }
 
     [Fact]
-    public void A_tab_whose_conversation_is_on_disk_can_be_compacted()
+    public void A_tab_the_app_knows_no_chat_of_is_not_compacted_from_here()
     {
         var row = new ChatRowViewModel("s1", menu: new FakeRowMenu());
         row.ShowTab(new OpenChatTab("s1", "Claude Code"), notRunning: true, new TabConversation(Now.AddHours(-3), "Fix build"));
 
-        row.CompactNowCommand.CanExecute(null).ShouldBeTrue();
+        row.CompactNowCommand.CanExecute(null).ShouldBeFalse("the app does not know the folder it runs in, which Claude Code finds its conversation by");
+    }
+
+    [Fact]
+    public void A_session_nothing_was_said_in_has_nothing_to_compact()
+    {
+        var row = new ChatRowViewModel("s1", menu: new FakeRowMenu());
+        row.Update(Idle() with { Title = null }, Pricing);
+
+        row.CompactNowCommand.CanExecute(null).ShouldBeFalse();
     }
 
     private sealed class FakeRowMenu : IChatRowMenu

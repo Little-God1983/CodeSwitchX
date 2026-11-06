@@ -84,6 +84,20 @@ public class KeepWarmTests
         _sender.Sent.ShouldBe(["ws-a"]);
     }
 
+    /// <summary>For the on-screen check: nobody waits 55 minutes to see a ping arrive.</summary>
+    [Fact]
+    public async Task The_age_a_chat_is_pinged_at_can_be_set()
+    {
+        Chat("a", Minutes(1));
+        var keep = new KeepWarm(id => _chats.GetValueOrDefault(id), id => _names.GetValueOrDefault(id), _sender, _settings, _time,
+            NullLogger<KeepWarm>.Instance) { PingAfter = Minutes(1) };
+        keep.Start("a", TimeSpan.FromHours(2));
+
+        await keep.CheckAsync(CancellationToken.None);
+
+        _sender.Sent.ShouldBe(["ws-a"]);
+    }
+
     [Fact]
     public async Task A_ping_is_not_sent_again_while_its_turn_may_still_be_on_its_way()
     {
