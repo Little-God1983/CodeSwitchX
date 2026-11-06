@@ -195,6 +195,9 @@ public sealed partial class WorkspaceTileViewModel : ObservableObject
         var running = _turns.TryGetValue(id, out var turn) && turn == Turn.Running;
         switch (now.State)
         {
+            // The app's own ping, which keeps the chat's cache warm (#386), is no turn of the user's: what the tile showed stays.
+            case SessionState.Working or SessionState.Idle when now.KeepAliveTurn:
+                break;
             case SessionState.Working:
             case SessionState.Waiting when now.HeldConversation:
                 _turns[id] = Turn.Running;

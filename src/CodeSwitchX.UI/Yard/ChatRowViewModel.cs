@@ -79,7 +79,7 @@ public sealed partial class ChatRowViewModel : ObservableObject
 
     /// <summary>
     /// When a turn of the chat last started, waited or ended (#295): what orders a tile's rows, the latest first. A working
-    /// chat counts from when it started working, so its tool calls do not move it; else its last use, as the engine stamps
+    /// chat counts from when it started working (not on a keep-alive ping), so its tool calls do not move it; else its last use, as the engine stamps
     /// it, or for a tab the app knows no chat of, when the chat was last written in; such a tab never written in goes last.
     /// </summary>
     public DateTimeOffset LastTurnAt { get; private set; }
@@ -100,7 +100,8 @@ public sealed partial class ChatRowViewModel : ObservableObject
         ShowTitle();
         State = snapshot.State;
         StateSince = snapshot.StateSince;
-        LastTurnAt = snapshot.State == SessionState.Working ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
+        // The app's own ping (#386) is no turn of the user's: the row stays where it was.
+        LastTurnAt = snapshot.State == SessionState.Working && !snapshot.KeepAliveTurn ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
         Inferred = snapshot.Inferred;
         LastToolName = snapshot.LastToolName;
         Model = snapshot.Model;

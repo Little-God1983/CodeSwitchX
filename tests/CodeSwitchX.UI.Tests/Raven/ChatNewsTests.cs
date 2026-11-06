@@ -59,6 +59,35 @@ public sealed class ChatNewsTests : IDisposable
 
     private Task<IReadOnlyList<ChatNewsLine>> TakeAsync() => _news.TakeAsync(TestContext.Current.CancellationToken);
 
+    /// <summary>#386: the app's own ping keeps a chat's cache warm; the user asked the chat nothing.</summary>
+    [Theory]
+    [InlineData(SessionState.Idle)]
+    [InlineData(SessionState.Waiting)]
+    public void What_a_keep_alive_turn_comes_to_is_no_news(SessionState end)
+    {
+        var raised = 0;
+        _news.Arrived += (_, _) => raised++;
+        _news.Noted += (_, _) => raised++;
+        _yard.Now("a", end, needsYou: end == SessionState.Waiting);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", end, _time.GetUtcNow()) with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeFalse();
+        raised.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_chat_whose_claude_goes_during_a_keep_alive_turn_is_news_all_the_same()
+    {
+        _yard.Now("a", SessionState.Errored, needsYou: false);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Errored, _time.GetUtcNow()) with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeTrue("the chat is gone, whoever asked it last");
+    }
+
     [Fact]
     public async Task A_finished_turn_a_wait_for_the_user_and_a_failure_are_news_named_as_the_Yard_shows_them()
     {

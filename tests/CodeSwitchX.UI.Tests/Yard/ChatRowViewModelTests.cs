@@ -45,6 +45,22 @@ public class ChatRowViewModelTests
         row.IsLive.ShouldBeTrue();
     }
 
+    /// <summary>#386: the ping that keeps its cache warm is no turn of the user's, so the row keeps its place on the tile.</summary>
+    [Fact]
+    public void A_keep_alive_turn_does_not_move_the_row_up()
+    {
+        var row = new ChatRowViewModel("s1");
+        var used = Now.AddMinutes(-55);
+
+        row.Update(new SessionSnapshot
+        {
+            SessionId = "s1", Title = "Fix build", State = SessionState.Working, StartedAt = Now.AddHours(-2), LastEventAt = Now, StateSince = Now,
+            LastUseAt = used, KeepAliveTurn = true,
+        }, Pricing);
+
+        row.LastTurnAt.ShouldBe(used);
+    }
+
     [Fact]
     public void A_chat_on_the_1M_context_option_measures_its_fill_against_a_million()
     {
