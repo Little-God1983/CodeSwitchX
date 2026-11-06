@@ -76,9 +76,20 @@ public sealed class LimitBar : FrameworkElement
     /// <summary>Where the spent part ends, from the left, on a bar this wide.</summary>
     internal static double FillWidth(LimitBarState state, double width) => Math.Clamp(state.Percent, 0, 100) / 100 * width;
 
-    /// <summary>Where the pace mark's left edge sits on a bar this wide, kept inside it; null without a mark.</summary>
-    internal static double? MarkLeft(LimitBarState state, double width) =>
-        state.Pace is { } pace ? Math.Clamp((Math.Clamp(pace, 0, 100) / 100 * width) - (MarkWidth / 2), 0, Math.Max(0, width - MarkWidth)) : null;
+    /// <summary>
+    /// Where the pace mark's left edge sits on a bar this wide, kept inside it and on a whole device pixel at this
+    /// <paramref name="scale"/> (a mark between pixels is drawn blurred over three); null without a mark.
+    /// </summary>
+    internal static double? MarkLeft(LimitBarState state, double width, double scale = 1)
+    {
+        if (state.Pace is not { } pace)
+        {
+            return null;
+        }
+
+        var left = Math.Clamp((Math.Clamp(pace, 0, 100) / 100 * width) - (MarkWidth / 2), 0, Math.Max(0, width - MarkWidth));
+        return Math.Round(left * scale) / scale;
+    }
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -107,7 +118,7 @@ public sealed class LimitBar : FrameworkElement
             dc.Pop();
         }
 
-        if (MarkLeft(state, width) is { } left)
+        if (MarkLeft(state, width, VisualTreeHelper.GetDpi(this).DpiScaleX) is { } left)
         {
             dc.DrawRectangle(MarkBrush, null, new Rect(left, 0, MarkWidth, height));
         }

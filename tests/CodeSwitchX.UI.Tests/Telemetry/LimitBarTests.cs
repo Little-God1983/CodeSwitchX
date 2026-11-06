@@ -101,4 +101,16 @@ public sealed class LimitBarTests
     [InlineData(100, 98)] // the whole window passed: the mark stays inside the bar's end
     public void The_mark_is_centred_on_its_pace_and_stays_on_the_bar(double pace, double left) =>
         LimitBar.MarkLeft(new LimitBarState(0, pace, ""), 100).ShouldBe(left);
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.25)] // the BenQ's scaling
+    [InlineData(1.5)]
+    public void The_mark_sits_on_a_whole_device_pixel(double scale)
+    {
+        var left = LimitBar.MarkLeft(new LimitBarState(0, 139 / 300.0 * 100, ""), 90, scale)!.Value;
+
+        (left * scale).ShouldBe(Math.Round(left * scale), 1e-9);
+        left.ShouldBe((90 * 139 / 300.0) - 1, 1 / scale, "within a device pixel of the pace");
+    }
 }

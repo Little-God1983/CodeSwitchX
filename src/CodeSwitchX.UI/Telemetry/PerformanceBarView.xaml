@@ -8,7 +8,7 @@
              xmlns:cache="clr-namespace:CodeSwitchX.Telemetry;assembly=CodeSwitchX.Telemetry">
   <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" Padding="12,4">
     <!-- On a narrow window the bar gives way instead of running its texts into each other (#168): first the models' names
-         fold, leaving their dots and states, then the week's short text, then the 5-hour one (#384). The two limit bars stay
+         fold, leaving their dots and states, then the week's short text (#384). The two limit bars and the 5-hour text stay
          (#370): the 5-hour limit is the one that stops the work soonest. -->
     <infra:GiveWayBar>
       <DockPanel>
@@ -101,8 +101,8 @@
             </infra:GiveWay>
           </StackPanel>
           <!-- The plan's real limits as bars (#370, #384): spent, and a mark for how much of the window has passed; amber when
-               spent faster than that. Nothing at all without a subscription or while none could be read. The bars never fold,
-               their short texts do: the week's first, the 5-hour one, which stops the work soonest, last. -->
+               spent faster than that. Nothing at all without a subscription or while none could be read. The bars never fold;
+               of their short texts only the week's does: the 5-hour limit stops the work soonest. -->
           <StackPanel Orientation="Horizontal" Margin="0,0,20,0" Background="Transparent"
                       Visibility="{Binding Limits.FiveHourBar, Converter={StaticResource NullToCollapsed}}">
             <StackPanel.ToolTip>
@@ -114,10 +114,10 @@
             </StackPanel.ToolTip>
             <TextBlock Style="{StaticResource Label}" Text="5h" Margin="0,0,6,0" />
             <tel:LimitBar Width="90" Height="10" VerticalAlignment="Center" State="{Binding Limits.FiveHourBar}"
-                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="5-hour limit" />
-            <infra:GiveWay Step="3">
-              <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.FiveHourBar.Text}" Margin="6,0,0,0" />
-            </infra:GiveWay>
+                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="5-hour limit"
+                          AutomationProperties.HelpText="{Binding Limits.FiveHourText}" />
+            <!-- Never folds (#370): an empty bar after a reset says "reading again…" only here. -->
+            <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.FiveHourBar.Text}" Margin="6,0,0,0" />
           </StackPanel>
           <StackPanel Orientation="Horizontal" Margin="0,0,20,0" Background="Transparent"
                       Visibility="{Binding Limits.WeekBar, Converter={StaticResource NullToCollapsed}}">
@@ -130,7 +130,8 @@
             </StackPanel.ToolTip>
             <TextBlock Style="{StaticResource Label}" Text="week" Margin="0,0,6,0" />
             <tel:LimitBar Width="90" Height="10" VerticalAlignment="Center" State="{Binding Limits.WeekBar}"
-                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="Weekly limit" />
+                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="Weekly limit"
+                          AutomationProperties.HelpText="{Binding Limits.WeekText}" />
             <infra:GiveWay Step="2">
               <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.WeekBar.Text}" Margin="6,0,0,0" />
             </infra:GiveWay>

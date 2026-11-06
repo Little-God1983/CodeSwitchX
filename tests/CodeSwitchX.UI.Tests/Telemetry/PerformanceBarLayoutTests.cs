@@ -171,7 +171,7 @@ public sealed class PerformanceBarLayoutTests
     }
 
     [Fact]
-    public async Task On_a_narrow_bar_the_week_s_text_folds_before_the_five_hour_one_and_the_bars_stay()
+    public async Task On_a_narrow_bar_the_week_s_text_folds_and_the_bars_and_the_five_hour_text_stay()
     {
         await StaThread.RunAsync(() =>
         {
@@ -179,16 +179,16 @@ public sealed class PerformanceBarLayoutTests
             var row = ((FrameworkElement)Descendants(bar).OfType<GiveWayBar>().Single().Child).DesiredSize.Width;
             var names = Descendants(bar).OfType<GiveWay>().Where(g => g.Step == 1).Sum(g => g.Natural);
             var week = Holding(bar, "38% · Mon 06:00");
-            var fiveHour = Holding(bar, "54% · 2h 41m");
 
             Lay(bar, row - names - (week.Natural / 2) + 24); // the border's padding, 12 each side
 
             week.IsFolded.ShouldBeTrue();
-            fiveHour.IsFolded.ShouldBeFalse();
 
             Lay(bar, 300);
 
-            fiveHour.IsFolded.ShouldBeTrue();
+            // #370: the 5-hour limit stops the work soonest, and after a reset only its text says the empty bar is being read again.
+            Descendants(bar).OfType<GiveWay>().Any(g => g.Child is TextBlock t && t.Text == "54% · 2h 41m").ShouldBeFalse();
+            Text(bar, "54% · 2h 41m").ActualWidth.ShouldBeGreaterThan(0);
             Descendants(bar).OfType<LimitBar>().ShouldAllBe(b => b.ActualWidth == 90);
         });
     }
