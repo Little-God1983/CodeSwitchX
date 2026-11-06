@@ -54,6 +54,96 @@ public sealed class PlanLimitsViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Each_limit_s_bar_has_its_percent_and_short_text()
+    {
+        await StartedAsync(Reading());
+
+        _vm.FiveHourBar!.Percent.ShouldBe(54);
+        _vm.FiveHourBar.Text.ShouldBe("54% · 2h 41m");
+        _vm.WeekBar!.Percent.ShouldBe(38);
+        _vm.WeekBar.Text.ShouldBe("38% · Mon 06:00");
+    }
+
+    [Fact]
+    public async Task The_pace_mark_is_how_much_of_the_window_has_passed()
+    {
+        // 2h 41m of 5 hours left: 2h 19m passed. Wed 12:00 to Mon 06:00 is 4 days 18 hours of 7 days left: 54 hours passed.
+        await StartedAsync(Reading());
+
+        _vm.FiveHourBar!.Pace!.Value.ShouldBe(139 / 300.0 * 100, 0.001);
+        _vm.WeekBar!.Pace!.Value.ShouldBe(54 / 168.0 * 100, 0.001);
+    }
+
+    [Fact]
+    public async Task The_pace_mark_moves_as_time_passes()
+    {
+        await StartedAsync(Reading());
+
+        await PassAsync(TimeSpan.FromMinutes(1));
+
+        _vm.FiveHourBar!.Pace!.Value.ShouldBe(140 / 300.0 * 100, 0.001);
+        _vm.FiveHourBar.Text.ShouldBe("54% · 2h 40m");
+    }
+
+    [Theory]
+    [InlineData(54, true)] // 46% of the window passed, 54% spent
+    [InlineData(40, false)]
+    public async Task A_limit_spent_faster_than_its_window_passes_is_ahead(int percent, bool ahead)
+    {
+        await StartedAsync(Reading(fiveHour: percent));
+
+        _vm.FiveHourBar!.IsAhead.ShouldBe(ahead);
+    }
+
+    [Fact]
+    public async Task A_reset_further_off_than_the_window_puts_the_mark_at_the_start()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(6)));
+
+        _vm.FiveHourBar!.Pace.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task A_limit_with_no_reset_has_no_pace_mark_and_is_never_ahead()
+    {
+        await StartedAsync(new PlanReading(PlanReadingKind.Read, new PlanLimits(new PlanLimit(54, null), new PlanLimit(38, null))));
+
+        _vm.FiveHourBar!.Pace.ShouldBeNull();
+        _vm.FiveHourBar.IsAhead.ShouldBeFalse();
+        _vm.FiveHourBar.Text.ShouldBe("54%");
+        _vm.WeekBar!.Text.ShouldBe("38%");
+    }
+
+    [Fact]
+    public async Task With_the_reset_passed_the_bar_is_empty_until_it_is_read_again()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(2)));
+        _reader.Hold = new TaskCompletionSource();
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        _vm.FiveHourBar.ShouldBe(new LimitBarState(0, null, "reading again…"), "the old percent tells of the window that ended");
+        _reader.Next = Reading(fiveHour: 0, inFive: TimeSpan.FromHours(5));
+        _reader.Hold.SetResult();
+        await _vm.PendingRead;
+    }
+
+    [Fact]
+    public async Task Without_figures_there_are_no_bars()
+    {
+        await StartedAsync(new PlanReading(PlanReadingKind.Read, new PlanLimits(null, new PlanLimit(38, Start.AddDays(5)))));
+
+        _vm.FiveHourBar.ShouldBeNull();
+        _vm.WeekBar.ShouldNotBeNull();
+
+        _reader.Next = new PlanReading(PlanReadingKind.NoFigures);
+        await PassAsync(PlanLimitsViewModel.ReadInterval);
+
+        _vm.WeekBar.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task The_day_and_time_of_the_week_are_the_user_s_own()
     {
         _time.SetLocalTimeZone(TimeZoneInfo.FindSystemTimeZoneById("Asia/Tokyo"));

@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Markup;
 using System.Windows.Media;
 using System.Xml.Linq;
+using CodeSwitchX.UI.Infrastructure;
+using CodeSwitchX.UI.Telemetry;
 using CodeSwitchX.UI.Tests.Infrastructure;
 using CodeSwitchX.UI.Tests.Yard;
 
@@ -13,7 +15,11 @@ public sealed class PerformanceBarLayoutTests
 {
     private static readonly XNamespace Wpf = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
-    private static Grid Bar(bool hasBudget)
+    private static readonly LimitBarState FiveHour = new(54, 46, "54% · 2h 41m");
+
+    private static readonly LimitBarState Week = new(38, 32, "38% · Mon 06:00");
+
+    private static Grid Bar(bool limits = true)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "src", "CodeSwitchX.UI", "App.xaml")))
@@ -29,32 +35,38 @@ public sealed class PerformanceBarLayoutTests
             new XElement(Wpf + "Grid.Resources", GitPillsXamlTests.AppResourcesXaml()), root.Element(Wpf + "Border"));
         var xaml = GitPillsXamlTests.AssemblyQualified(grid.ToString())
             .Replace("\"clr-namespace:CodeSwitchX.UI.Voice\"", "\"clr-namespace:CodeSwitchX.UI.Voice;assembly=CodeSwitchX\"", StringComparison.Ordinal)
-            .Replace("\"clr-namespace:CodeSwitchX.UI.Settings\"", "\"clr-namespace:CodeSwitchX.UI.Settings;assembly=CodeSwitchX\"", StringComparison.Ordinal);
+            .Replace("\"clr-namespace:CodeSwitchX.UI.Settings\"", "\"clr-namespace:CodeSwitchX.UI.Settings;assembly=CodeSwitchX\"", StringComparison.Ordinal)
+            .Replace("\"clr-namespace:CodeSwitchX.UI.Telemetry\"", "\"clr-namespace:CodeSwitchX.UI.Telemetry;assembly=CodeSwitchX\"", StringComparison.Ordinal);
         var bar = (Grid)XamlReader.Parse(xaml);
-        bar.DataContext = new BarData(hasBudget);
-        bar.Width = 2400;
+        bar.DataContext = new BarData(limits);
         bar.Height = 40;
-        bar.Measure(new Size(2400, 40));
-        bar.Arrange(new Rect(0, 0, 2400, 40));
-        bar.UpdateLayout();
+        Lay(bar, 2400);
         return bar;
     }
 
     /// <summary>What the bar binds to; a class, since its toggle writes IsExpanded back.</summary>
-    private sealed class BarData(bool hasBudget)
+    private sealed class BarData(bool limits)
     {
         public bool IsExpanded { get; set; } = true;
+
+        public string TokensTodayText => "12.3M";
+
+        public string CostTodayText => "$4.20 est.";
 
         public string FiveHourText => "40.9M";
 
         public double FiveHourPercent => 50.0;
 
-        public bool HasBudget => hasBudget;
+        public bool HasBudget => true;
 
         public object Voice => new { SpeechName = "voice · Kokoro", ListeningName = "speech to text · Whisper Tiny" };
 
-        public object Limits => new { FiveHourText = "5h 13% · resets in 3h 36m", WeekText = "week 47% · resets Mon 06:00", Detail = "detail" };
+        public LimitsData Limits => limits
+            ? new LimitsData(FiveHour, Week, "5h 54% · resets in 2h 41m", "week 38% · resets Mon 06:00", "detail")
+            : new LimitsData(null, null, null, null, null);
     }
+
+    private sealed record LimitsData(LimitBarState? FiveHourBar, LimitBarState? WeekBar, string? FiveHourText, string? WeekText, string? Detail);
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
     {
@@ -90,7 +102,7 @@ public sealed class PerformanceBarLayoutTests
     {
         await StaThread.RunAsync(() =>
         {
-            var bar = Bar(hasBudget: false);
+            var bar = Bar();
             var light = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
             bar.Resources[ThemeText] = light;
             bar.UpdateLayout();
@@ -113,29 +125,82 @@ public sealed class PerformanceBarLayoutTests
         });
     }
 
+    private static void Lay(Grid bar, double width)
+    {
+        bar.Width = width;
+        bar.Measure(new Size(width, 40));
+        bar.Arrange(new Rect(0, 0, width, 40));
+        bar.UpdateLayout();
+    }
+
+    /// <summary>The fold that holds this text.</summary>
+    private static GiveWay Holding(Grid bar, string text) => Descendants(bar).OfType<GiveWay>().Single(g => g.Child is TextBlock t && t.Text == text);
+
     [Fact]
-    public async Task Without_a_budget_the_counted_figure_and_the_real_limit_stand_apart()
+    public async Task The_counted_figures_and_the_sparkline_are_hidden_but_kept()
     {
         await StaThread.RunAsync(() =>
         {
-            var bar = Bar(hasBudget: false);
+            var bar = Bar();
 
-            var gap = Span(bar, Text(bar, "5h 13% · resets in 3h 36m")).Left - Span(bar, Text(bar, "40.9M")).Right;
+            foreach (var label in new[] { "tokens today", "cost today", "5-hour window", "rate (60 min)" })
+            {
+                Text(bar, label).ActualWidth.ShouldBe(0, label);
+            }
 
-            gap.ShouldBe(20, 0.5, "the two 5-hour measures must not read as one value");
+            Text(bar, "active chats").ActualWidth.ShouldBeGreaterThan(0);
         });
     }
 
     [Fact]
-    public async Task With_a_budget_the_progress_bar_sits_by_its_figure_and_apart_from_the_real_limit()
+    public async Task The_limits_come_first_as_bars_then_the_chats()
     {
         await StaThread.RunAsync(() =>
         {
-            var bar = Bar(hasBudget: true);
-            var progress = Descendants(bar).OfType<System.Windows.Controls.ProgressBar>().Single();
+            var bar = Bar();
+            var bars = Descendants(bar).OfType<LimitBar>().ToList();
 
-            (Span(bar, progress).Left - Span(bar, Text(bar, "40.9M")).Right).ShouldBe(6, 0.5);
-            (Span(bar, Text(bar, "5h 13% · resets in 3h 36m")).Left - Span(bar, progress).Right).ShouldBe(20, 0.5);
+            bars.Count.ShouldBe(2);
+            bars[0].State.ShouldBe(FiveHour);
+            bars[1].State.ShouldBe(Week);
+            FrameworkElement[] order = [Text(bar, "5h"), bars[0], Text(bar, "54% · 2h 41m"), Text(bar, "week"), bars[1], Text(bar, "38% · Mon 06:00"), Text(bar, "active chats")];
+            order.Select(e => Span(bar, e).Left).ShouldBeInOrder(SortDirection.Ascending);
+            (Span(bar, Text(bar, "week")).Left - Span(bar, Text(bar, "54% · 2h 41m")).Right).ShouldBe(20, 0.5, "the two limits must not read as one");
+            (Span(bar, Text(bar, "active chats")).Left - Span(bar, Text(bar, "38% · Mon 06:00")).Right).ShouldBe(20, 0.5);
+        });
+    }
+
+    [Fact]
+    public async Task On_a_narrow_bar_the_week_s_text_folds_before_the_five_hour_one_and_the_bars_stay()
+    {
+        await StaThread.RunAsync(() =>
+        {
+            var bar = Bar();
+            var row = ((FrameworkElement)Descendants(bar).OfType<GiveWayBar>().Single().Child).DesiredSize.Width;
+            var names = Descendants(bar).OfType<GiveWay>().Where(g => g.Step == 1).Sum(g => g.Natural);
+            var week = Holding(bar, "38% · Mon 06:00");
+            var fiveHour = Holding(bar, "54% · 2h 41m");
+
+            Lay(bar, row - names - (week.Natural / 2) + 24); // the border's padding, 12 each side
+
+            week.IsFolded.ShouldBeTrue();
+            fiveHour.IsFolded.ShouldBeFalse();
+
+            Lay(bar, 300);
+
+            fiveHour.IsFolded.ShouldBeTrue();
+            Descendants(bar).OfType<LimitBar>().ShouldAllBe(b => b.ActualWidth == 90);
+        });
+    }
+
+    [Fact]
+    public async Task Without_figures_the_limits_take_no_room()
+    {
+        await StaThread.RunAsync(() =>
+        {
+            var bar = Bar(limits: false);
+
+            Span(bar, Text(bar, "active chats")).Left.ShouldBe(12, 0.5, "right after the border's padding");
         });
     }
 }
