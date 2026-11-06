@@ -4,11 +4,12 @@
              xmlns:voice="clr-namespace:CodeSwitchX.UI.Voice"
              xmlns:infra="clr-namespace:CodeSwitchX.UI.Infrastructure"
              xmlns:settings="clr-namespace:CodeSwitchX.UI.Settings"
+             xmlns:tel="clr-namespace:CodeSwitchX.UI.Telemetry"
              xmlns:cache="clr-namespace:CodeSwitchX.Telemetry;assembly=CodeSwitchX.Telemetry">
   <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" Padding="12,4">
     <!-- On a narrow window the bar gives way instead of running its texts into each other (#168): first the models' names
-         fold, leaving their dots and states, then the rate sparkline goes, then today's cost, then the soft 5-hour figure, then the
-         real weekly limit. The real 5-hour limit stays (#370): it is the one that stops the work soonest. -->
+         fold, leaving their dots and states, then the week's short text (#384). The two limit bars and the 5-hour text stay
+         (#370): the 5-hour limit is the one that stops the work soonest. -->
     <infra:GiveWayBar>
       <DockPanel>
         <DockPanel.Resources>
@@ -69,38 +70,72 @@
           </Button>
         </StackPanel>
         <StackPanel Orientation="Horizontal" Visibility="{Binding IsExpanded, Converter={StaticResource BoolVisible}}">
-          <TextBlock Style="{StaticResource Label}" Text="tokens today" />
-          <TextBlock Style="{StaticResource Value}" Text="{Binding TokensTodayText}" />
-          <infra:GiveWay Step="3">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Style="{StaticResource Label}" Text="cost today" />
-              <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table; a model without a rule adds tokens but no cost" />
-            </StackPanel>
-          </infra:GiveWay>
-          <infra:GiveWay Step="4">
-            <!-- The group's margin is the gap that stays when the progress bar is gone, so this figure never runs into the real limit. -->
-            <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
-              <TextBlock Style="{StaticResource Label}" Text="5-hour window" />
-              <TextBlock Style="{StaticResource Value}" Text="{Binding FiveHourText}" Margin="0,0,6,0" />
-              <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,6,0" VerticalAlignment="Center"
-                           Visibility="{Binding HasBudget, Converter={StaticResource BoolVisible}}" />
-            </StackPanel>
-          </infra:GiveWay>
-          <!-- The plan's real limits (#370); nothing at all without a subscription or while none could be read. -->
-          <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.FiveHourText}" ToolTip="{Binding Limits.Detail}"
-                     Visibility="{Binding Limits.FiveHourText, Converter={StaticResource NullToCollapsed}}" />
-          <infra:GiveWay Step="5">
-            <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.WeekText}" ToolTip="{Binding Limits.Detail}"
-                       Visibility="{Binding Limits.WeekText, Converter={StaticResource NullToCollapsed}}" />
-          </infra:GiveWay>
-          <infra:GiveWay Step="2">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock Style="{StaticResource Label}" Text="rate (60 min)" />
-              <Canvas x:Name="Sparkline" Width="120" Height="18" Margin="0,0,20,0" VerticalAlignment="Center" ClipToBounds="True">
-                <Polyline x:Name="SparklinePath" Stroke="#3B82F6" StrokeThickness="1.5" StrokeLineJoin="Round" />
-              </Canvas>
-            </StackPanel>
-          </infra:GiveWay>
+          <!-- Hidden for now (#384), kept for statistics later: tokens and cost today, the counted 5-hour figure and the rate
+               sparkline. Their data still flows; to bring one back, move it out of this panel. Under a collapsed panel their
+               GiveWay steps take no part in the folding. -->
+          <StackPanel Orientation="Horizontal" Visibility="Collapsed">
+            <TextBlock Style="{StaticResource Label}" Text="tokens today" />
+            <TextBlock Style="{StaticResource Value}" Text="{Binding TokensTodayText}" />
+            <infra:GiveWay Step="5">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource Label}" Text="cost today" />
+                <TextBlock Style="{StaticResource Value}" Text="{Binding CostTodayText}" ToolTip="Estimate from the editable pricing table; a model without a rule adds tokens but no cost" />
+              </StackPanel>
+            </infra:GiveWay>
+            <infra:GiveWay Step="6">
+              <!-- The group's margin is the gap that stays when the progress bar is gone, so this figure never runs into the real limit. -->
+              <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
+                <TextBlock Style="{StaticResource Label}" Text="5-hour window" />
+                <TextBlock Style="{StaticResource Value}" Text="{Binding FiveHourText}" Margin="0,0,6,0" />
+                <ProgressBar Width="90" Height="6" Minimum="0" Maximum="100" Value="{Binding FiveHourPercent, Mode=OneWay}" Margin="0,0,6,0" VerticalAlignment="Center"
+                             Visibility="{Binding HasBudget, Converter={StaticResource BoolVisible}}" />
+              </StackPanel>
+            </infra:GiveWay>
+            <infra:GiveWay Step="4">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Style="{StaticResource Label}" Text="rate (60 min)" />
+                <Canvas x:Name="Sparkline" Width="120" Height="18" Margin="0,0,20,0" VerticalAlignment="Center" ClipToBounds="True">
+                  <Polyline x:Name="SparklinePath" Stroke="#3B82F6" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                </Canvas>
+              </StackPanel>
+            </infra:GiveWay>
+          </StackPanel>
+          <!-- The plan's real limits as bars (#370, #384): spent, and a mark for how much of the window has passed; amber when
+               spent more than 10 points ahead of it. Nothing at all without a subscription or while none could be read. The bars never fold;
+               of their short texts only the week's does: the 5-hour limit stops the work soonest. -->
+          <StackPanel Orientation="Horizontal" Margin="0,0,20,0" Background="Transparent"
+                      Visibility="{Binding Limits.FiveHourBar, Converter={StaticResource NullToCollapsed}}">
+            <StackPanel.ToolTip>
+              <StackPanel>
+                <TextBlock Text="{Binding Limits.FiveHourText}" FontWeight="SemiBold" />
+                <TextBlock Text="The mark is how much of the 5 hours has passed; amber: spent more than 10 points ahead of it." />
+                <TextBlock Text="{Binding Limits.Detail}" Opacity="0.7" />
+              </StackPanel>
+            </StackPanel.ToolTip>
+            <TextBlock Style="{StaticResource Label}" Text="5h" Margin="0,0,6,0" />
+            <tel:LimitBar Width="90" Height="10" VerticalAlignment="Center" State="{Binding Limits.FiveHourBar}"
+                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="5-hour limit"
+                          AutomationProperties.HelpText="{Binding Limits.FiveHourText}" />
+            <!-- Never folds (#370): an empty bar after a reset says "reading again…" only here. -->
+            <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.FiveHourBar.Text}" Margin="6,0,0,0" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Margin="0,0,20,0" Background="Transparent"
+                      Visibility="{Binding Limits.WeekBar, Converter={StaticResource NullToCollapsed}}">
+            <StackPanel.ToolTip>
+              <StackPanel>
+                <TextBlock Text="{Binding Limits.WeekText}" FontWeight="SemiBold" />
+                <TextBlock Text="The mark is how much of the week has passed; amber: spent more than 10 points ahead of it." />
+                <TextBlock Text="{Binding Limits.Detail}" Opacity="0.7" />
+              </StackPanel>
+            </StackPanel.ToolTip>
+            <TextBlock Style="{StaticResource Label}" Text="week" Margin="0,0,6,0" />
+            <tel:LimitBar Width="90" Height="10" VerticalAlignment="Center" State="{Binding Limits.WeekBar}"
+                          MarkBrush="{DynamicResource TextFillColorPrimaryBrush}" AutomationProperties.Name="Weekly limit"
+                          AutomationProperties.HelpText="{Binding Limits.WeekText}" />
+            <infra:GiveWay Step="2">
+              <TextBlock Style="{StaticResource Value}" Text="{Binding Limits.WeekBar.Text}" Margin="6,0,0,0" />
+            </infra:GiveWay>
+          </StackPanel>
           <TextBlock Style="{StaticResource Label}" Text="active chats" />
           <TextBlock Style="{StaticResource Value}" Text="{Binding ActiveSessions}" />
           <TextBlock Style="{StaticResource Label}" Text="waiting" />

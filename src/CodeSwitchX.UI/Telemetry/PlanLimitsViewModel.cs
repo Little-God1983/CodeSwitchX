@@ -39,8 +39,19 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     /// <summary>"week 38% · resets Mon 06:00"; null while there is nothing to show.</summary>
     [ObservableProperty] private string? _weekText;
 
+    /// <summary>The 5-hour limit as the bar draws it (#384); null while there is nothing to show.</summary>
+    [ObservableProperty] private LimitBarState? _fiveHourBar;
+
+    /// <summary>The weekly limit as the bar draws it (#384); null while there is nothing to show.</summary>
+    [ObservableProperty] private LimitBarState? _weekBar;
+
     /// <summary>What the figures are, and how old.</summary>
     [ObservableProperty] private string? _detail;
+
+    /// <summary>How long each window runs: its pace mark is counted back from the reset.</summary>
+    internal static readonly TimeSpan FiveHourWindow = TimeSpan.FromHours(5);
+
+    internal static readonly TimeSpan WeekWindow = TimeSpan.FromDays(7);
 
     /// <summary>The reading under way, or the last; it never faults.</summary>
     internal Task PendingRead { get; private set; } = Task.CompletedTask;
@@ -138,8 +149,12 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
 
     private void Show(DateTimeOffset now)
     {
-        FiveHourText = _limits?.FiveHour is { } fiveHour ? Line("5h", fiveHour, now, CountdownOf) : null;
-        WeekText = _limits?.Week is { } week ? Line("week", week, now, DayOf) : null;
+        var fiveHour = _limits?.FiveHour;
+        var week = _limits?.Week;
+        FiveHourText = fiveHour is null ? null : Line("5h", fiveHour, now, (at, from) => $"in {CountdownOf(at, from)}");
+        WeekText = week is null ? null : Line("week", week, now, DayOf);
+        FiveHourBar = fiveHour is null ? null : Bar(fiveHour, FiveHourWindow, now, CountdownOf);
+        WeekBar = week is null ? null : Bar(week, WeekWindow, now, DayOf);
         Detail = _limits is null ? null : $"The real limits of your plan, as Claude Code's /usage says them. Read {ReadText(now)}.";
     }
 
@@ -159,11 +174,22 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
         { } at => $"{name} {limit.Percent}% · resets {resets(at, now)}",
     };
 
+    /// <summary>
+    /// The bar's state: the percent, a short text, and how much of the window has passed, counted back from the reset. A reset
+    /// that has passed leaves the bar empty: its percent tells of the window that ended.
+    /// </summary>
+    private static LimitBarState Bar(PlanLimit limit, TimeSpan window, DateTimeOffset now, Func<DateTimeOffset, DateTimeOffset, string> resets) => limit.ResetsAt switch
+    {
+        null => new LimitBarState(limit.Percent, null, $"{limit.Percent}%"),
+        { } at when at <= now => new LimitBarState(0, null, "reading again…"),
+        { } at => new LimitBarState(limit.Percent, Math.Clamp((window - (at - now)) / window * 100, 0, 100), $"{limit.Percent}% · {resets(at, now)}"),
+    };
+
     /// <summary>Hours and minutes: the source is good to about a minute. Counted up, so it never says "0m" while time is left.</summary>
     private static string CountdownOf(DateTimeOffset at, DateTimeOffset now)
     {
         var minutes = (int)Math.Ceiling((at - now).TotalMinutes);
-        return minutes >= 60 ? $"in {minutes / 60}h {minutes % 60}m" : $"in {minutes}m";
+        return minutes >= 60 ? $"{minutes / 60}h {minutes % 60}m" : $"{minutes}m";
     }
 
     /// <summary>To the nearest five minutes: the text's time wavers around the real one, and the same reset read "5:59am" and "6am" within the hour. A day and a time need no more than that.</summary>
