@@ -58,10 +58,18 @@ public sealed class KeepAliveSenderTests : IDisposable
         options.WallClockTimeout.ShouldBe(KeepAliveSender.Limit);
     }
 
+    /// <summary>
+    /// The sender runs with the user's settings, their output style among them: on screen (2026-11-06) it answered
+    /// "**TL;DR:** The keep-alive message was sent to `z-scratch386-54` once." where a bare "sent" was asked for. So it is
+    /// asked for a word no style rewrites, and told by that word wherever it stands.
+    /// </summary>
     [Theory]
-    [InlineData("sent", true)]
-    [InlineData("Sent.", true)]
-    [InlineData("failed: No agent named codeswitchx-52 is reachable", false)]
+    [InlineData("PING_SENT", true)]
+    [InlineData("**TL;DR:** The keep-alive message was sent to `codeswitchx-52` once. PING_SENT", true)]
+    [InlineData("ping_sent.", true)]
+    [InlineData("PING_FAILED No agent named codeswitchx-52 is reachable", false)]
+    [InlineData("**TL;DR:** It was not sent. PING_FAILED: the tool said PING_SENT is not possible", false)]
+    [InlineData("**TL;DR:** The keep-alive message was sent to `codeswitchx-52` once.", false)]
     [InlineData("I could not find that session.", false)]
     [InlineData("", false)]
     public async Task What_the_sender_answers_tells_whether_it_was_sent(string answer, bool sent)
@@ -69,6 +77,15 @@ public sealed class KeepAliveSenderTests : IDisposable
         _claude.Answer = answer;
 
         (await Sender().SendAsync("codeswitchx-52", Ct)).ShouldBe(sent);
+    }
+
+    [Fact]
+    public void The_sender_is_asked_for_the_word_it_is_told_by()
+    {
+        var request = KeepAliveSender.Request("codeswitchx-52");
+
+        request.ShouldContain(KeepAliveSender.SentWord);
+        request.ShouldContain(KeepAliveSender.FailedWord);
     }
 
     [Fact]
@@ -93,7 +110,7 @@ public sealed class KeepAliveSenderTests : IDisposable
     {
         public List<(IReadOnlyList<ChatMessage> Messages, ChatOptions Options)> Calls { get; } = [];
 
-        public string Answer { get; set; } = "sent";
+        public string Answer { get; set; } = "PING_SENT";
 
         public Exception? Failure { get; set; }
 

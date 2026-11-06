@@ -21,6 +21,14 @@ public sealed class KeepAliveSender(IChatClient claude, string folder, ILogger<K
     /// <summary>How long a send may take: Claude Code starts in a few seconds, and the send itself is one step.</summary>
     internal static readonly TimeSpan Limit = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// What the sender ends its answer with when the tool took the message, and when it did not. Words no output style
+    /// rewrites: the sender runs with the user's settings, and theirs turned a bare "sent" into a headed summary.
+    /// </summary>
+    internal const string SentWord = "PING_SENT";
+
+    internal const string FailedWord = "PING_FAILED";
+
     private const string SystemPrompt = "You pass one message on for the CodeSwitchX app. Do exactly what the request says and nothing else: "
         + "no other tools, no questions, no comments.";
 
@@ -59,7 +67,7 @@ public sealed class KeepAliveSender(IChatClient claude, string folder, ILogger<K
             return false;
         }
 
-        if (answer.StartsWith("sent", StringComparison.OrdinalIgnoreCase))
+        if (answer.Contains(SentWord, StringComparison.OrdinalIgnoreCase) && !answer.Contains(FailedWord, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -68,9 +76,10 @@ public sealed class KeepAliveSender(IChatClient claude, string folder, ILogger<K
         return false;
     }
 
-    /// <summary>What the sender is asked: the chat's name and the message, and one word back.</summary>
+    /// <summary>What the sender is asked: the chat's name and the message, and a word back that tells how it went.</summary>
     internal static string Request(string sendName) =>
         $"Send one message with the {ClaudeCliBrain.SendTool} tool to the Claude session named \"{sendName}\". The message, word for word:\n\n"
         + KeepAlive.Text
-        + "\n\nSend it once, to that session only. Then answer \"sent\" if the tool took it, or \"failed: \" and what the tool said.";
+        + "\n\nSend it once, to that session only. Then end your answer with " + SentWord + " if the tool took it, or with "
+        + FailedWord + " and what the tool said.";
 }
