@@ -146,6 +146,22 @@ public class KeepAliveTests
     }
 
     [Fact]
+    public void The_keep_alive_turn_stays_the_chats_last_through_later_events()
+    {
+        _engine.Apply(Prompt(Ping()));
+        _engine.Apply(Stop());
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        _engine.Apply(new HookEvent
+        {
+            SessionId = "s1", EventName = "Notification", Signal = SessionSignal.IdlePrompt, At = _time.GetUtcNow(), NotificationType = "idle_prompt", Informational = true,
+        });
+        _engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), LastRequestAt = _time.GetUtcNow() });
+
+        _engine.Get("s1")!.KeepAliveTurn.ShouldBeTrue("the Yard shows the chat idle since the user left it, not since the ping");
+    }
+
+    [Fact]
     public void The_users_next_prompt_starts_a_turn_of_their_own()
     {
         _engine.Apply(Prompt(Ping()));

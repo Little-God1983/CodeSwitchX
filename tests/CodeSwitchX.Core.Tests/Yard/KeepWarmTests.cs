@@ -227,6 +227,19 @@ public class KeepWarmTests
         keep.Until("a").ShouldNotBeNull();
     }
 
+    /// <summary>The engine marks a chat Stale after 30 quiet minutes: every chat left alone for its hour is Stale at 55 (seen on screen 2026-11-06).</summary>
+    [Fact]
+    public async Task A_chat_gone_stale_sitting_at_its_prompt_is_pinged()
+    {
+        Chat("a", Minutes(55), SessionState.Stale);
+        var keep = New();
+        keep.Start("a", TimeSpan.FromHours(2));
+
+        await keep.CheckAsync(CancellationToken.None);
+
+        _sender.Sent.ShouldBe(["ws-a"]);
+    }
+
     [Fact]
     public async Task A_chat_that_only_waits_for_a_background_job_is_pinged()
     {

@@ -73,7 +73,9 @@ public static partial class TranscriptLastReply
     /// </summary>
     private static string? PromptOf(string line)
     {
-        if (!line.Contains("\"user\"", StringComparison.Ordinal))
+        // Before parsing: a tool result (often the longest line of all) and a sub-agent's line are no prompt.
+        if (!line.Contains("\"type\":\"user\"", StringComparison.Ordinal) || line.Contains("\"tool_result\"", StringComparison.Ordinal)
+            || line.Contains("\"isSidechain\":true", StringComparison.Ordinal))
         {
             return null;
         }

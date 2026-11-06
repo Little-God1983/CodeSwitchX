@@ -312,8 +312,9 @@ public sealed class KeepWarm : BackgroundService
             return Step.Cold;
         }
 
-        // At its prompt: idle, or working only through a background job (#332).
-        var atPrompt = chat.State == SessionState.Idle || (chat.State == SessionState.Working && chat.TurnOverAt is not null);
+        // At its prompt: idle (stale after 30 quiet minutes, which every chat left alone for its hour is), or working only
+        // through a background job (#332).
+        var atPrompt = chat.State is SessionState.Idle or SessionState.Stale || (chat.State == SessionState.Working && chat.TurnOverAt is not null);
         var pingedLately = mark.PingedAt is { } pinged && now - pinged < PingGap;
         return age >= pingAfter && atPrompt && sendName is not null && !pingedLately ? Step.Ping : Step.Wait;
     }

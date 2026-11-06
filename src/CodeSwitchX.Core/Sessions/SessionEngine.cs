@@ -540,10 +540,11 @@ public sealed class SessionEngine : IDisposable
     }
 
     /// <summary>
-    /// Whether the chat's keep-alive turn (#386) is still what the next change is about: while it runs, and for the change
-    /// that ends it. A change after that (a background job's end, a sweep) is the user's own news again.
+    /// Whether the chat's keep-alive turn (#386) is still what the next change is about: until the user's next prompt, so the
+    /// Yard shows the chat as idle since the user left it; but not once the turn is over with a background job open, whose
+    /// end is the user's own news again.
     /// </summary>
-    private static bool KeepAliveGoesOn(SessionSnapshot s) => s.KeepAliveTurn && s.State == SessionState.Working && s.TurnOverAt is null;
+    private static bool KeepAliveGoesOn(SessionSnapshot s) => s.KeepAliveTurn && s.TurnOverAt is null;
 
     /// <summary>
     /// The chat's open jobs once these lines are applied. A start counts only for a chat whose end or process can clear it, in

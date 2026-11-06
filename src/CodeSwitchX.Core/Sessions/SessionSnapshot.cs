@@ -77,7 +77,8 @@ public sealed record SessionSnapshot
 
     /// <summary>
     /// The chat's current turn, or its last one, began with a keep-alive ping (#386: <see cref="KeepAlive"/>), not with a
-    /// prompt of the user's: its end is no news. Until the next prompt. Not persisted.
+    /// prompt of the user's: its end is no news, and the chat is idle since the user left it. Until the next prompt, or
+    /// until the turn is over with a background job open. Not persisted.
     /// </summary>
     public bool KeepAliveTurn { get; init; }
 

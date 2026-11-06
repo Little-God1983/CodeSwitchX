@@ -13,7 +13,8 @@
       <!-- A click on the row opens that chat (#115). A button takes the click, so the tile's own click does not fire too. -->
       <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand"
               AutomationProperties.Name="{Binding Title, StringFormat='Open chat {0}'}" ContextMenuOpening="OnChatMenuOpening">
-        <!-- The chat's own menu (#386); a right-click beside the rows opens the tile's. -->
+        <!-- The chat's own menu (#386); a right-click beside the rows opens the tile's. A row with no menu behind it (none in the app:
+             every row gets one) shows nothing. -->
         <Button.ContextMenu>
           <ContextMenu Visibility="{Binding HasMenu, Converter={StaticResource BoolVisible}}">
             <MenuItem Header="Compact now" Command="{Binding CompactNowCommand}"
