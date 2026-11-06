@@ -186,8 +186,10 @@ public sealed partial class ChatRowViewModel : ObservableObject
         State = snapshot.State;
         StateSince = snapshot.StateSince;
         _timedSince = snapshot.KeepAliveTurn && snapshot.State == SessionState.Idle ? snapshot.LastUseAt ?? snapshot.StateSince : snapshot.StateSince;
-        // The app's own ping (#386) is no turn of the user's: the row stays where it was.
-        LastTurnAt = snapshot.State == SessionState.Working && !snapshot.KeepAliveTurn ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
+        // The app's own ping (#386) is no turn of the user's: a row it set working stays where it was. One working already (a
+        // background job) counts from when that began, as ever.
+        var pingSetWorking = snapshot.KeepAliveTurn && snapshot.TurnStartedAt is { } ping && snapshot.StateSince >= ping;
+        LastTurnAt = snapshot.State == SessionState.Working && !pingSetWorking ? snapshot.StateSince : snapshot.LastUseAt ?? snapshot.StartedAt;
         Inferred = snapshot.Inferred;
         LastToolName = snapshot.LastToolName;
         Model = snapshot.Model;

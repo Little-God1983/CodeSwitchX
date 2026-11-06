@@ -41,6 +41,18 @@ public sealed class TranscriptLastReplyTests : IDisposable
     }
 
     [Fact]
+    public void A_prompt_with_a_picture_ends_what_the_ping_hid()
+    {
+        File.WriteAllLines(_path, [Prompt("Fix the retry"), Assistant("The retry now backs off."),
+            Prompt("""<cross-session-message from=\"uds:x\" from-name=\"keepwarm-3f\">Keep-alive from CodeSwitchX: reply with only ok.</cross-session-message>"""),
+            Assistant("ok"),
+            """{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Why is this button off?"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}""",
+            Assistant("The button is misaligned because its margin is set twice.")]);
+
+        TranscriptLastReply.Read(_path).ShouldBe("The button is misaligned because its margin is set twice.");
+    }
+
+    [Fact]
     public void A_chat_that_only_ever_answered_pings_said_nothing()
     {
         File.WriteAllLines(_path, [

@@ -71,10 +71,25 @@ public class ChatRowViewModelTests
         row.Update(new SessionSnapshot
         {
             SessionId = "s1", Title = "Fix build", State = SessionState.Working, StartedAt = Now.AddHours(-2), LastEventAt = Now, StateSince = Now,
-            LastUseAt = used, KeepAliveTurn = true,
+            LastUseAt = used, KeepAliveTurn = true, TurnStartedAt = Now,
         }, Pricing);
 
         row.LastTurnAt.ShouldBe(used);
+    }
+
+    [Fact]
+    public void A_chat_working_on_a_job_through_a_keep_alive_turn_still_counts_from_when_it_began_working()
+    {
+        var row = new ChatRowViewModel("s1");
+        var began = Now.AddMinutes(-60);
+
+        row.Update(new SessionSnapshot
+        {
+            SessionId = "s1", Title = "Build", State = SessionState.Working, StartedAt = Now.AddHours(-2), LastEventAt = Now, StateSince = began,
+            LastUseAt = Now.AddMinutes(-45), KeepAliveTurn = true, TurnStartedAt = Now, OpenJobs = ["job1"],
+        }, Pricing);
+
+        row.LastTurnAt.ShouldBe(began);
     }
 
     private static SessionSnapshot Idle(DateTimeOffset? lastRequest = null) => new()

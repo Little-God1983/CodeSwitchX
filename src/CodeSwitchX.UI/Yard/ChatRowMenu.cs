@@ -104,7 +104,7 @@ public sealed class ChatRowMenu(Func<IYardDirectory> yard, Func<IYardActions> ac
     public void KeepWarm(string sessionId, TimeSpan duration)
     {
         // What the menu showed may be seconds old: the tab closed, or the cache ran out, since.
-        if (!keepWarm.Start(sessionId, duration) && keepWarm.WhyNot(sessionId) is { } why)
+        if (keepWarm.Start(sessionId, duration) is { } why)
         {
             dialogs.Tell(why);
         }

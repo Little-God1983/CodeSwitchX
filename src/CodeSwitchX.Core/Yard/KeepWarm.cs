@@ -104,24 +104,27 @@ public sealed class KeepWarm : BackgroundService
             : null;
     }
 
-    /// <summary>Keeps the chat warm for <paramref name="duration"/> from now; false when it cannot be (<see cref="WhyNot"/>).</summary>
-    public bool Start(string sessionId, TimeSpan duration)
+    /// <summary>
+    /// Keeps the chat warm for <paramref name="duration"/> from now; null when it is, else why it cannot be (<see cref="WhyNot"/>),
+    /// in words for the user. A chat kept warm already keeps the ping it was sent a moment ago: marked anew, it is not pinged twice.
+    /// </summary>
+    public string? Start(string sessionId, TimeSpan duration)
     {
         if (WhyNot(sessionId) is { } why)
         {
             _logger.LogInformation("Chat {Id} is not kept warm: {Why}", sessionId, why);
-            return false;
+            return why;
         }
 
         var until = _time.GetUtcNow() + duration;
         lock (_gate)
         {
-            _marks[sessionId] = new Mark(until, null);
+            _marks[sessionId] = new Mark(until, _marks.GetValueOrDefault(sessionId)?.PingedAt);
             SaveLocked();
         }
 
         _logger.LogInformation("Chat {Id} is kept warm until {Until:u}", sessionId, until);
-        return true;
+        return null;
     }
 
     /// <summary>Stops keeping the chat warm; nothing for one that is not.</summary>
@@ -249,12 +252,12 @@ public sealed class KeepWarm : BackgroundService
                     case Step.Ping:
                         lock (_gate)
                         {
-                            if (!_marks.TryGetValue(id, out var current) || current.Until != mark.Until)
+                            if (!_marks.TryGetValue(id, out var current))
                             {
-                                continue; // stopped, or marked anew, meanwhile
+                                continue; // stopped meanwhile
                             }
 
-                            _marks[id] = mark with { PingedAt = now };
+                            _marks[id] = current with { PingedAt = now };
                         }
 
                         pings.Add(PingAsync(id, name!, ct));

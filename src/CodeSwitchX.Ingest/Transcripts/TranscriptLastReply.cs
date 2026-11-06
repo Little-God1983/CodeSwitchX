@@ -41,17 +41,22 @@ public static partial class TranscriptLastReply
             return null;
         }
 
-        // Forwards, so that each reply is known to answer the user or a keep-alive ping (#386): the "ok" a chat answers the
-        // app's ping with is not what it last said to the user.
+        // From the end: the newest reply is kept until the prompt it answers is reached, and dropped when that prompt is a
+        // keep-alive ping (#386): the "ok" a chat answers the app's ping with is not what it last said to the user.
+        var lines = tail.Split('\n');
         string? last = null;
-        var ping = false;
-        foreach (var line in tail.Split('\n'))
+        for (var i = lines.Length - 1; i >= 0; i--)
         {
-            if (PromptOf(line) is { } prompt)
+            if (PromptOf(lines[i]) is { } prompt)
             {
-                ping = KeepAlive.IsPing(prompt);
+                if (last is not null && !KeepAlive.IsPing(prompt))
+                {
+                    break;
+                }
+
+                last = null;
             }
-            else if (!ping && TextOf(line) is { } text)
+            else if (last is null && TextOf(lines[i]) is { } text)
             {
                 last = text;
             }
@@ -62,7 +67,10 @@ public static partial class TranscriptLastReply
         return said.Length > 0 ? Shorten(said, maxChars) : null;
     }
 
-    /// <summary>The prompt of a main-chat user line (its content is one string; a tool result's is an array); null for every other line.</summary>
+    /// <summary>
+    /// The prompt of a main-chat user line: its content is one string, or blocks with text in them (a prompt with an image);
+    /// a tool result's blocks hold none. Null for every other line.
+    /// </summary>
     private static string? PromptOf(string line)
     {
         if (!line.Contains("\"user\"", StringComparison.Ordinal))
@@ -74,13 +82,45 @@ public static partial class TranscriptLastReply
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
-            return root.ValueKind == JsonValueKind.Object
-                && root.TryGetProperty("type", out var type) && type.GetString() == "user"
-                && !(root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)
-                && root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.Object
-                && message.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
-                ? content.GetString()
-                : null;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("type", out var type) || type.GetString() != "user"
+                || (root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)
+                || !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object
+                || !message.TryGetProperty("content", out var content))
+            {
+                return null;
+            }
+
+            if (content.ValueKind == JsonValueKind.String)
+            {
+                return content.GetString();
+            }
+
+            if (content.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var text = new StringBuilder();
+            foreach (var block in content.EnumerateArray())
+            {
+                if (block.ValueKind != JsonValueKind.Object || !block.TryGetProperty("type", out var kind))
+                {
+                    continue;
+                }
+
+                if (kind.GetString() == "tool_result")
+                {
+                    return null;
+                }
+
+                if (kind.GetString() == "text" && block.TryGetProperty("text", out var value) && value.ValueKind == JsonValueKind.String)
+                {
+                    text.Append(value.GetString()).Append('\n');
+                }
+            }
+
+            return text.Length > 0 ? text.ToString() : null;
         }
         catch (JsonException)
         {

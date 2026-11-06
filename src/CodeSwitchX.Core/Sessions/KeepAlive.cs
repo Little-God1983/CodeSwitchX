@@ -16,8 +16,10 @@ public static class KeepAlive
         + "Reply with only \"ok\" and do nothing else.";
 
     /// <summary>
-    /// Whether a prompt is a ping: a message of another session with <see cref="Opening"/> in it. The sender is a model told to
-    /// copy the message, and may quote it or put a word before it. The same words typed by the user are a prompt of their own.
+    /// Whether a prompt is a ping: a message of another session that opens with <see cref="Opening"/> (quotes or marks before it
+    /// aside), or holds the whole <see cref="Text"/>. The sender is a model told to copy the message, and may quote it or put a
+    /// word before it; a message that only names the ping (Raven passing on the user's words) is no ping, and the same words
+    /// typed by the user are a prompt of their own.
     /// </summary>
     public static bool IsPing(string? prompt)
     {
@@ -27,6 +29,12 @@ public static class KeepAlive
         }
 
         var tagEnd = envelope.IndexOf('>');
-        return tagEnd >= 0 && envelope.AsSpan(tagEnd + 1).Contains(Opening, StringComparison.OrdinalIgnoreCase);
+        if (tagEnd < 0)
+        {
+            return false;
+        }
+
+        var body = envelope.AsSpan(tagEnd + 1).Trim().TrimStart(['"', '\u201c', '\'', '*', '_', '`', '>', ' ']);
+        return body.StartsWith(Opening, StringComparison.OrdinalIgnoreCase) || body.Contains(Text, StringComparison.OrdinalIgnoreCase);
     }
 }

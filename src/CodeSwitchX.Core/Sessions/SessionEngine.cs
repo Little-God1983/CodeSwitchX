@@ -234,7 +234,7 @@ public sealed class SessionEngine : IDisposable
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
                 LastNotification = e.Signal == SessionSignal.Notification ? e.Message ?? e.NotificationType : s.LastNotification,
-                Title = s.Title ?? ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength),
+                Title = s.Title ?? (ping ? null : ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength)),
                 Inferred = false,
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
@@ -246,7 +246,7 @@ public sealed class SessionEngine : IDisposable
                     _ => s.TurnFailed,
                 },
                 TurnStartedAt = e.EventName == "UserPromptSubmit" ? e.At : s.TurnStartedAt,
-                KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : s.KeepAliveTurn,
+                KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = signal is null ? s.JobsEndedAt : null,
@@ -534,9 +534,16 @@ public sealed class SessionEngine : IDisposable
                 TurnOverAt = turnOver,
                 JobsEndedAt = jobsEndedAt,
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
+                KeepAliveTurn = KeepAliveGoesOn(s),
             });
         }
     }
+
+    /// <summary>
+    /// Whether the chat's keep-alive turn (#386) is still what the next change is about: while it runs, and for the change
+    /// that ends it. A change after that (a background job's end, a sweep) is the user's own news again.
+    /// </summary>
+    private static bool KeepAliveGoesOn(SessionSnapshot s) => s.KeepAliveTurn && s.State == SessionState.Working && s.TurnOverAt is null;
 
     /// <summary>
     /// The chat's open jobs once these lines are applied. A start counts only for a chat whose end or process can clear it, in
@@ -727,6 +734,7 @@ public sealed class SessionEngine : IDisposable
             OpenJobs = over && previous.OpenJobs.Count > 0 ? [] : previous.OpenJobs,
             TurnOverAt = over ? null : previous.TurnOverAt,
             JobsEndedAt = next == SessionState.Idle || over ? null : previous.JobsEndedAt,
+            KeepAliveTurn = KeepAliveGoesOn(previous),
         });
     }
 

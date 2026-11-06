@@ -45,7 +45,7 @@ public class KeepWarmTests
         Chat("a", Minutes(10));
         var keep = New();
 
-        keep.Start("a", TimeSpan.FromHours(4)).ShouldBeTrue();
+        keep.Start("a", TimeSpan.FromHours(4)).ShouldBeNull();
 
         keep.Until("a").ShouldBe(Start.AddHours(4));
     }
@@ -117,6 +117,23 @@ public class KeepWarmTests
         check.IsCompleted.ShouldBeFalse();
         _sender.Hold.SetResult();
         await check;
+    }
+
+    [Fact]
+    public async Task A_chat_marked_anew_right_after_its_ping_is_not_pinged_twice()
+    {
+        Chat("a", Minutes(55));
+        var keep = New();
+        keep.Start("a", TimeSpan.FromHours(2));
+        await keep.CheckAsync(CancellationToken.None);
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        keep.Start("a", TimeSpan.FromHours(8)); // the user changed their mind about how long
+        _time.Advance(TimeSpan.FromSeconds(20));
+        await keep.CheckAsync(CancellationToken.None);
+
+        _sender.Sent.Count.ShouldBe(1, "its ping is on its way");
+        keep.Until("a").ShouldBe(Start.AddSeconds(10).AddHours(8));
     }
 
     [Fact]
@@ -259,7 +276,7 @@ public class KeepWarmTests
         var keep = New();
 
         keep.WhyNot("a").ShouldBe("Its cache is cold already: keeping it warm would pay for the whole conversation again.");
-        keep.Start("a", TimeSpan.FromHours(2)).ShouldBeFalse();
+        keep.Start("a", TimeSpan.FromHours(2)).ShouldBe("Its cache is cold already: keeping it warm would pay for the whole conversation again.");
         keep.Until("a").ShouldBeNull();
     }
 
