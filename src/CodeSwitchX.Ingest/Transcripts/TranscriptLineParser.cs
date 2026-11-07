@@ -107,7 +107,8 @@ public static class TranscriptLineParser
     /// in a month of transcripts, and the CLI's source as of 2.1.316), and it always means the task runs no more: stopped by
     /// it, in one wording for a task of this machine and another for a command on a remote one, or found not running. A stop
     /// that fails otherwise throws and leaves no such result. The id is the task's own, the same the start told, even when the
-    /// chat named the task by its name.
+    /// chat named the task by its name. The relay tells the same stop through the hook (Relay.EndedJobOf, #381): a change
+    /// to this rule goes there too.
     /// </summary>
     private static (string? Started, string? Stopped) JobsOf(JsonElement root)
     {

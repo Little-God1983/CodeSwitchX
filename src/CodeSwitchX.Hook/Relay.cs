@@ -314,12 +314,14 @@ internal static class Relay
 
     /// <summary>
     /// The background job a tool use stopped (#381): TaskStop's response, with <c>task_id</c> and <c>task_type</c>, always
-    /// means the task runs no more, as the transcript reader knows it (#379). The transcript's result line names no tool,
-    /// the hook does: another tool's result of the same shape ends nothing.
+    /// means the task runs no more, as the transcript reader knows it (#379; TranscriptLineParser.JobsOf keeps the same
+    /// rule). The transcript's result line names no tool, the hook does: another tool's result of the same shape ends
+    /// nothing. KillShell and KillBash are TaskStop's old names, which Claude Code 2.1.316 still maps to it.
     /// </summary>
     private static string? EndedJobOf(JsonElement payload) =>
         payload.ValueKind == JsonValueKind.Object
-        && payload.TryGetProperty("tool_name", out var tool) && tool.ValueKind == JsonValueKind.String && tool.ValueEquals("TaskStop")
+        && payload.TryGetProperty("tool_name", out var tool) && tool.ValueKind == JsonValueKind.String
+        && (tool.ValueEquals("TaskStop") || tool.ValueEquals("KillShell") || tool.ValueEquals("KillBash"))
         && payload.TryGetProperty("tool_response", out var response) && response.ValueKind == JsonValueKind.Object
         && response.TryGetProperty("task_type", out _) && response.TryGetProperty("task_id", out var task) && task.ValueKind == JsonValueKind.String
             ? task.GetString()

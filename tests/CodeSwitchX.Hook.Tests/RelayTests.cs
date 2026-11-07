@@ -247,6 +247,12 @@ public class RelayTests : IDisposable
         JobIn("PostToolUse", payload).ShouldBeNull("a stop starts nothing");
     }
 
+    [Theory]
+    [InlineData("KillShell")]
+    [InlineData("KillBash")]
+    public void A_stop_under_the_tool_s_old_name_names_its_ended_job(string tool) =>
+        EndedJobIn("PostToolUse", $$$"""{"session_id":"s1","tool_name":"{{{tool}}}","tool_response":{"task_id":"b1","task_type":"local_bash"}}""").ShouldBe("b1");
+
     [Fact]
     public void A_big_stop_response_still_names_its_ended_job()
     {

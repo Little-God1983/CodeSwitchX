@@ -202,17 +202,25 @@ public sealed class SessionEngine : IDisposable
 
             var jobs = JobsAfterLocked(e, signal, s);
             var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs);
-            var jobsEndedAt = signal is null ? s.JobsEndedAt : null;
+            // A background agent's steps say nothing about the chat's own turn, so they leave a settling end as it is.
+            var jobsEndedAt = signal is null || (signal == SessionSignal.ToolUse && e.AgentId is not null) ? s.JobsEndedAt : null;
             if (state == SessionState.Idle && jobs.Count > 0)
             {
                 state = SessionState.Working;
             }
-            else if (jobs.Count == 0 && s.OpenJobs.Count > 0 && turnOver is not null && state == SessionState.Working)
+            else if (e.EndedJob is not null && LastJobEndedAfterTurn(jobs, s, state))
             {
-                // A sub-agent stopped the last job while the chat sat at its input prompt (#381). As when the transcript tells
-                // such an end, a turn that reacts may still come, and the sweep ends the wait if it does not.
+                // A sub-agent stopped the last job while the chat sat at its input prompt, or the stop's hook landed after the
+                // turn's Stop (#381): settled as when the transcript tells such an end.
                 turnOver = null;
-                jobsEndedAt = e.At;
+                if (SettleFrom(e.At, s.TurnOverAt!.Value) is { } from)
+                {
+                    jobsEndedAt = from;
+                }
+                else
+                {
+                    state = SessionState.Idle;
+                }
             }
 
             var cwd = e.Cwd ?? s.Cwd;
@@ -283,6 +291,17 @@ public sealed class SessionEngine : IDisposable
 
     private IReadOnlyList<string> WithJob(IReadOnlyList<string> jobs, string sessionId, string job) =>
         jobs.Contains(job) || (_endedJobs.TryGetValue(sessionId, out var ended) && ended.Contains(job)) ? jobs : [.. jobs, job];
+
+    /// <summary>Whether the chat's last job just ended while it sat at its input prompt with the turn over.</summary>
+    private static bool LastJobEndedAfterTurn(IReadOnlyList<string> jobs, SessionSnapshot s, SessionState state) =>
+        jobs.Count == 0 && s.OpenJobs.Count > 0 && s.TurnOverAt is not null && state == SessionState.Working;
+
+    /// <summary>
+    /// What the end of a chat's last job after its turn leaves (#332): a stop since the end was the turn that reacted to it,
+    /// read late, so the chat is done (null). Else that turn may still come, and the sweep ends the wait
+    /// <see cref="JobEndSettle"/> after the end it returns.
+    /// </summary>
+    private static DateTimeOffset? SettleFrom(DateTimeOffset endedAt, DateTimeOffset turnOver) => endedAt <= turnOver ? null : endedAt;
 
     /// <summary>The jobs without one that ended, remembered as ended so a start told later opens nothing.</summary>
     private IReadOnlyList<string> WithoutJobLocked(IReadOnlyList<string> jobs, string sessionId, string job)
@@ -520,19 +539,17 @@ public sealed class SessionEngine : IDisposable
                 state = SessionState.Working;
                 turnOver ??= activityAt;
             }
-            else if (jobs.Count == 0 && s.OpenJobs.Count > 0 && turnOver is { } over && state == SessionState.Working)
+            else if (LastJobEndedAfterTurn(jobs, s, state))
             {
-                // The last job ended. A stop since then was the turn that reacted to it, read late: the chat is done. Else that
-                // turn may still come, and the sweep ends the wait if it does not.
                 turnOver = null;
-                if (u.JobsEnded.Max(j => j.At) <= over)
+                if (SettleFrom(u.JobsEnded.Max(j => j.At), s.TurnOverAt!.Value) is not { } from)
                 {
                     state = SessionState.Idle;
                     stateSince = activityAt;
                 }
                 else
                 {
-                    jobsEndedAt = u.JobsEnded.Max(j => j.At);
+                    jobsEndedAt = from;
                 }
             }
 

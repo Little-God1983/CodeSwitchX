@@ -385,6 +385,39 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_stop_whose_hook_lands_after_the_turn_s_stop_settles_too()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        TaskStop("job1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
+
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle, "never stuck at work with no job open");
+    }
+
+    [Fact]
+    public void A_background_agent_s_next_step_leaves_a_settling_end_as_it_is()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        TaskStop("job1", agent: "a1");
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, agent: "a1"));
+        Chat.JobsEndedAt.ShouldNotBeNull("its steps say nothing about the chat's own turn");
+
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
     public void A_stop_of_a_job_the_chat_never_told_changes_nothing_but_is_remembered()
     {
         ATurnEndsWithAJobOpen();
