@@ -313,11 +313,14 @@ internal static class Relay
     }
 
     /// <summary>
-    /// The background job a tool use stopped (#381): TaskStop's response is the only one with <c>task_id</c> and
-    /// <c>task_type</c>, and it always means the task runs no more, as the transcript reader knows it (#379).
+    /// The background job a tool use stopped (#381): TaskStop's response, with <c>task_id</c> and <c>task_type</c>, always
+    /// means the task runs no more, as the transcript reader knows it (#379). The transcript's result line names no tool,
+    /// the hook does: another tool's result of the same shape ends nothing.
     /// </summary>
     private static string? EndedJobOf(JsonElement payload) =>
-        payload.ValueKind == JsonValueKind.Object && payload.TryGetProperty("tool_response", out var response) && response.ValueKind == JsonValueKind.Object
+        payload.ValueKind == JsonValueKind.Object
+        && payload.TryGetProperty("tool_name", out var tool) && tool.ValueKind == JsonValueKind.String && tool.ValueEquals("TaskStop")
+        && payload.TryGetProperty("tool_response", out var response) && response.ValueKind == JsonValueKind.Object
         && response.TryGetProperty("task_type", out _) && response.TryGetProperty("task_id", out var task) && task.ValueKind == JsonValueKind.String
             ? task.GetString()
             : null;

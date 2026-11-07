@@ -258,8 +258,10 @@ public class RelayTests : IDisposable
     public void Nothing_else_names_an_ended_job()
     {
         EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"stdout":"","backgroundTaskId":"b1"}}""").ShouldBeNull();
-        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"X","tool_response":{"task_id":"b1"}}""").ShouldBeNull("only a stop has a task type beside the id");
-        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"X","tool_response":{"task_id":7,"task_type":"local_bash"}}""").ShouldBeNull();
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"mcp__x__tasks","tool_response":{"task_id":"b1","task_type":"local_bash"}}""").ShouldBeNull("another tool's result of the same shape stops nothing");
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_response":{"task_id":"b1","task_type":"local_bash"}}""").ShouldBeNull();
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":{"task_id":"b1"}}""").ShouldBeNull();
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":{"task_id":7,"task_type":"local_bash"}}""").ShouldBeNull();
         EndedJobIn("PreToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":{"task_id":"b1","task_type":"local_bash"}}""").ShouldBeNull();
         EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":"stopped"}""").ShouldBeNull();
     }

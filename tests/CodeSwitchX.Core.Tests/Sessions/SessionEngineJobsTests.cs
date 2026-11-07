@@ -354,17 +354,34 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
-    public void A_sub_agent_s_stop_is_left_to_the_transcript()
+    public void A_sub_agent_s_stop_ends_the_chat_s_job_too()
+    {
+        Prompt();
+        JobStarts("job1");
+        TaskStop("job1", agent: "a1");
+        Chat.OpenJobs.ShouldBeEmpty("the transcript counts a sub-agent's stop as well");
+
+        Stop();
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_sub_agent_that_stops_the_last_job_after_the_turn_settles_as_the_transcript_would()
     {
         ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
 
         TaskStop("job1", agent: "a1");
-        Chat.OpenJobs.ShouldBe(["job1"], "its starts are left to the transcript too");
 
-        _time.Advance(TimeSpan.FromSeconds(1));
-        JobEnds("job1");
+        Chat.State.ShouldBe(SessionState.Working, "a turn that reacts may still come");
         Chat.OpenJobs.ShouldBeEmpty();
-        Chat.JobsEndedAt.ShouldNotBeNull("the turn that reacts may still come");
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
+
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle, "never stuck at work with no job open");
     }
 
     [Fact]

@@ -202,9 +202,17 @@ public sealed class SessionEngine : IDisposable
 
             var jobs = JobsAfterLocked(e, signal, s);
             var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs);
+            var jobsEndedAt = signal is null ? s.JobsEndedAt : null;
             if (state == SessionState.Idle && jobs.Count > 0)
             {
                 state = SessionState.Working;
+            }
+            else if (jobs.Count == 0 && s.OpenJobs.Count > 0 && turnOver is not null && state == SessionState.Working)
+            {
+                // A sub-agent stopped the last job while the chat sat at its input prompt (#381). As when the transcript tells
+                // such an end, a turn that reacts may still come, and the sweep ends the wait if it does not.
+                turnOver = null;
+                jobsEndedAt = e.At;
             }
 
             var cwd = e.Cwd ?? s.Cwd;
@@ -249,7 +257,7 @@ public sealed class SessionEngine : IDisposable
                 KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = signal is null ? s.JobsEndedAt : null,
+                JobsEndedAt = jobsEndedAt,
             });
         }
     }
@@ -257,9 +265,9 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// The chat's open jobs once this event is applied (#332). A new process took the old ones with it, and so did the chat's
     /// end; a compact, which has no signal, leaves them. A sub-agent's job is left out: its end may never reach the chat's
-    /// own transcript. A job the main agent stopped ends here (#381), before the turn's Stop, which follows sooner than the
-    /// transcript is read; a sub-agent's stop is left to the transcript, as its starts are. The same list when nothing
-    /// changed, as a snapshot compares by it.
+    /// own transcript. A stopped job ends here (#381), before the turn's Stop, which follows sooner than the transcript is
+    /// read; from a sub-agent too, as the transcript counts its stops. The same list when nothing changed, as a snapshot
+    /// compares by it.
     /// </summary>
     private IReadOnlyList<string> JobsAfterLocked(HookEvent e, SessionSignal? signal, SessionSnapshot s)
     {
@@ -269,12 +277,7 @@ public sealed class SessionEngine : IDisposable
             return s.OpenJobs.Count > 0 ? [] : s.OpenJobs;
         }
 
-        if (e.AgentId is not null)
-        {
-            return s.OpenJobs;
-        }
-
-        var jobs = e.BackgroundJob is { } job ? WithJob(s.OpenJobs, e.SessionId, job) : s.OpenJobs;
+        var jobs = e.BackgroundJob is { } job && e.AgentId is null ? WithJob(s.OpenJobs, e.SessionId, job) : s.OpenJobs;
         return e.EndedJob is { } ended ? WithoutJobLocked(jobs, e.SessionId, ended) : jobs;
     }
 
