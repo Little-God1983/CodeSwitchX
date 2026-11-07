@@ -367,38 +367,51 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
-    public void A_sub_agent_that_stops_the_last_job_after_the_turn_settles_as_the_transcript_would()
+    public void A_sub_agent_that_stops_the_last_job_after_the_turn_leaves_the_chat_idle()
     {
         ATurnEndsWithAJobOpen();
         _time.Advance(TimeSpan.FromMinutes(1));
 
         TaskStop("job1", agent: "a1");
 
-        Chat.State.ShouldBe(SessionState.Working, "a turn that reacts may still come");
+        Chat.State.ShouldBe(SessionState.Idle, "no turn reacts to a stop: it tells no task notification");
         Chat.OpenJobs.ShouldBeEmpty();
         Chat.TurnOverAt.ShouldBeNull();
-        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
-
-        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
-        _engine.SweepStale();
-        Chat.State.ShouldBe(SessionState.Idle, "never stuck at work with no job open");
+        Chat.JobsEndedAt.ShouldBeNull();
     }
 
     [Fact]
-    public void A_stop_whose_hook_lands_after_the_turn_s_stop_settles_too()
+    public void A_stop_whose_hook_lands_after_the_turn_s_stop_leaves_the_chat_idle()
     {
         ATurnEndsWithAJobOpen();
         _time.Advance(TimeSpan.FromSeconds(1));
 
         TaskStop("job1");
 
-        Chat.State.ShouldBe(SessionState.Working);
+        Chat.State.ShouldBe(SessionState.Idle);
         Chat.TurnOverAt.ShouldBeNull();
-        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
+        Chat.JobsEndedAt.ShouldBeNull();
+    }
 
-        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
-        _engine.SweepStale();
-        Chat.State.ShouldBe(SessionState.Idle, "never stuck at work with no job open");
+    [Fact]
+    public void A_late_stop_of_one_of_two_jobs_leaves_the_turn_over()
+    {
+        Prompt();
+        JobStarts("job1");
+        JobStarts("job2");
+        Stop();
+        var over = Chat.TurnOverAt.ShouldNotBeNull();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        TaskStop("job1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.OpenJobs.ShouldBe(["job2"]);
+        Chat.TurnOverAt.ShouldBe(over, "the stop ends a step of the turn that is over, it opens no new one");
+
+        _time.Advance(TimeSpan.FromSeconds(1));
+        JobEnds("job2");
+        Chat.JobsEndedAt.ShouldNotBeNull("the last job's end is settled as ever");
     }
 
     [Fact]
@@ -406,7 +419,7 @@ public sealed class SessionEngineJobsTests : IDisposable
     {
         ATurnEndsWithAJobOpen();
         _time.Advance(TimeSpan.FromMinutes(1));
-        TaskStop("job1", agent: "a1");
+        JobEnds("job1");
 
         _time.Advance(TimeSpan.FromSeconds(5));
         _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, agent: "a1"));

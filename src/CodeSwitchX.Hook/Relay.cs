@@ -315,8 +315,9 @@ internal static class Relay
     /// <summary>
     /// The background job a tool use stopped (#381): TaskStop's response, with <c>task_id</c> and <c>task_type</c>, always
     /// means the task runs no more, as the transcript reader knows it (#379; TranscriptLineParser.JobsOf keeps the same
-    /// rule). The transcript's result line names no tool, the hook does: another tool's result of the same shape ends
-    /// nothing. KillShell and KillBash are TaskStop's old names, which Claude Code 2.1.316 still maps to it.
+    /// shape rule). The transcript's result line names no tool, the hook does, so here the tool must be TaskStop too: another
+    /// tool's result of the same shape ends nothing, and a stop under a name not listed is still ended by the transcript, a
+    /// scan later. KillShell and KillBash are TaskStop's old names, which Claude Code 2.1.316 still maps to it.
     /// </summary>
     private static string? EndedJobOf(JsonElement payload) =>
         payload.ValueKind == JsonValueKind.Object
