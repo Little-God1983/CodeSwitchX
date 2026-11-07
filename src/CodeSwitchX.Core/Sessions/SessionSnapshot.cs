@@ -75,6 +75,13 @@ public sealed record SessionSnapshot
     /// </summary>
     public DateTimeOffset? TurnStartedAt { get; init; }
 
+    /// <summary>
+    /// The chat's current turn, or its last one, began with a keep-alive ping (#386: <see cref="KeepAlive"/>), not with a
+    /// prompt of the user's: its end is no news, and the chat is idle since the user left it. Until the next prompt, or
+    /// until the turn is over with a background job open. Not persisted.
+    /// </summary>
+    public bool KeepAliveTurn { get; init; }
+
     /// <summary>Engine-wide monotonic counter stamped on every published change so consumers can drop stale snapshots. Not persisted.</summary>
     public long Version { get; init; }
     public int? ClaudePid { get; init; }

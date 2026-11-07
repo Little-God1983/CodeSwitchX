@@ -404,6 +404,55 @@ public sealed class RavenActionsTests
         _shell.Told.ShouldBe([(Diffusion.Id, "The chat is compacted, but its tab did not open again.", true)]);
     }
 
+    /// <summary>#386: "Compact now" on the Yard waits for the compaction however long it takes: no brain waits on it.</summary>
+    [Fact]
+    public async Task A_compaction_asked_on_the_Yard_returns_only_when_it_is_done()
+    {
+        _vsCode.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var chat = Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" };
+        _actions.IsCompacting("long").ShouldBeFalse();
+
+        var compact = _actions.CompactChatNowAsync(chat, Ct);
+        for (var i = 0; i < 40; i++)
+        {
+            await Task.Delay(5, Ct);
+            _time.Advance(TimeSpan.FromSeconds(5)); // far past the minute a brain is given
+        }
+
+        compact.IsCompleted.ShouldBeFalse();
+        _actions.IsCompacting("long").ShouldBeTrue();
+
+        _vsCode.Hold.SetResult();
+
+        (await compact).ShouldBe("The Fix the upload chat is compacted, and its tab is open again.");
+        _actions.IsCompacting("long").ShouldBeFalse();
+        _shell.Told.ShouldBeEmpty("the Yard says what came of it itself");
+    }
+
+    [Fact]
+    public async Task A_compaction_asked_on_the_Yard_that_fails_says_why()
+    {
+        _vsCode.NotReopened = "The chat is compacted, but its tab did not open again.";
+
+        (await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatNowAsync(Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" }, Ct)))
+            .Message.ShouldBe("The chat is compacted, but its tab did not open again.");
+        _actions.IsCompacting("long").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_chat_being_compacted_is_not_compacted_a_second_time_from_the_Yard()
+    {
+        _vsCode.Hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var chat = Chat("long", "Fix the upload") with { Cwd = @"E:\Repos\App" };
+        var first = _actions.CompactChatNowAsync(chat, Ct);
+
+        (await Should.ThrowAsync<YardActionException>(() => _actions.CompactChatNowAsync(chat, Ct)))
+            .Message.ShouldBe("The Fix the upload chat is being compacted already.");
+
+        _vsCode.Hold.SetResult();
+        await first;
+    }
+
     [Fact]
     public async Task A_chat_Raven_started_whose_tab_does_not_come_back_loses_its_mark()
     {

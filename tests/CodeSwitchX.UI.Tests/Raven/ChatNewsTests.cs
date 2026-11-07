@@ -59,6 +59,67 @@ public sealed class ChatNewsTests : IDisposable
 
     private Task<IReadOnlyList<ChatNewsLine>> TakeAsync() => _news.TakeAsync(TestContext.Current.CancellationToken);
 
+    /// <summary>#386: the app's own ping keeps a chat's cache warm; the user asked the chat nothing.</summary>
+    [Fact]
+    public void The_end_of_a_keep_alive_turn_is_no_news()
+    {
+        var raised = 0;
+        _news.Arrived += (_, _) => raised++;
+        _news.Noted += (_, _) => raised++;
+        _yard.Now("a", SessionState.Idle);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Idle, _time.GetUtcNow()) with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeFalse();
+        raised.ShouldBe(0);
+    }
+
+    [Fact]
+    public void A_keep_alive_turn_that_fails_is_news()
+    {
+        _yard.Now("a", SessionState.Idle);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Idle, _time.GetUtcNow()) with { KeepAliveTurn = true, TurnFailed = true }));
+
+        _news.HasNews.ShouldBeTrue("the user asked for the chat to be kept warm, and it is not");
+    }
+
+    [Fact]
+    public async Task News_of_a_finished_turn_holds_while_a_keep_alive_ping_runs()
+    {
+        Change("a", SessionState.Working, SessionState.Idle);
+        _time.Advance(TimeSpan.FromMinutes(55));
+        _yard.Now("a", SessionState.Working, keepAlive: true); // the ping's turn, for a few seconds
+
+        var lines = await TakeAsync();
+
+        lines.Select(l => (l.Title, l.Kind)).ShouldBe([("Fix the upload retry", ChatNewsKind.Finished)]);
+    }
+
+    [Fact]
+    public void A_chat_that_stops_to_ask_during_a_keep_alive_turn_needs_the_user_all_the_same()
+    {
+        _yard.Now("a", SessionState.Waiting, needsYou: true);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Waiting, _time.GetUtcNow(), "Claude needs your permission to use Bash") with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeTrue("the ping asked for one word, and the chat blocks on a prompt instead");
+    }
+
+    [Fact]
+    public void A_chat_whose_claude_goes_during_a_keep_alive_turn_is_news_all_the_same()
+    {
+        _yard.Now("a", SessionState.Errored, needsYou: false);
+
+        _bus.Publish(new SessionChanged(Chat("a", SessionState.Working, _time.GetUtcNow()) with { KeepAliveTurn = true },
+            Chat("a", SessionState.Errored, _time.GetUtcNow()) with { KeepAliveTurn = true }));
+
+        _news.HasNews.ShouldBeTrue("the chat is gone, whoever asked it last");
+    }
+
     [Fact]
     public async Task A_finished_turn_a_wait_for_the_user_and_a_failure_are_news_named_as_the_Yard_shows_them()
     {
@@ -382,12 +443,12 @@ internal sealed class FakeYardDirectory : IYardDirectory
         workspace, SessionState.Idle, false, DateTimeOffset.UnixEpoch, "1m", null, null, 0, null, null, SendName: sendName));
 
     /// <summary>The chat as the board shows it now.</summary>
-    public void Now(string id, SessionState state, bool needsYou = false)
+    public void Now(string id, SessionState state, bool needsYou = false, bool keepAlive = false)
     {
         var index = _chats.FindIndex(c => c.Id == id);
         if (index >= 0)
         {
-            _chats[index] = _chats[index] with { State = state, NeedsYou = needsYou };
+            _chats[index] = _chats[index] with { State = state, NeedsYou = needsYou, KeepAliveTurn = keepAlive };
         }
     }
 

@@ -208,6 +208,7 @@ public sealed class SessionEngine : IDisposable
             }
 
             var cwd = e.Cwd ?? s.Cwd;
+            var ping = e.EventName == "UserPromptSubmit" && KeepAlive.IsPing(e.Prompt);
             var claudePid = chainPid ?? s.ClaudePid;
             var window = WindowOfLocked(s, claudePid, lookup);
             var windowChanged = !SameFolders(window, s.WindowFolders);
@@ -223,7 +224,8 @@ public sealed class SessionEngine : IDisposable
                 StateSince = state == s.State && previous is not null ? s.StateSince : e.At,
                 LastEventAt = e.At > s.LastEventAt ? e.At : s.LastEventAt,
                 // The event's own signal: a tool use the agents make no progress of is still the chat at work.
-                LastUseAt = UsedAt(s, e.Signal, state, e.At),
+                // A keep-alive ping is the app's own, not the user's (#386).
+                LastUseAt = ping ? s.LastUseAt : UsedAt(s, e.Signal, state, e.At),
                 Cwd = cwd,
                 WorkspaceId = _claims.TryGetValue(e.SessionId, out var claimed) ? claimed
                     : cwd != s.Cwd || s.WorkspaceId is null || windowChanged ? _resolver.Resolve(cwd, window) : s.WorkspaceId,
@@ -232,7 +234,7 @@ public sealed class SessionEngine : IDisposable
                 Model = e.Model ?? s.Model,
                 LastToolName = e.ToolName ?? s.LastToolName,
                 LastNotification = e.Signal == SessionSignal.Notification ? e.Message ?? e.NotificationType : s.LastNotification,
-                Title = s.Title ?? ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength),
+                Title = s.Title ?? (ping ? null : ChatTitle.FromPrompt(e.Prompt, _options.TitleMaxLength)),
                 Inferred = false,
                 HookSeen = true,
                 AwaitingToolResult = awaitingToolResult,
@@ -244,6 +246,7 @@ public sealed class SessionEngine : IDisposable
                     _ => s.TurnFailed,
                 },
                 TurnStartedAt = e.EventName == "UserPromptSubmit" ? e.At : s.TurnStartedAt,
+                KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = signal is null ? s.JobsEndedAt : null,
@@ -531,9 +534,17 @@ public sealed class SessionEngine : IDisposable
                 TurnOverAt = turnOver,
                 JobsEndedAt = jobsEndedAt,
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
+                KeepAliveTurn = KeepAliveGoesOn(s),
             });
         }
     }
+
+    /// <summary>
+    /// Whether the chat's keep-alive turn (#386) is still what the next change is about: until the user's next prompt, so the
+    /// Yard shows the chat as idle since the user left it; but not once the turn is over with a background job open, whose
+    /// end is the user's own news again.
+    /// </summary>
+    private static bool KeepAliveGoesOn(SessionSnapshot s) => s.KeepAliveTurn && s.TurnOverAt is null;
 
     /// <summary>
     /// The chat's open jobs once these lines are applied. A start counts only for a chat whose end or process can clear it, in
@@ -724,6 +735,7 @@ public sealed class SessionEngine : IDisposable
             OpenJobs = over && previous.OpenJobs.Count > 0 ? [] : previous.OpenJobs,
             TurnOverAt = over ? null : previous.TurnOverAt,
             JobsEndedAt = next == SessionState.Idle || over ? null : previous.JobsEndedAt,
+            KeepAliveTurn = KeepAliveGoesOn(previous),
         });
     }
 

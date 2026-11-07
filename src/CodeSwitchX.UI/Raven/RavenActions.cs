@@ -316,20 +316,33 @@ public sealed class RavenActions : IYardActions
         }
     }
 
-    public async Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
+    public bool IsCompacting(string chatId) => _compacting.ContainsKey(chatId);
+
+    public Task<string> CompactChatNowAsync(YardChat chat, CancellationToken ct) =>
+        BeginCompaction(chat, null, $"The {chat.Title} chat is being compacted already.");
+
+    /// <summary>
+    /// Starts the compaction, which is carried through once begun whoever stops waiting for it, and its tab opened again.
+    /// Off the caller's thread from its first step: reading a long conversation must not eat into a wait, nor hold the UI.
+    /// </summary>
+    /// <param name="already">What the caller is told when the chat is being compacted already.</param>
+    private Task<string> BeginCompaction(YardChat chat, string? keep, string already)
     {
         var folder = chat.Cwd ?? throw new YardActionException($"CodeSwitchX does not know the folder the {chat.Title} chat runs in, so it cannot compact it.");
         if (!_compacting.TryAdd(chat.Id, true))
         {
-            throw new YardActionException($"The {chat.Title} chat is being compacted already; Raven's panel says when that is done.");
+            throw new YardActionException(already);
         }
 
-        _logger.LogInformation("Raven compacts chat {Id} in {Workspace}", chat.Id, chat.Workspace);
+        _logger.LogInformation("Chat {Id} in {Workspace} is compacted", chat.Id, chat.Workspace);
         var cutsOff = chat.State == SessionState.Working || chat.NeedsYou;
+        return Task.Run(() => CompactAsync(chat, folder, keep, cutsOff), CancellationToken.None);
+    }
 
-        // Not ended with the question: once begun, a compaction is carried through, and its tab opened again. Off this
-        // thread from its first step: reading a long conversation must not eat into the wait.
-        var compacting = Task.Run(() => CompactAsync(chat, folder, keep, cutsOff), CancellationToken.None);
+    public async Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct)
+    {
+        // Not ended with the question: once begun, a compaction is carried through.
+        var compacting = BeginCompaction(chat, keep, $"The {chat.Title} chat is being compacted already; Raven's panel says when that is done.");
         try
         {
             return await compacting.WaitAsync(CompactWait, _time, ct).ConfigureAwait(false);

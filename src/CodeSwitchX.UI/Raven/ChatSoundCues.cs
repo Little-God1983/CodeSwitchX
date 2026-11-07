@@ -47,9 +47,10 @@ public sealed class ChatSoundCues : IDisposable
     {
         var current = change.Current;
         _states[current.SessionId] = current.State;
-        // Once per turn: a chat that waited on the user and works again goes on with the turn it had.
+        // Once per turn: a chat that waited on the user and works again goes on with the turn it had. Not for the app's own
+        // ping, which keeps the chat's cache warm (#386).
         if (current.TurnStartedAt is { } turn && turn != change.Previous?.TurnStartedAt && current.State == SessionState.Working
-            && current.ShowsAsChat)
+            && current.ShowsAsChat && !current.KeepAliveTurn)
         {
             Raise(SoundSlot.StartsWorking, current.SessionId, current.WorkspaceId, SoundLine.None, SessionState.Working, holds: true);
         }

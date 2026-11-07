@@ -40,6 +40,16 @@ public interface IYardActions
     Task<string> CompactChatAsync(YardChat chat, string? keep, CancellationToken ct);
 
     /// <summary>
+    /// Compacts the chat as <see cref="CompactChatAsync"/> does, for "Compact now" on the Yard (#386): no brain waits on it, so
+    /// it returns only once the compaction is done, however long that takes, and nothing is written in Raven's panel.
+    /// </summary>
+    /// <exception cref="YardActionException">It was not compacted, or its tab did not come back; the message says why.</exception>
+    Task<string> CompactChatNowAsync(YardChat chat, CancellationToken ct);
+
+    /// <summary>Whether the chat is being compacted right now, by either way. Any thread.</summary>
+    bool IsCompacting(string chatId);
+
+    /// <summary>
     /// Stops the chat's running turn at its next tool step, keeping the chat. Returns what came of it: stopped, stopping
     /// at its next step (it writes, or is in a long step), or done before the stop came.
     /// </summary>

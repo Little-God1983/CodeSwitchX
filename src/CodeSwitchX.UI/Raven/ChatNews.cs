@@ -158,6 +158,14 @@ public sealed class ChatNews : IDisposable
             return null;
         }
 
+        // The app's own ping, which keeps the chat's cache warm (#386): the user asked the chat nothing, so its end is no news.
+        // A chat that stops to ask during it, whose turn fails (the user asked for the chat to be kept warm, and it is not),
+        // or that is gone, is.
+        if (change.Current.KeepAliveTurn && change.Current.State == SessionState.Idle && !change.Current.TurnFailed)
+        {
+            return null;
+        }
+
         return change.Current.State switch
         {
             // A turn that ended on an API error (a usage limit, an overload) stops as Idle too, but its work is not done.
@@ -222,11 +230,14 @@ public sealed class ChatNews : IDisposable
             lastSaid[i], now - t.Slot.At > MaximumAge)).ToList();
     }
 
-    /// <summary>Whether the chat, as the Yard shows it now, is still where its news left it.</summary>
+    /// <summary>
+    /// Whether the chat, as the Yard shows it now, is still where its news left it. A keep-alive ping (#386) working for a
+    /// moment is no work of the user's: what the chat finished before still holds.
+    /// </summary>
     internal static bool StillHolds(ChatNewsKind kind, YardChat chat) => kind switch
     {
         ChatNewsKind.NeedsYou => chat.NeedsYou,
-        _ => chat.State != SessionState.Working, // finished or failed, until it works again
+        _ => chat.State != SessionState.Working || chat.KeepAliveTurn, // finished or failed, until it works again
     };
 
     public void Dispose() => _subscription.Dispose();

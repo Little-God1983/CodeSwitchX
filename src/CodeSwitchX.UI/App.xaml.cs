@@ -310,6 +310,26 @@ public partial class App : Application
             OriginLookup.ReadAsync,
             sp.GetRequiredService<ILogger<GitHubActivity>>(),
             sp.GetRequiredService<SshAliases>().HostOfAsync));
+        // A chat row's right-click (#386): Compact now, and Keep warm, which pings a marked chat through a small headless
+        // Claude Code before its cache runs out. The Yard's directory and actions are asked for when first needed: both
+        // are made after the Yard that owns the rows.
+        services.AddSingleton<IKeepAliveSender>(sp => new KeepAliveSender(new ClaudeCliChatClient(KeepAliveSender.Options()),
+            Path.Combine(sp.GetRequiredService<AppPaths>().Root, "keepwarm"), sp.GetRequiredService<ILogger<KeepAliveSender>>()));
+        services.AddSingleton(sp => new KeepWarm(sp.GetRequiredService<SessionEngine>().Get, sp.GetRequiredService<ClaudeLiveSessions>().NameOf,
+            sp.GetRequiredService<IKeepAliveSender>(), sp.GetRequiredService<ISettingsStore>(), sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<KeepWarm>>())
+#if DEBUG
+        {
+            // The on-screen check of the ping: nobody waits 55 minutes for each one, so a debug build can ping sooner.
+            PingAfter = double.TryParse(Environment.GetEnvironmentVariable("CODESWITCHX_KEEPWARM_PING_AFTER_MINUTES"), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var minutes) && minutes > 0 ? TimeSpan.FromMinutes(minutes) : TimeSpan.FromMinutes(55),
+        }
+#endif
+        );
+        services.AddHostedService(sp => sp.GetRequiredService<KeepWarm>());
+        services.AddSingleton<IYardDialogs, YardDialogs>();
+        services.AddSingleton<IChatRowMenu>(sp => new ChatRowMenu(() => sp.GetRequiredService<IYardDirectory>(), () => sp.GetRequiredService<IYardActions>(),
+            sp.GetRequiredService<KeepWarm>(), sp.GetRequiredService<IYardDialogs>(), sp.GetRequiredService<ILogger<ChatRowMenu>>()));
         services.AddSingleton(sp => ActivatorUtilities.CreateInstance<YardViewModel>(sp,
             (Func<string, TabConversation?>)(id => VsCodeChats.ConversationOf(sp.GetRequiredService<ClaudeCodePaths>().ProjectsDirectory, id)),
             (Func<IReadOnlyDictionary<string, bool>>)(() =>

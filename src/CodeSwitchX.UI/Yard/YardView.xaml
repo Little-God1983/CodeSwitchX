@@ -12,7 +12,23 @@
     <DataTemplate x:Key="ChatRowTemplate" DataType="{x:Type yard:ChatRowViewModel}">
       <!-- A click on the row opens that chat (#115). A button takes the click, so the tile's own click does not fire too. -->
       <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand"
-              AutomationProperties.Name="{Binding Title, StringFormat='Open chat {0}'}">
+              AutomationProperties.Name="{Binding Title, StringFormat='Open chat {0}'}" ContextMenuOpening="OnChatMenuOpening">
+        <!-- The chat's own menu (#386); a right-click beside the rows opens the tile's. A row with no menu behind it (none in the app:
+             every row gets one) shows nothing. -->
+        <Button.ContextMenu>
+          <ContextMenu Visibility="{Binding HasMenu, Converter={StaticResource BoolVisible}}">
+            <MenuItem Header="Compact now" Command="{Binding CompactNowCommand}"
+                      ToolTip="Sums the conversation up now, as /compact in its tab would: its tab closes and opens again" />
+            <MenuItem Header="{Binding KeepWarmHeader}" IsEnabled="{Binding CanKeepWarm}" ToolTip="{Binding KeepWarmBlock}"
+                      ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Keep warm">
+              <MenuItem Header="2 hours" Command="{Binding KeepWarmCommand}" CommandParameter="2" />
+              <MenuItem Header="4 hours" Command="{Binding KeepWarmCommand}" CommandParameter="4" />
+              <MenuItem Header="8 hours" Command="{Binding KeepWarmCommand}" CommandParameter="8" />
+            </MenuItem>
+            <MenuItem Header="Stop keeping warm" Command="{Binding StopKeepingWarmCommand}"
+                      Visibility="{Binding IsKeptWarm, Converter={StaticResource BoolVisible}}" />
+          </ContextMenu>
+        </Button.ContextMenu>
         <Button.Template>
           <ControlTemplate TargetType="Button">
             <Border x:Name="Row" Padding="0,2" CornerRadius="4" Background="Transparent">
@@ -87,6 +103,20 @@
               </Style>
             </ProgressBar.Style>
           </ProgressBar>
+          <!-- Kept warm (#386). Hidden rather than collapsed while it is not, so the times of a tile stay in line. -->
+          <TextBlock Text="&#x1F525;" FontFamily="Segoe UI Emoji" FontSize="9" Foreground="#F59E0B" Margin="3,0,0,0" VerticalAlignment="Center"
+                     AutomationProperties.Name="Kept warm" ToolTip="{Binding KeptWarmTip}">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Visibility" Value="Hidden" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsKeptWarm}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
         </StackPanel>
         <ProgressBar Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="4,0,0,0" Height="3" Minimum="0" Maximum="1"
                      Value="{Binding ContextFill, Mode=OneWay}" Foreground="{Binding Pressure, Converter={StaticResource PressureBrush}}"

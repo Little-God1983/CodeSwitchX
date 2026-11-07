@@ -32,6 +32,38 @@ public partial class YardViewModelTests
         app.IsFinished.ShouldBeTrue();
     }
 
+    /// <summary>#386: the ping that keeps a chat's cache warm finished nothing the user has to look at.</summary>
+    [Fact]
+    public async Task A_keep_alive_turn_that_ends_leaves_the_tile_as_it_was()
+    {
+        var app = await AppTile();
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app") with
+        {
+            Prompt = $"""<cross-session-message from="uds:x" from-name="keepwarm-3f">{KeepAlive.Text}</cross-session-message>""",
+        });
+
+        Stop("s1");
+
+        app.IsFinished.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task A_turn_the_user_has_not_seen_stays_unseen_through_a_keep_alive_turn()
+    {
+        var app = await AppTile();
+        Prompt("s1");
+        Stop("s1");
+
+        _engine.Apply(Hook("s1", "UserPromptSubmit", SessionSignal.PromptSubmit, @"c:\repo\app") with
+        {
+            Prompt = $"""<cross-session-message from="uds:x" from-name="keepwarm-3f">{KeepAlive.Text}</cross-session-message>""",
+        });
+        app.IsFinished.ShouldBeTrue("the ping is not the user looking at it");
+        Stop("s1");
+
+        app.IsFinished.ShouldBeTrue();
+    }
+
     [Fact]
     public async Task Opening_the_workspace_clears_the_finished_mark()
     {

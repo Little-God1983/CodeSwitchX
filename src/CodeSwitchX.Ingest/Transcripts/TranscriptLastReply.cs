@@ -2,12 +2,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeSwitchX.Core;
+using CodeSwitchX.Core.Sessions;
 
 namespace CodeSwitchX.Ingest.Transcripts;
 
 /// <summary>
 /// What a chat last said: the text of the last assistant message of the main chat (no subagent's) in its transcript,
-/// read from the end of the file, so a long transcript costs no more than a short one.
+/// read from the end of the file, so a long transcript costs no more than a short one. Not the "ok" it answered a keep-alive
+/// ping with (#386).
 /// </summary>
 public static partial class TranscriptLastReply
 {
@@ -39,18 +41,93 @@ public static partial class TranscriptLastReply
             return null;
         }
 
+        // From the end: the newest reply is kept until the prompt it answers is reached, and dropped when that prompt is a
+        // keep-alive ping (#386): the "ok" a chat answers the app's ping with is not what it last said to the user.
         var lines = tail.Split('\n');
+        string? last = null;
         for (var i = lines.Length - 1; i >= 0; i--)
         {
-            if (TextOf(lines[i]) is { } text)
+            if (PromptOf(lines[i]) is { } prompt)
             {
-                // A reply that is all table or code says nothing: an earlier one ("Now the tests.") would be older news.
-                var said = Prose(text);
-                return said.Length > 0 ? Shorten(said, maxChars) : null;
+                if (last is not null && !KeepAlive.IsPing(prompt))
+                {
+                    break;
+                }
+
+                last = null;
+            }
+            else if (last is null && TextOf(lines[i]) is { } text)
+            {
+                last = text;
             }
         }
 
-        return null;
+        // A reply that is all table or code says nothing: an earlier one ("Now the tests.") would be older news.
+        var said = last is null ? "" : Prose(last);
+        return said.Length > 0 ? Shorten(said, maxChars) : null;
+    }
+
+    /// <summary>
+    /// The prompt of a main-chat user line: its content is one string, or blocks with text in them (a prompt with an image);
+    /// a tool result's blocks hold none. Null for every other line.
+    /// </summary>
+    private static string? PromptOf(string line)
+    {
+        // Before parsing: a tool result (often the longest line of all) and a sub-agent's line are no prompt.
+        if (!line.Contains("\"type\":\"user\"", StringComparison.Ordinal) || line.Contains("\"tool_result\"", StringComparison.Ordinal)
+            || line.Contains("\"isSidechain\":true", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("type", out var type) || type.GetString() != "user"
+                || (root.TryGetProperty("isSidechain", out var side) && side.ValueKind == JsonValueKind.True)
+                || !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object
+                || !message.TryGetProperty("content", out var content))
+            {
+                return null;
+            }
+
+            if (content.ValueKind == JsonValueKind.String)
+            {
+                return content.GetString();
+            }
+
+            if (content.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var text = new StringBuilder();
+            foreach (var block in content.EnumerateArray())
+            {
+                if (block.ValueKind != JsonValueKind.Object || !block.TryGetProperty("type", out var kind))
+                {
+                    continue;
+                }
+
+                if (kind.GetString() == "tool_result")
+                {
+                    return null;
+                }
+
+                if (kind.GetString() == "text" && block.TryGetProperty("text", out var value) && value.ValueKind == JsonValueKind.String)
+                {
+                    text.Append(value.GetString()).Append('\n');
+                }
+            }
+
+            return text.Length > 0 ? text.ToString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The text of a main-chat assistant line; null for every other line, a partial first one too.</summary>

@@ -42,6 +42,12 @@ public partial class YardView : UserControl
 
     private void OnTileMenuOpening(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(true);
 
+    /// <summary>
+    /// A chat row's own menu opens (#386): the row finds out what it offers now. Not handled, so the board hears it too and
+    /// holds its order while the menu is open.
+    /// </summary>
+    private void OnChatMenuOpening(object sender, ContextMenuEventArgs e) => ((sender as FrameworkElement)?.DataContext as ChatRowViewModel)?.MenuOpening();
+
     private void OnTileMenuClosing(object sender, ContextMenuEventArgs e) => (DataContext as YardViewModel)?.MenuOpen(false);
 
     private void OnDragOver(object sender, DragEventArgs e)

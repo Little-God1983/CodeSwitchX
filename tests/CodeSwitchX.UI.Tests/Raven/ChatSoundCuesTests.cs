@@ -59,6 +59,17 @@ public sealed class ChatSoundCuesTests : IDisposable
         ]);
     }
 
+    /// <summary>#386: the app's own ping, which keeps a chat's cache warm, is heard neither starting nor ending.</summary>
+    [Fact]
+    public void A_keep_alive_turn_makes_no_sound()
+    {
+        var turn = _time.GetUtcNow();
+        Change(Chat("a", SessionState.Idle), Chat("a", SessionState.Working, turn) with { KeepAliveTurn = true });
+        Change(Chat("a", SessionState.Working, turn) with { KeepAliveTurn = true }, Chat("a", SessionState.Idle, turn) with { KeepAliveTurn = true });
+
+        _heard.ShouldBeEmpty();
+    }
+
     [Fact]
     public void A_start_is_no_longer_true_once_the_chat_stops_working()
     {
