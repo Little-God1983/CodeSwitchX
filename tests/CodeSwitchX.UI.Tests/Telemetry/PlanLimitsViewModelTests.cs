@@ -276,20 +276,133 @@ public sealed class PlanLimitsViewModelTests : IDisposable
 
         await PassAsync(TimeSpan.FromHours(1));
 
-        _reader.Reads.ShouldBeLessThan(2 + PlanLimitsViewModel.MaxResetRetries + 12);
+        var retries = (int)(PlanLimitsViewModel.EndedAfter / PlanLimitsViewModel.RetryAfterReset);
+        var reads = (int)(TimeSpan.FromHours(1) / PlanLimitsViewModel.ReadInterval);
+        _reader.Reads.ShouldBeInRange(2 + retries, 2 + retries + reads, "a minute apart for a while after the reset, then every five minutes");
+        _vm.FiveHourText.ShouldBe("5h 0%", "by then the window counts as ended");
+    }
+
+    [Fact]
+    public async Task A_window_that_ended_with_the_account_idle_stands_at_zero_once_the_retries_run_out()
+    {
+        // #376: if /usage keeps telling the old reset while nothing is used, the window ended and no new one began.
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(1)));
+        await PassAsync(TimeSpan.FromMinutes(1));
+        _vm.FiveHourText.ShouldBe("5h reading again…", "a reading right after the reset may still tell of the old window");
+
+        await PassAsync(PlanLimitsViewModel.EndedAfter);
+
+        _reader.Reads.ShouldBe(2 + (int)(PlanLimitsViewModel.EndedAfter / PlanLimitsViewModel.RetryAfterReset), "the start, the reset, and a minute apart until five minutes after it");
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        _vm.FiveHourBar.ShouldBe(new LimitBarState(0, null, "0%"));
+        _vm.WeekText.ShouldBe("week 38% · resets Mon 06:00", "its own window goes on");
+
+        await PassAsync(TimeSpan.FromHours(3));
+        _vm.FiveHourText.ShouldBe("5h 0%", "it stays so, and does not go back to being read again");
+    }
+
+    [Fact]
+    public async Task The_detail_says_which_window_ended_and_that_its_zero_is_inferred()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3)));
+
+        _vm.Detail.ShouldNotBeNull().ShouldContain("The 5-hour window ended with nothing used since");
+        _vm.Detail.ShouldNotContain("The week");
+
+        _reader.Next = Reading();
+        await PassAsync(PlanLimitsViewModel.ReadInterval);
+        _vm.Detail.ShouldNotBeNull().ShouldNotContain("ended", Case.Insensitive);
+    }
+
+    [Fact]
+    public async Task A_reading_just_inside_the_retries_still_says_it_is_read_again()
+    {
+        await StartedAsync(Reading(inFive: -(PlanLimitsViewModel.EndedAfter - TimeSpan.FromSeconds(1))));
+
         _vm.FiveHourText.ShouldBe("5h reading again…");
+        _vm.FiveHourBar.ShouldBe(new LimitBarState(0, null, "reading again…"));
+    }
+
+    [Fact]
+    public async Task A_first_reading_long_past_its_reset_stands_at_zero_at_once()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3), weekAt: Start.AddDays(-1)));
+
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        _vm.WeekText.ShouldBe("week 0%");
+        _vm.WeekBar.ShouldBe(new LimitBarState(0, null, "0%"));
+    }
+
+    [Fact]
+    public async Task Two_resets_close_together_each_get_their_minutes_of_retries()
+    {
+        // Both stay past: the week's, two minutes after the 5-hour one, is not cut short by the retries the first one had.
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(1), weekAt: Start.AddMinutes(3)));
+
+        await PassAsync(TimeSpan.FromMinutes(1) + PlanLimitsViewModel.EndedAfter);
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        _vm.WeekText.ShouldBe("week reading again…");
+
+        await PassAsync(TimeSpan.FromMinutes(2));
+        var minutes = (int)((TimeSpan.FromMinutes(3) + PlanLimitsViewModel.EndedAfter) / PlanLimitsViewModel.RetryAfterReset);
+        _reader.Reads.ShouldBe(1 + minutes, "a minute apart from the first reset until the second counts as ended");
+        _vm.WeekText.ShouldBe("week 0%");
+    }
+
+    [Fact]
+    public async Task A_later_reset_gets_its_own_retries_after_an_ended_window()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(1), weekAt: Start.AddMinutes(20)));
+        await PassAsync(TimeSpan.FromMinutes(20));
+        var reads = _reader.Reads;
+
+        await PassAsync(TimeSpan.FromMinutes(3));
+
+        _reader.Reads.ShouldBe(reads + 3);
+    }
+
+    [Fact]
+    public async Task A_failed_reading_after_an_ended_window_keeps_it_as_any_figure()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3)));
+        _reader.Next = new PlanReading(PlanReadingKind.Failed);
+
+        await PassAsync(PlanLimitsViewModel.ReadInterval);
+
+        _reader.Reads.ShouldBe(2);
+        _vm.FiveHourText.ShouldBe("5h 0%", "a failed reading leaves the last figures standing, with the time they were read");
+    }
+
+    [Fact]
+    public async Task Use_after_an_ended_window_shows_the_new_one_at_the_next_reading()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3)));
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        await PassAsync(PlanLimitsViewModel.ReadInterval - TimeSpan.FromSeconds(15));
+        _reader.Reads.ShouldBe(1, "an ended window is not looked at again every minute");
+        _reader.Next = Reading(fiveHour: 4, inFive: TimeSpan.FromHours(5) + PlanLimitsViewModel.ReadInterval - TimeSpan.FromMinutes(1));
+
+        await PassAsync(TimeSpan.FromSeconds(15));
+
+        _reader.Reads.ShouldBe(2);
+        _vm.FiveHourText.ShouldBe("5h 4% · resets in 4h 59m");
     }
 
     [Fact]
     public async Task A_stuck_reset_does_not_make_the_other_limit_s_reset_wait()
     {
-        var stale = Start.AddHours(-1);
-        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(18), weekAt: stale)); // the week's reset stays past, and its retries run out
+        // The week's reset passes and stays in the figures, as readings fail; its retries run out, and the 5-hour reset is still read on time.
+        var stale = Start.AddMinutes(1);
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(18), weekAt: stale));
+        _reader.Next = new PlanReading(PlanReadingKind.Failed);
         await PassAsync(TimeSpan.FromMinutes(17));
+        _vm.WeekText.ShouldBe("week reading again…", "a failed reading keeps the last figures, past reset and all");
+        var reads = _reader.Reads;
         _reader.Next = Reading(fiveHour: 0, inFive: TimeSpan.FromHours(5), weekAt: stale);
 
         await PassAsync(TimeSpan.FromMinutes(1));
 
+        _reader.Reads.ShouldBe(reads + 1, "read at the 5-hour reset, not at the next five minutes");
         _vm.FiveHourText!.ShouldStartWith("5h 0%", Case.Sensitive);
     }
 

@@ -10,7 +10,8 @@ namespace CodeSwitchX.UI.Telemetry;
 /// The real limits of the user's plan on the bottom bar (#370). Read at the start, every five minutes and right after a reset
 /// passes; between readings the countdown ticks on its own. How often <c>/usage</c> may be called is not known, so it stays
 /// modest. A failed reading leaves the last figures standing; a reset that has passed makes its percent wrong, so that limit
-/// says it is being read again.
+/// says it is being read again, until a fresh reading still tells of it well after the reset: that window ended with the
+/// account idle, and the limit stands at 0% (#376).
 /// </summary>
 public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDispatcher ui, TimeProvider time, ILogger<PlanLimitsViewModel> logger) : ObservableObject, IDisposable
 {
@@ -20,15 +21,23 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     /// <summary>How soon to look again at a reading that still tells of the old window: the text's reset can be a minute early.</summary>
     internal static readonly TimeSpan RetryAfterReset = TimeSpan.FromMinutes(1);
 
-    /// <summary>How many times in a row that is done before going back to <see cref="ReadInterval"/>.</summary>
-    internal const int MaxResetRetries = 5;
+    /// <summary>
+    /// How long after a reset that is done, before going back to <see cref="ReadInterval"/>; and how far past its reset a fresh
+    /// reading may still tell of the old window before that window counts as ended with no new one begun (#376). A window
+    /// starts with the first use after the reset, so with the account idle since, nothing is spent: the limit stands at 0%
+    /// with no reset, as a reading that says so, rather than being read again for hours. Ten minutes: the text's reset can be
+    /// a minute early, and the server gets time to catch up before a figure is inferred instead of read.
+    /// </summary>
+    internal static readonly TimeSpan EndedAfter = TimeSpan.FromMinutes(10);
 
     private readonly CancellationTokenSource _stop = new();
     private ITimer? _timer;
     private PlanLimits? _limits;
     private DateTimeOffset _readAt;
+
+    /// <summary>What the last reading's ended windows were, said in the detail line; null when none was.</summary>
+    private string? _endedNote;
     private DateTimeOffset _nextRead = DateTimeOffset.MinValue;
-    private int _resetRetries;
     private bool _reading;
     private bool _stopped;
     private bool _disposed;
@@ -114,11 +123,13 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
         switch (reading.Kind)
         {
             case PlanReadingKind.Read:
-                _limits = reading.Limits;
+                _limits = reading.Limits is { } limits ? new PlanLimits(UnlessEnded(limits.FiveHour, now), UnlessEnded(limits.Week, now)) : null;
+                _endedNote = EndedNote(reading.Limits, now);
                 _readAt = now;
                 break;
             case PlanReadingKind.NoFigures:
                 _limits = null;
+                _endedNote = null;
                 break;
             case PlanReadingKind.SpentATurn:
                 _limits = null;
@@ -134,11 +145,9 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     {
         var next = now + ReadInterval;
         DateTimeOffset?[] resets = [_limits?.FiveHour?.ResetsAt, _limits?.Week?.ResetsAt];
-        if (!resets.Any(r => r <= now))
-        {
-            _resetRetries = 0;
-        }
-        else if (_resetRetries++ < MaxResetRetries)
+        // Each limit's own reset is looked for soon after it passes, and no longer than EndedAfter: by then a reading has ended
+        // its window, or readings fail and the five minutes do.
+        if (resets.Any(r => r <= now && !IsEnded(r.Value, now)))
         {
             next = now + RetryAfterReset;
         }
@@ -155,7 +164,32 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
         WeekText = week is null ? null : Line("week", week, now, DayOf);
         FiveHourBar = fiveHour is null ? null : Bar(fiveHour, FiveHourWindow, now, CountdownOf);
         WeekBar = week is null ? null : Bar(week, WeekWindow, now, DayOf);
-        Detail = _limits is null ? null : $"The real limits of your plan, as Claude Code's /usage says them. Read {ReadText(now)}.";
+        Detail = _limits is null ? null : $"The real limits of your plan, as Claude Code's /usage says them. Read {ReadText(now)}.{_endedNote}";
+    }
+
+    /// <summary>A limit as read, or 0% with no reset when the reading tells of a window that ended with no new one begun (see <see cref="EndedAfter"/>).</summary>
+    private static PlanLimit? UnlessEnded(PlanLimit? limit, DateTimeOffset now) =>
+        limit?.ResetsAt is { } at && IsEnded(at, now) ? new PlanLimit(0, null) : limit;
+
+    /// <summary>
+    /// Whether a fresh reading that still tells this reset tells of a window that ended; the retries after a reset stop at the
+    /// same point. A past reset kept from an earlier reading, while readings fail, is not judged: nothing new was read.
+    /// </summary>
+    private static bool IsEnded(DateTimeOffset resetsAt, DateTimeOffset now) => resetsAt <= now - EndedAfter;
+
+    /// <summary>The 0% of an ended window is inferred, not what /usage printed, and the detail line says so.</summary>
+    private static string? EndedNote(PlanLimits? read, DateTimeOffset now)
+    {
+        var fiveHour = read?.FiveHour?.ResetsAt is { } a && IsEnded(a, now);
+        var week = read?.Week?.ResetsAt is { } b && IsEnded(b, now);
+        var which = (fiveHour, week) switch
+        {
+            (true, true) => "The 5-hour window and the week",
+            (true, false) => "The 5-hour window",
+            (false, true) => "The week",
+            _ => null,
+        };
+        return which is null ? null : $" {which} ended with nothing used since: /usage still tells the old reset, so 0% is shown until your next use starts a new one.";
     }
 
     /// <summary>With the day when it was another: failed readings leave old figures standing, and this is where their age shows.</summary>
