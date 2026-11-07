@@ -269,34 +269,48 @@ public sealed class SoundLibraryTests : IDisposable
         new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(["Ding", "Dong", "Bell"]);
     }
 
-    /// <summary>#392: a scanner holding the index for a moment, as one often does right after it was written, holds up no change.</summary>
+    /// <summary>
+    /// #392: a scanner holding the index for a moment, as one often does right after it was written, holds up no change. The
+    /// hold ends once the write has begun (its part file is there), so the move is refused at least once.
+    /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task An_index_held_for_a_moment_is_written_once_it_is_let_go(bool remove)
     {
+        var ct = TestContext.Current.CancellationToken;
         var library = new SoundLibrary(Folder);
         var ding = library.Add(Picked("Ding.wav")).Sound;
+        var dong = Picked("Dong.wav");
         var index = Path.Combine(Folder, "index.json");
 
-        var holder = File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var letGo = Task.Run(async () =>
+        Task change;
+        using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            await Task.Delay(250, TestContext.Current.CancellationToken);
-            holder.Dispose();
-        }, TestContext.Current.CancellationToken);
-        if (remove)
-        {
-            library.Remove(ding.Id);
-        }
-        else
-        {
-            library.Add(Picked("Dong.wav"));
+            change = Task.Run(() =>
+            {
+                if (remove)
+                {
+                    library.Remove(ding.Id);
+                }
+                else
+                {
+                    library.Add(dong);
+                }
+            }, ct);
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (!File.Exists(index + ".part") && !change.IsCompleted)
+            {
+                DateTime.UtcNow.ShouldBeLessThan(until, "the write never began");
+                await Task.Delay(1, ct);
+            }
+
+            change.IsCompleted.ShouldBeFalse("the index is held: the move cannot have gone through");
         }
 
-        await letGo;
+        await change;
         new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(remove ? [] : ["Ding", "Dong"]);
-        File.Exists(index + ".tmp").ShouldBeFalse();
+        File.Exists(index + ".part").ShouldBeFalse();
     }
 
     [Fact]
@@ -311,8 +325,20 @@ public sealed class SoundLibraryTests : IDisposable
             Should.Throw<UnauthorizedAccessException>(() => library.Remove(ding.Id));
         }
 
-        File.Exists(index + ".tmp").ShouldBeFalse();
+        File.Exists(index + ".part").ShouldBeFalse();
         new SoundLibrary(Folder).Has(ding.Id).ShouldBeTrue("the index was not changed");
+    }
+
+    [Fact]
+    public void A_part_file_a_killed_app_left_is_deleted_at_the_next_start()
+    {
+        new SoundLibrary(Folder).Add(Picked("Ding.wav"));
+        var part = Path.Combine(Folder, "index.json.part");
+        File.WriteAllText(part, "[");
+
+        _ = new SoundLibrary(Folder);
+
+        File.Exists(part).ShouldBeFalse();
     }
 
     /// <summary>Review round 3 of #307: a file cut off in its data is no sound, though its header is whole.</summary>

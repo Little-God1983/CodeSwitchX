@@ -16,7 +16,7 @@ public sealed class SoundLibrary
 {
     private const string UserPrefix = "user-";
 
-    /// <summary>How often the index is tried, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment.</summary>
+    /// <summary>How often the index is read, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment.</summary>
     private const int IndexTries = 5;
 
     private readonly string? _directory;
@@ -326,32 +326,11 @@ public sealed class SoundLibrary
 
     /// <summary>Writes the index whole or not at all: a write cut off (the app killed, the power gone) leaves the one before.</summary>
     /// <remarks>
-    /// Tried again for a moment as the read is (#392): Windows refuses to move over a file another program has open, with
-    /// <see cref="UnauthorizedAccessException"/>, and a scanner opens a file just written.
+    /// As the app's other files are, through <see cref="CodeSwitchX.Core.AtomicFile"/> (#392): the move over the index is tried
+    /// for about half a second, since Windows refuses it while a scanner or the search indexer has the file open, as they often
+    /// do right after it was written. A <c>.part</c> file a killed app leaves is deleted at the next start.
     /// </remarks>
-    private void WriteIndex(List<UserSound> sounds)
-    {
-        var part = IndexFile + ".tmp";
-        var json = JsonSerializer.Serialize(sounds);
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                File.WriteAllText(part, json);
-                File.Move(part, IndexFile, overwrite: true);
-                return;
-            }
-            catch (Exception ex) when (attempt < IndexTries && ex is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(100);
-            }
-            catch
-            {
-                TryDelete(part);
-                throw;
-            }
-        }
-    }
+    private void WriteIndex(List<UserSound> sounds) => CodeSwitchX.Core.AtomicFile.Replace(IndexFile, JsonSerializer.Serialize(sounds), ".part");
 
     private sealed record UserSound(string Id, string Name);
 }
