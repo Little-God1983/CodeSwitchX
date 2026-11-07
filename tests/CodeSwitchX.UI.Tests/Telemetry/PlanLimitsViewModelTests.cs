@@ -278,7 +278,8 @@ public sealed class PlanLimitsViewModelTests : IDisposable
 
         var retries = (int)(PlanLimitsViewModel.EndedAfter / PlanLimitsViewModel.RetryAfterReset);
         var reads = (int)(TimeSpan.FromHours(1) / PlanLimitsViewModel.ReadInterval);
-        _reader.Reads.ShouldBeLessThanOrEqualTo(2 + retries + reads, "a minute apart for the five minutes after the reset, then every five");
+        _reader.Reads.ShouldBeInRange(2 + retries, 2 + retries + reads, "a minute apart for a while after the reset, then every five minutes");
+        _vm.FiveHourText.ShouldBe("5h 0%", "by then the window counts as ended");
     }
 
     [Fact]
@@ -298,6 +299,19 @@ public sealed class PlanLimitsViewModelTests : IDisposable
 
         await PassAsync(TimeSpan.FromHours(3));
         _vm.FiveHourText.ShouldBe("5h 0%", "it stays so, and does not go back to being read again");
+    }
+
+    [Fact]
+    public async Task The_detail_says_which_window_ended_and_that_its_zero_is_inferred()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3)));
+
+        _vm.Detail.ShouldNotBeNull().ShouldContain("The 5-hour window ended with nothing used since");
+        _vm.Detail.ShouldNotContain("The week");
+
+        _reader.Next = Reading();
+        await PassAsync(PlanLimitsViewModel.ReadInterval);
+        _vm.Detail.ShouldNotBeNull().ShouldNotContain("ended", Case.Insensitive);
     }
 
     [Fact]
@@ -322,15 +336,16 @@ public sealed class PlanLimitsViewModelTests : IDisposable
     [Fact]
     public async Task Two_resets_close_together_each_get_their_minutes_of_retries()
     {
-        // Both stay past: the week's, three minutes after the 5-hour one, is not cut short by the retries the first one had.
+        // Both stay past: the week's, two minutes after the 5-hour one, is not cut short by the retries the first one had.
         await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(1), weekAt: Start.AddMinutes(3)));
 
-        await PassAsync(TimeSpan.FromMinutes(7));
+        await PassAsync(TimeSpan.FromMinutes(1) + PlanLimitsViewModel.EndedAfter);
         _vm.FiveHourText.ShouldBe("5h 0%");
         _vm.WeekText.ShouldBe("week reading again…");
 
-        await PassAsync(TimeSpan.FromMinutes(1));
-        _reader.Reads.ShouldBe(9, "a minute apart from the first reset until five minutes after the second");
+        await PassAsync(TimeSpan.FromMinutes(2));
+        var minutes = (int)((TimeSpan.FromMinutes(3) + PlanLimitsViewModel.EndedAfter) / PlanLimitsViewModel.RetryAfterReset);
+        _reader.Reads.ShouldBe(1 + minutes, "a minute apart from the first reset until the second counts as ended");
         _vm.WeekText.ShouldBe("week 0%");
     }
 
