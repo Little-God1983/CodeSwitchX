@@ -277,7 +277,59 @@ public sealed class PlanLimitsViewModelTests : IDisposable
         await PassAsync(TimeSpan.FromHours(1));
 
         _reader.Reads.ShouldBeLessThan(2 + PlanLimitsViewModel.MaxResetRetries + 12);
+    }
+
+    [Fact]
+    public async Task A_window_that_ended_with_the_account_idle_stands_at_zero_once_the_retries_run_out()
+    {
+        // #376: if /usage keeps telling the old reset while nothing is used, the window ended and no new one began.
+        await StartedAsync(Reading(inFive: TimeSpan.FromMinutes(1)));
+        await PassAsync(TimeSpan.FromMinutes(1));
+        _vm.FiveHourText.ShouldBe("5h reading again…", "a reading right after the reset may still tell of the old window");
+
+        await PassAsync(PlanLimitsViewModel.EndedAfter);
+
+        _reader.Reads.ShouldBe(2 + PlanLimitsViewModel.MaxResetRetries);
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        _vm.FiveHourBar.ShouldBe(new LimitBarState(0, null, "0%"));
+        _vm.WeekText.ShouldBe("week 38% · resets Mon 06:00", "its own window goes on");
+
+        await PassAsync(TimeSpan.FromHours(3));
+        _vm.FiveHourText.ShouldBe("5h 0%", "it stays so, and does not go back to being read again");
+    }
+
+    [Fact]
+    public async Task A_reading_just_inside_the_retries_still_says_it_is_read_again()
+    {
+        await StartedAsync(Reading(inFive: -(PlanLimitsViewModel.EndedAfter - TimeSpan.FromSeconds(1))));
+
         _vm.FiveHourText.ShouldBe("5h reading again…");
+        _vm.FiveHourBar.ShouldBe(new LimitBarState(0, null, "reading again…"));
+    }
+
+    [Fact]
+    public async Task A_first_reading_long_past_its_reset_stands_at_zero_at_once()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3), weekAt: Start.AddDays(-1)));
+
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        _vm.WeekText.ShouldBe("week 0%");
+        _vm.WeekBar.ShouldBe(new LimitBarState(0, null, "0%"));
+    }
+
+    [Fact]
+    public async Task Use_after_an_ended_window_shows_the_new_one_at_the_next_reading()
+    {
+        await StartedAsync(Reading(inFive: TimeSpan.FromHours(-3)));
+        _vm.FiveHourText.ShouldBe("5h 0%");
+        await PassAsync(PlanLimitsViewModel.ReadInterval - TimeSpan.FromSeconds(15));
+        _reader.Reads.ShouldBe(1, "an ended window is not looked at again every minute");
+        _reader.Next = Reading(fiveHour: 4, inFive: TimeSpan.FromHours(5) + PlanLimitsViewModel.ReadInterval - TimeSpan.FromMinutes(1));
+
+        await PassAsync(TimeSpan.FromSeconds(15));
+
+        _reader.Reads.ShouldBe(2);
+        _vm.FiveHourText.ShouldBe("5h 4% · resets in 4h 59m");
     }
 
     [Fact]

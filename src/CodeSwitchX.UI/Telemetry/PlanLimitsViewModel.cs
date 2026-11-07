@@ -10,7 +10,8 @@ namespace CodeSwitchX.UI.Telemetry;
 /// The real limits of the user's plan on the bottom bar (#370). Read at the start, every five minutes and right after a reset
 /// passes; between readings the countdown ticks on its own. How often <c>/usage</c> may be called is not known, so it stays
 /// modest. A failed reading leaves the last figures standing; a reset that has passed makes its percent wrong, so that limit
-/// says it is being read again.
+/// says it is being read again, until a fresh reading still tells of it well after the reset: that window ended with the
+/// account idle, and the limit stands at 0% (#376).
 /// </summary>
 public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDispatcher ui, TimeProvider time, ILogger<PlanLimitsViewModel> logger) : ObservableObject, IDisposable
 {
@@ -22,6 +23,13 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
 
     /// <summary>How many times in a row that is done before going back to <see cref="ReadInterval"/>.</summary>
     internal const int MaxResetRetries = 5;
+
+    /// <summary>
+    /// How far past its reset a fresh reading may still tell of the old window before that window counts as ended with no new
+    /// one begun (#376): as long as the retries after a reset run. A window starts with the first use after the reset, so
+    /// with the account idle since, nothing is spent: the limit stands at 0% rather than being read again for hours.
+    /// </summary>
+    internal static readonly TimeSpan EndedAfter = RetryAfterReset * MaxResetRetries;
 
     private readonly CancellationTokenSource _stop = new();
     private ITimer? _timer;
@@ -134,7 +142,8 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     {
         var next = now + ReadInterval;
         DateTimeOffset?[] resets = [_limits?.FiveHour?.ResetsAt, _limits?.Week?.ResetsAt];
-        if (!resets.Any(r => r <= now))
+        // A window long past its reset ended with no new one (EndedAfter): nothing is coming soon to look for.
+        if (!resets.Any(r => r <= now && r > now - EndedAfter))
         {
             _resetRetries = 0;
         }
@@ -151,12 +160,18 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
     {
         var fiveHour = _limits?.FiveHour;
         var week = _limits?.Week;
-        FiveHourText = fiveHour is null ? null : Line("5h", fiveHour, now, (at, from) => $"in {CountdownOf(at, from)}");
-        WeekText = week is null ? null : Line("week", week, now, DayOf);
-        FiveHourBar = fiveHour is null ? null : Bar(fiveHour, FiveHourWindow, now, CountdownOf);
-        WeekBar = week is null ? null : Bar(week, WeekWindow, now, DayOf);
+        FiveHourText = fiveHour is null ? null : Ended(fiveHour) ? "5h 0%" : Line("5h", fiveHour, now, (at, from) => $"in {CountdownOf(at, from)}");
+        WeekText = week is null ? null : Ended(week) ? "week 0%" : Line("week", week, now, DayOf);
+        FiveHourBar = fiveHour is null ? null : Ended(fiveHour) ? EndedBar : Bar(fiveHour, FiveHourWindow, now, CountdownOf);
+        WeekBar = week is null ? null : Ended(week) ? EndedBar : Bar(week, WeekWindow, now, DayOf);
         Detail = _limits is null ? null : $"The real limits of your plan, as Claude Code's /usage says them. Read {ReadText(now)}.";
     }
+
+    /// <summary>Whether the last reading told of a window that ended with no new one begun since (see <see cref="EndedAfter"/>).</summary>
+    private bool Ended(PlanLimit limit) => limit.ResetsAt is { } at && at <= _readAt - EndedAfter;
+
+    /// <summary>A limit whose window ended with nothing used since: empty, with no reset to count down to and no pace.</summary>
+    private static readonly LimitBarState EndedBar = new(0, null, "0%");
 
     /// <summary>With the day when it was another: failed readings leave old figures standing, and this is where their age shows.</summary>
     private string ReadText(DateTimeOffset now)
