@@ -16,6 +16,9 @@ public sealed class SoundLibrary
 {
     private const string UserPrefix = "user-";
 
+    /// <summary>How often the index is tried, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment.</summary>
+    private const int IndexTries = 5;
+
     private readonly string? _directory;
     private readonly Lock _lock = new();
     private readonly List<UserSound> _user;
@@ -276,7 +279,7 @@ public sealed class SoundLibrary
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (attempt == 5)
+                if (attempt == IndexTries)
                 {
                     return (null, true);
                 }
@@ -322,18 +325,31 @@ public sealed class SoundLibrary
     }
 
     /// <summary>Writes the index whole or not at all: a write cut off (the app killed, the power gone) leaves the one before.</summary>
+    /// <remarks>
+    /// Tried again for a moment as the read is (#392): Windows refuses to move over a file another program has open, with
+    /// <see cref="UnauthorizedAccessException"/>, and a scanner opens a file just written.
+    /// </remarks>
     private void WriteIndex(List<UserSound> sounds)
     {
         var part = IndexFile + ".tmp";
-        try
+        var json = JsonSerializer.Serialize(sounds);
+        for (var attempt = 1; ; attempt++)
         {
-            File.WriteAllText(part, JsonSerializer.Serialize(sounds));
-            File.Move(part, IndexFile, overwrite: true);
-        }
-        catch
-        {
-            TryDelete(part);
-            throw;
+            try
+            {
+                File.WriteAllText(part, json);
+                File.Move(part, IndexFile, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < IndexTries && ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(100);
+            }
+            catch
+            {
+                TryDelete(part);
+                throw;
+            }
         }
     }
 
