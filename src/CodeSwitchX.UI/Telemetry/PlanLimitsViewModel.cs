@@ -141,7 +141,7 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
         DateTimeOffset?[] resets = [_limits?.FiveHour?.ResetsAt, _limits?.Week?.ResetsAt];
         // Each limit's own reset is looked for soon after it passes, and no longer than EndedAfter: by then a reading has ended
         // its window, or readings fail and the five minutes do.
-        if (resets.Any(r => r <= now && r > now - EndedAfter))
+        if (resets.Any(r => r <= now && !IsEnded(r.Value, now)))
         {
             next = now + RetryAfterReset;
         }
@@ -163,7 +163,10 @@ public sealed partial class PlanLimitsViewModel(IPlanUsageReader reader, IUiDisp
 
     /// <summary>A limit as read, or 0% with no reset when the reading tells of a window that ended with no new one begun (see <see cref="EndedAfter"/>).</summary>
     private static PlanLimit? Ended(PlanLimit? limit, DateTimeOffset now) =>
-        limit?.ResetsAt is { } at && at <= now - EndedAfter ? new PlanLimit(0, null) : limit;
+        limit?.ResetsAt is { } at && IsEnded(at, now) ? new PlanLimit(0, null) : limit;
+
+    /// <summary>Whether a reset is so far past that a reading still telling it tells of a window that ended: the one rule for the retries and for the 0%.</summary>
+    private static bool IsEnded(DateTimeOffset resetsAt, DateTimeOffset now) => resetsAt <= now - EndedAfter;
 
     /// <summary>With the day when it was another: failed readings leave old figures standing, and this is where their age shows.</summary>
     private string ReadText(DateTimeOffset now)
