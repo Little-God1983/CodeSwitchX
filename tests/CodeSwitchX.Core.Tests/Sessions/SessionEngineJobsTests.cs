@@ -442,6 +442,120 @@ public sealed class SessionEngineJobsTests : IDisposable
         Chat.OpenJobs.ShouldBe(["job1"]);
     }
 
+    private void AgentAsks(string agent) => _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, agent: agent));
+
+    private void AgentSteps(string agent) => _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: agent));
+
+    [Fact]
+    public void A_background_agent_s_prompt_leaves_the_turn_over()
+    {
+        ATurnEndsWithAJobOpen();
+        var over = Chat.TurnOverAt;
+
+        AgentAsks("a1");
+
+        Chat.State.ShouldBe(SessionState.Waiting);
+        Chat.TurnOverAt.ShouldBe(over, "the main agent's turn is over: it is a background agent that asks");
+    }
+
+    [Fact]
+    public void A_job_that_ended_while_a_background_agent_s_prompt_waited_settles_once_the_prompt_is_answered()
+    {
+        // #390: before, the prompt cleared the turn-over mark, and the chat stayed Working with no job open for good.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a1");
+        JobEnds("job1");
+        Chat.State.ShouldBe(SessionState.Waiting);
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        AgentSteps("a1");
+
+        Chat.State.ShouldBe(SessionState.Working, "a turn that reacts to the end may still come");
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
+
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_busy_background_agent_does_not_put_off_the_end_of_the_wait()
+    {
+        // #390: the wait counted from the chat's last event, which each of the agent's steps moved on.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+
+        // A step every 30 s, the last one a second before the two minutes are up.
+        foreach (var gap in new[] { 30, 30, 30, 29 })
+        {
+            _time.Advance(TimeSpan.FromSeconds(gap));
+            AgentSteps("a1");
+            Chat.State.ShouldBe(SessionState.Working);
+        }
+
+        _time.Advance(TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle, "two minutes after the end, though the agent stepped a moment ago");
+    }
+
+    [Fact]
+    public void A_request_of_the_chat_s_own_after_the_end_is_the_reacting_turn_and_ends_the_wait()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), LastRequestAt = _time.GetUtcNow(),
+        });
+
+        Chat.JobsEndedAt.ShouldBeNull("that turn ends with its own stop");
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromMinutes(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Working, "a long reply that uses no tool is still the chat at work");
+
+        Stop();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_request_from_before_the_end_does_not_end_the_wait()
+    {
+        ATurnEndsWithAJobOpen();
+        var before = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), LastRequestAt = before,
+        });
+
+        Chat.JobsEndedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Only_the_newest_ends_are_remembered()
+    {
+        // #390: a start told late comes seconds after its end, so the newest ends are enough; the oldest are let go.
+        Prompt();
+        for (var i = 0; i <= SessionEngine.EndedJobs.Kept; i++)
+        {
+            TaskStop($"j{i}");
+        }
+
+        JobStarts($"j{SessionEngine.EndedJobs.Kept}");
+        Chat.OpenJobs.ShouldBeEmpty("the newest end is remembered");
+
+        JobStarts("j0");
+        Chat.OpenJobs.ShouldBe(["j0"], "the oldest was let go");
+    }
+
     [Fact]
     public void The_transcript_tells_a_job_the_hook_did_not_and_the_same_job_counts_once()
     {
