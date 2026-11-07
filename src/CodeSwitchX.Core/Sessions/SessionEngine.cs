@@ -257,7 +257,9 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// The chat's open jobs once this event is applied (#332). A new process took the old ones with it, and so did the chat's
     /// end; a compact, which has no signal, leaves them. A sub-agent's job is left out: its end may never reach the chat's
-    /// own transcript. The same list when nothing changed, as a snapshot compares by it.
+    /// own transcript. A job the main agent stopped ends here (#381), before the turn's Stop, which follows sooner than the
+    /// transcript is read; a sub-agent's stop is left to the transcript, as its starts are. The same list when nothing
+    /// changed, as a snapshot compares by it.
     /// </summary>
     private IReadOnlyList<string> JobsAfterLocked(HookEvent e, SessionSignal? signal, SessionSnapshot s)
     {
@@ -267,11 +269,29 @@ public sealed class SessionEngine : IDisposable
             return s.OpenJobs.Count > 0 ? [] : s.OpenJobs;
         }
 
-        return e.BackgroundJob is { } job && e.AgentId is null ? WithJob(s.OpenJobs, e.SessionId, job) : s.OpenJobs;
+        if (e.AgentId is not null)
+        {
+            return s.OpenJobs;
+        }
+
+        var jobs = e.BackgroundJob is { } job ? WithJob(s.OpenJobs, e.SessionId, job) : s.OpenJobs;
+        return e.EndedJob is { } ended ? WithoutJobLocked(jobs, e.SessionId, ended) : jobs;
     }
 
     private IReadOnlyList<string> WithJob(IReadOnlyList<string> jobs, string sessionId, string job) =>
         jobs.Contains(job) || (_endedJobs.TryGetValue(sessionId, out var ended) && ended.Contains(job)) ? jobs : [.. jobs, job];
+
+    /// <summary>The jobs without one that ended, remembered as ended so a start told later opens nothing.</summary>
+    private IReadOnlyList<string> WithoutJobLocked(IReadOnlyList<string> jobs, string sessionId, string job)
+    {
+        if (!_endedJobs.TryGetValue(sessionId, out var known))
+        {
+            _endedJobs[sessionId] = known = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        known.Add(job);
+        return jobs.Contains(job) ? jobs.Where(j => j != job).ToArray() : jobs;
+    }
 
     /// <summary>
     /// <see cref="SessionSnapshot.TurnOverAt"/> once this event is applied: a stop, or the idle prompt notice, with jobs open
@@ -563,16 +583,7 @@ public sealed class SessionEngine : IDisposable
 
         foreach (var ended in u.JobsEnded)
         {
-            if (!_endedJobs.TryGetValue(s.SessionId, out var known))
-            {
-                _endedJobs[s.SessionId] = known = new HashSet<string>(StringComparer.Ordinal);
-            }
-
-            known.Add(ended.Id);
-            if (jobs.Contains(ended.Id))
-            {
-                jobs = jobs.Where(j => j != ended.Id).ToArray();
-            }
+            jobs = WithoutJobLocked(jobs, s.SessionId, ended.Id);
         }
 
         return jobs;

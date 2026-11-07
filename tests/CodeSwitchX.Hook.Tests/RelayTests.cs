@@ -231,6 +231,39 @@ public class RelayTests : IDisposable
         JobIn("PreToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"backgroundTaskId":"b1"}}""").ShouldBeNull();
     }
 
+    private static string? EndedJobIn(string eventName, string payload)
+    {
+        using var doc = JsonDocument.Parse(Relay.BuildEnvelope(eventName, payload, DateTimeOffset.UtcNow, 1, []));
+        return doc.RootElement.TryGetProperty("endedJob", out var job) ? job.GetString() : null;
+    }
+
+    [Fact]
+    public void A_stopped_task_names_its_job_as_ended()
+    {
+        // #381: the response Claude Code 2.1.316 gave a TaskStop of a background sleep, word for word.
+        const string payload = """{"session_id":"s1","tool_name":"TaskStop","tool_response":{"message":"Successfully stopped task: b6h4j7l90 (sleep 120)","task_id":"b6h4j7l90","task_type":"local_bash","command":"sleep 120"}}""";
+
+        EndedJobIn("PostToolUse", payload).ShouldBe("b6h4j7l90");
+        JobIn("PostToolUse", payload).ShouldBeNull("a stop starts nothing");
+    }
+
+    [Fact]
+    public void A_big_stop_response_still_names_its_ended_job()
+    {
+        var big = new string('x', 200_000);
+        EndedJobIn("PostToolUse", "{\"session_id\":\"s1\",\"tool_name\":\"TaskStop\",\"tool_response\":{\"message\":\"stopped\",\"command\":\"" + big + "\",\"task_id\":\"b1\",\"task_type\":\"local_bash\"}}").ShouldBe("b1");
+    }
+
+    [Fact]
+    public void Nothing_else_names_an_ended_job()
+    {
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"Bash","tool_response":{"stdout":"","backgroundTaskId":"b1"}}""").ShouldBeNull();
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"X","tool_response":{"task_id":"b1"}}""").ShouldBeNull("only a stop has a task type beside the id");
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"X","tool_response":{"task_id":7,"task_type":"local_bash"}}""").ShouldBeNull();
+        EndedJobIn("PreToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":{"task_id":"b1","task_type":"local_bash"}}""").ShouldBeNull();
+        EndedJobIn("PostToolUse", """{"session_id":"s1","tool_name":"TaskStop","tool_response":"stopped"}""").ShouldBeNull();
+    }
+
     private static string? HashIn(string envelope)
     {
         using var doc = JsonDocument.Parse(envelope);
