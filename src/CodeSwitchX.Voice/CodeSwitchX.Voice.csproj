@@ -20,6 +20,10 @@
     <EmbeddedResource Include="Audio\Sounds\*.wav" LogicalName="CodeSwitchX.Voice.Sounds.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
+    <!-- AtomicFile: the sound list is replaced as the app's other files are (#392). -->
+    <ProjectReference Include="..\CodeSwitchX.Core\CodeSwitchX.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />

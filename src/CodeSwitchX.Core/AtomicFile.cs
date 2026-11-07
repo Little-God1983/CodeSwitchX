@@ -16,24 +16,37 @@ public static class AtomicFile
         var tmp = file + tempSuffix;
         try
         {
-            File.WriteAllText(tmp, content);
-            for (var attempt = 1; ; attempt++)
-            {
-                try
-                {
-                    File.Move(tmp, file, overwrite: true);
-                    return;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < Attempts && !IsReadOnly(file))
-                {
-                    Thread.Sleep(RetryDelay);
-                }
-            }
+            // Tried as the move is: a temporary file a failed write left may still be held by a scanner (#392).
+            Retry(() => File.WriteAllText(tmp, content), tmp);
+            MoveOver(tmp, file);
         }
         catch
         {
             TryDelete(tmp);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Moves a file written next to <paramref name="file"/> over it, tried for about half a second while another process holds
+    /// either one, as a scanner does a file just written (#392); a read-only target is refused at once. The caller deletes
+    /// the source when this throws.
+    /// </summary>
+    public static void MoveOver(string source, string file) => Retry(() => File.Move(source, file, overwrite: true), file);
+
+    private static void Retry(Action action, string target)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < Attempts && !IsReadOnly(target))
+            {
+                Thread.Sleep(RetryDelay);
+            }
         }
     }
 

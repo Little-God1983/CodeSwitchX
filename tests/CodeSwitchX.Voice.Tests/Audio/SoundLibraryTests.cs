@@ -8,7 +8,22 @@ public sealed class SoundLibraryTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("csx-library-").FullName;
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    /// <summary>Tried again for a moment: a scanner may hold a file the test just wrote (#392).</summary>
+    public void Dispose()
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(_root, recursive: true);
+                return;
+            }
+            catch (Exception ex) when (attempt < 10 && ex is IOException or UnauthorizedAccessException)
+            {
+                Thread.Sleep(100);
+            }
+        }
+    }
 
     private string Folder => Path.Combine(_root, "sounds");
 
@@ -252,6 +267,113 @@ public sealed class SoundLibraryTests : IDisposable
         library.Add(Picked("Bell.wav"));
 
         new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(["Ding", "Dong", "Bell"]);
+    }
+
+    /// <summary>
+    /// #392: a scanner holding the index for a moment, as one often does right after it was written, holds up no change. The
+    /// change runs on a thread of its own, and the hold lasts 100 ms after the write has begun (its part file is there), so
+    /// the move is refused and tried again; the tries run for about half a second, which leaves room for a busy machine.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void An_index_held_for_a_moment_is_written_once_it_is_let_go(bool remove)
+    {
+        var library = new SoundLibrary(Folder);
+        var ding = library.Add(Picked("Ding.wav")).Sound;
+        var dong = Picked("Dong.wav");
+        var index = Path.Combine(Folder, "index.json");
+        Exception? failed = null;
+        var change = new Thread(() =>
+        {
+            try
+            {
+                if (remove)
+                {
+                    library.Remove(ding.Id);
+                }
+                else
+                {
+                    library.Add(dong);
+                }
+            }
+            catch (Exception ex)
+            {
+                failed = ex;
+            }
+        });
+
+        using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            change.Start();
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (!File.Exists(index + ".part") && change.IsAlive)
+            {
+                DateTime.UtcNow.ShouldBeLessThan(until, "the write never began");
+                Thread.Sleep(1);
+            }
+
+            Thread.Sleep(100);
+            failed.ShouldBeNull("the change failed while the index was held");
+            change.IsAlive.ShouldBeTrue("the index is held: the move cannot have gone through yet");
+        }
+
+        change.Join(TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        failed.ShouldBeNull();
+        new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(remove ? [] : ["Ding", "Dong"]);
+        File.Exists(index + ".part").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void An_index_held_for_good_fails_the_change_and_leaves_no_part_file()
+    {
+        var library = new SoundLibrary(Folder);
+        var ding = library.Add(Picked("Ding.wav")).Sound;
+        var index = Path.Combine(Folder, "index.json");
+
+        using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Should.Throw<Exception>(() => library.Remove(ding.Id)).ShouldSatisfyAllConditions(
+                ex => (ex is IOException or UnauthorizedAccessException).ShouldBeTrue($"what the library's callers handle, not {ex.GetType().Name}"));
+        }
+
+        File.Exists(index + ".part").ShouldBeFalse();
+        new SoundLibrary(Folder).Has(ding.Id).ShouldBeTrue("the index was not changed");
+    }
+
+    /// <summary>#392 round 3: a start that found the index held cleans its temporary file once it reads it, and keeps a sound Add just imported.</summary>
+    [Fact]
+    public void A_held_start_cleans_the_index_s_part_file_once_it_reads_the_index()
+    {
+        new SoundLibrary(Folder).Add(Picked("Ding.wav"));
+        var part = Path.Combine(Folder, "index.json.part");
+        File.WriteAllText(part, "[");
+
+        SoundLibrary library;
+        using (File.Open(Path.Combine(Folder, "index.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            library = new SoundLibrary(Folder);
+        }
+
+        File.Exists(part).ShouldBeTrue("the start could not read the index, so it cleaned nothing");
+        library.Add(Picked("Bell.wav"));
+
+        File.Exists(part).ShouldBeFalse();
+        new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(["Ding", "Bell"]);
+    }
+
+    [Theory]
+    [InlineData("index.json.part")]
+    [InlineData("index.json.tmp")] // a build before #392 wrote this one
+    public void A_part_file_a_killed_app_left_is_deleted_at_the_next_start(string name)
+    {
+        new SoundLibrary(Folder).Add(Picked("Ding.wav"));
+        var part = Path.Combine(Folder, name);
+        File.WriteAllText(part, "[");
+
+        _ = new SoundLibrary(Folder);
+
+        File.Exists(part).ShouldBeFalse();
     }
 
     /// <summary>Review round 3 of #307: a file cut off in its data is no sound, though its header is whole.</summary>

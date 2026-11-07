@@ -276,12 +276,12 @@ public sealed class SoundLibrary
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (attempt == 5)
+                if (attempt == CodeSwitchX.Core.AtomicFile.Attempts)
                 {
                     return (null, true);
                 }
 
-                Thread.Sleep(100); // a scanner or a backup holds it for a moment
+                Thread.Sleep(CodeSwitchX.Core.AtomicFile.RetryDelay); // a scanner or a backup holds it for a moment; waited out as a write is
             }
         }
     }
@@ -303,6 +303,10 @@ public sealed class SoundLibrary
         _user.Clear();
         _user.AddRange(sounds);
         _indexHeld = false;
+        // What the start skipped while the index was held, as far as is safe now: the index's own temporary files, written only
+        // under the lock. A sound's file not listed may be one Add just imported, before it took the lock.
+        TryDelete(IndexFile + ".part");
+        TryDelete(IndexFile + ".tmp");
     }
 
     /// <summary>Files a failed remove or write left behind, deleted at the start, when the index tells which sounds are the user's.</summary>
@@ -315,27 +319,20 @@ public sealed class SoundLibrary
 
         var listed = _user.Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var file in Directory.GetFiles(_directory, UserPrefix + "*.wav").Where(f => !listed.Contains(Path.GetFileNameWithoutExtension(f)))
-            .Concat(Directory.GetFiles(_directory, "*.part")))
+            .Concat(Directory.GetFiles(_directory, "*.part"))
+            .Concat(Directory.GetFiles(_directory, "index.json.tmp"))) // an index write of a build before #392
         {
             TryDelete(file);
         }
     }
 
     /// <summary>Writes the index whole or not at all: a write cut off (the app killed, the power gone) leaves the one before.</summary>
-    private void WriteIndex(List<UserSound> sounds)
-    {
-        var part = IndexFile + ".tmp";
-        try
-        {
-            File.WriteAllText(part, JsonSerializer.Serialize(sounds));
-            File.Move(part, IndexFile, overwrite: true);
-        }
-        catch
-        {
-            TryDelete(part);
-            throw;
-        }
-    }
+    /// <remarks>
+    /// As the app's other files are, through <see cref="CodeSwitchX.Core.AtomicFile"/> (#392): the move over the index is tried
+    /// for about half a second, since Windows refuses it while a scanner or the search indexer has the file open, as they often
+    /// do right after it was written. A <c>.part</c> file a killed app leaves is deleted at the next start.
+    /// </remarks>
+    private void WriteIndex(List<UserSound> sounds) => CodeSwitchX.Core.AtomicFile.Replace(IndexFile, JsonSerializer.Serialize(sounds), ".part");
 
     private sealed record UserSound(string Id, string Name);
 }
