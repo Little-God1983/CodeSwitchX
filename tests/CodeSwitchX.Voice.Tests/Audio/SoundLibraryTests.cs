@@ -271,7 +271,8 @@ public sealed class SoundLibraryTests : IDisposable
 
     /// <summary>
     /// #392: a scanner holding the index for a moment, as one often does right after it was written, holds up no change. The
-    /// hold ends once the write has begun (its part file is there), so the move is refused at least once.
+    /// hold lasts 100 ms after the write has begun (its part file is there), so the move is refused and tried again; the
+    /// retries run for about 450 ms, which leaves room for a slow machine.
     /// </summary>
     [Theory]
     [InlineData(true)]
@@ -305,6 +306,7 @@ public sealed class SoundLibraryTests : IDisposable
                 await Task.Delay(1, ct);
             }
 
+            await Task.Delay(100, ct);
             change.IsCompleted.ShouldBeFalse("the index is held: the move cannot have gone through");
         }
 
@@ -322,18 +324,21 @@ public sealed class SoundLibraryTests : IDisposable
 
         using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Should.Throw<UnauthorizedAccessException>(() => library.Remove(ding.Id));
+            Should.Throw<Exception>(() => library.Remove(ding.Id)).ShouldSatisfyAllConditions(
+                ex => (ex is IOException or UnauthorizedAccessException).ShouldBeTrue($"what the library's callers handle, not {ex.GetType().Name}"));
         }
 
         File.Exists(index + ".part").ShouldBeFalse();
         new SoundLibrary(Folder).Has(ding.Id).ShouldBeTrue("the index was not changed");
     }
 
-    [Fact]
-    public void A_part_file_a_killed_app_left_is_deleted_at_the_next_start()
+    [Theory]
+    [InlineData("index.json.part")]
+    [InlineData("index.json.tmp")] // a build before #392 wrote this one
+    public void A_part_file_a_killed_app_left_is_deleted_at_the_next_start(string name)
     {
         new SoundLibrary(Folder).Add(Picked("Ding.wav"));
-        var part = Path.Combine(Folder, "index.json.part");
+        var part = Path.Combine(Folder, name);
         File.WriteAllText(part, "[");
 
         _ = new SoundLibrary(Folder);

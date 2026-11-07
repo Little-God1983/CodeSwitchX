@@ -16,8 +16,8 @@ public sealed class SoundLibrary
 {
     private const string UserPrefix = "user-";
 
-    /// <summary>How often the index is read, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment.</summary>
-    private const int IndexTries = 5;
+    /// <summary>How often the index is read, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment. Writes wait as <see cref="CodeSwitchX.Core.AtomicFile"/> does.</summary>
+    private const int ReadTries = 5;
 
     private readonly string? _directory;
     private readonly Lock _lock = new();
@@ -279,7 +279,7 @@ public sealed class SoundLibrary
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (attempt == IndexTries)
+                if (attempt == ReadTries)
                 {
                     return (null, true);
                 }
@@ -318,7 +318,8 @@ public sealed class SoundLibrary
 
         var listed = _user.Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var file in Directory.GetFiles(_directory, UserPrefix + "*.wav").Where(f => !listed.Contains(Path.GetFileNameWithoutExtension(f)))
-            .Concat(Directory.GetFiles(_directory, "*.part")))
+            .Concat(Directory.GetFiles(_directory, "*.part"))
+            .Concat(Directory.GetFiles(_directory, "index.json.tmp"))) // an index write of a build before #392
         {
             TryDelete(file);
         }
