@@ -63,7 +63,7 @@ public static class SoundImport
                 }
             }
 
-            File.Move(part, target, overwrite: true);
+            CodeSwitchX.Core.AtomicFile.MoveOver(part, target); // a scanner opens the file just written (#392)
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

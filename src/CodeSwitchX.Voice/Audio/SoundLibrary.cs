@@ -16,9 +16,6 @@ public sealed class SoundLibrary
 {
     private const string UserPrefix = "user-";
 
-    /// <summary>How often the index is read, 100 ms apart, while a scanner, a backup or the search indexer holds it for a moment. Writes wait as <see cref="CodeSwitchX.Core.AtomicFile"/> does.</summary>
-    private const int ReadTries = 5;
-
     private readonly string? _directory;
     private readonly Lock _lock = new();
     private readonly List<UserSound> _user;
@@ -279,12 +276,12 @@ public sealed class SoundLibrary
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (attempt == ReadTries)
+                if (attempt == CodeSwitchX.Core.AtomicFile.Attempts)
                 {
                     return (null, true);
                 }
 
-                Thread.Sleep(100); // a scanner or a backup holds it for a moment
+                Thread.Sleep(CodeSwitchX.Core.AtomicFile.RetryDelay); // a scanner or a backup holds it for a moment; waited out as a write is
             }
         }
     }
@@ -306,6 +303,10 @@ public sealed class SoundLibrary
         _user.Clear();
         _user.AddRange(sounds);
         _indexHeld = false;
+        // What the start skipped while the index was held, as far as is safe now: the index's own temporary files, written only
+        // under the lock. A sound's file not listed may be one Add just imported, before it took the lock.
+        TryDelete(IndexFile + ".part");
+        TryDelete(IndexFile + ".tmp");
     }
 
     /// <summary>Files a failed remove or write left behind, deleted at the start, when the index tells which sounds are the user's.</summary>

@@ -271,24 +271,22 @@ public sealed class SoundLibraryTests : IDisposable
 
     /// <summary>
     /// #392: a scanner holding the index for a moment, as one often does right after it was written, holds up no change. The
-    /// hold lasts 100 ms after the write has begun (its part file is there), so the move is refused and tried again; the
-    /// retries run for about 450 ms, which leaves room for a slow machine.
+    /// change runs on a thread of its own, and the hold lasts 100 ms after the write has begun (its part file is there), so
+    /// the move is refused and tried again; the tries run for about half a second, which leaves room for a busy machine.
     /// </summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task An_index_held_for_a_moment_is_written_once_it_is_let_go(bool remove)
+    public void An_index_held_for_a_moment_is_written_once_it_is_let_go(bool remove)
     {
-        var ct = TestContext.Current.CancellationToken;
         var library = new SoundLibrary(Folder);
         var ding = library.Add(Picked("Ding.wav")).Sound;
         var dong = Picked("Dong.wav");
         var index = Path.Combine(Folder, "index.json");
-
-        Task change;
-        using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
+        Exception? failed = null;
+        var change = new Thread(() =>
         {
-            change = Task.Run(() =>
+            try
             {
                 if (remove)
                 {
@@ -298,19 +296,30 @@ public sealed class SoundLibraryTests : IDisposable
                 {
                     library.Add(dong);
                 }
-            }, ct);
+            }
+            catch (Exception ex)
+            {
+                failed = ex;
+            }
+        });
+
+        using (File.Open(index, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            change.Start();
             var until = DateTime.UtcNow.AddSeconds(5);
-            while (!File.Exists(index + ".part") && !change.IsCompleted)
+            while (!File.Exists(index + ".part") && change.IsAlive)
             {
                 DateTime.UtcNow.ShouldBeLessThan(until, "the write never began");
-                await Task.Delay(1, ct);
+                Thread.Sleep(1);
             }
 
-            await Task.Delay(100, ct);
-            change.IsCompleted.ShouldBeFalse("the index is held: the move cannot have gone through");
+            Thread.Sleep(100);
+            failed.ShouldBeNull("the change failed while the index was held");
+            change.IsAlive.ShouldBeTrue("the index is held: the move cannot have gone through yet");
         }
 
-        await change;
+        change.Join(TimeSpan.FromSeconds(5)).ShouldBeTrue();
+        failed.ShouldBeNull();
         new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(remove ? [] : ["Ding", "Dong"]);
         File.Exists(index + ".part").ShouldBeFalse();
     }
@@ -330,6 +339,27 @@ public sealed class SoundLibraryTests : IDisposable
 
         File.Exists(index + ".part").ShouldBeFalse();
         new SoundLibrary(Folder).Has(ding.Id).ShouldBeTrue("the index was not changed");
+    }
+
+    /// <summary>#392 round 3: a start that found the index held cleans its temporary file once it reads it, and keeps a sound Add just imported.</summary>
+    [Fact]
+    public void A_held_start_cleans_the_index_s_part_file_once_it_reads_the_index()
+    {
+        new SoundLibrary(Folder).Add(Picked("Ding.wav"));
+        var part = Path.Combine(Folder, "index.json.part");
+        File.WriteAllText(part, "[");
+
+        SoundLibrary library;
+        using (File.Open(Path.Combine(Folder, "index.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            library = new SoundLibrary(Folder);
+        }
+
+        File.Exists(part).ShouldBeTrue("the start could not read the index, so it cleaned nothing");
+        library.Add(Picked("Bell.wav"));
+
+        File.Exists(part).ShouldBeFalse();
+        new SoundLibrary(Folder).All.Where(s => !s.Shipped).Select(s => s.Name).ShouldBe(["Ding", "Bell"]);
     }
 
     [Theory]
