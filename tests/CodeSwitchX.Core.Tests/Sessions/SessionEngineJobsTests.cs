@@ -32,6 +32,8 @@ public sealed class SessionEngineJobsTests : IDisposable
 
     private void Stop() => _engine.Apply(Hook("Stop", SessionSignal.Stop));
 
+    private void TaskStop(string job, string? agent = null) => _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: agent) with { EndedJob = job });
+
     private void TranscriptTells(BackgroundJobEvent[]? started = null, BackgroundJobEvent[]? ended = null, bool historical = false) => _engine.Apply(new TranscriptUpdate
     {
         SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(),
@@ -292,6 +294,152 @@ public sealed class SessionEngineJobsTests : IDisposable
         Stop();
 
         Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_job_the_chat_stops_ends_at_once_so_the_turn_s_stop_leaves_it_idle()
+    {
+        // #381: the Stop follows the TaskStop sooner than the transcript is read.
+        ATurnEndsWithAJobOpen();
+        Prompt();
+        TaskStop("job1");
+        Chat.OpenJobs.ShouldBeEmpty();
+
+        Stop();
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBeNull("no turn reacts to a stop the chat made itself");
+    }
+
+    [Fact]
+    public void The_transcript_s_later_word_on_a_stop_the_hook_told_changes_nothing()
+    {
+        Prompt();
+        JobStarts("job1");
+        TaskStop("job1");
+        Stop();
+
+        _time.Advance(TimeSpan.FromSeconds(2));
+        TranscriptTells(started: [new BackgroundJobEvent("job1", _time.GetUtcNow())], ended: [new BackgroundJobEvent("job1", _time.GetUtcNow())]);
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.OpenJobs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_start_told_after_the_hook_s_stop_opens_nothing()
+    {
+        Prompt();
+        TaskStop("job1");
+
+        TranscriptTells(started: [new BackgroundJobEvent("job1", _time.GetUtcNow())]);
+        JobStarts("job1");
+        Stop();
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void Stopping_one_of_two_jobs_leaves_the_other_holding_the_chat()
+    {
+        Prompt();
+        JobStarts("job1");
+        JobStarts("job2");
+        TaskStop("job1");
+        Stop();
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.OpenJobs.ShouldBe(["job2"]);
+    }
+
+    [Fact]
+    public void A_sub_agent_s_stop_ends_the_chat_s_job_too()
+    {
+        Prompt();
+        JobStarts("job1");
+        TaskStop("job1", agent: "a1");
+        Chat.OpenJobs.ShouldBeEmpty("the transcript counts a sub-agent's stop as well");
+
+        Stop();
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_sub_agent_that_stops_the_last_job_after_the_turn_leaves_the_chat_idle()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        TaskStop("job1", agent: "a1");
+
+        Chat.State.ShouldBe(SessionState.Idle, "no turn reacts to a stop: it tells no task notification");
+        Chat.OpenJobs.ShouldBeEmpty();
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_stop_whose_hook_lands_after_the_turn_s_stop_leaves_the_chat_idle()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        TaskStop("job1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_late_stop_of_one_of_two_jobs_leaves_the_turn_over()
+    {
+        Prompt();
+        JobStarts("job1");
+        JobStarts("job2");
+        Stop();
+        var over = Chat.TurnOverAt.ShouldNotBeNull();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        TaskStop("job1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.OpenJobs.ShouldBe(["job2"]);
+        Chat.TurnOverAt.ShouldBe(over, "the stop ends a step of the turn that is over, it opens no new one");
+
+        _time.Advance(TimeSpan.FromSeconds(1));
+        JobEnds("job2");
+        Chat.JobsEndedAt.ShouldNotBeNull("the last job's end is settled as ever");
+    }
+
+    [Fact]
+    public void A_background_agent_s_next_step_leaves_a_settling_end_as_it_is()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, agent: "a1"));
+        Chat.JobsEndedAt.ShouldNotBeNull("its steps say nothing about the chat's own turn");
+
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_stop_of_a_job_the_chat_never_told_changes_nothing_but_is_remembered()
+    {
+        ATurnEndsWithAJobOpen();
+
+        TaskStop("other");
+        Chat.OpenJobs.ShouldBe(["job1"]);
+
+        JobStarts("other");
+        Chat.OpenJobs.ShouldBe(["job1"]);
     }
 
     [Fact]

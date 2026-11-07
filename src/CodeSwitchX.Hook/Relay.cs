@@ -273,6 +273,12 @@ internal static class Relay
                         writer.WriteString("backgroundJob", job);
                     }
 
+                    // The same for a job the chat stopped, so its turn's Stop does not find it open (#381).
+                    if (eventName == "PostToolUse" && EndedJobOf(document.RootElement) is { } ended)
+                    {
+                        writer.WriteString("endedJob", ended);
+                    }
+
                     writer.WritePropertyName("payload");
                     WriteValue(writer, document.RootElement, top: true, maxNestedBytes, keepStrings);
                 }
@@ -305,6 +311,22 @@ internal static class Relay
         return response.TryGetProperty("isAsync", out var async) && async.ValueKind == JsonValueKind.True
             && response.TryGetProperty("agentId", out var agent) && agent.ValueKind == JsonValueKind.String ? agent.GetString() : null;
     }
+
+    /// <summary>
+    /// The background job a tool use stopped (#381): TaskStop's response, with <c>task_id</c> and <c>task_type</c>, always
+    /// means the task runs no more, as the transcript reader knows it (#379; TranscriptLineParser.JobsOf keeps the same
+    /// shape rule). The transcript's result line names no tool, the hook does, so here the tool must be TaskStop too: another
+    /// tool's result of the same shape ends nothing, and a stop under a name not listed is still ended by the transcript, a
+    /// scan later. KillShell and KillBash are TaskStop's old names, which Claude Code 2.1.316 still maps to it.
+    /// </summary>
+    private static string? EndedJobOf(JsonElement payload) =>
+        payload.ValueKind == JsonValueKind.Object
+        && payload.TryGetProperty("tool_name", out var tool) && tool.ValueKind == JsonValueKind.String
+        && (tool.ValueEquals("TaskStop") || tool.ValueEquals("KillShell") || tool.ValueEquals("KillBash"))
+        && payload.TryGetProperty("tool_response", out var response) && response.ValueKind == JsonValueKind.Object
+        && response.TryGetProperty("task_type", out _) && response.TryGetProperty("task_id", out var task) && task.ValueKind == JsonValueKind.String
+            ? task.GetString()
+            : null;
 
     /// <summary>
     /// A fingerprint of a tool's input: the same in a tool use's PreToolUse and in the PermissionRequest it raises, which

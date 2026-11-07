@@ -47,6 +47,19 @@ public class HookEnvelopeParserTests
     }
 
     [Fact]
+    public void The_relay_s_ended_job_is_read_from_the_envelope()
+    {
+        const string json = """
+            {"event":"PostToolUse","relayPid":1,"parentChain":[],"endedJob":"b6h4j7l90","payload":{"session_id":"abc","hook_event_name":"PostToolUse","tool_name":"TaskStop"}}
+            """;
+
+        var e = HookEnvelopeParser.Parse(json, Received).ShouldNotBeNull();
+        e.EndedJob.ShouldBe("b6h4j7l90");
+        e.BackgroundJob.ShouldBeNull();
+        HookEnvelopeParser.Parse(json.Replace("\"endedJob\":\"b6h4j7l90\",", ""), Received).ShouldNotBeNull().EndedJob.ShouldBeNull("an older relay sends none");
+    }
+
+    [Fact]
     public void The_relay_s_fingerprint_of_the_tool_input_is_read_from_the_envelope()
     {
         var json = """
