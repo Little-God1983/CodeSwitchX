@@ -173,8 +173,8 @@ public sealed class SessionEngine : IDisposable
     /// </summary>
     public static readonly TimeSpan JobEndSettle = TimeSpan.FromMinutes(2);
 
-    /// <summary>The jobs each chat's transcript told the end of, since its process started: a hook that comes after one opens nothing. Under <see cref="_gate"/>.</summary>
-    private readonly Dictionary<string, HashSet<string>> _endedJobs = new(StringComparer.Ordinal);
+    /// <summary>The jobs each chat's hooks or transcript told the end of, since its process started: a start told after one opens nothing. Under <see cref="_gate"/>.</summary>
+    private readonly Dictionary<string, EndedJobs> _endedJobs = new(StringComparer.Ordinal);
 
     public void Apply(HookEvent e)
     {
@@ -201,19 +201,36 @@ public sealed class SessionEngine : IDisposable
             }
 
             var jobs = JobsAfterLocked(e, signal, s);
-            var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs);
-            // A background agent's steps say nothing about the chat's own turn, so they leave a settling end as it is.
-            var jobsEndedAt = signal is null || (signal == SessionSignal.ToolUse && e.AgentId is not null) ? s.JobsEndedAt : null;
+            // A stale idle prompt describes the turn before: it tells nothing new of the main agent's turn.
+            var ofMainTurn = !staleIdlePrompt && OfMainTurnLocked(e, signal);
+            var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs, ofMainTurn);
+            // What tells nothing of the main agent's turn (a background agent's steps and prompts) leaves a settling end as it is.
+            var jobsEndedAt = ofMainTurn ? null : s.JobsEndedAt;
             if (state == SessionState.Idle && jobs.Count > 0)
             {
                 state = SessionState.Working;
             }
             else if (e.EndedJob is not null && TurnOverOfLastJobEnd(jobs, s, state) is not null)
             {
-                // A sub-agent stopped the last job while the chat sat at its input prompt, or the stop's hook landed after the
-                // turn's Stop (#381). No turn reacts to a stop, which tells no task notification (#379): the chat is done.
                 turnOver = null;
-                state = SessionState.Idle;
+                if (state == SessionState.Working)
+                {
+                    // A sub-agent stopped the last job while the chat sat at its input prompt, or the stop's hook landed after
+                    // the turn's Stop (#381). No turn reacts to a stop, which tells no task notification (#379): the chat is done.
+                    state = SessionState.Idle;
+                }
+                else
+                {
+                    // Stopped while a background agent's prompt holds the chat Waiting (#390): once that prompt is answered, the
+                    // wait for a reacting turn runs out as for any end after the turn.
+                    jobsEndedAt = e.At;
+                }
+            }
+
+            if (s.State == SessionState.Waiting && state == SessionState.Working && jobsEndedAt is not null)
+            {
+                // The prompt is answered: a turn that reacts to the end may have waited behind it, so the wait for it begins now.
+                jobsEndedAt = e.At;
             }
 
             var cwd = e.Cwd ?? s.Cwd;
@@ -258,10 +275,18 @@ public sealed class SessionEngine : IDisposable
                 KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = jobsEndedAt,
+                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
             });
         }
     }
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.JobsEndedAt"/> as a chat in <paramref name="state"/> with <paramref name="jobs"/> open keeps
+    /// it: the wait for the turn that reacts to the end of its last job holds only while it works on, or waits, with no job
+    /// open. A job open again is waited for by itself, and a chat that is done waits for nothing (#390).
+    /// </summary>
+    private static DateTimeOffset? WaitAfter(SessionState state, IReadOnlyList<string> jobs, DateTimeOffset? endedAt) =>
+        jobs.Count == 0 && state is SessionState.Working or SessionState.Waiting ? endedAt : null;
 
     /// <summary>
     /// The chat's open jobs once this event is applied (#332). A new process took the old ones with it, and so did the chat's
@@ -285,16 +310,34 @@ public sealed class SessionEngine : IDisposable
     private IReadOnlyList<string> WithJob(IReadOnlyList<string> jobs, string sessionId, string job) =>
         jobs.Contains(job) || (_endedJobs.TryGetValue(sessionId, out var ended) && ended.Contains(job)) ? jobs : [.. jobs, job];
 
-    /// <summary>When the chat's turn was over, if its last job just ended while it sat at its input prompt; else null.</summary>
+    /// <summary>
+    /// When the chat's turn was over, if its last job just ended after that, while it sat at its input prompt or while a
+    /// background agent's prompt held it Waiting (#390); else null.
+    /// </summary>
     private static DateTimeOffset? TurnOverOfLastJobEnd(IReadOnlyList<string> jobs, SessionSnapshot s, SessionState state) =>
-        jobs.Count == 0 && s.OpenJobs.Count > 0 && state == SessionState.Working ? s.TurnOverAt : null;
+        jobs.Count == 0 && s.OpenJobs.Count > 0 && state is SessionState.Working or SessionState.Waiting ? s.TurnOverAt : null;
+
+    /// <summary>
+    /// Whether an event tells of the main agent's turn (#390): an event with no signal does not, nor does any of a background
+    /// agent's, its prompts included. A prompt whose hook names no agent is the main agent's only when the main agent is the
+    /// one it waits for (<see cref="Agents"/>); one that restates a background agent's prompt is that agent's. The start of
+    /// the main agent's step is its turn even where it is no progress for a Waiting another agent's prompt holds; a step's
+    /// result is not, as it may land after the turn's Stop.
+    /// </summary>
+    private bool OfMainTurnLocked(HookEvent e, SessionSignal? signal) => (signal ?? (MainStepBegins(e) ? e.Signal : null)) switch
+    {
+        null => false,
+        _ when e.AgentId is not null => false,
+        SessionSignal.Notification => _agents.TryGetValue(e.SessionId, out var agents) && agents.Waiting.Contains(Agents.Main),
+        _ => true,
+    };
 
     /// <summary>The jobs without one that ended, remembered as ended so a start told later opens nothing.</summary>
     private IReadOnlyList<string> WithoutJobLocked(IReadOnlyList<string> jobs, string sessionId, string job)
     {
         if (!_endedJobs.TryGetValue(sessionId, out var known))
         {
-            _endedJobs[sessionId] = known = new HashSet<string>(StringComparer.Ordinal);
+            _endedJobs[sessionId] = known = new EndedJobs();
         }
 
         known.Add(job);
@@ -302,17 +345,46 @@ public sealed class SessionEngine : IDisposable
     }
 
     /// <summary>
+    /// The newest ends of a chat's jobs (#390): a start is told late by seconds, by the other route, so the newest
+    /// <see cref="Kept"/> are enough, and a chat that runs for days does not keep every id it ever ended.
+    /// </summary>
+    internal sealed class EndedJobs
+    {
+        internal const int Kept = 1024;
+
+        private readonly HashSet<string> _ids = new(StringComparer.Ordinal);
+        private readonly Queue<string> _order = new();
+
+        public bool Contains(string id) => _ids.Contains(id);
+
+        public void Add(string id)
+        {
+            if (!_ids.Add(id))
+            {
+                return;
+            }
+
+            _order.Enqueue(id);
+            if (_order.Count > Kept)
+            {
+                _ids.Remove(_order.Dequeue());
+            }
+        }
+    }
+
+    /// <summary>
     /// <see cref="SessionSnapshot.TurnOverAt"/> once this event is applied: a stop, or the idle prompt notice, with jobs open
     /// ends the turn; a prompt, a question or a step of the main agent is a turn again. A background agent's steps say nothing
     /// about the chat's own turn. Nor does a stop's result (#381): it ends a step its PreToolUse already told, and one that
-    /// lands after the turn's Stop must not open the turn again.
+    /// lands after the turn's Stop must not open the turn again. Nor does a background agent's prompt (#390).
     /// </summary>
-    private static DateTimeOffset? TurnOverAfter(HookEvent e, SessionSignal? signal, SessionSnapshot s, IReadOnlyList<string> jobs) => signal switch
+    private static DateTimeOffset? TurnOverAfter(HookEvent e, SessionSignal? signal, SessionSnapshot s, IReadOnlyList<string> jobs, bool ofMainTurn) =>
+        // The main turn's own stop counts though a background agent's prompt holds the Waiting on (#390).
+        (signal ?? (e.AgentId is null && e.Signal is SessionSignal.Stop or SessionSignal.IdlePrompt ? e.Signal : null)) switch
     {
         SessionSignal.Stop => jobs.Count > 0 ? e.At : null,
         SessionSignal.IdlePrompt => jobs.Count > 0 ? s.TurnOverAt ?? e.At : null,
-        SessionSignal.ToolUse when e.AgentId is not null || e.EndedJob is not null => s.TurnOverAt,
-        null => s.TurnOverAt,
+        _ when !ofMainTurn || e.EndedJob is not null => s.TurnOverAt,
         _ => null,
     };
 
@@ -360,7 +432,7 @@ public sealed class SessionEngine : IDisposable
                 agents.Open.RemoveAll(t => t.Agent == agent);
                 if (agents.Waiting.Remove(agent) && s.State == SessionState.Waiting && agents.Waiting.Count == 0)
                 {
-                    signal = Released(agents); // the waiting agent stopped (its prompt denied): nobody waits
+                    signal = Released(agents, s); // the waiting agent stopped (its prompt denied): nobody waits
                 }
 
                 break;
@@ -385,7 +457,12 @@ public sealed class SessionEngine : IDisposable
                 signal = null;
                 break;
             case SessionSignal.ToolUse when s.State == SessionState.Waiting && agents.Waiting.Count > 0:
-                signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents);
+                if (MainStepBegins(e))
+                {
+                    agents.TurnEnded = false; // the main agent steps again (#390): its turn goes on once the prompts are answered
+                }
+
+                signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents, s);
                 break;
             case SessionSignal.ToolUse:
                 agents.Waiting.Remove(agent);
@@ -448,13 +525,19 @@ public sealed class SessionEngine : IDisposable
         return agents.Waiting.Count > 0 ? null : agents.Open.Count > 0 ? agents.Open[^1].Agent : Agents.Main;
     }
 
-    /// <summary>Nobody waits any more: the parent's turn goes on, or is over when it ended while the prompt was open.</summary>
-    private static SessionSignal Released(Agents agents)
+    /// <summary>
+    /// Nobody waits any more: the parent's turn goes on, or is over when it ended while the prompt was open. Unless its last
+    /// job ended since (#390): the turn that reacts may still come, and the chat works on until the wait for it runs out.
+    /// </summary>
+    private static SessionSignal Released(Agents agents, SessionSnapshot s)
     {
         var ended = agents.TurnEnded;
         agents.TurnEnded = false;
-        return ended ? SessionSignal.Stop : SessionSignal.ToolUse;
+        return ended && s.JobsEndedAt is null ? SessionSignal.Stop : SessionSignal.ToolUse;
     }
+
+    /// <summary>Whether the event starts a step of the main agent: a step's result may land after the turn's Stop (#381).</summary>
+    private static bool MainStepBegins(HookEvent e) => e is { EventName: "PreToolUse", AgentId: null };
 
     /// <summary>
     /// What a chat's agents are up to, kept only while a chat has hooks in this run: the tool uses whose PreToolUse has no
@@ -529,17 +612,26 @@ public sealed class SessionEngine : IDisposable
             else if (TurnOverOfLastJobEnd(jobs, s, state) is { } over)
             {
                 // The last job ended. A stop since then was the turn that reacted to it, read late: the chat is done. Else that
-                // turn may still come, and the sweep ends the wait if it does not.
+                // turn may still come, and the sweep ends the wait if it does not; while a background agent's prompt holds the
+                // chat Waiting (#390), it begins again once the prompt is answered.
                 turnOver = null;
-                if (u.JobsEnded.Max(j => j.At) <= over)
+                var endedAt = u.JobsEnded.Max(j => j.At);
+                if (endedAt <= over && state == SessionState.Working)
                 {
                     state = SessionState.Idle;
                     stateSince = activityAt;
                 }
                 else
                 {
-                    jobsEndedAt = u.JobsEnded.Max(j => j.At);
+                    jobsEndedAt = endedAt;
                 }
+            }
+
+            // A request of the chat's own (a sub-agent's lines hold none) after the end is the turn that reacts to it: it ends
+            // with its own stop, so the wait for it is over (#390).
+            if (jobsEndedAt is { } settling && u.LastRequestAt is { } reacting && reacting > settling)
+            {
+                jobsEndedAt = null;
             }
 
             var cwd = s.Cwd ?? u.Cwd;
@@ -561,7 +653,7 @@ public sealed class SessionEngine : IDisposable
                 AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = jobsEndedAt,
+                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
                 KeepAliveTurn = KeepAliveGoesOn(s),
             });
@@ -648,7 +740,8 @@ public sealed class SessionEngine : IDisposable
                     SessionState.Idle when quiet >= _options.StaleAfter => SessionSignal.StaleTimeout,
                     // Only an unknown hook event leaves a session in Starting; nothing else would ever move it.
                     SessionState.Starting when quiet >= _options.InferredIdleAfter => SessionSignal.Stop,
-                    SessionState.Working when s.JobsEndedAt is not null && quiet >= JobEndSettle => SessionSignal.Stop,
+                    // From the end itself (#390): a background agent's steps, which keep the wait, must not put it off either.
+                    SessionState.Working when s.JobsEndedAt is { } ended && now - ended >= JobEndSettle => SessionSignal.Stop,
                     SessionState.Working when !s.HookSeen && !s.RestoredWorking && s.OpenJobs.Count == 0 && quiet >= _options.InferredIdleAfter =>
                         s.AwaitingToolResult ? SessionSignal.Notification : SessionSignal.Stop,
                     SessionState.Waiting when !s.HookSeen && s.ClaudePid is null && quiet >= _options.StaleAfter => SessionSignal.Stop,
