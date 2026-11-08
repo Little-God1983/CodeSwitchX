@@ -466,6 +466,7 @@ public sealed class TranscriptIndexer : BackgroundService
         string? cwd = null;
         string? model = null;
         DateTimeOffset? lastActivity = null;
+        DateTimeOffset? lastReply = null;
         TokenUsage? latestContext = null;
         DateTimeOffset? lastRequest = null;
         var jobsStarted = new List<BackgroundJobEvent>();
@@ -533,6 +534,11 @@ public sealed class TranscriptIndexer : BackgroundService
             if (line.Timestamp is { } ts && (lastActivity is null || ts > lastActivity))
             {
                 lastActivity = ts;
+            }
+
+            if (line is AssistantLine { Timestamp: { } replied } && (lastReply is null || replied > lastReply))
+            {
+                lastReply = replied; // an API error's line too: the agent ran again
             }
 
             switch (line)
@@ -698,6 +704,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 // A file of no agent (a workflow's journal) is no agent's the chat could wait for: its name, which no hook names.
                 AgentId = AgentIdOf(path) ?? Path.GetFileNameWithoutExtension(path),
                 LastActivityAt = lastActivity,
+                LastReplyAt = lastReply,
                 Usage = usage,
                 MessageIds = newMessageIds,
                 InferredSignal = recentlyWritten ? SessionSignal.ToolUse : null,

@@ -152,7 +152,7 @@ public sealed class SessionEngine : IDisposable
                     var agents = new Agents { TurnEnded = corrected.WaitingTurnEnded };
                     foreach (var (agent, since) in waiting)
                     {
-                        agents.Waiting[agent] = since;
+                        agents.Waiting[agent] = new WaitStart(since, Restored: true);
                     }
 
                     _agents[corrected.SessionId] = agents;
@@ -512,7 +512,7 @@ public sealed class SessionEngine : IDisposable
             case SessionSignal.Notification:
                 if (WaitingAgentOf(e, agents) is { } waiting)
                 {
-                    agents.Waiting.TryAdd(waiting, e.At); // a prompt restated keeps when it began
+                    agents.Waiting.TryAdd(waiting, new WaitStart(e.At, Restored: false)); // a prompt restated keeps when it began
                     if (e.ToolUseId is { } asking)
                     {
                         agents.WaitingSteps.Add(asking);
@@ -651,23 +651,32 @@ public sealed class SessionEngine : IDisposable
             : (null, false);
 
     /// <summary>
-    /// The signal that ends a Waiting whose agents are known, once these lines are applied (#401); null while it goes on.
-    /// A sub-agent's lines written after it began to wait are that agent at work again: its prompt was answered, maybe while
-    /// the app was down, after which no hook of it may come. The chat's own file tells the main agent as it always did while
-    /// no hook was seen: a recent write is its answer, a quiet end its turn's end (as its Stop would), a tool call left open
-    /// its prompt still waiting. Lines of an agent nobody waits for end nothing.
+    /// The signal that ends a Waiting whose agents are known, once these lines are applied (#401); null while it goes on. A
+    /// wait that came back from storage may have been answered while the app was down, after which no hook of that agent may
+    /// come: its reply written after it began to wait is that agent at work again. A wait of this run is ended by hooks alone,
+    /// as before. The chat's own file tells the main agent as inference always did while no hook was seen: a recent write is
+    /// its answer (or, while it does not wait, its turn going on), a quiet end its turn's end (as its Stop would), a tool
+    /// call left open its prompt still waiting. Lines of an agent nobody waits for end nothing.
     /// </summary>
     private SessionSignal? ReleasedByLinesLocked(TranscriptUpdate u, SessionSnapshot s, Agents agents)
     {
         var writer = Agents.Key(u.AgentId);
-        if (!agents.Waiting.TryGetValue(writer, out var since))
+        var said = u.AgentId is null ? (s.HookSeen ? null : u.InferredSignal) : null;
+        if (!agents.Waiting.TryGetValue(writer, out var wait))
         {
+            if (writer == Agents.Main && said == SessionSignal.ToolUse)
+            {
+                agents.TurnEnded = false; // the main agent steps again, as its own step on the hook route says (#390)
+            }
+
             return null;
         }
 
-        var said = u.AgentId is not null
-            ? u.LastActivityAt is { } at && at > since ? SessionSignal.ToolUse : (SessionSignal?)null
-            : s.HookSeen ? null : u.InferredSignal;
+        if (u.AgentId is not null)
+        {
+            said = wait.Restored && u.LastReplyAt is { } replied && replied > wait.Since ? SessionSignal.ToolUse : null;
+        }
+
         if (said is not (SessionSignal.ToolUse or SessionSignal.Stop))
         {
             return null;
@@ -685,8 +694,7 @@ public sealed class SessionEngine : IDisposable
         }
 
         agents.WaitingSteps.Clear();
-        var released = said == SessionSignal.Stop ? SessionSignal.Stop : Released(agents, s);
-        agents.TurnEnded = false;
+        var released = Released(agents, s);
         if (agents.Idle)
         {
             _agents.Remove(u.SessionId);
@@ -731,6 +739,9 @@ public sealed class SessionEngine : IDisposable
     /// the agents whose prompt waits for the user and since when, and whether the main turn ended meanwhile. The last two are
     /// stored with the chat while it waits (<see cref="SessionSnapshot.WaitingAgents"/>, #401) and come back on a restore.
     /// </summary>
+    /// <summary>When an agent began to wait, and whether that wait came back from storage (#401): only such a wait is ended by the agent's lines.</summary>
+    private readonly record struct WaitStart(DateTimeOffset Since, bool Restored);
+
     private sealed class Agents
     {
         /// <summary>The main agent's key; sub-agents are keyed by their agent_id.</summary>
@@ -738,8 +749,8 @@ public sealed class SessionEngine : IDisposable
 
         public List<(string Agent, string? ToolUseId)> Open { get; } = [];
 
-        /// <summary>The agents whose prompt waits for the user, each with when it began to wait.</summary>
-        public Dictionary<string, DateTimeOffset> Waiting { get; } = new(StringComparer.Ordinal);
+        /// <summary>The agents whose prompt waits for the user, each with when it began to wait and whether a restore brought it back.</summary>
+        public Dictionary<string, WaitStart> Waiting { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The tool uses whose prompt waits, where the prompt named one: their own late PreToolUse is no progress.</summary>
         public HashSet<string> WaitingSteps { get; } = new(StringComparer.Ordinal);
@@ -754,8 +765,8 @@ public sealed class SessionEngine : IDisposable
         /// What <see cref="SessionSnapshot.WaitingAgents"/> stores of the waiting agents: one per line, ordered, the main one as
         /// <c>main</c>, each with when it began to wait in UTC ticks after a space.
         /// </summary>
-        public static string Encode(IReadOnlyDictionary<string, DateTimeOffset> waiting) => string.Join('\n',
-            waiting.Select(w => $"{(w.Key == Main ? "main" : w.Key)} {w.Value.UtcTicks.ToString(CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal));
+        public static string Encode(IReadOnlyDictionary<string, WaitStart> waiting) => string.Join('\n',
+            waiting.Select(w => $"{(w.Key == Main ? "main" : w.Key)} {w.Value.Since.UtcTicks.ToString(CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal));
 
         /// <summary>The waiting agents <see cref="Encode"/> stored; one stored with no time waits since <paramref name="since"/>.</summary>
         public static IReadOnlyList<(string Agent, DateTimeOffset Since)> Decode(string? stored, DateTimeOffset since) =>

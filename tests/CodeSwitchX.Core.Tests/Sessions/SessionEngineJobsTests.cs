@@ -1193,7 +1193,8 @@ public sealed class SessionEngineJobsTests : IDisposable
     private TranscriptUpdate WrittenBy(string? agent, DateTimeOffset at) => new()
     {
         SessionId = "s1", TranscriptPath = agent is null ? "p" : $"p/subagents/agent-{agent}.jsonl", ObservedAt = _time.GetUtcNow(),
-        LastActivityAt = at, AgentId = agent, InferredSignal = _time.GetUtcNow() - at < TimeSpan.FromSeconds(10) ? SessionSignal.ToolUse : null,
+        LastActivityAt = at, AgentId = agent, LastReplyAt = agent is null ? null : at,
+        InferredSignal = _time.GetUtcNow() - at < TimeSpan.FromSeconds(10) ? SessionSignal.ToolUse : null,
     };
 
     [Fact]
@@ -1335,6 +1336,45 @@ public sealed class SessionEngineJobsTests : IDisposable
         engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse));
 
         engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void A_wait_of_this_run_is_ended_by_hooks_alone()
+    {
+        // Review round 2 of #401: before, a transcript never moved a chat with hooks; lines that are no progress (a hook's
+        // result) must not end a live prompt either.
+        Prompt();
+        AgentAsks("a1");
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        _engine.Apply(WrittenBy("a1", _time.GetUtcNow()));
+
+        Chat.State.ShouldBe(SessionState.Waiting);
+    }
+
+    [Fact]
+    public void Lines_of_the_waiting_agent_that_are_no_reply_leave_a_restored_chat_waiting()
+    {
+        // Review round 2 of #401: a hook's result or a parallel step's result is written while the prompt still waits.
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-1)) with { LastReplyAt = _time.GetUtcNow().AddMinutes(-6) });
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-1)) with { LastReplyAt = null });
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+    }
+
+    [Fact]
+    public void The_main_agent_at_work_again_before_its_first_hook_is_no_longer_a_turn_that_ended()
+    {
+        // Review round 2 of #401: a stored "turn ended" outlived a main turn that went on, and a1's answer then made it Idle.
+        using var engine = RestoredWaitingOn("a1", turnEnded: true);
+
+        engine.Apply(WrittenBy(null, _time.GetUtcNow()));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "a1's prompt still waits");
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow()));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the main turn goes on");
     }
 
     [Fact]

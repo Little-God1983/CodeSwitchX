@@ -32,6 +32,13 @@ public sealed record TranscriptUpdate
     /// </summary>
     public string? AgentId { get; init; }
 
+    /// <summary>
+    /// When the newest reply of these lines was written (an assistant line); null when they hold none (#401). A sub-agent replies
+    /// again only once every step it took is over, the one its prompt asked for included: lines that are no reply (a hook's
+    /// result, progress) and a parallel step's result do not tell that.
+    /// </summary>
+    public DateTimeOffset? LastReplyAt { get; init; }
+
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
 
