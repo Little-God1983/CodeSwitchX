@@ -465,19 +465,169 @@ public sealed class SessionEngineJobsTests : IDisposable
         ATurnEndsWithAJobOpen();
         _time.Advance(TimeSpan.FromMinutes(1));
         AgentAsks("a1");
+        var ended = _time.GetUtcNow();
         JobEnds("job1");
+
         Chat.State.ShouldBe(SessionState.Waiting);
+        Chat.TurnOverAt.ShouldBeNull("no job is open: no turn-over mark is left behind, not even through a restart");
+        Chat.JobsEndedAt.ShouldBe(ended, "the wait counts from the end itself");
 
         _time.Advance(TimeSpan.FromSeconds(10));
         AgentSteps("a1");
-
         Chat.State.ShouldBe(SessionState.Working, "a turn that reacts to the end may still come");
-        Chat.TurnOverAt.ShouldBeNull();
-        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow());
 
-        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromSeconds(1));
+        _time.Advance(SessionEngine.JobEndSettle);
         _engine.SweepStale();
         Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_background_agent_s_prompt_during_the_wait_keeps_it()
+    {
+        // Review round 1 of #390: a second prompt cleared the wait, and the chat stayed Working once it was answered.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        var ended = Chat.JobsEndedAt;
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        AgentAsks("a1");
+        Chat.JobsEndedAt.ShouldBe(ended);
+        AgentSteps("a1");
+        Chat.JobsEndedAt.ShouldBe(ended);
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_reacting_turn_that_began_while_a_prompt_waited_is_not_cut_off()
+    {
+        // Review round 1 of #390: the chat's own request after the end, made while the background agent's prompt waited.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a1");
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), LastRequestAt = _time.GetUtcNow(),
+        });
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        AgentSteps("a1");
+        _time.Advance(SessionEngine.JobEndSettle + TimeSpan.FromMinutes(1));
+        _engine.SweepStale();
+
+        Chat.State.ShouldBe(SessionState.Working, "the reacting turn ends with its own stop");
+    }
+
+    [Fact]
+    public void A_stop_while_a_background_agent_s_prompt_waits_settles_once_it_is_answered()
+    {
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a2");
+
+        TaskStop("job1", agent: "a1");
+        Chat.State.ShouldBe(SessionState.Waiting);
+        Chat.TurnOverAt.ShouldBeNull();
+        Chat.JobsEndedAt.ShouldNotBeNull();
+
+        AgentSteps("a2");
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void An_idle_prompt_told_stale_by_a_background_agent_s_step_keeps_the_wait()
+    {
+        // Review round 2 of #390: the stale notice counted as the main agent's turn, cleared the wait and left the state.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromSeconds(30));
+        JobEnds("job1");
+        var ended = Chat.JobsEndedAt;
+
+        _time.Advance(TimeSpan.FromSeconds(25));
+        AgentSteps("a1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+        _engine.Apply(Hook("Notification", SessionSignal.IdlePrompt));
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.JobsEndedAt.ShouldBe(ended, "a stale notice tells nothing new");
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void The_main_agent_s_step_while_a_background_agent_s_prompt_waits_is_the_reacting_turn()
+    {
+        // Review round 2 of #390: the step's signal is no progress for the Waiting, but it is the main agent's turn all the
+        // same; read from the hooks alone, the wait ran out once the prompt was answered and cut that turn off.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a1");
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse));
+        Chat.State.ShouldBe(SessionState.Waiting);
+        Chat.JobsEndedAt.ShouldBeNull("the turn that reacts has begun");
+
+        _time.Advance(TimeSpan.FromMinutes(3));
+        AgentSteps("a1");
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Working, "the reacting turn ends with its own stop");
+    }
+
+    [Fact]
+    public void A_job_the_main_agent_starts_while_a_background_agent_s_prompt_waits_keeps_the_chat_working()
+    {
+        // Review round 2 of #390: the old end's wait ran out with the new job open, and the chat went Idle.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a1");
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+
+        JobStarts("job2");
+        _time.Advance(TimeSpan.FromMinutes(3));
+        AgentSteps("a1");
+        _engine.SweepStale();
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.OpenJobs.ShouldBe(["job2"]);
+    }
+
+    [Fact]
+    public void A_job_open_again_is_not_cut_off_by_the_wait_of_the_one_before()
+    {
+        // Review round 2 of #390: the transcript tells the new job's start before any hook of its turn.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromSeconds(5));
+
+        TranscriptTells(started: [new BackgroundJobEvent("job2", _time.GetUtcNow())]);
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.OpenJobs.ShouldBe(["job2"]);
+    }
+
+    [Fact]
+    public void The_main_agent_s_own_prompt_is_a_turn_again()
+    {
+        Prompt();
+        JobStarts("job1");
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
+
+        Chat.State.ShouldBe(SessionState.Waiting);
+        Chat.TurnOverAt.ShouldBeNull();
     }
 
     [Fact]
