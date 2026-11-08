@@ -83,6 +83,30 @@ public class SessionRecordTests
     }
 
     [Fact]
+    public void Whom_a_waiting_chat_waits_for_survives_the_record()
+    {
+        // #401: a restart forgot which agents' prompts held the chat Waiting, so any agent's step ended the Waiting.
+        var snapshot = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Waiting,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch,
+            StateSince = DateTimeOffset.UnixEpoch,
+            WaitingAgents = "a1\nmain",
+            WaitingTurnEnded = true,
+        };
+
+        var back = SessionRecord.FromSnapshot(snapshot).ToSnapshot();
+        back.WaitingAgents.ShouldBe("a1\nmain");
+        back.WaitingTurnEnded.ShouldBeTrue();
+
+        var none = SessionRecord.FromSnapshot(snapshot with { WaitingAgents = null, WaitingTurnEnded = false }).ToSnapshot();
+        none.WaitingAgents.ShouldBeNull();
+        none.WaitingTurnEnded.ShouldBeFalse();
+    }
+
+    [Fact]
     public void The_wait_for_a_turn_that_reacts_to_a_job_s_end_survives_the_record()
     {
         // #395: a restart while a background agent's prompt held the chat Waiting lost the wait, and the chat stayed Working.

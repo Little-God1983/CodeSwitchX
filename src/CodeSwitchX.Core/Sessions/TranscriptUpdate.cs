@@ -26,6 +26,25 @@ public sealed record TranscriptUpdate
     public IReadOnlyList<BackgroundJobEvent> JobsStarted { get; init; } = [];
     public IReadOnlyList<BackgroundJobEvent> JobsEnded { get; init; } = [];
 
+    /// <summary>
+    /// The sub-agent whose file these lines are from (its <c>agent_id</c>, as its hooks name it; a file of no agent, such as a
+    /// workflow's journal, by its file name); null for the chat's own file (#401).
+    /// </summary>
+    public string? AgentId { get; init; }
+
+    /// <summary>
+    /// When the newest reply of these lines was written (an assistant line); null when they hold none (#401). A sub-agent replies
+    /// again only once every step it took is over, the one its prompt asked for included: lines that are no reply (a hook's
+    /// result, progress) and a parallel step's result do not tell that.
+    /// </summary>
+    public DateTimeOffset? LastReplyAt { get; init; }
+
+    /// <summary>
+    /// For a sub-agent's file: whether its lines end with a tool call that has no result yet (a step running, or a prompt
+    /// waiting); null when unknown, and always for the chat's own file, which tells it by <see cref="PendingToolUse"/> (#401).
+    /// </summary>
+    public bool? AgentCallOpen { get; init; }
+
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
 

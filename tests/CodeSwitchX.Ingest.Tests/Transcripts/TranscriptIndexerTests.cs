@@ -292,6 +292,43 @@ public class TranscriptIndexerTests : IDisposable
         subagent.JobsEnded.ShouldBe([new BackgroundJobEvent("b3", new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero))]);
     }
 
+    /// <summary>#401: a sub-agent's lines name it as its hooks do (its file is <c>agent-&lt;agent_id&gt;.jsonl</c>); the chat's own name none.</summary>
+    [Fact]
+    public async Task A_sub_agent_s_lines_name_the_agent_that_wrote_them()
+    {
+        File.WriteAllLines(Transcript("parent"), [User("parent", "Main task"), Assistant("parent", "m1", TextBlock)]);
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-a11c4ced3df6dff1d.jsonl"), [User("parent", "Sub task"), Assistant("parent", "s1", TextBlock)]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        _updates.Single(u => u.TranscriptPath.EndsWith("agent-a11c4ced3df6dff1d.jsonl")).AgentId.ShouldBe("a11c4ced3df6dff1d");
+        _updates.Single(u => u.TranscriptPath == Transcript("parent")).AgentId.ShouldBeNull();
+    }
+
+    /// <summary>#401: when a sub-agent replied last, by its assistant lines only: a hook's result or a step's result is no reply.</summary>
+    [Fact]
+    public async Task A_sub_agent_s_last_reply_is_its_newest_assistant_line()
+    {
+        File.WriteAllLines(Transcript("parent"), [User("parent", "Main task")]);
+        var subagentDir = Path.Combine(_projectDir, "parent", "subagents");
+        Directory.CreateDirectory(subagentDir);
+        File.WriteAllLines(Path.Combine(subagentDir, "agent-a1.jsonl"),
+        [
+            User("parent", "Sub task"),
+            Assistant("parent", "s1", ToolBlock, ts: "2026-09-23T10:00:05.000Z"),
+            """{"type":"attachment","sessionId":"parent","timestamp":"2026-09-23T10:00:09.000Z"}""",
+        ]);
+
+        await _indexer.ScanAsync(CancellationToken.None);
+
+        var sub = _updates.Single(u => u.TranscriptPath.EndsWith("agent-a1.jsonl"));
+        sub.LastReplyAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero));
+        sub.AgentCallOpen.ShouldBe(true, "its last reply asked for a step that has no result yet");
+        sub.LastActivityAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero));
+    }
+
     [Fact]
     public async Task The_last_request_is_when_the_newest_reply_began()
     {

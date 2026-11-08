@@ -181,6 +181,12 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<long?>("TurnOverAt")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("WaitingAgents")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("WaitingTurnEnded")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("WindowFolders")
                         .HasColumnType("TEXT");
 
