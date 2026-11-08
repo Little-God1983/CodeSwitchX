@@ -816,6 +816,96 @@ public partial class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task Repositories_one_level_below_a_root_with_none_get_a_line_each_in_place_of_its_no_git_line()
+    {
+        // A folder of package repositories: the file lists the folder alone, and the tile read "no git" for 30 s, every 30 s.
+        var nuget = Path.Combine(_tempRoot, "nuget");
+        Directory.CreateDirectory(Path.Combine(nuget, "docs"));
+        var llm = Repo(Path.Combine("nuget", "llm"));
+        var speech = Repo(Path.Combine("nuget", "speech"));
+        Repo(Path.Combine("nuget", "docs", "deep"));
+        var file = Path.Combine(_tempRoot, "Nuget.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "nuget" } ] }""");
+        var listed = new Workspace { Name = "Nuget", RootPath = nuget, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([listed]));
+        var yard = Yard((dir, _, _) => Task.FromResult<string?>(dir == speech ? " M a.cs\n M b.cs\n?? c.cs\n" : string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var lines = yard.FindTile(listed.Id)!.GitLines;
+        lines.Select(l => (l.Text, l.GitStateLabel)).ShouldBe([("llm · main", "clean"), ("speech · main", "3 changed")],
+            "docs is no repository, and docs/deep is two levels down");
+        lines.Select(l => l.Path).ShouldBe([llm, speech]);
+        lines.ShouldAllBe(l => l.IsRepository);
+    }
+
+    [Fact]
+    public async Task A_listed_folder_with_no_repository_shows_the_repositories_one_level_below_it_in_its_place()
+    {
+        var sdk = Repo("sdk");
+        Directory.CreateDirectory(Path.Combine(_tempRoot, "packages"));
+        Repo(Path.Combine("packages", "b"));
+        Repo(Path.Combine("packages", "a"));
+        Repo("nexus");
+        var file = Path.Combine(_tempRoot, "Full.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "sdk" }, { "path": "packages" }, { "path": "nexus" } ] }""");
+        var full = new Workspace { Name = "Full", RootPath = sdk, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([full]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(full.Id)!.GitLines.Select(l => l.Text).ShouldBe(["sdk · main", "a · main", "b · main", "nexus · main"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_without_a_file_shows_the_repositories_one_level_below_its_folder_and_a_lone_one_unnamed()
+    {
+        var plain = Path.Combine(_tempRoot, "plain");
+        Directory.CreateDirectory(plain);
+        var inner = Repo(Path.Combine("plain", "inner"));
+        var empty = Path.Combine(_tempRoot, "empty");
+        Directory.CreateDirectory(Path.Combine(empty, "notes"));
+        var withRepo = new Workspace { Name = "Plain", RootPath = plain, TrackId = _general.Id };
+        var withNone = new Workspace { Name = "Empty", RootPath = empty, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([withRepo, withNone]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        var line = yard.FindTile(withRepo.Id)!.GitLines.ShouldHaveSingleItem();
+        (line.Text, line.Path).ShouldBe(("main", inner));
+        yard.FindTile(withNone.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("no git", "a folder with no repository in or below it keeps its line");
+    }
+
+    [Fact]
+    public async Task A_workspace_file_that_cannot_be_read_for_a_moment_keeps_the_lines_of_the_repositories_below_the_root()
+    {
+        var nuget = Path.Combine(_tempRoot, "nuget");
+        var llm = Repo(Path.Combine("nuget", "llm"));
+        Repo(Path.Combine("nuget", "speech"));
+        var file = Path.Combine(_tempRoot, "Nuget.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "nuget" } ] }""");
+        var listed = new Workspace { Name = "Nuget", RootPath = nuget, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([listed]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+        await yard.RefreshGitAsync(CancellationToken.None);
+        File.WriteAllText(Path.Combine(llm, ".git", "HEAD"), "ref: refs/heads/next\n");
+
+        using (new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await yard.RefreshGitAsync(CancellationToken.None);
+        }
+
+        yard.FindTile(listed.Id)!.GitLines.Select(l => l.Text).ShouldBe(["llm · main", "speech · main"],
+            "the root's no git line is not put back over the first repository's");
+    }
+
+    [Fact]
     public async Task A_workspace_added_during_a_git_refresh_is_refreshed_as_soon_as_that_refresh_ends()
     {
         var app = new Workspace { Name = "App", RootPath = Repo("app"), TrackId = _general.Id };

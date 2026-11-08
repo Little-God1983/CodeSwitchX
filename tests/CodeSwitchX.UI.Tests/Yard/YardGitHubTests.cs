@@ -306,6 +306,29 @@ public class YardGitHubTests : IDisposable
     }
 
     [Fact]
+    public async Task Repositories_below_a_folder_with_none_get_their_own_pills()
+    {
+        // A folder of package repositories showed "no git" and no pills at all.
+        var nuget = Path.Combine(_tempRoot, "nuget");
+        Directory.CreateDirectory(nuget);
+        Repo(Path.Combine("nuget", "llm"));
+        Repo(Path.Combine("nuget", "speech"));
+        var file = Path.Combine(_tempRoot, "Nuget.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "nuget" } ] }""");
+        var listed = Add("Nuget", nuget, file);
+        _gh.Issues = 2;
+        _gh.PullRequests = 1;
+        var yard = Yard(true, listed);
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await Eventually(() => yard.FindTile(listed.Id)!.GitLines is [{ Issues: not null, PullRequests: not null }, { Issues: not null, PullRequests: not null }]);
+
+        var lines = yard.FindTile(listed.Id)!.GitLines;
+        lines[0].Issues!.Activity.Repo.ShouldBe(new GitHubRepo("acme", "llm"));
+        lines[1].PullRequests!.Activity.Repo.ShouldBe(new GitHubRepo("acme", "speech"));
+    }
+
+    [Fact]
     public async Task The_first_git_round_starts_the_first_github_round()
     {
         var app = Add("App", Repo("app"));
