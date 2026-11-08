@@ -442,6 +442,255 @@ public sealed class SessionEngineJobsTests : IDisposable
         Chat.OpenJobs.ShouldBe(["job1"]);
     }
 
+    private void MainPre(string step) => _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse) with { ToolUseId = step });
+
+    private void MainPost(string step, string? job = null, string? ended = null) =>
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, job) with { ToolUseId = step, EndedJob = ended });
+
+    [Fact]
+    public void A_job_start_told_after_the_turn_s_stop_keeps_the_turn_over()
+    {
+        // #397: the last step starts the job, and its PostToolUse lands after the Stop. It counted as the turn going on and left
+        // no turn-over mark, so once the job ended with no reacting turn the chat stayed Working for good.
+        Prompt();
+        MainPre("t1");
+        Stop();
+        Chat.State.ShouldBe(SessionState.Idle);
+
+        MainPost("t1", job: "job1");
+        Chat.State.ShouldBe(SessionState.Working, "a job is open");
+        Chat.TurnOverAt.ShouldNotBeNull("the turn was over before the job's start was told");
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_step_result_told_after_the_turn_s_stop_leaves_the_turn_over()
+    {
+        // #397: with a job open, the last step's late PostToolUse erased the turn-over mark the Stop had set.
+        Prompt();
+        MainPre("t0");
+        MainPost("t0", job: "job1");
+        MainPre("t1");
+        Stop();
+        var over = Chat.TurnOverAt.ShouldNotBeNull();
+
+        MainPost("t1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.TurnOverAt.ShouldBe(over);
+    }
+
+    [Fact]
+    public void A_stop_s_result_told_after_the_transcript_ended_the_job_leaves_the_chat_idle()
+    {
+        // #396: the transcript told the TaskStop's result between the turn's Stop and the stop's own late PostToolUse, which
+        // then made the idle chat Working with nothing left to end that.
+        Prompt();
+        MainPre("t0");
+        MainPost("t0", job: "job1");
+        MainPre("t1");
+        var stopped = _time.GetUtcNow();
+        _time.Advance(TimeSpan.FromSeconds(1));
+        Stop();
+        TranscriptTells(ended: [new BackgroundJobEvent("job1", stopped)]);
+        Chat.State.ShouldBe(SessionState.Idle);
+
+        MainPost("t1", ended: "job1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_stop_s_result_told_after_the_turn_s_stop_still_ends_the_job()
+    {
+        // #396/#397: a late result is no progress, but the end of a job it tells still counts.
+        Prompt();
+        MainPre("t0");
+        MainPost("t0", job: "job1");
+        MainPre("t1");
+        Stop();
+
+        MainPost("t1", ended: "job1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.OpenJobs.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void A_step_result_with_no_job_told_after_the_turn_s_stop_leaves_the_chat_idle()
+    {
+        Prompt();
+        MainPre("t1");
+        Stop();
+
+        MainPost("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle, "the late result is no progress");
+    }
+
+    [Fact]
+    public void A_step_result_told_after_a_failed_turn_leaves_the_chat_idle()
+    {
+        Prompt();
+        MainPre("t1");
+        _engine.Apply(Hook("StopFailure", SessionSignal.Stop));
+
+        MainPost("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_job_start_told_late_marks_the_turn_over_at_the_stop()
+    {
+        // Review round 1 of #396/#397: the mark was the late result's own time, so a job that ended between the Stop and that
+        // result counted as told to the turn already, and the chat went Idle before the turn that reacts to the end.
+        Prompt();
+        MainPre("t1");
+        var stoppedAt = _time.GetUtcNow();
+        Stop();
+        _time.Advance(TimeSpan.FromMilliseconds(900));
+
+        MainPost("t1", job: "job1");
+        Chat.TurnOverAt.ShouldBe(stoppedAt);
+
+        TranscriptTells(ended: [new BackgroundJobEvent("job1", stoppedAt.AddMilliseconds(500))]);
+        Chat.State.ShouldBe(SessionState.Working, "the end came after the turn: a turn that reacts to it may come");
+        Chat.JobsEndedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void A_job_start_told_late_while_a_background_agent_s_prompt_waits_gets_the_wait()
+    {
+        // Review round 1 of #396/#397: a late job start on a chat held Waiting set no turn-over mark, so its end began no wait,
+        // and answering the prompt made the chat Idle at once, before the turn that reacts to the end.
+        Prompt();
+        AgentAsks("a1");
+        MainPre("t1");
+        Stop();
+        MainPost("t1", job: "job1");
+        Chat.TurnOverAt.ShouldNotBeNull();
+
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        AgentSteps("a1");
+        Chat.State.ShouldBe(SessionState.Working, "the turn that reacts to the end may still come");
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_step_start_told_after_the_turn_s_stop_leaves_the_turn_over()
+    {
+        // Review round 2 of #396/#397: a quick step's PreToolUse lands after its own result and the Stop. It counted as the
+        // main agent stepping again: it cleared the turn-over mark and the stop, so the chat stayed Working with the job open.
+        Prompt();
+        MainPre("t0");
+        MainPost("t0", job: "job1");
+        MainPost("t1");
+        Stop();
+        var over = Chat.TurnOverAt.ShouldNotBeNull();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.TurnOverAt.ShouldBe(over);
+    }
+
+    [Fact]
+    public void A_step_start_told_after_the_turn_s_stop_leaves_an_idle_chat_idle()
+    {
+        Prompt();
+        MainPost("t1");
+        Stop();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.AwaitingToolResult.ShouldBeFalse("the step's result came already");
+    }
+
+    [Fact]
+    public void A_compaction_keeps_what_tells_a_late_step()
+    {
+        // Review round 3 of #396/#397: a SessionStart after compaction, which keeps the chat's state, forgot the steps whose
+        // result came, so the late start of one after the Stop counted as the turn going on.
+        Prompt();
+        MainPost("t1");
+        _engine.Apply(Hook("SessionStart", null, source: "compact") with { Informational = true });
+        Stop();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_step_result_told_before_its_start_ends_no_other_step()
+    {
+        // Review round 3 of #396/#397: a result whose step was not open yet ended the main agent's last open step instead, a
+        // step that a nameless permission prompt then could not be put down to: it went to a background agent.
+        Prompt();
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, agent: "a1") with { ToolUseId = "s1" });
+        MainPre("tA");
+        MainPost("tB");
+        MainPre("tB");
+
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "permission_prompt" });
+        Chat.State.ShouldBe(SessionState.Waiting);
+        AgentSteps("a1");
+
+        Chat.State.ShouldBe(SessionState.Waiting, "the prompt is the main agent's, for step tA, which is still open");
+    }
+
+    [Fact]
+    public void A_prompt_after_the_stop_makes_every_result_count_again()
+    {
+        Prompt();
+        MainPre("t1");
+        Stop();
+
+        Prompt();
+        MainPost("t2");
+        MainPre("t2");
+
+        Chat.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void A_step_start_told_after_its_own_result_works_on_and_the_stop_ends_the_turn()
+    {
+        // #396/#397: the reverse race, a PreToolUse that lands after its own PostToolUse.
+        Prompt();
+        MainPost("t1");
+        MainPre("t1");
+        Chat.State.ShouldBe(SessionState.Working);
+
+        Stop();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void The_main_agent_s_step_after_its_stop_is_a_turn_again()
+    {
+        // #396/#397: a turn that reacts to a job's end starts with no prompt; its steps are progress, not late results.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        MainPre("t2");
+        MainPost("t2");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.TurnOverAt.ShouldBeNull("the turn is on again");
+    }
+
     private void AgentAsks(string agent) => _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification, agent: agent));
 
     private void AgentSteps(string agent) => _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: agent));
@@ -773,12 +1022,12 @@ public sealed class SessionEngineJobsTests : IDisposable
     {
         // #390: a start told late comes seconds after its end, so the newest ends are enough; the oldest are let go.
         Prompt();
-        for (var i = 0; i <= SessionEngine.EndedJobs.Kept; i++)
+        for (var i = 0; i <= SessionEngine.RecentIds.JobsKept; i++)
         {
             TaskStop($"j{i}");
         }
 
-        JobStarts($"j{SessionEngine.EndedJobs.Kept}");
+        JobStarts($"j{SessionEngine.RecentIds.JobsKept}");
         Chat.OpenJobs.ShouldBeEmpty("the newest end is remembered");
 
         JobStarts("j0");
