@@ -494,7 +494,7 @@ public sealed class SessionEngineJobsTests : IDisposable
         AgentAsks("a1");
         Chat.JobsEndedAt.ShouldBe(ended);
         AgentSteps("a1");
-        Chat.JobsEndedAt.ShouldBe(ended);
+        Chat.JobsEndedAt.ShouldBe(_time.GetUtcNow(), "a turn that reacts may have waited behind the prompt: its wait begins at the answer");
 
         _time.Advance(SessionEngine.JobEndSettle);
         _engine.SweepStale();
@@ -617,6 +617,48 @@ public sealed class SessionEngineJobsTests : IDisposable
 
         Chat.State.ShouldBe(SessionState.Working);
         Chat.OpenJobs.ShouldBe(["job2"]);
+
+        // Review round 3: the old end's wait outlived the new job, and cut the chat off the moment that job ended.
+        _time.Advance(TimeSpan.FromMinutes(10));
+        JobEnds("job2");
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Working, "the turn that started job2 has not stopped yet");
+    }
+
+    [Fact]
+    public void A_prompt_answered_late_gives_the_reacting_turn_its_wait()
+    {
+        // Review round 3 of #390: the wait counted from the end alone, so a prompt answered after two minutes left the turn
+        // that reacts (held back behind the prompt) no time at all.
+        ATurnEndsWithAJobOpen();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        AgentAsks("a1");
+        JobEnds("job1");
+
+        _time.Advance(TimeSpan.FromMinutes(5));
+        AgentSteps("a1");
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Working);
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void The_main_agent_s_step_after_its_stop_while_a_prompt_waits_is_its_turn_again()
+    {
+        // Review round 3 of #390: the step left the turn marked ended, so answering the prompt stopped the chat mid-turn.
+        Prompt();
+        JobStarts("job1");
+        AgentAsks("a1");
+        Stop();
+        JobEnds("job1");
+
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse));
+        AgentSteps("a1");
+
+        Chat.State.ShouldBe(SessionState.Working, "the main agent's turn goes on");
     }
 
     [Fact]
