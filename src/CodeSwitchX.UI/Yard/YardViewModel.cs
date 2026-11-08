@@ -891,7 +891,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// its own. A folder in a checkout already shown adds none. A folder that is in no repository shows the repositories
     /// one level below it instead, each under its own folder's name (a folder of package repositories); the root's
     /// "no git" line gives way to them, and a folder with none below it adds nothing, or keeps the root's "no git". A
-    /// folder the file lists another folder within is left as it is: the file picks and names the repositories there. Never
+    /// folder the file lists a repository within is left as it is: the file picks and names the repositories there. Never
     /// throws but for cancellation, so the other folders cannot hold back the root's line or the worktree sync: a folder
     /// whose check fails, and a file that cannot be read for a moment, keep last round's lines. Runs off the UI thread: it
     /// reads the file.
@@ -916,17 +916,18 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.RootPath,
             IsRepository: root.IsRepository);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
-        var listedKeys = folders.Select(f => PathNormalizer.Normalize(f.Path)).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
         // folder in it. Both steps look at the folders side by side: one on an offline share blocks Directory.Exists for
         // about 20 s, and that should cost the round once, not once per folder.
-        var rootBelowTask = root.GitDir is null && ListsNoneWithin(tile.RootPath) ? RepositoriesBelowAsync(tile.RootPath, ct) : Task.FromResult(ReposBelow.None);
+        // The root's listing runs beside the folders' checks, and is set aside when they find the file picks the repositories below it.
+        var rootBelowTask = root.GitDir is null ? RepositoriesBelowAsync(tile.RootPath, ct) : Task.FromResult(ReposBelow.None);
         var gitDirs = await Task.WhenAll(others.Select(f => GitDirOfAsync(f, ct))).ConfigureAwait(false);
-        var belowOthers = await Task.WhenAll(others.Zip(gitDirs).Select(p => p.Second is { GitDir: null, Failed: false } && ListsNoneWithin(p.First.Path)
+        var listedRepositories = others.Zip(gitDirs).Where(p => p.Second.GitDir is not null).Select(p => PathNormalizer.Normalize(p.First.Path)).ToList();
+        var belowOthers = await Task.WhenAll(others.Zip(gitDirs).Select(p => p.Second is { GitDir: null, Failed: false } && ListsNoRepositoryWithin(p.First.Path)
             ? RepositoriesBelowAsync(p.First.Path, ct)
             : Task.FromResult(ReposBelow.None))).ConfigureAwait(false);
-        var rootBelow = await rootBelowTask.ConfigureAwait(false);
+        var rootBelow = ListsNoRepositoryWithin(tile.RootPath) ? await rootBelowTask.ConfigureAwait(false) : ReposBelow.None;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (root.GitDir is { } rootGitDir)
         {
@@ -959,10 +960,11 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         // Only the root's own line leaves its name out: a lone repository below the root is not the workspace's folder.
         return all.Count > 1 || replacesRoot ? all : [rootLine with { Folder = null }];
 
-        bool ListsNoneWithin(string folder)
+        // A listed folder within it that is in a repository: the file picks and names the repositories there itself.
+        bool ListsNoRepositoryWithin(string folder)
         {
             var key = PathNormalizer.Normalize(folder);
-            return !listedKeys.Any(k => k != key && PathNormalizer.IsWithin(k, key));
+            return !listedRepositories.Any(k => k != key && PathNormalizer.IsWithin(k, key));
         }
 
         void AddBelow(string parent, ReposBelow below)

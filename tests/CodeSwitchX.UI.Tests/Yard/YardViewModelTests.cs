@@ -904,6 +904,26 @@ public partial class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_folder_within_the_root_that_is_no_repository_does_not_hide_the_repositories_below_the_root()
+    {
+        // Only a listed repository within it says the file picks the repositories there; a listed docs folder hid them all.
+        var nuget = Path.Combine(_tempRoot, "nuget");
+        Directory.CreateDirectory(Path.Combine(nuget, "docs"));
+        Repo(Path.Combine("nuget", "llm"));
+        Repo(Path.Combine("nuget", "speech"));
+        var file = Path.Combine(_tempRoot, "Nuget.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "nuget" }, { "path": "nuget/docs" } ] }""");
+        var listed = new Workspace { Name = "Nuget", RootPath = nuget, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([listed]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(listed.Id)!.GitLines.Select(l => l.Text).ShouldBe(["llm · main", "speech · main"]);
+    }
+
+    [Fact]
     public async Task A_workspace_without_a_file_shows_the_repositories_one_level_below_its_folder_a_lone_one_by_name()
     {
         var plain = Path.Combine(_tempRoot, "plain");
