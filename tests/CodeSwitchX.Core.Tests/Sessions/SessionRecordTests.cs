@@ -83,6 +83,24 @@ public class SessionRecordTests
     }
 
     [Fact]
+    public void The_wait_for_a_turn_that_reacts_to_a_job_s_end_survives_the_record()
+    {
+        // #395: a restart while a background agent's prompt held the chat Waiting lost the wait, and the chat stayed Working.
+        var snapshot = new SessionSnapshot
+        {
+            SessionId = "s1",
+            State = SessionState.Waiting,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            LastEventAt = DateTimeOffset.UnixEpoch,
+            StateSince = DateTimeOffset.UnixEpoch,
+            JobsEndedAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        };
+
+        SessionRecord.FromSnapshot(snapshot).ToSnapshot().JobsEndedAt.ShouldBe(snapshot.JobsEndedAt);
+        SessionRecord.FromSnapshot(snapshot with { JobsEndedAt = null }).ToSnapshot().JobsEndedAt.ShouldBeNull();
+    }
+
+    [Fact]
     public void The_last_request_survives_the_record()
     {
         var snapshot = new SessionSnapshot

@@ -134,6 +134,9 @@ namespace CodeSwitchX.Data.Migrations
                     b.Property<bool>("Inferred")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long?>("JobsEndedAt")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("LastEventAt")
                         .HasColumnType("INTEGER");
 

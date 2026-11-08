@@ -859,6 +859,34 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void The_wait_for_a_reacting_turn_survives_a_restart_while_a_background_agent_s_prompt_waits()
+    {
+        // #395: the wait was not stored, so the chat came back Waiting with neither mark, and answering the prompt left it
+        // Working with nothing to end that.
+        var ended = _time.GetUtcNow().AddMinutes(-5);
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = ended }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+        engine.Get("s1")!.JobsEndedAt.ShouldBe(ended);
+
+        _time.Advance(TimeSpan.FromSeconds(30));
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a1"));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a turn that reacts to the end may still come");
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_chat_restored_idle_keeps_no_wait()
+    {
+        using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-5) }, new FakeProcessProbe());
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull("a chat that is done waits for nothing");
+    }
+
+    [Fact]
     public void A_running_foreground_command_stays_working_through_a_restart()
     {
         using var engine = Restored(Stored() with { AwaitingToolResult = true }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));

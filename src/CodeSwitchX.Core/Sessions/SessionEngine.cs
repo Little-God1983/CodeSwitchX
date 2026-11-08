@@ -136,6 +136,8 @@ public sealed class SessionEngine : IDisposable
                     corrected = corrected with { State = SessionState.Stale, StateSince = StaleSince(corrected) };
                 }
 
+                // The wait for a turn that reacts to the end of the last job is stored (#395), and holds as it does while running.
+                corrected = corrected with { JobsEndedAt = WaitAfter(corrected.State, corrected.OpenJobs, corrected.JobsEndedAt) };
                 Commit(restored, corrected);
             }
         }
