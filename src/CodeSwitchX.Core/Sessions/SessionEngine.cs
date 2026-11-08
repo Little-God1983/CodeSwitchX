@@ -470,7 +470,8 @@ public sealed class SessionEngine : IDisposable
                 break;
             case "PostToolUse":
                 var index = agents.Open.FindLastIndex(t => t.ToolUseId is not null && t.ToolUseId == e.ToolUseId);
-                if (index < 0)
+                // A result that names its step and finds it not open ends none: its start comes late, or is long gone.
+                if (index < 0 && e.ToolUseId is null)
                 {
                     index = agents.Open.FindLastIndex(t => t.Agent == agent);
                 }
@@ -568,7 +569,8 @@ public sealed class SessionEngine : IDisposable
     /// </summary>
     private ToldLate MainStepToldLateLocked(HookEvent e)
     {
-        if (e.EventName is "SessionStart" or "SessionEnd")
+        // By the signal, as the jobs are: a SessionStart after compaction has none, and keeps the turn as it is.
+        if (e.Signal is SessionSignal.SessionStart or SessionSignal.SessionEnd)
         {
             _mainTurns.Remove(e.SessionId);
             return default;

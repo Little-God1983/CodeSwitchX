@@ -618,6 +618,39 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_compaction_keeps_what_tells_a_late_step()
+    {
+        // Review round 3 of #396/#397: a SessionStart after compaction, which keeps the chat's state, forgot the steps whose
+        // result came, so the late start of one after the Stop counted as the turn going on.
+        Prompt();
+        MainPost("t1");
+        _engine.Apply(Hook("SessionStart", null, source: "compact") with { Informational = true });
+        Stop();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_step_result_told_before_its_start_ends_no_other_step()
+    {
+        // Review round 3 of #396/#397: a result whose step was not open yet ended the main agent's last open step instead, a
+        // step that a nameless permission prompt then could not be put down to: it went to a background agent.
+        Prompt();
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse, agent: "a1") with { ToolUseId = "s1" });
+        MainPre("tA");
+        MainPost("tB");
+        MainPre("tB");
+
+        _engine.Apply(Hook("Notification", SessionSignal.Notification) with { NotificationType = "permission_prompt" });
+        Chat.State.ShouldBe(SessionState.Waiting);
+        AgentSteps("a1");
+
+        Chat.State.ShouldBe(SessionState.Waiting, "the prompt is the main agent's, for step tA, which is still open");
+    }
+
+    [Fact]
     public void A_prompt_after_the_stop_makes_every_result_count_again()
     {
         Prompt();
