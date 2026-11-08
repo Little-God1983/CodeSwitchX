@@ -89,6 +89,8 @@ public sealed class SessionEngine : IDisposable
     /// hook most likely fired while the app was down, and an Idle one quiet for the stale window comes back Stale, as the
     /// first sweep would make it 5 s on (until then its row would sit on the tile). Waiting sessions with a live process
     /// are left alone: a permission prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
+    /// The wait for a turn that reacts to the end of the last job (<see cref="SessionSnapshot.JobsEndedAt"/>) is kept only by a
+    /// chat that comes back Working or Waiting with no job open (#395).
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -136,7 +138,8 @@ public sealed class SessionEngine : IDisposable
                     corrected = corrected with { State = SessionState.Stale, StateSince = StaleSince(corrected) };
                 }
 
-                // The wait for a turn that reacts to the end of the last job is stored (#395), and holds as it does while running.
+                // The wait for a turn that reacts to the end of the last job is stored (#395): a chat restored Waiting on a
+                // background agent's prompt keeps it for when the prompt is answered. One that comes back done keeps none.
                 corrected = corrected with { JobsEndedAt = WaitAfter(corrected.State, corrected.OpenJobs, corrected.JobsEndedAt) };
                 Commit(restored, corrected);
             }
@@ -627,6 +630,13 @@ public sealed class SessionEngine : IDisposable
                 {
                     jobsEndedAt = endedAt;
                 }
+            }
+
+            if (s.State == SessionState.Waiting && state == SessionState.Working && jobsEndedAt is not null)
+            {
+                // As on the hook route: the prompt is answered, and the wait for a reacting turn begins now. A chat restored
+                // Waiting has no hook yet, so its transcript tells this, and its stored wait must not run out at once (#395).
+                jobsEndedAt = activityAt;
             }
 
             // A request of the chat's own (a sub-agent's lines hold none) after the end is the turn that reacts to it: it ends

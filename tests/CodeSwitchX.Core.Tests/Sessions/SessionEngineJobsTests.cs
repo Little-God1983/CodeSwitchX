@@ -871,10 +871,31 @@ public sealed class SessionEngineJobsTests : IDisposable
         _time.Advance(TimeSpan.FromSeconds(30));
         engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a1"));
         engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a turn that reacts to the end may still come");
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the wait begins at the answer, not at the stored end");
 
         _time.Advance(SessionEngine.JobEndSettle);
         engine.SweepStale();
         engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_transcript_write_after_a_restart_does_not_run_out_the_stored_wait_at_once()
+    {
+        // Review round 1 of #395: with no hook yet, a transcript write moves the restored Waiting chat to Working, and the wait
+        // kept its stored end, so the next sweep made the chat Idle while the prompt may still be open.
+        var ended = _time.GetUtcNow().AddMinutes(-5);
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = ended, AwaitingToolResult = true }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+        engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), InferredSignal = SessionSignal.ToolUse,
+        });
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+        engine.Get("s1")!.JobsEndedAt.ShouldBe(_time.GetUtcNow(), "Waiting to Working is the prompt answered: the wait begins now");
+
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
     }
 
     [Fact]
