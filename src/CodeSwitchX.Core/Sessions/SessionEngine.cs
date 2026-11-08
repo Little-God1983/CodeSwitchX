@@ -216,7 +216,10 @@ public sealed class SessionEngine : IDisposable
             var jobsEndedAt = ofMainTurn ? null : s.JobsEndedAt;
             if (state == SessionState.Idle && jobs.Count > 0)
             {
+                // Only an event that is no progress opens a job of an idle chat: the main agent's step result told after the
+                // turn's Stop (#397). The turn is over, but a job goes on, as the transcript route has it.
                 state = SessionState.Working;
+                turnOver ??= e.At;
             }
             else if (e.EndedJob is not null && TurnOverOfLastJobEnd(jobs, s, state) is not null)
             {
@@ -419,7 +422,15 @@ public sealed class SessionEngine : IDisposable
         var signal = e.Signal;
         switch (e.EventName)
         {
+            case "Stop" or "StopFailure" when e.AgentId is null:
+                agents.MainStopped = true;
+                break;
             case "PreToolUse":
+                if (e.AgentId is null)
+                {
+                    agents.MainStopped = false; // the main agent steps again: a turn that reacts to a job's end needs no prompt
+                }
+
                 agents.Open.Add((agent, e.ToolUseId));
                 if (agents.Open.Count > OpenToolsKept)
                 {
@@ -437,6 +448,14 @@ public sealed class SessionEngine : IDisposable
                 if (index >= 0)
                 {
                     agents.Open.RemoveAt(index);
+                }
+
+                if (e.AgentId is null && agents.MainStopped)
+                {
+                    // The main agent's turn stopped and no step of its own began since: Claude Code ends every step of the
+                    // turn before its Stop, so this result was told late, by a relay that landed after the Stop's (#396, #397).
+                    // It is no progress, and the turn stays over; a job start or end it tells still counts.
+                    signal = null;
                 }
 
                 break;
@@ -497,6 +516,7 @@ public sealed class SessionEngine : IDisposable
                 agents.Waiting.Remove(Agents.Main);
                 agents.Open.RemoveAll(t => t.Agent == Agents.Main);
                 agents.TurnEnded = false;
+                agents.MainStopped = false;
                 break;
             case SessionSignal.SessionStart or SessionSignal.SessionEnd:
                 agents = new Agents();
@@ -569,7 +589,13 @@ public sealed class SessionEngine : IDisposable
 
         public bool TurnEnded { get; set; }
 
-        public bool Idle => Open.Count == 0 && Waiting.Count == 0 && !TurnEnded;
+        /// <summary>
+        /// Whether the main agent's turn stopped with no prompt or step of its own since (#396, #397): its step result told now
+        /// was told late. Not known after a restart, when every result counts as before.
+        /// </summary>
+        public bool MainStopped { get; set; }
+
+        public bool Idle => Open.Count == 0 && Waiting.Count == 0 && !TurnEnded && !MainStopped;
 
         public static string Key(string? agentId) => agentId ?? Main;
     }
