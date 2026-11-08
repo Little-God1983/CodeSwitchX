@@ -890,7 +890,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// (Diffusion-Full: DiffusionNexus.Installer.SDK and DiffusionNexus), each under the name the file gives the folder, or
     /// its own. A folder in a checkout already shown adds none. A folder that is in no repository shows the repositories
     /// one level below it instead, each under its own folder's name (a folder of package repositories); the root's
-    /// "no git" line gives way to them, and a folder with none below it adds nothing, or keeps the root's "no git". Never
+    /// "no git" line gives way to them, and a folder with none below it adds nothing, or keeps the root's "no git". A
+    /// folder the file lists another folder within is left as it is: the file picks and names the repositories there. Never
     /// throws but for cancellation, so the other folders cannot hold back the root's line or the worktree sync: a folder
     /// whose check fails, and a file that cannot be read for a moment, keep last round's lines. Runs off the UI thread: it
     /// reads the file.
@@ -915,15 +916,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             tile.RootPath,
             IsRepository: root.IsRepository);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
+        var listedKeys = folders.Select(f => PathNormalizer.Normalize(f.Path)).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
         // folder in it. Both steps look at the folders side by side: one on an offline share blocks Directory.Exists for
         // about 20 s, and that should cost the round once, not once per folder.
-        var rootBelowTask = root.GitDir is null ? RepositoriesBelowAsync(tile.RootPath, ct) : Task.FromResult(NoneBelow);
+        var rootBelowTask = root.GitDir is null && ListsNoneWithin(tile.RootPath) ? RepositoriesBelowAsync(tile.RootPath, ct) : Task.FromResult(ReposBelow.None);
         var gitDirs = await Task.WhenAll(others.Select(f => GitDirOfAsync(f, ct))).ConfigureAwait(false);
-        var belowOthers = await Task.WhenAll(others.Zip(gitDirs).Select(p => p.Second is { GitDir: null, Failed: false }
+        var belowOthers = await Task.WhenAll(others.Zip(gitDirs).Select(p => p.Second is { GitDir: null, Failed: false } && ListsNoneWithin(p.First.Path)
             ? RepositoriesBelowAsync(p.First.Path, ct)
-            : Task.FromResult(NoneBelow))).ConfigureAwait(false);
+            : Task.FromResult(ReposBelow.None))).ConfigureAwait(false);
         var rootBelow = await rootBelowTask.ConfigureAwait(false);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (root.GitDir is { } rootGitDir)
@@ -954,9 +956,16 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var lines = await Task.WhenAll(pending).ConfigureAwait(false);
         var replacesRoot = root.GitDir is null && lines.Take(belowRoot).Any(l => l is not null);
         List<GitLine> all = replacesRoot ? [.. lines.OfType<GitLine>()] : [rootLine, .. lines.OfType<GitLine>()];
-        return all.Count > 1 ? all : [all[0] with { Folder = null }];
+        // Only the root's own line leaves its name out: a lone repository below the root is not the workspace's folder.
+        return all.Count > 1 || replacesRoot ? all : [rootLine with { Folder = null }];
 
-        void AddBelow(string parent, (IReadOnlyList<(WorkspaceFolder Folder, string GitDir)> Repositories, bool Failed) below)
+        bool ListsNoneWithin(string folder)
+        {
+            var key = PathNormalizer.Normalize(folder);
+            return !listedKeys.Any(k => k != key && PathNormalizer.IsWithin(k, key));
+        }
+
+        void AddBelow(string parent, ReposBelow below)
         {
             if (below.Failed)
             {
@@ -998,39 +1007,46 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static readonly (IReadOnlyList<(WorkspaceFolder Folder, string GitDir)> Repositories, bool Failed) NoneBelow = ([], false);
+    /// <summary>A repository one level below a folder that is in none, with its git directory.</summary>
+    private sealed record RepoBelow(WorkspaceFolder Folder, string GitDir);
+
+    /// <param name="Failed">The folder could not be listed right now.</param>
+    private sealed record ReposBelow(IReadOnlyList<RepoBelow> Repositories, bool Failed)
+    {
+        public static readonly ReposBelow None = new([], false);
+    }
 
     /// <summary>
     /// The repositories one level below a folder that is in none, by folder name, each with its git directory: a child
     /// with a <c>.git</c> of its own. Deeper folders are not looked at, so the round costs one folder listing. Failed when
     /// the folder cannot be listed right now; a folder that is gone has none.
     /// </summary>
-    private async Task<(IReadOnlyList<(WorkspaceFolder Folder, string GitDir)> Repositories, bool Failed)> RepositoriesBelowAsync(string parent, CancellationToken ct)
+    private async Task<ReposBelow> RepositoriesBelowAsync(string parent, CancellationToken ct)
     {
         try
         {
-            return (await Task.Run(() => RepositoriesBelow(parent), ct).ConfigureAwait(false), false);
+            return new ReposBelow(await Task.Run(() => RepositoriesBelow(parent), ct).ConfigureAwait(false), false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Finding the repositories below {Folder} failed", parent);
-            return ([], true);
+            return new ReposBelow([], true);
         }
     }
 
-    private List<(WorkspaceFolder Folder, string GitDir)> RepositoriesBelow(string parent)
+    private List<RepoBelow> RepositoriesBelow(string parent)
     {
         if (!Directory.Exists(parent))
         {
             return [];
         }
 
-        var found = new List<(WorkspaceFolder Folder, string GitDir)>();
+        var found = new List<RepoBelow>();
         foreach (var child in Directory.EnumerateDirectories(parent).Order(StringComparer.OrdinalIgnoreCase))
         {
             if (Path.Exists(Path.Combine(child, ".git")) && _git.GitDirOf(child) is { } gitDir)
             {
-                found.Add((new WorkspaceFolder(child, null), gitDir));
+                found.Add(new RepoBelow(new WorkspaceFolder(child, null), gitDir));
             }
         }
 

@@ -861,7 +861,28 @@ public partial class YardViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task A_workspace_without_a_file_shows_the_repositories_one_level_below_its_folder_and_a_lone_one_unnamed()
+    public async Task A_folder_with_no_repository_whose_repositories_the_file_lists_itself_shows_them_as_the_file_has_them()
+    {
+        // The file picks and names the repositories below its first folder: the Yard showed them in name order, unnamed, with every sibling,
+        // and a failed listing of the folder kept a line the listed folder then added again.
+        var diffusion = Path.Combine(_tempRoot, "diffusion");
+        Repo(Path.Combine("diffusion", "sdk"));
+        Repo(Path.Combine("diffusion", "nexus"));
+        Repo(Path.Combine("diffusion", "other"));
+        var file = Path.Combine(_tempRoot, "Diffusion.code-workspace");
+        File.WriteAllText(file, """{ "folders": [ { "path": "diffusion" }, { "path": "diffusion/sdk", "name": "SDK" }, { "path": "diffusion/nexus" } ] }""");
+        var listed = new Workspace { Name = "Diffusion", RootPath = diffusion, WorkspaceFile = file, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([listed]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        await yard.RefreshGitAsync(CancellationToken.None);
+
+        yard.FindTile(listed.Id)!.GitLines.Select(l => l.Text).ShouldBe(["diffusion · no git", "SDK · main", "nexus · main"]);
+    }
+
+    [Fact]
+    public async Task A_workspace_without_a_file_shows_the_repositories_one_level_below_its_folder_a_lone_one_by_name()
     {
         var plain = Path.Combine(_tempRoot, "plain");
         Directory.CreateDirectory(plain);
@@ -877,7 +898,7 @@ public partial class YardViewModelTests : IDisposable
         await yard.RefreshGitAsync(CancellationToken.None);
 
         var line = yard.FindTile(withRepo.Id)!.GitLines.ShouldHaveSingleItem();
-        (line.Text, line.Path).ShouldBe(("main", inner));
+        (line.Text, line.Path).ShouldBe(("inner · main", inner), "unnamed, it read as the workspace's own folder being on main");
         yard.FindTile(withNone.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("no git", "a folder with no repository in or below it keeps its line");
     }
 
