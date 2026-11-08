@@ -320,10 +320,11 @@ public sealed class SessionEngine : IDisposable
     /// <summary>
     /// Whether an event tells of the main agent's turn (#390): an event with no signal does not, nor does any of a background
     /// agent's, its prompts included. A prompt whose hook names no agent is the main agent's only when the main agent is the
-    /// one it waits for (<see cref="Agents"/>); one that restates a background agent's prompt is that agent's. The main
-    /// agent's step is its turn even where it is no progress for a Waiting another agent's prompt holds.
+    /// one it waits for (<see cref="Agents"/>); one that restates a background agent's prompt is that agent's. The start of
+    /// the main agent's step is its turn even where it is no progress for a Waiting another agent's prompt holds; a step's
+    /// result is not, as it may land after the turn's Stop.
     /// </summary>
-    private bool OfMainTurnLocked(HookEvent e, SessionSignal? signal) => (signal ?? (e.Signal == SessionSignal.ToolUse ? e.Signal : null)) switch
+    private bool OfMainTurnLocked(HookEvent e, SessionSignal? signal) => (signal ?? (MainStepBegins(e) ? e.Signal : null)) switch
     {
         null => false,
         _ when e.AgentId is not null => false,
@@ -377,7 +378,9 @@ public sealed class SessionEngine : IDisposable
     /// about the chat's own turn. Nor does a stop's result (#381): it ends a step its PreToolUse already told, and one that
     /// lands after the turn's Stop must not open the turn again. Nor does a background agent's prompt (#390).
     /// </summary>
-    private static DateTimeOffset? TurnOverAfter(HookEvent e, SessionSignal? signal, SessionSnapshot s, IReadOnlyList<string> jobs, bool ofMainTurn) => signal switch
+    private static DateTimeOffset? TurnOverAfter(HookEvent e, SessionSignal? signal, SessionSnapshot s, IReadOnlyList<string> jobs, bool ofMainTurn) =>
+        // The main turn's own stop counts though a background agent's prompt holds the Waiting on (#390).
+        (signal ?? (e.AgentId is null && e.Signal is SessionSignal.Stop or SessionSignal.IdlePrompt ? e.Signal : null)) switch
     {
         SessionSignal.Stop => jobs.Count > 0 ? e.At : null,
         SessionSignal.IdlePrompt => jobs.Count > 0 ? s.TurnOverAt ?? e.At : null,
@@ -429,7 +432,7 @@ public sealed class SessionEngine : IDisposable
                 agents.Open.RemoveAll(t => t.Agent == agent);
                 if (agents.Waiting.Remove(agent) && s.State == SessionState.Waiting && agents.Waiting.Count == 0)
                 {
-                    signal = Released(agents); // the waiting agent stopped (its prompt denied): nobody waits
+                    signal = Released(agents, s); // the waiting agent stopped (its prompt denied): nobody waits
                 }
 
                 break;
@@ -454,12 +457,12 @@ public sealed class SessionEngine : IDisposable
                 signal = null;
                 break;
             case SessionSignal.ToolUse when s.State == SessionState.Waiting && agents.Waiting.Count > 0:
-                if (agent == Agents.Main)
+                if (MainStepBegins(e))
                 {
                     agents.TurnEnded = false; // the main agent steps again (#390): its turn goes on once the prompts are answered
                 }
 
-                signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents);
+                signal = !agents.Waiting.Remove(agent) || agents.Waiting.Count > 0 ? null : Released(agents, s);
                 break;
             case SessionSignal.ToolUse:
                 agents.Waiting.Remove(agent);
@@ -522,13 +525,19 @@ public sealed class SessionEngine : IDisposable
         return agents.Waiting.Count > 0 ? null : agents.Open.Count > 0 ? agents.Open[^1].Agent : Agents.Main;
     }
 
-    /// <summary>Nobody waits any more: the parent's turn goes on, or is over when it ended while the prompt was open.</summary>
-    private static SessionSignal Released(Agents agents)
+    /// <summary>
+    /// Nobody waits any more: the parent's turn goes on, or is over when it ended while the prompt was open. Unless its last
+    /// job ended since (#390): the turn that reacts may still come, and the chat works on until the wait for it runs out.
+    /// </summary>
+    private static SessionSignal Released(Agents agents, SessionSnapshot s)
     {
         var ended = agents.TurnEnded;
         agents.TurnEnded = false;
-        return ended ? SessionSignal.Stop : SessionSignal.ToolUse;
+        return ended && s.JobsEndedAt is null ? SessionSignal.Stop : SessionSignal.ToolUse;
     }
+
+    /// <summary>Whether the event starts a step of the main agent: a step's result may land after the turn's Stop (#381).</summary>
+    private static bool MainStepBegins(HookEvent e) => e is { EventName: "PreToolUse", AgentId: null };
 
     /// <summary>
     /// What a chat's agents are up to, kept only while a chat has hooks in this run: the tool uses whose PreToolUse has no
@@ -604,7 +613,7 @@ public sealed class SessionEngine : IDisposable
             {
                 // The last job ended. A stop since then was the turn that reacted to it, read late: the chat is done. Else that
                 // turn may still come, and the sweep ends the wait if it does not; while a background agent's prompt holds the
-                // chat Waiting (#390), the wait counts from the end all the same and runs out once the prompt is answered.
+                // chat Waiting (#390), it begins again once the prompt is answered.
                 turnOver = null;
                 var endedAt = u.JobsEnded.Max(j => j.At);
                 if (endedAt <= over && state == SessionState.Working)

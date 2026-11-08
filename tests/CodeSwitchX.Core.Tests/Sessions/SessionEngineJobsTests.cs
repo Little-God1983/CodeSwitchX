@@ -662,6 +662,43 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void The_main_agent_s_step_result_told_after_its_stop_while_a_prompt_waits_leaves_the_turn_over()
+    {
+        // Review round 4 of #390: a late PostToolUse ends a step its PreToolUse began before the Stop; it undid the turn's end,
+        // and once the prompt was answered the chat worked on with no Stop to come.
+        Prompt();
+        _engine.Apply(Hook("PreToolUse", SessionSignal.ToolUse));
+        AgentAsks("a1");
+        Stop();
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse));
+
+        AgentSteps("a1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_job_that_ends_after_a_stop_told_while_a_prompt_waits_gets_its_wait()
+    {
+        // Review round 4 of #390: that stop recorded no turn-over, so the end started no wait, and answering the prompt made
+        // the chat Idle at once, before the turn that reacts.
+        Prompt();
+        JobStarts("job1");
+        AgentAsks("a1");
+        Stop();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        _time.Advance(TimeSpan.FromMinutes(1));
+
+        AgentSteps("a1");
+        Chat.State.ShouldBe(SessionState.Working, "the turn that reacts to the end may still come");
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
     public void The_main_agent_s_own_prompt_is_a_turn_again()
     {
         Prompt();
