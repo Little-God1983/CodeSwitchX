@@ -587,6 +587,51 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_step_start_told_after_the_turn_s_stop_leaves_the_turn_over()
+    {
+        // Review round 2 of #396/#397: a quick step's PreToolUse lands after its own result and the Stop. It counted as the
+        // main agent stepping again: it cleared the turn-over mark and the stop, so the chat stayed Working with the job open.
+        Prompt();
+        MainPre("t0");
+        MainPost("t0", job: "job1");
+        MainPost("t1");
+        Stop();
+        var over = Chat.TurnOverAt.ShouldNotBeNull();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Working);
+        Chat.TurnOverAt.ShouldBe(over);
+    }
+
+    [Fact]
+    public void A_step_start_told_after_the_turn_s_stop_leaves_an_idle_chat_idle()
+    {
+        Prompt();
+        MainPost("t1");
+        Stop();
+
+        MainPre("t1");
+
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.AwaitingToolResult.ShouldBeFalse("the step's result came already");
+    }
+
+    [Fact]
+    public void A_prompt_after_the_stop_makes_every_result_count_again()
+    {
+        Prompt();
+        MainPre("t1");
+        Stop();
+
+        Prompt();
+        MainPost("t2");
+        MainPre("t2");
+
+        Chat.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
     public void A_step_start_told_after_its_own_result_works_on_and_the_stop_ends_the_turn()
     {
         // #396/#397: the reverse race, a PreToolUse that lands after its own PostToolUse.
@@ -944,12 +989,12 @@ public sealed class SessionEngineJobsTests : IDisposable
     {
         // #390: a start told late comes seconds after its end, so the newest ends are enough; the oldest are let go.
         Prompt();
-        for (var i = 0; i <= SessionEngine.EndedJobs.Kept; i++)
+        for (var i = 0; i <= SessionEngine.RecentIds.JobsKept; i++)
         {
             TaskStop($"j{i}");
         }
 
-        JobStarts($"j{SessionEngine.EndedJobs.Kept}");
+        JobStarts($"j{SessionEngine.RecentIds.JobsKept}");
         Chat.OpenJobs.ShouldBeEmpty("the newest end is remembered");
 
         JobStarts("j0");

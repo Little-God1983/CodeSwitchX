@@ -182,7 +182,10 @@ public sealed class SessionEngine : IDisposable
     public static readonly TimeSpan JobEndSettle = TimeSpan.FromMinutes(2);
 
     /// <summary>The jobs each chat's hooks or transcript told the end of, since its process started: a start told after one opens nothing. Under <see cref="_gate"/>.</summary>
-    private readonly Dictionary<string, EndedJobs> _endedJobs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RecentIds> _endedJobs = new(StringComparer.Ordinal);
+
+    /// <summary>Per chat, what tells a main step's hook told late (<see cref="MainTurn"/>). Under <see cref="_gate"/>.</summary>
+    private readonly Dictionary<string, MainTurn> _mainTurns = new(StringComparer.Ordinal);
 
     public void Apply(HookEvent e)
     {
@@ -195,7 +198,7 @@ public sealed class SessionEngine : IDisposable
             var s = previous ?? NewSession(e.SessionId, e.At);
 
             var state = s.State;
-            var signal = SignalOfLocked(e, s, out var stoppedBefore);
+            var signal = SignalOfLocked(e, s, out var late);
             // idle_prompt reports a quiet minute. Activity within the quiet window means it raced the next prompt (each relay
             // may take up to a second to land) and describes the turn before, which has already ended.
             var staleIdlePrompt = signal == SessionSignal.IdlePrompt && e.At - s.LastEventAt < _options.InferredIdleAfter;
@@ -210,11 +213,12 @@ public sealed class SessionEngine : IDisposable
 
             var jobs = JobsAfterLocked(e, signal, s);
             // A stale idle prompt describes the turn before: it tells nothing new of the main agent's turn.
-            var ofMainTurn = !staleIdlePrompt && OfMainTurnLocked(e, signal);
+            // Nor does a hook of the main agent's step told late (#396, #397).
+            var ofMainTurn = !staleIdlePrompt && !late.Any && OfMainTurnLocked(e, signal);
             var turnOver = staleIdlePrompt ? s.TurnOverAt : TurnOverAfter(e, signal, s, jobs, ofMainTurn);
             // What tells nothing of the main agent's turn (a background agent's steps and prompts) leaves a settling end as it is.
             var jobsEndedAt = ofMainTurn ? null : s.JobsEndedAt;
-            if (stoppedBefore is { } stoppedAt && jobs.Count > s.OpenJobs.Count)
+            if (late.StoppedBefore is { } stoppedAt && jobs.Count > s.OpenJobs.Count)
             {
                 // A job start told after the turn's Stop (#397): the turn was over when the Stop came, before the job was told.
                 turnOver ??= stoppedAt;
@@ -222,10 +226,7 @@ public sealed class SessionEngine : IDisposable
 
             if (state == SessionState.Idle && jobs.Count > 0)
             {
-                // Only an event that is no progress opens a job of an idle chat (a step result told late): the turn is over,
-                // but a job goes on, as the transcript route has it.
                 state = SessionState.Working;
-                turnOver ??= e.At;
             }
             else if (e.EndedJob is not null && TurnOverOfLastJobEnd(jobs, s, state) is not null)
             {
@@ -251,6 +252,7 @@ public sealed class SessionEngine : IDisposable
             var windowChanged = !SameFolders(window, s.WindowFolders);
             var awaitingToolResult = e.EventName switch
             {
+                "PreToolUse" when late.StaleStart => s.AwaitingToolResult, // its result came already
                 "PreToolUse" or "PermissionRequest" => true,
                 "PostToolUse" => false,
                 _ => s.AwaitingToolResult,
@@ -358,7 +360,7 @@ public sealed class SessionEngine : IDisposable
     {
         if (!_endedJobs.TryGetValue(sessionId, out var known))
         {
-            _endedJobs[sessionId] = known = new EndedJobs();
+            _endedJobs[sessionId] = known = new RecentIds(RecentIds.JobsKept);
         }
 
         known.Add(job);
@@ -366,12 +368,15 @@ public sealed class SessionEngine : IDisposable
     }
 
     /// <summary>
-    /// The newest ends of a chat's jobs (#390): a start is told late by seconds, by the other route, so the newest
-    /// <see cref="Kept"/> are enough, and a chat that runs for days does not keep every id it ever ended.
+    /// The newest ids of a kind a chat is done with: the ends of its jobs (#390), the main steps whose result came (#396,
+    /// #397). What is told late comes seconds after, by another route or relay, so the newest ones are enough, and a chat that
+    /// runs for days does not keep every id it ever saw.
     /// </summary>
-    internal sealed class EndedJobs
+    internal sealed class RecentIds(int kept)
     {
-        internal const int Kept = 1024;
+        internal const int JobsKept = 1024;
+
+        internal const int StepsKept = 64;
 
         private readonly HashSet<string> _ids = new(StringComparer.Ordinal);
         private readonly Queue<string> _order = new();
@@ -386,11 +391,30 @@ public sealed class SessionEngine : IDisposable
             }
 
             _order.Enqueue(id);
-            if (_order.Count > Kept)
+            if (_order.Count > kept)
             {
                 _ids.Remove(_order.Dequeue());
             }
         }
+    }
+
+    /// <summary>
+    /// What tells a hook of the main agent's own steps told late (#396, #397), each by a relay of its own that may land up to
+    /// a second after the next: when its turn stopped, until its next prompt or step, and the steps whose result came. Claude
+    /// Code ends every step of a turn before its Stop, so a step result after the Stop was told late; and a step start after
+    /// its own result was too. Not known after a restart, when every hook counts as before.
+    /// </summary>
+    private sealed class MainTurn
+    {
+        public DateTimeOffset? StoppedAt { get; set; }
+
+        public RecentIds Done { get; } = new(RecentIds.StepsKept);
+    }
+
+    /// <summary>What a hook of the main agent's own step told late is (<see cref="MainTurn"/>).</summary>
+    private readonly record struct ToldLate(bool StaleStart, DateTimeOffset? StoppedBefore)
+    {
+        public bool Any => StaleStart || StoppedBefore is not null;
     }
 
     /// <summary>
@@ -421,24 +445,22 @@ public sealed class SessionEngine : IDisposable
     /// The PreToolUse of the very step a prompt waits for, when the prompt names it and it comes late, is no progress.
     /// Without a set (a restored Waiting, an inferred one) the first tool use ends it, as before.
     /// </summary>
-    /// <param name="stoppedBefore">For a main step result told after the main turn's Stop (#396, #397), when that Stop came.</param>
-    private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s, out DateTimeOffset? stoppedBefore)
+    /// <param name="late">Whether the event is a hook of the main agent's step told late (<see cref="MainTurn"/>): no progress.</param>
+    private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s, out ToldLate late)
     {
-        stoppedBefore = null;
+        late = MainStepToldLateLocked(e);
+        if (late.Any)
+        {
+            // It changes nothing of what the agents are up to: the step's result came already, or its turn stopped.
+            return null;
+        }
+
         var agents = _agents.GetValueOrDefault(e.SessionId) ?? new Agents();
         var agent = Agents.Key(e.AgentId);
         var signal = e.Signal;
         switch (e.EventName)
         {
-            case "Stop" or "StopFailure" when e.AgentId is null:
-                agents.MainStoppedAt ??= e.At;
-                break;
             case "PreToolUse":
-                if (e.AgentId is null)
-                {
-                    agents.MainStoppedAt = null; // the main agent steps again: a turn that reacts to a job's end needs no prompt
-                }
-
                 agents.Open.Add((agent, e.ToolUseId));
                 if (agents.Open.Count > OpenToolsKept)
                 {
@@ -456,15 +478,6 @@ public sealed class SessionEngine : IDisposable
                 if (index >= 0)
                 {
                     agents.Open.RemoveAt(index);
-                }
-
-                if (e.AgentId is null && agents.MainStoppedAt is { } stopped)
-                {
-                    // The main agent's turn stopped and no step of its own began since: Claude Code ends every step of the
-                    // turn before its Stop, so this result was told late, by a relay that landed after the Stop's (#396, #397).
-                    // It is no progress, and the turn stays over; a job start or end it tells still counts.
-                    signal = null;
-                    stoppedBefore = stopped;
                 }
 
                 break;
@@ -525,7 +538,6 @@ public sealed class SessionEngine : IDisposable
                 agents.Waiting.Remove(Agents.Main);
                 agents.Open.RemoveAll(t => t.Agent == Agents.Main);
                 agents.TurnEnded = false;
-                agents.MainStoppedAt = null;
                 break;
             case SessionSignal.SessionStart or SessionSignal.SessionEnd:
                 agents = new Agents();
@@ -547,6 +559,52 @@ public sealed class SessionEngine : IDisposable
         }
 
         return signal;
+    }
+
+    /// <summary>
+    /// Keeps the chat's <see cref="MainTurn"/> up to date with the event and tells whether it is a hook of the main agent's
+    /// step told late (#396, #397): a step start whose result came already, or a step result after the turn's Stop with no
+    /// prompt or step of its own since. A job start or end such a result tells still counts; it is no progress otherwise.
+    /// </summary>
+    private ToldLate MainStepToldLateLocked(HookEvent e)
+    {
+        if (e.EventName is "SessionStart" or "SessionEnd")
+        {
+            _mainTurns.Remove(e.SessionId);
+            return default;
+        }
+
+        if (e.AgentId is not null || e.EventName is not ("Stop" or "StopFailure" or "UserPromptSubmit" or "PreToolUse" or "PostToolUse"))
+        {
+            return default;
+        }
+
+        if (!_mainTurns.TryGetValue(e.SessionId, out var turn))
+        {
+            _mainTurns[e.SessionId] = turn = new MainTurn();
+        }
+
+        switch (e.EventName)
+        {
+            case "Stop" or "StopFailure":
+                turn.StoppedAt = e.At;
+                return default;
+            case "UserPromptSubmit":
+                turn.StoppedAt = null;
+                return default;
+            case "PreToolUse" when e.ToolUseId is { } step && turn.Done.Contains(step):
+                return new ToldLate(StaleStart: true, StoppedBefore: null);
+            case "PreToolUse":
+                turn.StoppedAt = null; // the main agent steps again: a turn that reacts to a job's end needs no prompt
+                return default;
+            default: // PostToolUse
+                if (e.ToolUseId is { } done)
+                {
+                    turn.Done.Add(done);
+                }
+
+                return turn.StoppedAt is { } stopped ? new ToldLate(StaleStart: false, StoppedBefore: stopped) : default;
+        }
     }
 
     /// <summary>The agent a prompt waits for, or null for a permission_prompt that restates a prompt already waited for.</summary>
@@ -582,8 +640,7 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>
     /// What a chat's agents are up to, kept only while a chat has hooks in this run: the tool uses whose PreToolUse has no
-    /// PostToolUse yet, the agents whose prompt waits for the user, whether the main turn ended meanwhile, and when the main
-    /// turn stopped until its next prompt or step. Dropped when the chat ends. Not persisted.
+    /// PostToolUse yet, the agents whose prompt waits for the user, and whether the main turn ended meanwhile. Not persisted.
     /// </summary>
     private sealed class Agents
     {
@@ -599,13 +656,7 @@ public sealed class SessionEngine : IDisposable
 
         public bool TurnEnded { get; set; }
 
-        /// <summary>
-        /// When the main agent's turn stopped, while no prompt or step of its own came since (#396, #397): its step result told
-        /// now was told late. Not known after a restart, when every result counts as before.
-        /// </summary>
-        public DateTimeOffset? MainStoppedAt { get; set; }
-
-        public bool Idle => Open.Count == 0 && Waiting.Count == 0 && !TurnEnded && MainStoppedAt is null;
+        public bool Idle => Open.Count == 0 && Waiting.Count == 0 && !TurnEnded;
 
         public static string Key(string? agentId) => agentId ?? Main;
     }
@@ -887,7 +938,7 @@ public sealed class SessionEngine : IDisposable
         if (over)
         {
             _endedJobs.Remove(sessionId);
-            _agents.Remove(sessionId); // a chat whose process went gets no SessionEnd to clear it
+            _mainTurns.Remove(sessionId); // a chat whose process went gets no SessionEnd to clear it
         }
 
         Commit(previous, previous with
