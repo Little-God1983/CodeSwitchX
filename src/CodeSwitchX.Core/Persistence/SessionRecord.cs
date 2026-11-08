@@ -26,6 +26,9 @@ public sealed class SessionRecord
     /// <summary><see cref="SessionSnapshot.TurnOverAt"/>.</summary>
     public DateTimeOffset? TurnOverAt { get; set; }
 
+    /// <summary><see cref="SessionSnapshot.JobsEndedAt"/>; null in a row stored before #395.</summary>
+    public DateTimeOffset? JobsEndedAt { get; set; }
+
     /// <summary><see cref="SessionSnapshot.AwaitingToolResult"/>.</summary>
     public bool AwaitingToolResult { get; set; }
     public string? Cwd { get; set; }
@@ -71,6 +74,7 @@ public sealed class SessionRecord
         LastRequestAt = s.LastRequestAt;
         OpenJobs = s.OpenJobs.Count > 0 ? string.Join('\n', s.OpenJobs) : null;
         TurnOverAt = s.TurnOverAt;
+        JobsEndedAt = s.JobsEndedAt;
         AwaitingToolResult = s.AwaitingToolResult;
         Cwd = s.Cwd;
         TranscriptPath = s.TranscriptPath;
@@ -101,6 +105,7 @@ public sealed class SessionRecord
         LastRequestAt = LastRequestAt,
         OpenJobs = OpenJobs?.Split('\n', StringSplitOptions.RemoveEmptyEntries) ?? [],
         TurnOverAt = TurnOverAt,
+        JobsEndedAt = JobsEndedAt,
         AwaitingToolResult = AwaitingToolResult,
         Cwd = Cwd,
         TranscriptPath = TranscriptPath,

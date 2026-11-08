@@ -89,6 +89,8 @@ public sealed class SessionEngine : IDisposable
     /// hook most likely fired while the app was down, and an Idle one quiet for the stale window comes back Stale, as the
     /// first sweep would make it 5 s on (until then its row would sit on the tile). Waiting sessions with a live process
     /// are left alone: a permission prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
+    /// The wait for a turn that reacts to the end of the last job (<see cref="SessionSnapshot.JobsEndedAt"/>) is kept only by a
+    /// chat that comes back Waiting with no job open (#395), for when its prompt is answered.
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -136,6 +138,12 @@ public sealed class SessionEngine : IDisposable
                     corrected = corrected with { State = SessionState.Stale, StateSince = StaleSince(corrected) };
                 }
 
+                // The wait for a turn that reacts to the end of the last job is stored (#395): a chat restored Waiting on a
+                // background agent's prompt keeps it for when the prompt is answered. Any other restores as before: a Working
+                // one's wait may have run out while the app was down, and the first sweep would end it before its transcript
+                // tells of a reacting turn that began meanwhile.
+                var keepsWait = corrected.State == SessionState.Waiting && corrected.OpenJobs.Count == 0;
+                corrected = corrected with { JobsEndedAt = keepsWait ? corrected.JobsEndedAt : null };
                 Commit(restored, corrected);
             }
         }
@@ -227,12 +235,6 @@ public sealed class SessionEngine : IDisposable
                 }
             }
 
-            if (s.State == SessionState.Waiting && state == SessionState.Working && jobsEndedAt is not null)
-            {
-                // The prompt is answered: a turn that reacts to the end may have waited behind it, so the wait for it begins now.
-                jobsEndedAt = e.At;
-            }
-
             var cwd = e.Cwd ?? s.Cwd;
             var ping = e.EventName == "UserPromptSubmit" && KeepAlive.IsPing(e.Prompt);
             var claudePid = chainPid ?? s.ClaudePid;
@@ -275,10 +277,20 @@ public sealed class SessionEngine : IDisposable
                 KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
+                JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, e.At),
             });
         }
     }
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.JobsEndedAt"/> once a chat in <paramref name="was"/> moves to <paramref name="state"/> at
+    /// <paramref name="at"/>: Waiting to Working is the prompt answered, and a turn that reacts to the end may have waited
+    /// behind it, so the wait for it begins at <paramref name="at"/>. On the transcript route too, which tells it for a chat
+    /// restored Waiting before its first hook: its stored wait must not run out at once (#395). The caller weighs a reacting
+    /// request against the wait first, as the answer must not put the wait past it.
+    /// </summary>
+    private static DateTimeOffset? WaitAfter(SessionState was, SessionState state, IReadOnlyList<string> jobs, DateTimeOffset? endedAt, DateTimeOffset at) =>
+        WaitAfter(state, jobs, was == SessionState.Waiting && state == SessionState.Working && endedAt is not null ? at : endedAt);
 
     /// <summary>
     /// <see cref="SessionSnapshot.JobsEndedAt"/> as a chat in <paramref name="state"/> with <paramref name="jobs"/> open keeps
@@ -653,7 +665,7 @@ public sealed class SessionEngine : IDisposable
                 AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
+                JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, activityAt),
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
                 KeepAliveTurn = KeepAliveGoesOn(s),
             });

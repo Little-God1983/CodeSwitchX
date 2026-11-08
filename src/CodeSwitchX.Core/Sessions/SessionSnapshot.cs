@@ -39,7 +39,7 @@ public sealed record SessionSnapshot
 
     /// <summary>
     /// When the last job of a chat whose turn was over ended, while the turn Claude Code starts on that end may still come.
-    /// Not persisted.
+    /// Persisted (#395): a restart while a background agent's prompt holds the chat Waiting must not lose the wait.
     /// </summary>
     public DateTimeOffset? JobsEndedAt { get; init; }
 

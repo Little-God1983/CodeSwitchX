@@ -859,6 +859,86 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void The_wait_for_a_reacting_turn_survives_a_restart_while_a_background_agent_s_prompt_waits()
+    {
+        // #395: the wait was not stored, so the chat came back Waiting with neither mark, and answering the prompt left it
+        // Working with nothing to end that.
+        var ended = _time.GetUtcNow().AddMinutes(-5);
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = ended }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+        engine.Get("s1")!.JobsEndedAt.ShouldBe(ended);
+
+        _time.Advance(TimeSpan.FromSeconds(30));
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a1"));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a turn that reacts to the end may still come");
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the wait begins at the answer, not at the stored end");
+
+        _time.Advance(SessionEngine.JobEndSettle);
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void A_transcript_write_after_a_restart_does_not_run_out_the_stored_wait_at_once()
+    {
+        // Review round 1 of #395: with no hook yet, a transcript write moves the restored Waiting chat to Working, and the wait
+        // kept its stored end, so the next sweep made the chat Idle while the prompt may still be open.
+        var ended = _time.GetUtcNow().AddMinutes(-5);
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = ended, AwaitingToolResult = true }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+        engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), InferredSignal = SessionSignal.ToolUse,
+        });
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+        engine.Get("s1")!.JobsEndedAt.ShouldBe(_time.GetUtcNow(), "Waiting to Working is the prompt answered: the wait begins now");
+
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void A_reacting_request_read_with_the_answer_after_a_restart_ends_the_wait()
+    {
+        // Review round 2 of #395: the wait began anew at the write before the request was weighed, so the request, older than
+        // the write, no longer ended it, and the sweep made the chat Idle in the middle of its reacting turn.
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = _time.GetUtcNow().AddMinutes(-5), AwaitingToolResult = true },
+            new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+        engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(),
+            LastRequestAt = _time.GetUtcNow().AddSeconds(-1), InferredSignal = SessionSignal.ToolUse,
+        });
+
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull("the turn that reacts has begun, and ends with its own stop");
+    }
+
+    [Fact]
+    public void A_chat_restored_working_restores_as_before_the_wait_was_stored()
+    {
+        // Review round 3 of #395: a wait that ran out while the app was down ended a chat restored mid-command at the first
+        // sweep, before the transcript could tell the reacting turn that began meanwhile. Only a Waiting chat needs the wait.
+        using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-10), AwaitingToolResult = true },
+            new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull();
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a command still runs, as far as the app can tell");
+    }
+
+    [Fact]
+    public void A_chat_restored_idle_keeps_no_wait()
+    {
+        using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-5) }, new FakeProcessProbe());
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull("a chat that is done waits for nothing");
+    }
+
+    [Fact]
     public void A_running_foreground_command_stays_working_through_a_restart()
     {
         using var engine = Restored(Stored() with { AwaitingToolResult = true }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
