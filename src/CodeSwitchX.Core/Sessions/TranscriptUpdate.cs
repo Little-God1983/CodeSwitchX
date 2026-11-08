@@ -26,6 +26,12 @@ public sealed record TranscriptUpdate
     public IReadOnlyList<BackgroundJobEvent> JobsStarted { get; init; } = [];
     public IReadOnlyList<BackgroundJobEvent> JobsEnded { get; init; } = [];
 
+    /// <summary>
+    /// The sub-agent whose file these lines are from (its <c>agent_id</c>, as its hooks name it; a file of no agent, such as a
+    /// workflow's journal, by its file name); null for the chat's own file (#401).
+    /// </summary>
+    public string? AgentId { get; init; }
+
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
 

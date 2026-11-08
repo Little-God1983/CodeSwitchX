@@ -67,6 +67,16 @@ public sealed class TranscriptIndexer : BackgroundService
         Path.GetFileName(path).StartsWith("agent-", StringComparison.OrdinalIgnoreCase) || SessionFolder(path) is not null;
 
     /// <summary>
+    /// The agent a sub-agent's file is of (#401): Claude Code names it <c>agent-&lt;agent_id&gt;.jsonl</c>, the id its hooks
+    /// carry (seen with CLI 2.1.316). Null for a file named otherwise, such as a workflow's journal.
+    /// </summary>
+    internal static string? AgentIdOf(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        return name.StartsWith("agent-", StringComparison.OrdinalIgnoreCase) && name.Length > "agent-".Length ? name["agent-".Length..] : null;
+    }
+
+    /// <summary>
     /// The session folder that holds a <c>subagents</c> folder (<c>&lt;project&gt;/&lt;session&gt;/subagents/...</c>), or null
     /// when the path is not under one. It names the session of a file whose lines do not, such as a workflow's <c>journal.jsonl</c>.
     /// </summary>
@@ -685,6 +695,8 @@ public sealed class TranscriptIndexer : BackgroundService
                 SessionId = sessionId,
                 TranscriptPath = path,
                 ObservedAt = now,
+                // A file of no agent (a workflow's journal) is no agent's the chat could wait for: its name, which no hook names.
+                AgentId = AgentIdOf(path) ?? Path.GetFileNameWithoutExtension(path),
                 LastActivityAt = lastActivity,
                 Usage = usage,
                 MessageIds = newMessageIds,

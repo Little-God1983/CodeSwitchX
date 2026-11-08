@@ -44,6 +44,16 @@ public sealed record SessionSnapshot
     public DateTimeOffset? JobsEndedAt { get; init; }
 
     /// <summary>
+    /// While the chat waits, the agents whose prompt it waits for (#401): one per line, ordered, the main agent as
+    /// <c>main</c>; null when it does not wait or nobody was told apart. Persisted, so after a restart only those agents'
+    /// steps end the Waiting. A string, so the snapshot compares by value.
+    /// </summary>
+    public string? WaitingAgents { get; init; }
+
+    /// <summary>While the chat waits on a background agent's prompt, whether the main turn ended meanwhile (#401). Persisted.</summary>
+    public bool WaitingTurnEnded { get; init; }
+
+    /// <summary>
     /// Restored Working with a tool running and its process alive: no hook speaks during a long foreground command, so the
     /// quiet does not say it is over. Until the transcript says so. Not persisted.
     /// </summary>

@@ -1178,6 +1178,112 @@ public sealed class SessionEngineJobsTests : IDisposable
         engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a command still runs, as far as the app can tell");
     }
 
+    private SessionEngine RestoredWaitingOn(string agents, bool turnEnded = false) => Restored(
+        Stored() with { State = SessionState.Waiting, StateSince = _time.GetUtcNow().AddMinutes(-5), WaitingAgents = agents, WaitingTurnEnded = turnEnded, AwaitingToolResult = true },
+        new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+    private TranscriptUpdate WrittenBy(string? agent, DateTimeOffset at) => new()
+    {
+        SessionId = "s1", TranscriptPath = agent is null ? "p" : $"p/subagents/agent-{agent}.jsonl", ObservedAt = _time.GetUtcNow(),
+        LastActivityAt = at, AgentId = agent, InferredSignal = _time.GetUtcNow() - at < TimeSpan.FromSeconds(10) ? SessionSignal.ToolUse : null,
+    };
+
+    [Fact]
+    public void A_chat_tells_whom_it_waits_for()
+    {
+        Prompt();
+        AgentAsks("a1");
+        Chat.WaitingAgents.ShouldBe("a1");
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
+        Chat.WaitingAgents.ShouldBe("a1\nmain");
+
+        Stop();
+        Chat.WaitingTurnEnded.ShouldBeTrue("the main turn ended while a1's prompt waits");
+        Chat.WaitingAgents.ShouldBe("a1");
+
+        AgentSteps("a1");
+        Chat.State.ShouldBe(SessionState.Idle);
+        Chat.WaitingAgents.ShouldBeNull();
+        Chat.WaitingTurnEnded.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void After_a_restart_another_agent_s_step_leaves_the_chat_waiting()
+    {
+        // #401: the first tool use of any agent ended a restored Waiting, so the chat could show Idle while a1's prompt waited.
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a2"));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "a1's prompt still waits for the user");
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a1"));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void After_a_restart_a_turn_that_ended_while_the_prompt_waited_is_over_once_it_is_answered()
+    {
+        using var engine = RestoredWaitingOn("a1", turnEnded: true);
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a1"));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void After_a_restart_the_main_agent_s_prompt_is_answered_by_its_own_step_only()
+    {
+        using var engine = RestoredWaitingOn("main");
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a2"));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse));
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void A_write_of_the_waiting_agent_after_its_prompt_ends_the_wait()
+    {
+        // #401: a prompt answered while the app was down; no hook of that agent comes again, but its transcript tells it.
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-2)));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
+    }
+
+    [Fact]
+    public void A_write_of_another_agent_leaves_a_restored_chat_waiting()
+    {
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(WrittenBy("a2", _time.GetUtcNow()));
+        engine.Apply(WrittenBy(null, _time.GetUtcNow()));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+    }
+
+    [Fact]
+    public void A_write_of_the_waiting_agent_from_before_its_prompt_leaves_the_chat_waiting()
+    {
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-6)));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "the line that asked was written before the prompt");
+    }
+
+    [Fact]
+    public void A_chat_restored_waiting_with_no_one_named_ends_at_the_first_step_as_before()
+    {
+        using var engine = Restored(Stored() with { State = SessionState.Waiting }, new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse, agent: "a2"));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a row stored before #401 names no one");
+    }
+
     [Fact]
     public void A_chat_restored_idle_keeps_no_wait()
     {
