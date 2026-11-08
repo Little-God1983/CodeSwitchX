@@ -1263,6 +1263,21 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_wait_ended_by_the_agent_s_reply_does_not_come_back_on_the_quiet()
+    {
+        // On-screen check of #401: the step that asked still counted as awaiting its result, so once the lines went quiet the
+        // sweep for a chat with no hooks made it Waiting again, with nobody to wait for.
+        using var engine = RestoredWaitingOn("a1");
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-2)));
+        engine.Get("s1")!.AwaitingToolResult.ShouldBeFalse("the agent replied after the step it asked for");
+
+        _time.Advance(TimeSpan.FromSeconds(15));
+        engine.SweepStale();
+
+        engine.Get("s1")!.State.ShouldNotBe(SessionState.Waiting);
+    }
+
+    [Fact]
     public void A_write_of_another_agent_leaves_a_restored_chat_waiting()
     {
         using var engine = RestoredWaitingOn("a1");

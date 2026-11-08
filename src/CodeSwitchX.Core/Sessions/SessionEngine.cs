@@ -797,6 +797,7 @@ public sealed class SessionEngine : IDisposable
             var state = s.State;
             var stateSince = s.StateSince;
             var activityAt = u.LastActivityAt ?? u.ObservedAt;
+            var answeredByLines = false;
             // Esc ends the turn without a Stop hook; the transcript's interrupt marker is the only evidence there is, and the
             // newest: Interrupted means the file ends with it, so the same lines infer nothing newer (their recent writes
             // would say Working). For a hook-backed chat an interrupt older than the current state belongs to an earlier
@@ -813,6 +814,7 @@ public sealed class SessionEngine : IDisposable
                 {
                     stateSince = after != state ? activityAt : stateSince;
                     state = after;
+                    answeredByLines = true;
                 }
             }
             else if (!u.Interrupted && !s.HookSeen && u.InferredSignal is { } signal && SessionStateMachine.TryNext(state, signal, out var next))
@@ -882,7 +884,9 @@ public sealed class SessionEngine : IDisposable
                 Title = s.TitleLocked ? s.Title : u.Title ?? s.Title,
                 LatestContext = u.LatestContext ?? s.LatestContext,
                 LastRequestAt = u.LastRequestAt is { } request && (s.LastRequestAt is not { } known || request > known) ? request : s.LastRequestAt,
-                AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
+                // The step that asked has its result once the waiting agent replied after it: no sweep may take the quiet that
+                // follows for that step still waiting (#401).
+                AwaitingToolResult = !u.Interrupted && !answeredByLines && (u.PendingToolUse ?? s.AwaitingToolResult),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, activityAt),
