@@ -318,13 +318,14 @@ public class TranscriptIndexerTests : IDisposable
         [
             User("parent", "Sub task"),
             Assistant("parent", "s1", ToolBlock, ts: "2026-09-23T10:00:05.000Z"),
-            User("parent", "later", ts: "2026-09-23T10:00:09.000Z"),
+            """{"type":"attachment","sessionId":"parent","timestamp":"2026-09-23T10:00:09.000Z"}""",
         ]);
 
         await _indexer.ScanAsync(CancellationToken.None);
 
         var sub = _updates.Single(u => u.TranscriptPath.EndsWith("agent-a1.jsonl"));
         sub.LastReplyAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 5, TimeSpan.Zero));
+        sub.AgentCallOpen.ShouldBe(true, "its last reply asked for a step that has no result yet");
         sub.LastActivityAt.ShouldBe(new DateTimeOffset(2026, 9, 23, 10, 0, 9, TimeSpan.Zero));
     }
 

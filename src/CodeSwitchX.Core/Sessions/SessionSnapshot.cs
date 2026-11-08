@@ -44,9 +44,10 @@ public sealed record SessionSnapshot
     public DateTimeOffset? JobsEndedAt { get; init; }
 
     /// <summary>
-    /// While the chat waits, the agents whose prompt it waits for (#401): one per line, ordered, the main agent as
-    /// <c>main</c>; null when it does not wait or nobody was told apart. Persisted, so after a restart only those agents'
-    /// steps end the Waiting. A string, so the snapshot compares by value.
+    /// While the chat waits, the agents whose prompt it waits for (#401): one per line, ordered, each as its agent_id (the
+    /// main agent as <c>main</c>), a space, and when it began to wait in UTC ticks; null when it does not wait or nobody was
+    /// told apart. Persisted, so after a restart only those agents' steps end the Waiting. A string, so the snapshot compares
+    /// by value.
     /// </summary>
     public string? WaitingAgents { get; init; }
 

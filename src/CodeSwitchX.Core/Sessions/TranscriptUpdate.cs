@@ -39,6 +39,12 @@ public sealed record TranscriptUpdate
     /// </summary>
     public DateTimeOffset? LastReplyAt { get; init; }
 
+    /// <summary>
+    /// For a sub-agent's file: whether its lines end with a tool call that has no result yet (a step running, or a prompt
+    /// waiting); null when unknown, and always for the chat's own file, which tells it by <see cref="PendingToolUse"/> (#401).
+    /// </summary>
+    public bool? AgentCallOpen { get; init; }
+
     /// <summary>Best-effort state signal, only honoured while the session has never received a hook event.</summary>
     public SessionSignal? InferredSignal { get; init; }
 

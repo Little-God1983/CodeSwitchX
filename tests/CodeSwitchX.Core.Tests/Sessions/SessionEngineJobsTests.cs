@@ -1193,7 +1193,7 @@ public sealed class SessionEngineJobsTests : IDisposable
     private TranscriptUpdate WrittenBy(string? agent, DateTimeOffset at) => new()
     {
         SessionId = "s1", TranscriptPath = agent is null ? "p" : $"p/subagents/agent-{agent}.jsonl", ObservedAt = _time.GetUtcNow(),
-        LastActivityAt = at, AgentId = agent, LastReplyAt = agent is null ? null : at,
+        LastActivityAt = at, AgentId = agent, LastReplyAt = at, AgentCallOpen = agent is null ? null : false,
         InferredSignal = _time.GetUtcNow() - at < TimeSpan.FromSeconds(10) ? SessionSignal.ToolUse : null,
     };
 
@@ -1375,6 +1375,52 @@ public sealed class SessionEngineJobsTests : IDisposable
         engine.Apply(WrittenBy("a1", _time.GetUtcNow()));
 
         engine.Get("s1")!.State.ShouldBe(SessionState.Working, "the main turn goes on");
+    }
+
+    [Fact]
+    public void A_reply_that_leaves_a_call_open_leaves_a_restored_chat_waiting()
+    {
+        // Review round 3 of #401: answered, then asking again while the app was down: the newest reply is the new request.
+        using var engine = RestoredWaitingOn("a1");
+
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-1)) with { AgentCallOpen = true });
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "its next hook tells whether it waits or works");
+    }
+
+    [Fact]
+    public void A_sweep_keeps_a_background_agent_s_prompt_the_chat_works_on_beside()
+    {
+        // Review round 3 of #401: a sweep forgot every waiting agent, though a Working chat keeps a background agent's open
+        // prompt; the main agent's next prompt then ended the Waiting while a1's still waited.
+        Prompt();
+        JobStarts("job1");
+        AgentAsks("a1");
+        Prompt();
+        Stop();
+        _time.Advance(TimeSpan.FromMinutes(1));
+        JobEnds("job1");
+        _time.Advance(SessionEngine.JobEndSettle);
+        _engine.SweepStale();
+        Chat.State.ShouldBe(SessionState.Idle);
+
+        MainPre("t9");
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
+        MainPost("t9");
+
+        Chat.State.ShouldBe(SessionState.Waiting, "a1's prompt still waits");
+    }
+
+    [Fact]
+    public void A_main_line_that_is_no_reply_leaves_a_restored_turn_ended()
+    {
+        // Review round 3 of #401: any recent main line (a rename's, a hook's) counted as the main turn going on.
+        using var engine = RestoredWaitingOn("a1", turnEnded: true);
+
+        engine.Apply(WrittenBy(null, _time.GetUtcNow()) with { LastReplyAt = null });
+        engine.Apply(WrittenBy("a1", _time.GetUtcNow()));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
     }
 
     [Fact]

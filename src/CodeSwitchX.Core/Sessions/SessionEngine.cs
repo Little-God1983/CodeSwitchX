@@ -664,7 +664,7 @@ public sealed class SessionEngine : IDisposable
         var said = u.AgentId is null ? (s.HookSeen ? null : u.InferredSignal) : null;
         if (!agents.Waiting.TryGetValue(writer, out var wait))
         {
-            if (writer == Agents.Main && said == SessionSignal.ToolUse)
+            if (writer == Agents.Main && said == SessionSignal.ToolUse && u.LastReplyAt is not null)
             {
                 agents.TurnEnded = false; // the main agent steps again, as its own step on the hook route says (#390)
             }
@@ -674,7 +674,8 @@ public sealed class SessionEngine : IDisposable
 
         if (u.AgentId is not null)
         {
-            said = wait.Restored && u.LastReplyAt is { } replied && replied > wait.Since ? SessionSignal.ToolUse : null;
+            // A reply that leaves a call open may be the agent asking again, or a step it still runs: its next hook tells.
+            said = wait.Restored && u.LastReplyAt is { } replied && replied > wait.Since && u.AgentCallOpen == false ? SessionSignal.ToolUse : null;
         }
 
         if (said is not (SessionSignal.ToolUse or SessionSignal.Stop))
@@ -734,14 +735,14 @@ public sealed class SessionEngine : IDisposable
     /// <summary>Whether the event starts a step of the main agent: a step's result may land after the turn's Stop (#381).</summary>
     private static bool MainStepBegins(HookEvent e) => e is { EventName: "PreToolUse", AgentId: null };
 
+    /// <summary>When an agent began to wait, and whether that wait came back from storage (#401): only such a wait is ended by the agent's lines.</summary>
+    private readonly record struct WaitStart(DateTimeOffset Since, bool Restored);
+
     /// <summary>
     /// What a chat's agents are up to, while it has hooks in this run: the tool uses whose PreToolUse has no PostToolUse yet,
     /// the agents whose prompt waits for the user and since when, and whether the main turn ended meanwhile. The last two are
     /// stored with the chat while it waits (<see cref="SessionSnapshot.WaitingAgents"/>, #401) and come back on a restore.
     /// </summary>
-    /// <summary>When an agent began to wait, and whether that wait came back from storage (#401): only such a wait is ended by the agent's lines.</summary>
-    private readonly record struct WaitStart(DateTimeOffset Since, bool Restored);
-
     private sealed class Agents
     {
         /// <summary>The main agent's key; sub-agents are keyed by their agent_id.</summary>
@@ -1067,9 +1068,11 @@ public sealed class SessionEngine : IDisposable
         }
 
         var over = next is SessionState.Ended or SessionState.Errored;
-        if (next != SessionState.Waiting)
+        if ((previous.State == SessionState.Waiting && next != SessionState.Waiting) || next is SessionState.Ended or SessionState.Errored)
         {
-            ForgetWaitingLocked(sessionId); // a sweep or the process's end decided the Waiting is over: nobody waits (#401)
+            // A sweep decided the Waiting is over, or the chat is (#401): nobody waits. A Working chat keeps a background
+            // agent's prompt that is still open, as the hook route does.
+            ForgetWaitingLocked(sessionId);
         }
 
         if (over)

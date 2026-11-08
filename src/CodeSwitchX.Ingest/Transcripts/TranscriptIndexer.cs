@@ -705,6 +705,7 @@ public sealed class TranscriptIndexer : BackgroundService
                 AgentId = AgentIdOf(path) ?? Path.GetFileNameWithoutExtension(path),
                 LastActivityAt = lastActivity,
                 LastReplyAt = lastReply,
+                AgentCallOpen = partial ? null : pendingToolUse,
                 Usage = usage,
                 MessageIds = newMessageIds,
                 InferredSignal = recentlyWritten ? SessionSignal.ToolUse : null,
