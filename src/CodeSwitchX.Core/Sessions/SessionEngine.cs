@@ -232,12 +232,6 @@ public sealed class SessionEngine : IDisposable
                 }
             }
 
-            if (s.State == SessionState.Waiting && state == SessionState.Working && jobsEndedAt is not null)
-            {
-                // The prompt is answered: a turn that reacts to the end may have waited behind it, so the wait for it begins now.
-                jobsEndedAt = e.At;
-            }
-
             var cwd = e.Cwd ?? s.Cwd;
             var ping = e.EventName == "UserPromptSubmit" && KeepAlive.IsPing(e.Prompt);
             var claudePid = chainPid ?? s.ClaudePid;
@@ -280,10 +274,20 @@ public sealed class SessionEngine : IDisposable
                 KeepAliveTurn = e is { EventName: "UserPromptSubmit", AgentId: null } ? ping : KeepAliveGoesOn(s),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
+                JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, e.At),
             });
         }
     }
+
+    /// <summary>
+    /// <see cref="SessionSnapshot.JobsEndedAt"/> once a chat in <paramref name="was"/> moves to <paramref name="state"/> at
+    /// <paramref name="at"/>: Waiting to Working is the prompt answered, and a turn that reacts to the end may have waited
+    /// behind it, so the wait for it begins at <paramref name="at"/>. On the transcript route too, which tells it for a chat
+    /// restored Waiting before its first hook: its stored wait must not run out at once (#395). The caller weighs a reacting
+    /// request against the wait first, as the answer must not put the wait past it.
+    /// </summary>
+    private static DateTimeOffset? WaitAfter(SessionState was, SessionState state, IReadOnlyList<string> jobs, DateTimeOffset? endedAt, DateTimeOffset at) =>
+        WaitAfter(state, jobs, was == SessionState.Waiting && state == SessionState.Working && endedAt is not null ? at : endedAt);
 
     /// <summary>
     /// <see cref="SessionSnapshot.JobsEndedAt"/> as a chat in <paramref name="state"/> with <paramref name="jobs"/> open keeps
@@ -632,13 +636,6 @@ public sealed class SessionEngine : IDisposable
                 }
             }
 
-            if (s.State == SessionState.Waiting && state == SessionState.Working && jobsEndedAt is not null)
-            {
-                // As on the hook route: the prompt is answered, and the wait for a reacting turn begins now. A chat restored
-                // Waiting has no hook yet, so its transcript tells this, and its stored wait must not run out at once (#395).
-                jobsEndedAt = activityAt;
-            }
-
             // A request of the chat's own (a sub-agent's lines hold none) after the end is the turn that reacts to it: it ends
             // with its own stop, so the wait for it is over (#390).
             if (jobsEndedAt is { } settling && u.LastRequestAt is { } reacting && reacting > settling)
@@ -665,7 +662,7 @@ public sealed class SessionEngine : IDisposable
                 AwaitingToolResult = !u.Interrupted && (u.PendingToolUse ?? s.AwaitingToolResult),
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
-                JobsEndedAt = WaitAfter(state, jobs, jobsEndedAt),
+                JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, activityAt),
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
                 KeepAliveTurn = KeepAliveGoesOn(s),
             });

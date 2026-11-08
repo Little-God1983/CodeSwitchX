@@ -899,6 +899,23 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_reacting_request_read_with_the_answer_after_a_restart_ends_the_wait()
+    {
+        // Review round 2 of #395: the wait began anew at the write before the request was weighed, so the request, older than
+        // the write, no longer ended it, and the sweep made the chat Idle in the middle of its reacting turn.
+        using var engine = Restored(Stored() with { State = SessionState.Waiting, JobsEndedAt = _time.GetUtcNow().AddMinutes(-5), AwaitingToolResult = true },
+            new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+        engine.Apply(new TranscriptUpdate
+        {
+            SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(),
+            LastRequestAt = _time.GetUtcNow().AddSeconds(-1), InferredSignal = SessionSignal.ToolUse,
+        });
+
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull("the turn that reacts has begun, and ends with its own stop");
+    }
+
+    [Fact]
     public void A_chat_restored_idle_keeps_no_wait()
     {
         using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-5) }, new FakeProcessProbe());
