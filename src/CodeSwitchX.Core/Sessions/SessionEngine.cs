@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using CodeSwitchX.Core.Messaging;
 using CodeSwitchX.Core.Workspaces;
 using Microsoft.Extensions.Logging;
@@ -146,15 +147,17 @@ public sealed class SessionEngine : IDisposable
                 corrected = corrected with { JobsEndedAt = keepsWait ? corrected.JobsEndedAt : null };
 
                 // Whom it waits for is stored too (#401): only those agents' steps end the Waiting, as before the restart.
-                if (corrected.State == SessionState.Waiting && Agents.Decode(corrected.WaitingAgents) is { Count: > 0 } waiting)
+                if (corrected.State == SessionState.Waiting && Agents.Decode(corrected.WaitingAgents, corrected.StateSince) is { Count: > 0 } waiting)
                 {
                     var agents = new Agents { TurnEnded = corrected.WaitingTurnEnded };
-                    agents.Waiting.UnionWith(waiting);
+                    foreach (var (agent, since) in waiting)
+                    {
+                        agents.Waiting[agent] = since;
+                    }
+
                     _agents[corrected.SessionId] = agents;
                 }
 
-                var (waitingAgents, waitingTurnEnded) = WaitingLocked(corrected.SessionId, corrected.State);
-                corrected = corrected with { WaitingAgents = waitingAgents, WaitingTurnEnded = waitingTurnEnded };
                 Commit(restored, corrected);
             }
         }
@@ -261,7 +264,6 @@ public sealed class SessionEngine : IDisposable
             var claudePid = chainPid ?? s.ClaudePid;
             var window = WindowOfLocked(s, claudePid, lookup);
             var windowChanged = !SameFolders(window, s.WindowFolders);
-            var (waitingAgents, waitingTurnEnded) = WaitingLocked(e.SessionId, state);
             var awaitingToolResult = e.EventName switch
             {
                 "PreToolUse" when late.StaleStart => s.AwaitingToolResult, // its result came already
@@ -301,8 +303,6 @@ public sealed class SessionEngine : IDisposable
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, e.At),
-                WaitingAgents = waitingAgents,
-                WaitingTurnEnded = waitingTurnEnded,
             });
         }
     }
@@ -365,7 +365,7 @@ public sealed class SessionEngine : IDisposable
     {
         null => false,
         _ when e.AgentId is not null => false,
-        SessionSignal.Notification => _agents.TryGetValue(e.SessionId, out var agents) && agents.Waiting.Contains(Agents.Main),
+        SessionSignal.Notification => _agents.TryGetValue(e.SessionId, out var agents) && agents.Waiting.ContainsKey(Agents.Main),
         _ => true,
     };
 
@@ -457,7 +457,8 @@ public sealed class SessionEngine : IDisposable
     /// meanwhile. A tool use by any other agent leaves the Waiting alone. The main turn's stop or idle prompt takes the main
     /// agent out and ends the Waiting unless a sub-agent still waits; a new prompt takes the main agent out and works on.
     /// The PreToolUse of the very step a prompt waits for, when the prompt names it and it comes late, is no progress.
-    /// Without a set (a restored Waiting, an inferred one) the first tool use ends it, as before.
+    /// A restored Waiting has its set back (#401); without one (an inferred Waiting, a row stored before #401) the first tool
+    /// use ends it, as before.
     /// </summary>
     /// <param name="late">Whether the event is a hook of the main agent's step told late (<see cref="MainTurn"/>): no progress.</param>
     private SessionSignal? SignalOfLocked(HookEvent e, SessionSnapshot s, out ToldLate late)
@@ -511,7 +512,7 @@ public sealed class SessionEngine : IDisposable
             case SessionSignal.Notification:
                 if (WaitingAgentOf(e, agents) is { } waiting)
                 {
-                    agents.Waiting.Add(waiting);
+                    agents.Waiting.TryAdd(waiting, e.At); // a prompt restated keeps when it began
                     if (e.ToolUseId is { } asking)
                     {
                         agents.WaitingSteps.Add(asking);
@@ -651,19 +652,31 @@ public sealed class SessionEngine : IDisposable
 
     /// <summary>
     /// The signal that ends a Waiting whose agents are known, once these lines are applied (#401); null while it goes on.
-    /// A sub-agent's lines written after the chat began to wait are that agent at work again: its prompt was answered, maybe
-    /// while the app was down, after which no hook of it may come. The chat's own file tells the main agent's answer as it
-    /// always did, by a recent write while no hook was seen. Lines of an agent nobody waits for end nothing.
+    /// A sub-agent's lines written after it began to wait are that agent at work again: its prompt was answered, maybe while
+    /// the app was down, after which no hook of it may come. The chat's own file tells the main agent as it always did while
+    /// no hook was seen: a recent write is its answer, a quiet end its turn's end (as its Stop would), a tool call left open
+    /// its prompt still waiting. Lines of an agent nobody waits for end nothing.
     /// </summary>
     private SessionSignal? ReleasedByLinesLocked(TranscriptUpdate u, SessionSnapshot s, Agents agents)
     {
         var writer = Agents.Key(u.AgentId);
-        var answered = u.AgentId is not null
-            ? u.LastActivityAt is { } at && at > s.StateSince
-            : !s.HookSeen && u.InferredSignal is not null;
-        if (!answered || !agents.Waiting.Remove(writer))
+        if (!agents.Waiting.TryGetValue(writer, out var since))
         {
             return null;
+        }
+
+        var said = u.AgentId is not null
+            ? u.LastActivityAt is { } at && at > since ? SessionSignal.ToolUse : (SessionSignal?)null
+            : s.HookSeen ? null : u.InferredSignal;
+        if (said is not (SessionSignal.ToolUse or SessionSignal.Stop))
+        {
+            return null;
+        }
+
+        agents.Waiting.Remove(writer);
+        if (said == SessionSignal.Stop)
+        {
+            agents.TurnEnded = true; // the main turn is over, as its Stop says while a background agent's prompt waits
         }
 
         if (agents.Waiting.Count > 0)
@@ -672,13 +685,31 @@ public sealed class SessionEngine : IDisposable
         }
 
         agents.WaitingSteps.Clear();
-        var released = Released(agents, s);
+        var released = said == SessionSignal.Stop ? SessionSignal.Stop : Released(agents, s);
+        agents.TurnEnded = false;
         if (agents.Idle)
         {
             _agents.Remove(u.SessionId);
         }
 
         return released;
+    }
+
+    /// <summary>Nobody waits for the user in the chat any more, though no agent's step said so (Esc, a sweep, its process's end).</summary>
+    private void ForgetWaitingLocked(string sessionId)
+    {
+        if (!_agents.TryGetValue(sessionId, out var agents))
+        {
+            return;
+        }
+
+        agents.Waiting.Clear();
+        agents.WaitingSteps.Clear();
+        agents.TurnEnded = false;
+        if (agents.Idle)
+        {
+            _agents.Remove(sessionId);
+        }
     }
 
     /// <summary>
@@ -696,8 +727,9 @@ public sealed class SessionEngine : IDisposable
     private static bool MainStepBegins(HookEvent e) => e is { EventName: "PreToolUse", AgentId: null };
 
     /// <summary>
-    /// What a chat's agents are up to, kept only while a chat has hooks in this run: the tool uses whose PreToolUse has no
-    /// PostToolUse yet, the agents whose prompt waits for the user, and whether the main turn ended meanwhile. Not persisted.
+    /// What a chat's agents are up to, while it has hooks in this run: the tool uses whose PreToolUse has no PostToolUse yet,
+    /// the agents whose prompt waits for the user and since when, and whether the main turn ended meanwhile. The last two are
+    /// stored with the chat while it waits (<see cref="SessionSnapshot.WaitingAgents"/>, #401) and come back on a restore.
     /// </summary>
     private sealed class Agents
     {
@@ -706,7 +738,8 @@ public sealed class SessionEngine : IDisposable
 
         public List<(string Agent, string? ToolUseId)> Open { get; } = [];
 
-        public HashSet<string> Waiting { get; } = new(StringComparer.Ordinal);
+        /// <summary>The agents whose prompt waits for the user, each with when it began to wait.</summary>
+        public Dictionary<string, DateTimeOffset> Waiting { get; } = new(StringComparer.Ordinal);
 
         /// <summary>The tool uses whose prompt waits, where the prompt named one: their own late PreToolUse is no progress.</summary>
         public HashSet<string> WaitingSteps { get; } = new(StringComparer.Ordinal);
@@ -717,12 +750,22 @@ public sealed class SessionEngine : IDisposable
 
         public static string Key(string? agentId) => agentId ?? Main;
 
-        /// <summary>What <see cref="SessionSnapshot.WaitingAgents"/> stores of a set of agents: ordered, one per line, the main one as <c>main</c>.</summary>
-        public static string Encode(IEnumerable<string> agents) =>
-            string.Join('\n', agents.Select(a => a == Main ? "main" : a).Order(StringComparer.Ordinal));
+        /// <summary>
+        /// What <see cref="SessionSnapshot.WaitingAgents"/> stores of the waiting agents: one per line, ordered, the main one as
+        /// <c>main</c>, each with when it began to wait in UTC ticks after a space.
+        /// </summary>
+        public static string Encode(IReadOnlyDictionary<string, DateTimeOffset> waiting) => string.Join('\n',
+            waiting.Select(w => $"{(w.Key == Main ? "main" : w.Key)} {w.Value.UtcTicks.ToString(CultureInfo.InvariantCulture)}").Order(StringComparer.Ordinal));
 
-        public static IReadOnlyList<string> Decode(string? stored) =>
-            stored?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(a => a == "main" ? Main : a).ToArray() ?? [];
+        /// <summary>The waiting agents <see cref="Encode"/> stored; one stored with no time waits since <paramref name="since"/>.</summary>
+        public static IReadOnlyList<(string Agent, DateTimeOffset Since)> Decode(string? stored, DateTimeOffset since) =>
+            stored?.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line =>
+            {
+                var parts = line.Split(' ', 2);
+                var at = parts.Length == 2 && long.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var ticks)
+                    ? new DateTimeOffset(ticks, TimeSpan.Zero) : since;
+                return (parts[0] == "main" ? Main : parts[0], at);
+            }).ToArray() ?? [];
     }
 
     public void Apply(TranscriptUpdate u)
@@ -806,7 +849,11 @@ public sealed class SessionEngine : IDisposable
                 jobsEndedAt = null;
             }
 
-            var transcriptWaiting = WaitingLocked(u.SessionId, state);
+            if (s.State == SessionState.Waiting && state != SessionState.Waiting)
+            {
+                ForgetWaitingLocked(u.SessionId); // Esc, or the transcript's quiet: nobody waits any more
+            }
+
             var cwd = s.Cwd ?? u.Cwd;
             // Sub-agent transcripts carry usage for their own model and no Model; the parent's context bar keeps the parent's.
             var model = u.Model ?? s.Model;
@@ -827,8 +874,6 @@ public sealed class SessionEngine : IDisposable
                 OpenJobs = jobs,
                 TurnOverAt = turnOver,
                 JobsEndedAt = WaitAfter(s.State, state, jobs, jobsEndedAt, activityAt),
-                WaitingAgents = transcriptWaiting.Agents,
-                WaitingTurnEnded = transcriptWaiting.TurnEnded,
                 RestoredWorking = s.RestoredWorking && u.PendingToolUse != false,
                 KeepAliveTurn = KeepAliveGoesOn(s),
             });
@@ -1011,6 +1056,11 @@ public sealed class SessionEngine : IDisposable
         }
 
         var over = next is SessionState.Ended or SessionState.Errored;
+        if (next != SessionState.Waiting)
+        {
+            ForgetWaitingLocked(sessionId); // a sweep or the process's end decided the Waiting is over: nobody waits (#401)
+        }
+
         if (over)
         {
             _endedJobs.Remove(sessionId);
@@ -1025,8 +1075,6 @@ public sealed class SessionEngine : IDisposable
             TurnOverAt = over ? null : previous.TurnOverAt,
             JobsEndedAt = next == SessionState.Idle || over ? null : previous.JobsEndedAt,
             KeepAliveTurn = KeepAliveGoesOn(previous),
-            WaitingAgents = next == SessionState.Waiting ? previous.WaitingAgents : null,
-            WaitingTurnEnded = next == SessionState.Waiting && previous.WaitingTurnEnded,
         });
     }
 
@@ -1048,6 +1096,9 @@ public sealed class SessionEngine : IDisposable
     /// <summary>Stores and publishes a changed snapshot. Must be called under <see cref="_gate"/> so versions and publish order agree.</summary>
     private void Commit(SessionSnapshot? previous, SessionSnapshot candidate)
     {
+        // Whom the chat waits for is what its agents are up to (#401): taken here, so no change of state or agents misses it.
+        var (waitingAgents, waitingTurnEnded) = WaitingLocked(candidate.SessionId, candidate.State);
+        candidate = candidate with { WaitingAgents = waitingAgents, WaitingTurnEnded = waitingTurnEnded };
         if (previous is not null && candidate == previous)
         {
             return;

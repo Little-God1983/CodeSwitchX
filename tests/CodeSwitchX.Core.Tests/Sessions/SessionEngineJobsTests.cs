@@ -1178,9 +1178,17 @@ public sealed class SessionEngineJobsTests : IDisposable
         engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a command still runs, as far as the app can tell");
     }
 
+    /// <summary>A chat restored Waiting on <paramref name="agents"/> (comma-separated), each waiting since five minutes ago.</summary>
     private SessionEngine RestoredWaitingOn(string agents, bool turnEnded = false) => Restored(
-        Stored() with { State = SessionState.Waiting, StateSince = _time.GetUtcNow().AddMinutes(-5), WaitingAgents = agents, WaitingTurnEnded = turnEnded, AwaitingToolResult = true },
+        Stored() with
+        {
+            State = SessionState.Waiting, StateSince = _time.GetUtcNow().AddMinutes(-5), AwaitingToolResult = true, WaitingTurnEnded = turnEnded,
+            WaitingAgents = string.Join('\n', agents.Split(',').Select(a => $"{a} {_time.GetUtcNow().AddMinutes(-5).UtcTicks}")),
+        },
         new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+
+    /// <summary>The agents a stored <see cref="SessionSnapshot.WaitingAgents"/> names, without when each began to wait.</summary>
+    private static string? Names(string? waiting) => waiting is null ? null : string.Join(',', waiting.Split('\n').Select(l => l.Split(' ')[0]));
 
     private TranscriptUpdate WrittenBy(string? agent, DateTimeOffset at) => new()
     {
@@ -1193,13 +1201,13 @@ public sealed class SessionEngineJobsTests : IDisposable
     {
         Prompt();
         AgentAsks("a1");
-        Chat.WaitingAgents.ShouldBe("a1");
+        Names(Chat.WaitingAgents).ShouldBe("a1");
         _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
-        Chat.WaitingAgents.ShouldBe("a1\nmain");
+        Names(Chat.WaitingAgents).ShouldBe("a1,main");
 
         Stop();
         Chat.WaitingTurnEnded.ShouldBeTrue("the main turn ended while a1's prompt waits");
-        Chat.WaitingAgents.ShouldBe("a1");
+        Names(Chat.WaitingAgents).ShouldBe("a1");
 
         AgentSteps("a1");
         Chat.State.ShouldBe(SessionState.Idle);
@@ -1272,6 +1280,61 @@ public sealed class SessionEngineJobsTests : IDisposable
         engine.Apply(WrittenBy("a1", _time.GetUtcNow().AddMinutes(-6)));
 
         engine.Get("s1")!.State.ShouldBe(SessionState.Waiting, "the line that asked was written before the prompt");
+    }
+
+    [Fact]
+    public void A_restored_main_prompt_still_open_by_its_transcript_keeps_the_chat_waiting()
+    {
+        // Review round 1 of #401: the quiet main file with its tool call left open (an inferred Notification) counted as the answer.
+        using var engine = RestoredWaitingOn("main");
+
+        engine.Apply(WrittenBy(null, _time.GetUtcNow().AddMinutes(-3)) with { InferredSignal = SessionSignal.Notification });
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Waiting);
+    }
+
+    [Fact]
+    public void A_restored_main_prompt_whose_turn_ended_meanwhile_goes_idle()
+    {
+        // Review round 1 of #401: the quiet main file with no call open (an inferred Stop) made the chat Working, not Idle.
+        using var engine = RestoredWaitingOn("main");
+
+        engine.Apply(WrittenBy(null, _time.GetUtcNow().AddMinutes(-3)) with { InferredSignal = SessionSignal.Stop });
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+    }
+
+    [Fact]
+    public void An_agent_s_lines_from_before_its_own_prompt_do_not_answer_it()
+    {
+        // Review round 1 of #401: lines counted from when the chat began to wait, so a second agent's lines from before its own
+        // prompt (read late, as the transcript is) answered it at once.
+        Prompt();
+        _engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
+        _time.Advance(TimeSpan.FromSeconds(5));
+        var asked = _time.GetUtcNow();
+        AgentAsks("a1");
+
+        _engine.Apply(WrittenBy("a1", asked.AddMilliseconds(-100)));
+        _engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse));
+
+        Chat.State.ShouldBe(SessionState.Waiting, "a1's prompt still waits");
+        Names(Chat.WaitingAgents).ShouldBe("a1");
+    }
+
+    [Fact]
+    public void An_interrupt_forgets_whom_a_restored_chat_waited_for()
+    {
+        // Review round 1 of #401: the restored set outlived the Waiting, and the next prompt of the main agent waited on a1 too.
+        using var engine = RestoredWaitingOn("a1");
+        engine.Apply(new TranscriptUpdate { SessionId = "s1", TranscriptPath = "p", ObservedAt = _time.GetUtcNow(), LastActivityAt = _time.GetUtcNow(), Interrupted = true });
+        engine.Get("s1")!.State.ShouldBe(SessionState.Idle);
+
+        engine.Apply(Hook("PermissionRequest", SessionSignal.Notification));
+        Names(engine.Get("s1")!.WaitingAgents).ShouldBe("main");
+        engine.Apply(Hook("PostToolUse", SessionSignal.ToolUse));
+
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working);
     }
 
     [Fact]
