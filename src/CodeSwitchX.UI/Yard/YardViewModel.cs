@@ -954,7 +954,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         var lines = await Task.WhenAll(pending).ConfigureAwait(false);
-        var replacesRoot = root.GitDir is null && lines.Take(belowRoot).Any(l => l is not null);
+        var replacesRoot = lines.Take(belowRoot).Any(l => l is not null);
         List<GitLine> all = replacesRoot ? [.. lines.OfType<GitLine>()] : [rootLine, .. lines.OfType<GitLine>()];
         // Only the root's own line leaves its name out: a lone repository below the root is not the workspace's folder.
         return all.Count > 1 || replacesRoot ? all : [rootLine with { Folder = null }];
@@ -1044,9 +1044,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var found = new List<RepoBelow>();
         foreach (var child in Directory.EnumerateDirectories(parent).Order(StringComparer.OrdinalIgnoreCase))
         {
-            if (Path.Exists(Path.Combine(child, ".git")) && _git.GitDirOf(child) is { } gitDir)
+            try
             {
-                found.Add(new RepoBelow(new WorkspaceFolder(child, null), gitDir));
+                if (Path.Exists(Path.Combine(child, ".git")) && _git.GitDirOf(child) is { } gitDir)
+                {
+                    found.Add(new RepoBelow(new WorkspaceFolder(child, null), gitDir));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A .git pointer that cannot be read is that folder's; it holds back none of the repositories beside it.
+                _logger.LogWarning(ex, "Finding the repository of {Folder} failed", child);
             }
         }
 

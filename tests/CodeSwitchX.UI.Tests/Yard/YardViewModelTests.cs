@@ -841,6 +841,28 @@ public partial class YardViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task A_folder_below_whose_git_pointer_cannot_be_read_holds_back_none_of_the_repositories_beside_it()
+    {
+        // One unreadable .git file failed the whole listing, and the tile read "no git" with none of the repositories below it.
+        var nuget = Path.Combine(_tempRoot, "nuget");
+        Repo(Path.Combine("nuget", "llm"));
+        var locked = Path.Combine(nuget, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, ".git"), "gitdir: ../llm/.git\n");
+        var plain = new Workspace { Name = "Nuget", RootPath = nuget, TrackId = _general.Id };
+        _store.GetAllAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<IReadOnlyList<Workspace>>([plain]));
+        var yard = Yard((_, _, _) => Task.FromResult<string?>(string.Empty));
+        await yard.InitializeAsync(CancellationToken.None);
+
+        using (new FileStream(Path.Combine(locked, ".git"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await yard.RefreshGitAsync(CancellationToken.None);
+        }
+
+        yard.FindTile(plain.Id)!.GitLines.ShouldHaveSingleItem().Text.ShouldBe("llm · main");
+    }
+
+    [Fact]
     public async Task A_listed_folder_with_no_repository_shows_the_repositories_one_level_below_it_in_its_place()
     {
         var sdk = Repo("sdk");
