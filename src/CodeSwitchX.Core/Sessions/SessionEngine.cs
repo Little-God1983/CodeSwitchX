@@ -90,7 +90,7 @@ public sealed class SessionEngine : IDisposable
     /// first sweep would make it 5 s on (until then its row would sit on the tile). Waiting sessions with a live process
     /// are left alone: a permission prompt is quiet by nature, and the liveness monitor decides when such a chat is really gone.
     /// The wait for a turn that reacts to the end of the last job (<see cref="SessionSnapshot.JobsEndedAt"/>) is kept only by a
-    /// chat that comes back Working or Waiting with no job open (#395).
+    /// chat that comes back Waiting with no job open (#395), for when its prompt is answered.
     /// </summary>
     public void Restore(IEnumerable<SessionSnapshot> persisted)
     {
@@ -139,8 +139,11 @@ public sealed class SessionEngine : IDisposable
                 }
 
                 // The wait for a turn that reacts to the end of the last job is stored (#395): a chat restored Waiting on a
-                // background agent's prompt keeps it for when the prompt is answered. One that comes back done keeps none.
-                corrected = corrected with { JobsEndedAt = WaitAfter(corrected.State, corrected.OpenJobs, corrected.JobsEndedAt) };
+                // background agent's prompt keeps it for when the prompt is answered. Any other restores as before: a Working
+                // one's wait may have run out while the app was down, and the first sweep would end it before its transcript
+                // tells of a reacting turn that began meanwhile.
+                var keepsWait = corrected.State == SessionState.Waiting && corrected.OpenJobs.Count == 0;
+                corrected = corrected with { JobsEndedAt = keepsWait ? corrected.JobsEndedAt : null };
                 Commit(restored, corrected);
             }
         }

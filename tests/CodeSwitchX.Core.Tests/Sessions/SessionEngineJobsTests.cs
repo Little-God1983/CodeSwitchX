@@ -916,6 +916,20 @@ public sealed class SessionEngineJobsTests : IDisposable
     }
 
     [Fact]
+    public void A_chat_restored_working_restores_as_before_the_wait_was_stored()
+    {
+        // Review round 3 of #395: a wait that ran out while the app was down ended a chat restored mid-command at the first
+        // sweep, before the transcript could tell the reacting turn that began meanwhile. Only a Waiting chat needs the wait.
+        using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-10), AwaitingToolResult = true },
+            new FakeProcessProbe().Run(77, _time.GetUtcNow().AddHours(-1)));
+        engine.Get("s1")!.JobsEndedAt.ShouldBeNull();
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        engine.SweepStale();
+        engine.Get("s1")!.State.ShouldBe(SessionState.Working, "a command still runs, as far as the app can tell");
+    }
+
+    [Fact]
     public void A_chat_restored_idle_keeps_no_wait()
     {
         using var engine = Restored(Stored() with { JobsEndedAt = _time.GetUtcNow().AddMinutes(-5) }, new FakeProcessProbe());
