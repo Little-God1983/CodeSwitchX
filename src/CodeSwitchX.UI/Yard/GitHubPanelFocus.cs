@@ -11,9 +11,9 @@ namespace CodeSwitchX.UI.Yard;
 /// <summary>
 /// Where the keyboard goes when the GitHub list opens and closes (#362). Opening takes the keyboard to the first stop in the panel, so Escape
 /// closes it, and puts the hover preview away. A list that swaps its rows loses the focused row with them, and the keyboard
-/// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the pill that opened it, as its
+/// falls to the window: it goes back to the panel. Closing the list hands the keyboard back to the repository line or pill that opened it (#406), as its
 /// tile has it now: a tile rebuilds its buttons when a git line changes, and may be rebuilt itself when it moves to another
-/// group, so the pill is looked up again, on the same line of the same tile. The tile gets the keyboard when no pill of the
+/// group, so the line or pill is looked up again, on the same line of the same tile. The tile gets the keyboard when no pill of the
 /// repository is left. Nothing is handed back after a mouse close, when the keyboard was not in the panel, when it has moved to
 /// a control since (Raven's type box), when another list took the panel's place, or when the Yard is being left.
 /// </summary>

@@ -21,6 +21,8 @@ public sealed partial class GitHubListViewModel : ObservableObject
     // Cancelled when the panel closes, which ends the gh run instead of leaving it to run out its timeout. It has no timer and
     // no wait handle is taken from it, so there is nothing to dispose.
     private readonly CancellationTokenSource _stop = new();
+    // 1 once a read has started: a tab is read once, however often it is shown.
+    private int _started;
 
     /// <summary>How many are open: the tile's count at first, then what the full list says.</summary>
     [ObservableProperty]
@@ -40,7 +42,9 @@ public sealed partial class GitHubListViewModel : ObservableObject
     [ObservableProperty] private string? _cutShortMessage;
 
     /// <summary>Says how many rows of the list could not be made sense of and are left out, or none.</summary>
-    [ObservableProperty] private string? _skippedMessage;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EmptyText))]
+    private string? _skippedMessage;
 
     /// <summary>The fresh read has not ended yet; a large repository's can take minutes.</summary>
     [ObservableProperty]
@@ -67,8 +71,8 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>The tab's name: "Pull requests 2", "Issues 5".</summary>
     public string TabText => $"{(Kind == GitHubItemKind.PullRequest ? "Pull requests" : "Issues")} {Count}";
 
-    /// <summary>Says the tab is empty once the read has ended with nothing; none while it loads or when it could not load.</summary>
-    public string? EmptyText => !IsLoading && Rows.Count == 0 && LoadMessage is null
+    /// <summary>Says the tab is empty once the read has ended with nothing; none while it loads, when it could not load, or when rows were left out.</summary>
+    public string? EmptyText => !IsLoading && Rows.Count == 0 && LoadMessage is null && SkippedMessage is null
         ? Kind == GitHubItemKind.PullRequest ? "No open pull requests." : "No open issues."
         : null;
 
@@ -80,8 +84,13 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>Ends the read: nothing it would have found reaches the list or the tile.</summary>
     public void Stop() => _stop.Cancel();
 
-    /// <summary>Reads the full list. <see cref="Stop"/> cancels the read: nothing it would have found reaches the panel or the tile.</summary>
-    public async Task LoadAsync(CancellationToken ct)
+    /// <summary>
+    /// Reads the full list, once: a later call waits for the first read. <see cref="Stop"/> cancels the read: nothing it would have
+    /// found reaches the panel or the tile.
+    /// </summary>
+    public Task LoadAsync(CancellationToken ct) => Interlocked.Exchange(ref _started, 1) == 1 ? Loaded : LoadOnceAsync(ct);
+
+    private async Task LoadOnceAsync(CancellationToken ct)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         try

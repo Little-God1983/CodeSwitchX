@@ -412,6 +412,47 @@
           <Style x:Key="GitHubDimLine" TargetType="TextBlock" BasedOn="{StaticResource GitHubFailureLine}">
             <Setter Property="Foreground" Value="#B0B0B0" />
           </Style>
+          <!-- A tab's rows. A large repository has up to a thousand rows: only the ones in view are built (#363). Each tab has a list of its
+               own, so it keeps its scroll position and a tab shown starts at its top (review of #406). -->
+          <Style x:Key="GitHubRows" TargetType="ItemsControl">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel" />
+            <Setter Property="Template">
+              <Setter.Value>
+                <ControlTemplate TargetType="ItemsControl">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
+                    <ItemsPresenter Margin="8,0,8,8" />
+                  </ScrollViewer>
+                </ControlTemplate>
+              </Setter.Value>
+            </Setter>
+            <Setter Property="ItemsPanel">
+              <Setter.Value>
+                <ItemsPanelTemplate>
+                  <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+              </Setter.Value>
+            </Setter>
+            <Setter Property="ItemTemplate">
+              <Setter.Value>
+                <DataTemplate>
+                  <DockPanel>
+                    <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
+                         and the keyboard stays where it was. -->
+                    <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                            Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
+                            VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
+                    <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
+                            ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
+                  </DockPanel>
+                </DataTemplate>
+              </Setter.Value>
+            </Setter>
+          </Style>
           <!-- a tab's name and its arrow: plain text on the tab, each a Tab stop of its own -->
           <Style x:Key="GitHubTabButton" TargetType="Button">
             <Setter Property="Cursor" Value="Hand" />
@@ -431,7 +472,7 @@
           </Style>
         </DockPanel.Resources>
         <DockPanel DockPanel.Dock="Top" Margin="16,12,8,8">
-          <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the list" />
+          <Button DockPanel.Dock="Right" Content="&#x2715;" Command="{Binding CloseCommand}" VerticalAlignment="Top" AutomationProperties.Name="Close the panel" />
           <StackPanel>
             <!-- The heading opens the repository's main page (#382): a link, so it keeps the look of a heading and is underlined under the pointer. -->
             <Button Command="{Binding OpenRepositoryCommand}" HorizontalAlignment="Left" Cursor="Hand" ToolTip="{Binding OpenRepositoryText}"
@@ -528,36 +569,32 @@
         <TextBlock Style="{StaticResource GitHubFailureLine}" Text="{Binding Shown.SkippedMessage}" />
         <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.LoadingMessage}" />
         <TextBlock Style="{StaticResource GitHubDimLine}" Text="{Binding Shown.EmptyText}" />
-        <!-- A large repository has up to a thousand rows: only the ones in view are built (#363). -->
-        <ItemsControl ItemsSource="{Binding Shown.Rows}" Focusable="False" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True"
-                      VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel">
-          <ItemsControl.Template>
-            <ControlTemplate TargetType="ItemsControl">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False" CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
-                <ItemsPresenter Margin="8,0,8,8" />
-              </ScrollViewer>
-            </ControlTemplate>
-          </ItemsControl.Template>
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate>
-              <VirtualizingStackPanel />
-            </ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate>
-              <DockPanel>
-                <!-- Beside the row's button, not in it, so a click copies and opens nothing. Not focusable: a row stays one Tab stop,
-                     and the keyboard stays where it was. -->
-                <Button DockPanel.Dock="Right" Command="{Binding DataContext.CopyRowLinkCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                        Content="&#xE8C8;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Focusable="False" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="6,2" Margin="2,4,0,0"
-                        VerticalAlignment="Top" ToolTip="Copy link" AutomationProperties.Name="{Binding NumberText, StringFormat='Copy the link to {0}'}" />
-                <Button Command="{Binding DataContext.OpenRowCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" CommandParameter="{Binding}"
-                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand" Background="Transparent" BorderThickness="0" Padding="8,2"
-                        ContentTemplate="{StaticResource GitHubRowTemplate}" Content="{Binding}" AutomationProperties.Name="{Binding NumberText, StringFormat='Open {0}'}" />
-              </DockPanel>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
+        <!-- the tab in front shows its rows; the other keeps its list, scrolled where it was -->
+        <Grid>
+          <ItemsControl ItemsSource="{Binding PullRequests.Rows}">
+            <ItemsControl.Style>
+              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
+                <Setter Property="Visibility" Value="Collapsed" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ItemsControl.Style>
+          </ItemsControl>
+          <ItemsControl ItemsSource="{Binding Issues.Rows}">
+            <ItemsControl.Style>
+              <Style TargetType="ItemsControl" BasedOn="{StaticResource GitHubRows}">
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsPullRequestsShown}" Value="True">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </ItemsControl.Style>
+          </ItemsControl>
+        </Grid>
       </DockPanel>
     </Border>
   </Grid>

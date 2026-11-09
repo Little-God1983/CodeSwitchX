@@ -22,9 +22,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private readonly IUiDispatcher _ui;
     private readonly TimeProvider _time;
     private readonly Action<GitHubPanelViewModel> _closed;
-    // Ends the second read too when the panel closes before it starts. No timer and no wait handle is taken from it.
+    // Ends a read a tab starts later, when the panel has closed by then. No timer and no wait handle is taken from it.
     private readonly CancellationTokenSource _stop = new();
-    private readonly TaskCompletionSource _loaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // The tab the panel opened on, read by LoadAsync; the other is read when it is first shown.
+    private readonly GitHubListViewModel _first;
+    // 1 once LoadAsync has run: from then on, showing a tab reads it.
+    private int _loading;
     private ITimer? _copyMessageTimer;
     private int _copies;
 
@@ -54,7 +57,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         _closed = closed;
         PullRequests = new GitHubListViewModel(new GitHubPill(repo, GitHubItemKind.PullRequest), reader, activity, ui, time, logger);
         Issues = new GitHubListViewModel(new GitHubPill(repo, GitHubItemKind.Issue), reader, activity, ui, time, logger);
-        _shown = ListOf(shown);
+        _first = ListOf(shown);
+        _shown = _first;
         PullRequests.PropertyChanged += OnListChanged;
         Issues.PropertyChanged += OnListChanged;
         // Worked out once: the browser's name is read from the registry and files, which a binding would repeat.
@@ -78,29 +82,18 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// <summary>The tab a click on the repository line opens: pull requests when any are open, they are what gets acted on (#406).</summary>
     public static GitHubItemKind DefaultKind(RepoActivity repo) => repo.OpenPullRequests > 0 ? GitHubItemKind.PullRequest : GitHubItemKind.Issue;
 
-    /// <summary>Completes when the reads of <see cref="LoadAsync"/> have ended, however they ended.</summary>
-    internal Task Loaded => _loaded.Task;
+    /// <summary>Completes when the read of the tab the panel opened on has ended, however it ended.</summary>
+    internal Task Loaded => _first.Loaded;
 
     /// <summary>
-    /// Reads the tab in front, then the other one. One after the other: each read stores its list on the tile only when no other
-    /// result was stored since it started, so two at once would leave one count behind.
+    /// Reads the tab the panel opened on. The other tab is read when it is first shown, at once, even while this read runs: a list of
+    /// a large repository takes minutes, and a tab that is never looked at costs no read (review of #406).
     /// </summary>
     public async Task LoadAsync(CancellationToken ct)
     {
+        Volatile.Write(ref _loading, 1);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
-        try
-        {
-            var first = Shown;
-            await first.LoadAsync(linked.Token).ConfigureAwait(false);
-            if (!linked.IsCancellationRequested)
-            {
-                await (ReferenceEquals(first, PullRequests) ? Issues : PullRequests).LoadAsync(linked.Token).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            _loaded.TrySetResult();
-        }
+        await _first.LoadAsync(linked.Token).ConfigureAwait(false);
     }
 
     private GitHubListViewModel ListOf(GitHubItemKind kind) => kind == GitHubItemKind.PullRequest ? PullRequests : Issues;
@@ -114,7 +107,16 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void Show(GitHubItemKind kind) => Shown = ListOf(kind);
+    private void Show(GitHubItemKind kind)
+    {
+        Shown = ListOf(kind);
+        if (Volatile.Read(ref _loading) == 1)
+        {
+            var list = Shown;
+            // Not on the UI thread: the read starts its gh before its first await. A list already read returns at once.
+            _ = Task.Run(() => list.LoadAsync(_stop.Token));
+        }
+    }
 
     [RelayCommand]
     private void Close()

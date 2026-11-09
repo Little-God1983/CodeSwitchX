@@ -204,16 +204,51 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task The_shown_kind_is_read_first_then_the_other()
+    public async Task Only_the_shown_tab_is_read_until_the_other_is_shown()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        _gh.PullRequestList.SetResult(PullRequestsOf(2));
+
+        await model.LoadAsync(TestContext.Current.CancellationToken);
+        _gh.Asked.ShouldBe(["issue"], "the other tab may never be looked at");
+
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        await model.PullRequests.Loaded;
+
+        _gh.Asked.ShouldBe(["issue", "pr"]);
+        model.PullRequests.Rows.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task A_tab_shown_while_the_first_still_loads_is_read_at_once()
     {
         var (activity, pill) = await PillAsync();
         var model = Open(activity, pill);
         var load = model.LoadAsync(TestContext.Current.CancellationToken);
-        _gh.Asked.ShouldBe(["issue"], "the other list waits for the shown one");
 
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+
+        await Eventually(() => _gh.Asked.Count == 2);
         _gh.List.SetResult(ListOf(3));
         _gh.PullRequestList.SetResult(PullRequestsOf(2));
         await load;
+    }
+
+    [Fact]
+    public async Task A_tab_shown_twice_is_read_once()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        _gh.List.SetResult(ListOf(3));
+        _gh.PullRequestList.SetResult(PullRequestsOf(2));
+        await model.LoadAsync(TestContext.Current.CancellationToken);
+
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        model.ShowCommand.Execute(GitHubItemKind.Issue);
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        await model.PullRequests.Loaded;
 
         _gh.Asked.ShouldBe(["issue", "pr"]);
     }
@@ -227,6 +262,8 @@ public class GitHubListViewModelTests
         _gh.PullRequestList.SetResult(PullRequestsOf(2));
 
         await model.LoadAsync(TestContext.Current.CancellationToken);
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        await model.PullRequests.Loaded;
 
         activity.ForFolder("app")!.OpenIssues.ShouldBe(4);
         activity.ForFolder("app")!.OpenPullRequests.ShouldBe(2);
@@ -242,6 +279,8 @@ public class GitHubListViewModelTests
         _gh.PullRequestList.SetResult(null);
 
         await model.LoadAsync(TestContext.Current.CancellationToken);
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+        await model.PullRequests.Loaded;
 
         model.Issues.LoadMessage.ShouldBeNull();
         model.PullRequests.LoadMessage.ShouldBe("Couldn't load the latest list. Showing what was last read.");
@@ -252,17 +291,34 @@ public class GitHubListViewModelTests
     {
         var (activity, pill) = await PillAsync();
         var model = Open(activity, pill);
-        var load = model.LoadAsync(TestContext.Current.CancellationToken);
         _gh.List.SetResult(ListOf(3));
+        await model.LoadAsync(TestContext.Current.CancellationToken);
+        model.ShowCommand.Execute(GitHubItemKind.PullRequest);
         await Eventually(() => _gh.Asked.Count == 2);
 
         model.CloseCommand.Execute(null);
         _gh.ListToken.IsCancellationRequested.ShouldBeTrue();
         _gh.PullRequestList.SetResult(PullRequestsOf(5)); // an answer that was already on its way
-        await load;
+        await model.PullRequests.Loaded;
 
         model.PullRequests.Rows.Count.ShouldBe(1);
         activity.ForFolder("app")!.OpenPullRequests.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task A_tab_whose_rows_were_all_skipped_is_not_called_empty()
+    {
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, new GitHubPill(pill.Activity, GitHubItemKind.PullRequest));
+        // one odd row and nothing else: two or more with none read is a failed read (GitHubReader.Split)
+        _gh.PullRequestList.SetResult(PullRequestsOf(1).Replace("\"number\":1,", "\"number\":\"1\",", StringComparison.Ordinal));
+
+        await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+
+        model.PullRequests.Rows.ShouldBeEmpty();
+        model.PullRequests.SkippedMessage.ShouldBe("1 row could not be shown.");
+        model.PullRequests.TabText.ShouldBe("Pull requests 1");
+        model.PullRequests.EmptyText.ShouldBeNull("the tab says 1, so it is not empty");
     }
 
     [Fact]
@@ -330,7 +386,7 @@ public class GitHubListViewModelTests
         {
             var names = TabStops(PanelView(model).Children.OfType<Border>().Single()).Select(AutomationProperties.GetName).ToList();
 
-            names.Take(7).ShouldBe(["Close the list", "Open acme/app on GitHub", "Show pull requests", "Open all pull requests on GitHub", "Show issues",
+            names.Take(7).ShouldBe(["Close the panel", "Open acme/app on GitHub", "Show pull requests", "Open all pull requests on GitHub", "Show issues",
                 "Open all issues on GitHub", "Copy all links"]);
             names.Skip(7).ShouldBe(["Open #1"]);
         });
@@ -434,7 +490,7 @@ public class GitHubListViewModelTests
         {
             var first = TabStops(PanelView(model))[0].ShouldBeOfType<Button>();
 
-            AutomationProperties.GetName(first).ShouldBe("Close the list");
+            AutomationProperties.GetName(first).ShouldBe("Close the panel");
         });
     }
 
@@ -707,13 +763,54 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
-    public async Task A_line_without_github_cannot_open_the_panel()
+    public async Task A_line_without_github_opens_nothing()
     {
         var (activity, pill) = await PillAsync();
+        var yard = NewYard(activity);
+        var noReaders = NewYard(null);
 
-        NewYard(activity).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0)).ShouldBeFalse();
-        NewYard(null).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0, GitHub: pill.Activity)).ShouldBeFalse("no readers");
-        NewYard(activity).OpenGitHubLineCommand.CanExecute(new GitLine(null, "main", 0, GitHub: pill.Activity)).ShouldBeTrue();
+        yard.OpenGitHubLineCommand.Execute(new GitLine(null, "main", 0));
+        noReaders.OpenGitHubLineCommand.Execute(new GitLine(null, "main", 0, GitHub: pill.Activity));
+
+        yard.GitHubPanel.ShouldBeNull();
+        noReaders.GitHubPanel.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task The_line_command_never_turns_the_line_off()
+    {
+        // The pills sit inside the line's button: a line button turned off would turn them off too (review of #406).
+        var (activity, _) = await PillAsync();
+
+        NewYard(activity).OpenGitHubLineCommand.CanExecute(null).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Switching_tabs_shows_the_new_tab_from_its_top()
+    {
+        _gh.IssueTotal = 300;
+        var (activity, pill) = await PillAsync();
+        var model = Open(activity, pill);
+        _gh.List.SetResult(ListOf(300));
+        _gh.PullRequestList.SetResult(PullRequestsOf(300));
+        await model.Issues.LoadAsync(TestContext.Current.CancellationToken);
+        await model.PullRequests.LoadAsync(TestContext.Current.CancellationToken);
+
+        await StaThread.RunAsync(() =>
+        {
+            var grid = PanelView(model);
+            // no window holds the panel, so IsVisible is no help: the list in front is the one no collapsed element holds
+            ScrollViewer Shown() => Descendants(grid).OfType<ScrollViewer>().Single(v => !Above(v).Any(e => e is UIElement { Visibility: not Visibility.Visible }));
+            static IEnumerable<DependencyObject> Above(DependencyObject e) { for (var at = e; at is not null; at = VisualTreeHelper.GetParent(at)) { yield return at; } }
+            Shown().ScrollToVerticalOffset(4000);
+            grid.UpdateLayout();
+            Shown().VerticalOffset.ShouldBeGreaterThan(1000);
+
+            model.ShowCommand.Execute(GitHubItemKind.PullRequest);
+            grid.UpdateLayout();
+
+            Shown().VerticalOffset.ShouldBe(0);
+        });
     }
 
     [Fact]
@@ -1317,7 +1414,7 @@ public class GitHubListViewModelTests
         {
             var (_, panel, source) = FocusedPanel(model);
             using var _ = source;
-            var close = Descendants(panel).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Close the list");
+            var close = Descendants(panel).OfType<Button>().Single(b => AutomationProperties.GetName(b) == "Close the panel");
             Keyboard.Focus(close);
 
             close.MoveFocus(new TraversalRequest(FocusNavigationDirection.Previous));

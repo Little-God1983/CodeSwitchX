@@ -1106,8 +1106,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void OpenGitHubList(GitHubPill pill) => OpenPanel(pill.Activity, pill.Kind);
 
-    /// <summary>A click on a tile's repository line opens its panel (#406), on pull requests when any are open; a line with nothing open opens it too.</summary>
-    [RelayCommand(CanExecute = nameof(CanOpenGitHubLine))]
+    /// <summary>
+    /// A click on a tile's repository line opens its panel (#406), on pull requests when any are open; a line with nothing open opens
+    /// it too. Always enabled: the line's pills sit inside its button, and a button turned off would turn them off with it. The line
+    /// is a button only when it is on GitHub, and without the readers there is nothing on GitHub.
+    /// </summary>
+    [RelayCommand]
     private void OpenGitHubLine(GitLine? line)
     {
         if (line?.GitHub is { } activity)
@@ -1115,8 +1119,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity));
         }
     }
-
-    private bool CanOpenGitHubLine(GitLine? line) => line?.GitHub is not null && _gitHub is not null && _gitHubReader is not null && _gitHubBrowsers is not null;
 
     private void OpenPanel(RepoActivity activity, GitHubItemKind kind)
     {
