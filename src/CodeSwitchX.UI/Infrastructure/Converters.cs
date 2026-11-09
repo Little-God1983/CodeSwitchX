@@ -156,3 +156,12 @@ public sealed class IsNullConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
 }
+
+/// <summary>Visible when the two values are equal (a row and the row the merge strip belongs to, #408); collapsed otherwise, and when either is missing.</summary>
+public sealed class SameToVisibleConverter : IMultiValueConverter
+{
+    public object Convert(object?[] values, Type targetType, object? parameter, CultureInfo culture) =>
+        values is [{ } a, { } b] && a != DependencyProperty.UnsetValue && Equals(a, b) ? Visibility.Visible : Visibility.Collapsed;
+
+    public object[] ConvertBack(object? value, Type[] targetTypes, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+}

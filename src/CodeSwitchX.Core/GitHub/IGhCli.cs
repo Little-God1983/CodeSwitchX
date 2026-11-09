@@ -3,7 +3,8 @@ namespace CodeSwitchX.Core.GitHub;
 /// <param name="Output">Stdout when <c>gh</c> exited with code 0; otherwise null.</param>
 /// <param name="FailureOutput">Stdout when it ran to its end and exited with another code: <c>gh api</c> prints GitHub's answer there, whatever it was. Null when it did not get that far.</param>
 /// <param name="TimedOut">The run was killed at its timeout.</param>
-public sealed record GhAnswer(string? Output, string? FailureOutput = null, bool TimedOut = false);
+/// <param name="ErrorOutput">What it wrote to stderr when it ran to its end: where <c>gh pr merge</c> says why it could not merge (#408). Null when it did not get that far.</param>
+public sealed record GhAnswer(string? Output, string? FailureOutput = null, bool TimedOut = false, string? ErrorOutput = null);
 
 /// <summary>Why <c>gh</c> gave no list of accounts.</summary>
 public enum GhFailure

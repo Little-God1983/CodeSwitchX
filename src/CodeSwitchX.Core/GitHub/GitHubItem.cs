@@ -6,6 +6,8 @@ public sealed record GitHubLabel(string Name, string Color);
 
 /// <param name="Branch">Pull requests only: the head branch.</param>
 /// <param name="Author">Pull requests only: the author's login; null when the account is deleted.</param>
+/// <param name="BaseBranch">Pull requests only: the branch it merges into (#408); null when it was not read.</param>
+/// <param name="IsCrossRepository">Pull requests only: the head branch lives in a fork, so no checkout of this repository is on it (#408).</param>
 public sealed record GitHubItem(
     int Number,
     string Title,
@@ -13,7 +15,9 @@ public sealed record GitHubItem(
     DateTimeOffset UpdatedAt,
     IReadOnlyList<GitHubLabel> Labels,
     string? Branch = null,
-    string? Author = null);
+    string? Author = null,
+    string? BaseBranch = null,
+    bool IsCrossRepository = false);
 
 /// <summary>
 /// Every open item of one kind that <c>gh</c> listed, newest first. <paramref name="Skipped"/> counts the rows it could not
@@ -74,5 +78,7 @@ public sealed record RepoActivity(
         && a.UpdatedAt == b.UpdatedAt
         && a.Branch == b.Branch
         && a.Author == b.Author
+        && a.BaseBranch == b.BaseBranch
+        && a.IsCrossRepository == b.IsCrossRepository
         && a.Labels.SequenceEqual(b.Labels);
 }

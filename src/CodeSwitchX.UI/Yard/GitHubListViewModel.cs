@@ -23,6 +23,8 @@ public sealed partial class GitHubListViewModel : ObservableObject
     private readonly CancellationTokenSource _stop = new();
     // 1 once a read has started: a tab is read once, however often it is shown.
     private int _started;
+    // The pull requests merged from the panel (#408); UI thread. A full list read before the merge still holds them.
+    private readonly HashSet<int> _dropped = [];
 
     /// <summary>How many are open: the tile's count at first, then what the full list says.</summary>
     [ObservableProperty]
@@ -83,6 +85,19 @@ public sealed partial class GitHubListViewModel : ObservableObject
 
     /// <summary>A read has started (or ended): showing the tab again reads nothing.</summary>
     public bool HasStarted => Volatile.Read(ref _started) == 1;
+
+    /// <summary>A pull request merged from the panel (#408) leaves the list, and the count with it.</summary>
+    public void Drop(int number)
+    {
+        // Once: the count goes down whether or not the row is among those shown (the tile's preview holds the newest five).
+        if (!_dropped.Add(number))
+        {
+            return;
+        }
+
+        Rows = Rows.Where(r => r.Item.Number != number).ToList();
+        Count = Math.Max(0, Count - 1);
+    }
 
     /// <summary>Ends the read: nothing it would have found reaches the list or the tile.</summary>
     public void Stop() => _stop.Cancel();
@@ -163,12 +178,15 @@ public sealed partial class GitHubListViewModel : ObservableObject
             return;
         }
 
-        // A list at the limit keeps the count GraphQL gave (see TotalGiven).
-        var total = stored ?? all.TotalGiven(_pill.Count);
+        // A list at the limit keeps the count GraphQL gave (see TotalGiven). A pull request merged from the panel while the list was read
+        // stays out of it (review of #408).
+        var gone = all.Items.Count(item => _dropped.Contains(item.Number));
+        var total = Math.Max(0, (stored ?? all.TotalGiven(_pill.Count)) - gone);
         Count = total;
-        Rows = RowsOf(all.Items);
+        var items = gone == 0 ? all.Items : all.Items.Where(item => !_dropped.Contains(item.Number)).ToList();
+        Rows = RowsOf(items);
         SkippedMessage = all.Skipped switch { 0 => null, 1 => "1 row could not be shown.", var n => $"{n} rows could not be shown." };
-        CutShortMessage = all.ReachedLimit && total > all.Items.Count + all.Skipped ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
+        CutShortMessage = all.ReachedLimit && total > items.Count + all.Skipped ? $"Showing the newest {items.Count} of {total}. The rest are on GitHub." : null;
         LoadMessage = null;
     }
 

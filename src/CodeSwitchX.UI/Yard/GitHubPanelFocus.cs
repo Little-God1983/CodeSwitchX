@@ -23,6 +23,8 @@ internal sealed class GitHubPanelFocus
     private readonly UIElement _panel;
     private readonly Action _closePreview;
     private (WorkspaceTileViewModel? Tile, string? Line, GitHubRepo Repo, GitHubItemKind? Kind)? _opener;
+    // The pull request whose merge strip had the keyboard last (#408): a strip's button closes the strip under itself.
+    private int? _stripRow;
 
     /// <param name="root">The Yard, whose pills open the list.</param>
     /// <param name="panel">The list's panel, whose visibility says when the list opens and closes.</param>
@@ -36,7 +38,11 @@ internal sealed class GitHubPanelFocus
         root.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(OnClick));
         panel.IsVisibleChanged += OnPanelVisibleChanged;
         panel.IsKeyboardFocusWithinChanged += OnKeyboardFocusWithinChanged;
+        panel.AddHandler(UIElement.GotKeyboardFocusEvent, new KeyboardFocusChangedEventHandler(OnGotKeyboardFocus));
     }
+
+    private void OnGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        _stripRow = e.NewFocus is FrameworkElement { DataContext: MergeStrip strip } ? strip.Row.Item.Number : null;
 
     private void OnClick(object sender, RoutedEventArgs e)
     {
@@ -62,6 +68,7 @@ internal sealed class GitHubPanelFocus
             return;
         }
 
+        _stripRow = null;
         // Read now: the keyboard leaves a collapsing panel a moment later, and what closed the list is the last input.
         var handBack = _panel.IsKeyboardFocusWithin && InputManager.Current.MostRecentInputDevice is not MouseDevice;
         // Later, once what follows the close has happened: a replacing list shows the panel again, leaving the Yard hides it.
@@ -77,7 +84,15 @@ internal sealed class GitHubPanelFocus
             {
                 if (_panel.IsVisible && Keyboard.FocusedElement is { } focused && ReferenceEquals(focused, PresentationSource.FromVisual(_root)?.RootVisual))
                 {
-                    FocusInside();
+                    // A strip's button closed the strip under itself: the keyboard goes back to that row's Merge button (review of #408).
+                    var merge = _stripRow is { } number
+                        ? Descendants(_panel).OfType<Button>().FirstOrDefault(b => b.IsVisible && b.Name == "MergeButton" && b.DataContext is GitHubRow row && row.Item.Number == number)
+                        : null;
+                    _stripRow = null;
+                    if (merge is null || !merge.Focus())
+                    {
+                        FocusInside();
+                    }
                 }
             });
         }

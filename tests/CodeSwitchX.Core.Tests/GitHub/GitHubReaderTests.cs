@@ -308,10 +308,29 @@ public class GitHubReaderTests
 
         var items = await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None);
 
-        gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,author"]);
+        gh.Commands.Single().ShouldBe(["pr", "list", "-R", "acme/tool", "--state", "open", "--limit", "1000", "--json", "number,title,url,updatedAt,labels,headRefName,baseRefName,isCrossRepository,author"]);
         var item = items.ShouldNotBeNull().Items.Single();
         item.Branch.ShouldBe("feature/x");
         item.Author.ShouldBe("amy");
+    }
+
+    [Fact]
+    public async Task Pull_requests_carry_their_base_branch_and_whether_they_come_from_a_fork()
+    {
+        var rows = """
+            [{"number":8,"title":"PR","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":"feature/x","baseRefName":"develop","isCrossRepository":true,"author":{"login":"amy"}},
+             {"number":7,"title":"PR","url":"u","updatedAt":"2026-11-01T10:00:00Z","labels":[],"headRefName":"feature/y","author":{"login":"amy"}}]
+            """;
+        var preview = Graphql("ADMIN", pullRequests: 1, prNodes: """{"number":3,"title":"P","url":"u","updatedAt":"2026-11-01T10:00:00Z","headRefName":"f","baseRefName":"main","isCrossRepository":false,"author":{"login":"amy"},"labels":{"nodes":[]}}""");
+        var gh = new FakeGh(["acme"], (_, arguments) => arguments[0] == "api" ? preview : rows);
+
+        var items = (await new GitHubReader(gh).ListAsync(Repo, "amy", GitHubItemKind.PullRequest, CancellationToken.None)).ShouldNotBeNull().Items;
+        var newest = (await Read(gh)).ShouldNotBeNull().NewestPullRequests.Single();
+
+        (items[0].BaseBranch, items[0].IsCrossRepository).ShouldBe(("develop", true));
+        (items[1].BaseBranch, items[1].IsCrossRepository).ShouldBe(((string?)null, false), "a row without them is still read");
+        (newest.BaseBranch, newest.IsCrossRepository).ShouldBe(("main", false));
+        gh.Commands.ShouldContain(c => c[0] == "api" && c.Any(a => a.Contains("baseRefName isCrossRepository", StringComparison.Ordinal)));
     }
 
     [Fact]

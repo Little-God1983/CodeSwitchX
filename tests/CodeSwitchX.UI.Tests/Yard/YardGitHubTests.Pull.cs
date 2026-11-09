@@ -12,6 +12,8 @@ public partial class YardGitHubTests
 {
     private readonly FakePullGit _pullGit = new();
 
+    private readonly FakeMergeGh _mergeGh = new();
+
     private static GitHubBrowsers Browsers() =>
         new(new BrowserCatalog(new FakeSource()), Substitute.For<ISettingsStore>(), _ => true, NullLogger<GitHubBrowsers>.Instance);
 
@@ -120,6 +122,37 @@ public partial class YardGitHubTests
 
         await Eventually(() => again.ActionMessage == "app is on main, 3 new commits.");
         yard.JobMessage.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_merge_reads_the_repository_again_so_the_pills_update_at_once()
+    {
+        _gh.PullRequests = 1;
+        var (yard, app) = await SettledYard();
+        yard.FindTile(app.Id)!.GitLines[0].PullRequests.ShouldNotBeNull();
+        _gh.PullRequests = 0;
+        var line = yard.FindTile(app.Id)!.GitLines[0];
+
+        await yard.GitJobs.MergeAsync(line.Path!, "app", line.GitHub!.Repo, "me", 9, "main", pullBranch: null, () => false);
+
+        _mergeGh.Runs.ShouldHaveSingleItem();
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].PullRequests is null);
+    }
+
+    [Fact]
+    public async Task A_GitHub_round_does_not_tell_the_panel_a_branch()
+    {
+        var (yard, app) = await SettledYard();
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        panel.FollowBranch("main-after-a-pull");
+        _gh.Issues = 7;
+
+        // A GitHub round alone: the timers would run git rounds too, which do know the branch.
+        await _activity!.RefreshAsync([app.RootPath], TestContext.Current.CancellationToken);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues?.Count == 7);
+
+        panel.Branch.ShouldBe("main-after-a-pull", "only a git round knows the branch; the lines a GitHub round shows may be older than a pull");
     }
 
     private sealed class FakeSource : IBrowserSource

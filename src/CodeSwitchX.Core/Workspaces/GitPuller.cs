@@ -13,8 +13,7 @@ public sealed record PullOutcome(bool Succeeded, string Text);
 /// with the reason and leaves the checkout as it was (on its branch, its files untouched): uncommitted changes to tracked files, a local default branch with commits that are
 /// not on GitHub, and whatever git itself refuses (an untracked file the switch would overwrite). Never stashes, resets or merges.
 /// </summary>
-/// <param name="run">Runs git in a folder with the arguments and a timeout; a real process by default, a fake in tests.</param>
-public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>>? run = null)
+public sealed class GitPuller
 {
     /// <summary>For the reads: status, rev-parse, rev-list.</summary>
     internal static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
@@ -28,7 +27,13 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
     /// <summary>The most of git's own words a reason carries; git can list many files.</summary>
     private const int MostReasonLength = 300;
 
-    private readonly Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>> _run = run ?? RunGitAsync;
+    private readonly Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>> _run;
+
+    /// <param name="run">Runs git in a folder with the arguments and a timeout; a real process by default, a fake in tests.</param>
+    public GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, CancellationToken, Task<ProcessRunResult>>? run = null)
+    {
+        _run = run ?? RunGitAsync;
+    }
 
     /// <param name="checkout">The checkout's folder (a repository line's).</param>
     /// <param name="branch">The default branch, as GitHub names it.</param>
@@ -37,7 +42,12 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
     /// Asked right before anything changes, after the fetch, which can take a while: a reason to stop (a chat started working meanwhile),
     /// or null to go on. None goes on.
     /// </param>
-    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct, Func<CancellationToken, Task<string?>>? lastCheck = null)
+    /// <param name="leavePushedOnly">
+    /// After a merge (#408): the branch the checkout leaves must hold nothing GitHub has not got, as last fetched. Its own commits would be
+    /// left out of the merge, and switching away would hide that.
+    /// </param>
+    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct, Func<CancellationToken, Task<string?>>? lastCheck = null,
+        bool leavePushedOnly = false)
     {
         // An explicit refspec: the remote's own fetch setting may leave the default branch out (a single-branch clone).
         var remote = $"refs/remotes/origin/{branch}";
@@ -73,6 +83,21 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
         if (current.Output.Trim().Length == 0)
         {
             return new PullOutcome(false, "the checkout is not on a branch.");
+        }
+
+        var leaving = current.Output.Trim();
+        if (leavePushedOnly && leaving != branch)
+        {
+            var unpushed = await _run(checkout, ["rev-list", "--count", $"refs/remotes/origin/{leaving}..HEAD"], ReadTimeout, ct).ConfigureAwait(false);
+            if (Count(unpushed.Output) is not { } extra)
+            {
+                return Failed(unpushed, $"git couldn't compare {leaving} with GitHub.");
+            }
+
+            if (extra > 0)
+            {
+                return new PullOutcome(false, $"{leaving} has local commits that aren't on GitHub, so they are not in the merge.");
+            }
         }
 
         if (lastCheck is not null && await lastCheck(ct).ConfigureAwait(false) is { } reason)

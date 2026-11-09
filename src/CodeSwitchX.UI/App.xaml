@@ -18,6 +18,7 @@
     <infra:ModelDotToBrushConverter x:Key="DotBrush" />
     <infra:InvertBoolConverter x:Key="InvertBool" />
     <infra:IsNullConverter x:Key="IsNull" />
+    <infra:SameToVisibleConverter x:Key="SameVisible" />
     <yard:GitHubLabelBrushConverter x:Key="LabelBrush" />
     <!-- The issue and pull request pills on a tile's git line (#335); the colours come with each button. -->
     <Style x:Key="GitHubPillButton" TargetType="Button">
