@@ -17,6 +17,9 @@ internal sealed class FakePullGit
     /// <summary>The checkout's branch.</summary>
     public string Current { get; set; } = "feature/x";
 
+    /// <summary>Commits of the checkout's branch that GitHub has not got.</summary>
+    public int Unpushed { get; set; }
+
     /// <summary>The command lines run, in order.</summary>
     public List<string> Ran { get; } = [];
 
@@ -36,6 +39,8 @@ internal sealed class FakePullGit
         {
             "status" => Ok(Status),
             "rev-parse" => Ok("abc123\n"),
+            // The branch left after a merge against GitHub's copy of it, the new commits since the pull began, local commits on main.
+            "rev-list" when arguments[2].StartsWith("refs/remotes/origin/", StringComparison.Ordinal) && arguments[2].EndsWith("..HEAD", StringComparison.Ordinal) => Ok($"{Unpushed}\n"),
             "rev-list" => Ok(arguments[2].EndsWith("..HEAD", StringComparison.Ordinal) ? "3\n" : "0\n"),
             "branch" => Ok(Current + "\n"),
             _ => Ok(string.Empty),

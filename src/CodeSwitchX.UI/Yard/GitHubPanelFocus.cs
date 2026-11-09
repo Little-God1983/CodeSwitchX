@@ -68,6 +68,7 @@ internal sealed class GitHubPanelFocus
             return;
         }
 
+        _stripRow = null;
         // Read now: the keyboard leaves a collapsing panel a moment later, and what closed the list is the last input.
         var handBack = _panel.IsKeyboardFocusWithin && InputManager.Current.MostRecentInputDevice is not MouseDevice;
         // Later, once what follows the close has happened: a replacing list shows the panel again, leaving the Yard hides it.

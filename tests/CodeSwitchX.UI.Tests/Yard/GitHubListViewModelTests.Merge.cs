@@ -202,8 +202,49 @@ public partial class GitHubListViewModelTests
 
         await jobs.MergeAsync(@"C:\app", "app", new GitHubRepo("acme", "app"), "me", 9, "main", null, () => false);
 
-        ended.ShouldHaveSingleItem().FromMerge.ShouldBeTrue("the Yard reads GitHub again: it may have merged");
+        ended.ShouldHaveSingleItem().ChangedGitHub.ShouldBeTrue("the Yard reads GitHub again: it may have merged");
         ended[0].Merged.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_refused_merge_changed_nothing_on_GitHub()
+    {
+        _merge.Answer = new GhAnswer(null, ErrorOutput: "X Pull request acme/app#9 is not mergeable: the merge commit cannot be cleanly created.\n");
+        var jobs = MergingJobs();
+        var ended = new List<GitJobOutcome>();
+        jobs.Ended += (outcome, _) => ended.Add(outcome);
+
+        await jobs.MergeAsync(@"C:\app", "app", new GitHubRepo("acme", "app"), "me", 9, "main", null, () => false);
+
+        ended.ShouldHaveSingleItem().ChangedGitHub.ShouldBeFalse("no read of GitHub for nothing");
+    }
+
+    [Fact]
+    public async Task Merge_and_pull_does_not_leave_a_branch_with_commits_GitHub_has_not_got()
+    {
+        _git.Unpushed = 2;
+        _git.Current = "b";
+        var model = await OpenForMerge("b");
+        model.OpenMergeCommand.Execute(Row(model));
+
+        model.MergeAndPullCommand.Execute(null);
+
+        await Eventually(() => !model.IsBusy && model.ActionMessage is not null);
+        model.ActionMessage.ShouldBe("Merged #9, but didn't switch: b has local commits that aren't on GitHub, so they are not in the merge.");
+        _git.Ran.ShouldNotContain(r => r.StartsWith("switch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_merged_pull_request_beyond_the_rows_shown_still_lowers_the_count_once()
+    {
+        var model = await OpenForMerge("b");
+        var before = model.PullRequests.Count;
+
+        model.PullRequests.Drop(400);
+        model.PullRequests.Drop(400);
+
+        model.PullRequests.Count.ShouldBe(before - 1);
+        model.PullRequests.Rows.Count.ShouldBe(1);
     }
 
     [Fact]

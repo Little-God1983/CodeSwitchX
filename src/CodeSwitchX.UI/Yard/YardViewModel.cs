@@ -896,8 +896,6 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             tile.ShowGit(tile.GitLines.Select(WithGitHub).ToList());
         }
-
-        FollowPanelBranch();
     });
 
     /// <summary>The open panel's Pull names what a press does now: its line's branch as last read (review of #407).</summary>
@@ -1213,9 +1211,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
         _ = RefreshGitAfterJobAsync();
 
-        // A merge changes the repository's open pull requests: its pills and counts are read now, not at the next ten minutes (#408). Whatever
-        // it came to: one gh ran out of time on may have gone through.
-        if (outcome.FromMerge && _gitHub is not null)
+        // A merge changes the repository's open pull requests: its pills and counts are read now, not at the next ten minutes (#408), also
+        // after one gh ran out of time on, which may have gone through.
+        if (outcome.ChangedGitHub && _gitHub is not null)
         {
             _ = RefreshGitHubAsync([outcome.Checkout]);
         }

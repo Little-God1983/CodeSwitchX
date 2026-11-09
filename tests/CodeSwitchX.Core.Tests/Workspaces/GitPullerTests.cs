@@ -187,6 +187,28 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task After_a_merge_a_branch_with_commits_GitHub_has_not_got_is_not_left()
+    {
+        await Arrange();
+        await Git(Work, "push", "-q", "origin", "feature/x");
+        await Commit(Work, "late.txt", "not pushed");
+
+        var outcome = await _puller.PullAsync(Work, "main", "work", TestContext.Current.CancellationToken, leavePushedOnly: true);
+
+        outcome.ShouldBe(new PullOutcome(false, "feature/x has local commits that aren't on GitHub, so they are not in the merge."));
+        (await Git(Work, "branch", "--show-current")).ShouldBe("feature/x");
+    }
+
+    [Fact]
+    public async Task After_a_merge_a_pushed_branch_is_left_for_main()
+    {
+        await Arrange();
+        await Git(Work, "push", "-q", "origin", "feature/x");
+
+        (await _puller.PullAsync(Work, "main", "work", TestContext.Current.CancellationToken, leavePushedOnly: true)).Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task A_detached_head_refuses_so_its_commits_are_not_left_behind()
     {
         await Arrange();

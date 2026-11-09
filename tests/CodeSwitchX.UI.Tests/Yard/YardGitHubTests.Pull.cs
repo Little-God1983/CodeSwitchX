@@ -139,6 +139,22 @@ public partial class YardGitHubTests
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].PullRequests is null);
     }
 
+    [Fact]
+    public async Task A_GitHub_round_does_not_tell_the_panel_a_branch()
+    {
+        var (yard, app) = await SettledYard();
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        panel.FollowBranch("main-after-a-pull");
+        _gh.Issues = 7;
+
+        // A GitHub round alone: the timers would run git rounds too, which do know the branch.
+        await _activity!.RefreshAsync([app.RootPath], TestContext.Current.CancellationToken);
+        await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues?.Count == 7);
+
+        panel.Branch.ShouldBe("main-after-a-pull", "only a git round knows the branch; the lines a GitHub round shows may be older than a pull");
+    }
+
     private sealed class FakeSource : IBrowserSource
     {
         public IReadOnlyList<(string Key, string? Executable)> Installed() => [];

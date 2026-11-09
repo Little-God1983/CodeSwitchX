@@ -89,13 +89,14 @@ public sealed partial class GitHubListViewModel : ObservableObject
     /// <summary>A pull request merged from the panel (#408) leaves the list, and the count with it.</summary>
     public void Drop(int number)
     {
-        _dropped.Add(number);
-        var left = Rows.Where(r => r.Item.Number != number).ToList();
-        if (left.Count < Rows.Count)
+        // Once: the count goes down whether or not the row is among those shown (the tile's preview holds the newest five).
+        if (!_dropped.Add(number))
         {
-            Rows = left;
-            Count = Math.Max(0, Count - 1);
+            return;
         }
+
+        Rows = Rows.Where(r => r.Item.Number != number).ToList();
+        Count = Math.Max(0, Count - 1);
     }
 
     /// <summary>Ends the read: nothing it would have found reaches the list or the tile.</summary>
@@ -182,9 +183,10 @@ public sealed partial class GitHubListViewModel : ObservableObject
         var gone = all.Items.Count(item => _dropped.Contains(item.Number));
         var total = Math.Max(0, (stored ?? all.TotalGiven(_pill.Count)) - gone);
         Count = total;
-        Rows = RowsOf(gone == 0 ? all.Items : all.Items.Where(item => !_dropped.Contains(item.Number)).ToList());
+        var items = gone == 0 ? all.Items : all.Items.Where(item => !_dropped.Contains(item.Number)).ToList();
+        Rows = RowsOf(items);
         SkippedMessage = all.Skipped switch { 0 => null, 1 => "1 row could not be shown.", var n => $"{n} rows could not be shown." };
-        CutShortMessage = all.ReachedLimit && total > all.Items.Count + all.Skipped ? $"Showing the newest {all.Items.Count} of {total}. The rest are on GitHub." : null;
+        CutShortMessage = all.ReachedLimit && total > items.Count + all.Skipped ? $"Showing the newest {items.Count} of {total}. The rest are on GitHub." : null;
         LoadMessage = null;
     }
 

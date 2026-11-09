@@ -42,7 +42,12 @@ public sealed class GitPuller
     /// Asked right before anything changes, after the fetch, which can take a while: a reason to stop (a chat started working meanwhile),
     /// or null to go on. None goes on.
     /// </param>
-    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct, Func<CancellationToken, Task<string?>>? lastCheck = null)
+    /// <param name="leavePushedOnly">
+    /// After a merge (#408): the branch the checkout leaves must hold nothing GitHub has not got, as last fetched. Its own commits would be
+    /// left out of the merge, and switching away would hide that.
+    /// </param>
+    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct, Func<CancellationToken, Task<string?>>? lastCheck = null,
+        bool leavePushedOnly = false)
     {
         // An explicit refspec: the remote's own fetch setting may leave the default branch out (a single-branch clone).
         var remote = $"refs/remotes/origin/{branch}";
@@ -78,6 +83,21 @@ public sealed class GitPuller
         if (current.Output.Trim().Length == 0)
         {
             return new PullOutcome(false, "the checkout is not on a branch.");
+        }
+
+        var leaving = current.Output.Trim();
+        if (leavePushedOnly && leaving != branch)
+        {
+            var unpushed = await _run(checkout, ["rev-list", "--count", $"refs/remotes/origin/{leaving}..HEAD"], ReadTimeout, ct).ConfigureAwait(false);
+            if (Count(unpushed.Output) is not { } extra)
+            {
+                return Failed(unpushed, $"git couldn't compare {leaving} with GitHub.");
+            }
+
+            if (extra > 0)
+            {
+                return new PullOutcome(false, $"{leaving} has local commits that aren't on GitHub, so they are not in the merge.");
+            }
         }
 
         if (lastCheck is not null && await lastCheck(ct).ConfigureAwait(false) is { } reason)

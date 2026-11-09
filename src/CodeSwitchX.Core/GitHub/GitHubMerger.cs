@@ -6,7 +6,8 @@ namespace CodeSwitchX.Core.GitHub;
 /// <summary>What a merge came to.</summary>
 /// <param name="Text">Why it was not merged, in short ("it has conflicts with main."); empty when it was.</param>
 /// <param name="AlreadyMerged">GitHub says it was merged before: merged all the same, so the row leaves and a pull may follow (review of #408).</param>
-public sealed record MergeOutcome(bool Merged, string Text = "", bool AlreadyMerged = false);
+/// <param name="Unknown">gh ran out of time: it may have merged or not.</param>
+public sealed record MergeOutcome(bool Merged, string Text = "", bool AlreadyMerged = false, bool Unknown = false);
 
 /// <summary>
 /// Merges a pull request on GitHub with a merge commit, as the account that reads the repository, without switching gh's active one
@@ -33,7 +34,7 @@ public sealed class GitHubMerger
 
         if (answer.TimedOut)
         {
-            return new MergeOutcome(false, "gh took too long. Check the pull request on GitHub.");
+            return new MergeOutcome(false, "gh took too long. Check the pull request on GitHub.", Unknown: true);
         }
 
         var printed = $"{answer.ErrorOutput}\n{answer.FailureOutput}";

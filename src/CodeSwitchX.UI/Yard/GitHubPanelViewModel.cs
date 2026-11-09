@@ -100,7 +100,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// checkout or the repository has no default branch.
     /// </summary>
     public string? PullText => _checkout is null || _repo.DefaultBranch is not { } main ? null
-        : IsBusy ? _checkout.Jobs.RunningText(_checkout.Path) ?? $"Pulling {main}\u2026"
+        : IsBusy && _checkout.Jobs.RunningText(_checkout.Path) is { } running ? running
         : Branch == main ? $"Pull {main}"
         : $"Switch to {main} and pull";
 
