@@ -101,7 +101,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     /// checkout or the repository has no default branch.
     /// </summary>
     public string? PullText => _checkout is null || _repo.DefaultBranch is not { } main ? null
-        : IsBusy && _checkout.Jobs.RunningText(_checkout.Path) is { } running ? running
+        : IsBusy && _checkout.Jobs.RunningText(_checkout.Key) is { } running ? running
         : Branch == main ? $"Pull {main}"
         : $"Switch to {main} and pull";
 
@@ -206,7 +206,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         ActionMessage = null;
         // An open strip worked out its choices from the branch the pull is about to change (review of #408).
         MergeStrip = null;
-        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking);
+        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
     }
 
     private bool CanPull() => _checkout is not null && _repo.DefaultBranch is not null;
@@ -263,12 +263,12 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         MergeStrip = null;
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking);
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
     }
 
     private void OnJobChanged(string key)
     {
-        if (_checkout is not null && key == YardGitJobs.Key(_checkout.Path))
+        if (_checkout is not null && key == _checkout.Key)
         {
             ShowJob(opening: false);
         }
@@ -278,14 +278,15 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
     private void ShowJob(bool opening)
     {
         var jobs = _checkout!.Jobs;
-        IsBusy = jobs.IsRunning(_checkout.Path);
-        if (IsBusy)
+        var busy = jobs.IsRunning(_checkout.Key);
+        if (busy)
         {
             // A job from another panel of the line: the strip's choices may not hold when it ends.
             MergeStrip = null;
         }
 
-        if (!IsBusy && jobs.TakeOutcome(_checkout.Path) is { } outcome)
+        // The outcome first, then the button back: the panel is never idle without saying what the job came to.
+        if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Tree) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
             if (outcome.Pulled && !opening)
@@ -299,6 +300,8 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
                 PullRequests.Drop(number);
             }
         }
+
+        IsBusy = busy;
     }
 
     private void ShowAction(string message, bool failed)

@@ -272,6 +272,43 @@ public class GitPullerTests : IDisposable
     }
 
     [Theory]
+    [InlineData(null, 1, true)]
+    [InlineData("", 0, true)]
+    [InlineData("C:/Windows/System32/OpenSSH/ssh.exe", 0, false)]
+    [InlineData(null, null, false)]
+    public async Task Ssh_fails_at_once_unless_an_ssh_command_is_configured(string? configured, int? exitCode, bool batch)
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH_COMMAND")) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH")))
+        {
+            Assert.Skip("this machine names an ssh command in the environment, which always wins");
+        }
+
+        var fetches = new List<IReadOnlyList<string>>();
+        var puller = new GitPuller((_, arguments, _, _) =>
+        {
+            if (arguments.Contains("fetch"))
+            {
+                fetches.Add(arguments);
+            }
+
+            var output = arguments[0] == "config" ? configured : string.Empty;
+            return Task.FromResult(new ProcessRunResult(output, false, 1, arguments[0] == "config" ? exitCode : 0, null, string.Empty));
+        });
+
+        await puller.PullAsync("C:/work", "main", "work", TestContext.Current.CancellationToken);
+
+        var fetch = fetches.ShouldHaveSingleItem();
+        if (batch)
+        {
+            fetch.Take(2).ShouldBe(["-c", "core.sshCommand=ssh -o BatchMode=yes"]);
+        }
+        else
+        {
+            fetch.ShouldNotContain("-c", "the user's own ssh command wins");
+        }
+    }
+
+    [Theory]
     [InlineData("error: Your local changes would be overwritten.\nhint: commit them\nAborting\n", "Your local changes would be overwritten.")]
     [InlineData("fatal: 'origin' does not appear to be a git repository\nfatal: Could not read from remote repository.\n", "'origin' does not appear to be a git repository Could not read from remote repository.")]
     [InlineData("hint: only a hint\n", null)]

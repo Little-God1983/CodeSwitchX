@@ -915,16 +915,20 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile with a line of the folder
-    /// or of the same GitHub repository (a workspace on a subfolder of it): the Yard never switches a branch under one (#407). By tile,
-    /// not by chat folder, and another clone of the repository counts too: it errs on the careful side.
+    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile with a line of the same
+    /// checkout (its git directory: a workspace on a subfolder of it, #412), of the folder, or of the same GitHub repository: the Yard never
+    /// switches a branch under one (#407). By tile, not by chat folder, and another clone of the repository counts too: it errs on the careful side.
     /// </summary>
-    private bool ChatIsWorkingIn(string path, GitHubRepo repo)
-    {
-        var key = YardGitJobs.Key(path);
-        return Tiles.Any(t => (t.IsWorking || t.NeedsAttention)
-            && t.GitLines.Any(l => (l.Path is { } p && YardGitJobs.Key(p) == key) || l.GitHub?.Repo == repo));
-    }
+    private bool ChatIsWorkingIn(GitLine line, GitHubRepo repo) =>
+        Tiles.Any(t => (t.IsWorking || t.NeedsAttention) && t.GitLines.Any(l => SameCheckout(l, line) || l.GitHub?.Repo == repo));
+
+    /// <summary>
+    /// Two lines are the same checkout (#412): the same folder, or the same repository's git directory when both know it (a workspace on a
+    /// subfolder, a linked worktree). The same folder counts whatever git says of it now: a folder cloned again is still where the chat works.
+    /// </summary>
+    internal static bool SameCheckout(GitLine a, GitLine b) =>
+        (a.Path is { } p && b.Path is { } q && YardGitJobs.Key(p) == YardGitJobs.Key(q))
+        || (YardGitJobs.CommonGitDir(a.GitDir) is { } x && YardGitJobs.CommonGitDir(b.GitDir) is { } y && YardGitJobs.Key(x) == YardGitJobs.Key(y));
 
     /// <summary>
     /// A line for the root folder, and one more for each other repository the tile's workspace file lists a folder of
@@ -946,7 +950,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             // The root's own line is brought up to date where it leads; where repositories below the root took its place, they stay as they were.
             return previous[0].Path is { } first && PathNormalizer.Normalize(first) != PathNormalizer.Normalize(tile.RootPath)
                 ? previous
-                : [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository }, .. previous.Skip(1)];
+                : [previous[0] with { Branch = root.Branch, DirtyCount = root.DirtyCount, Path = tile.RootPath, IsRepository = root.IsRepository, GitDir = root.GitDir }, .. previous.Skip(1)];
         }
 
         var rootKey = PathNormalizer.Normalize(tile.RootPath);
@@ -955,7 +959,8 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             root.Branch,
             root.DirtyCount,
             tile.RootPath,
-            IsRepository: root.IsRepository);
+            IsRepository: root.IsRepository,
+            GitDir: root.GitDir);
         var others = folders.Where(f => PathNormalizer.Normalize(f.Path) != rootKey).ToList();
 
         // Each folder's git directory first, which reads a file or two, so git status runs once per checkout, not once per
@@ -1027,7 +1032,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
             try
             {
                 var info = await _git.InspectAsync(folder.Path, ct).ConfigureAwait(false);
-                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository);
+                return new GitLine(folder.Label, info.Branch, info.DirtyCount, folder.Path, IsRepository: info.IsRepository, GitDir: info.GitDir);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1176,7 +1181,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
-        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(path, activity.Repo), GitJobs) : null;
+        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(line, activity.Repo), GitJobs, line.GitDir) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;
@@ -1196,7 +1201,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         // A later pull of the same checkout says the last word on it, whatever it came to.
-        var key = YardGitJobs.Key(outcome.Checkout);
+        var key = outcome.Key;
         if (_jobMessageCheckout == key)
         {
             JobMessage = null;

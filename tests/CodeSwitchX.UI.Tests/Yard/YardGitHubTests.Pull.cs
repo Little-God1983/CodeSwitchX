@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Yard;
@@ -29,7 +30,14 @@ public partial class YardGitHubTests
         panel.PullText.ShouldBe("Pull main", "the line is on main, GitHub's default branch");
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
-        _pullGit.Ran[0].ShouldStartWith("fetch");
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH_COMMAND")) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH")))
+        {
+            return; // an ssh command in the environment always wins: no probe, no batch mode
+        }
+
+        // the ssh probe, then the fetch (in batch mode: nothing configures ssh here), before anything else
+        _pullGit.Ran[0].ShouldBe("config --get core.sshCommand");
+        _pullGit.Ran[1].ShouldStartWith("-c core.sshCommand=ssh -o BatchMode=yes fetch");
     }
 
     [Fact]
@@ -82,7 +90,7 @@ public partial class YardGitHubTests
 
         panel.PullCommand.Execute(null);
 
-        await Eventually(() => panel.ActionMessage is not null && !yard.GitJobs.IsRunning(app.RootPath));
+        await Eventually(() => panel.ActionMessage is not null && !panel.IsBusy);
         panel.IsActionFailed.ShouldBeTrue();
         yard.FailureLineText.ShouldBeNull();
     }
@@ -116,7 +124,7 @@ public partial class YardGitHubTests
         _pullGit.Status = string.Empty;
         yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
         var again = yard.GitHubPanel.ShouldNotBeNull();
-        await Eventually(() => !yard.GitJobs.IsRunning(app.RootPath));
+        await Eventually(() => !again.IsBusy);
 
         again.PullCommand.Execute(null);
 
@@ -154,6 +162,68 @@ public partial class YardGitHubTests
         await Eventually(() => yard.FindTile(app.Id)!.GitLines[0].Issues?.Count == 7);
 
         panel.Branch.ShouldBe("main-after-a-pull", "only a git round knows the branch; the lines a GitHub round shows may be older than a pull");
+    }
+
+    [Fact]
+    public async Task Two_workspaces_on_one_checkout_share_its_pull()
+    {
+        var root = Repo("app");
+        Directory.CreateDirectory(Path.Combine(root, "src"));
+        var app = Add("App", root);
+        var sub = Add("Sub", Path.Combine(root, "src"));
+        var yard = Yard(true, app, sub);
+        await yard.InitializeAsync(CancellationToken.None);
+        await Eventually(() => yard.FindTile(sub.Id)!.GitLines[0].GitDir is not null && yard.FindTile(app.Id)!.GitLines[0].GitHub is not null
+            && yard.FindTile(sub.Id)!.GitLines[0].GitHub is not null);
+        var appLine = yard.FindTile(app.Id)!.GitLines[0];
+        var subLine = yard.FindTile(sub.Id)!.GitLines[0];
+        subLine.GitDir.ShouldBe(appLine.GitDir, "git walks up from the subfolder to the same checkout");
+        YardViewModel.SameCheckout(appLine, subLine).ShouldBeTrue();
+        _pullGit.Hold();
+        yard.OpenGitHubLineCommand.Execute(appLine);
+        yard.GitHubPanel.ShouldNotBeNull().PullCommand.Execute(null);
+
+        yard.OpenGitHubLineCommand.Execute(subLine);
+
+        var other = yard.GitHubPanel.ShouldNotBeNull();
+        other.IsBusy.ShouldBeTrue("the pull started from the root's line runs on this checkout too");
+        other.PullCommand.Execute(null);
+        _pullGit.Release();
+        await Eventually(() => !other.IsBusy);
+        other.ActionMessage.ShouldBe("app is on main, 3 new commits.", "the subfolder's panel shows what the pull of its checkout came to");
+        _pullGit.Ran.Count(r => r.Contains("fetch", StringComparison.Ordinal)).ShouldBe(1, "one pull, not two on one .git");
+    }
+
+    [Theory]
+    [InlineData(@"C:\r\.git", @"C:\r", @"c:\R\.git", @"C:\r\src", true)]
+    [InlineData(@"C:\r\.git", @"C:\r", @"C:\s\.git", @"C:\s", false)]
+    [InlineData(@"C:\r\.git", @"C:\r", @"C:\x\.git", @"C:\r", true)]
+    [InlineData(null, @"C:\r", null, @"c:\R\", true)]
+    [InlineData(null, @"C:\r", @"C:\r\.git", @"C:\r\src", false)]
+    [InlineData(@"C:\r\.git\worktrees\wt", @"C:\wt", @"C:\r\.git", @"C:\r", true)]
+    public void Same_checkout_is_the_same_folder_or_the_same_repository_git_directory(string? gitDirA, string pathA, string? gitDirB, string pathB, bool same) =>
+        YardViewModel.SameCheckout(new GitLine(null, "main", 0, pathA, GitDir: gitDirA), new GitLine(null, "main", 0, pathB, GitDir: gitDirB)).ShouldBe(same);
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(@"C:\r\.git", @"C:\r\.git")]
+    [InlineData(@"C:\r\.git\worktrees\wt", @"C:\r\.git")]
+    [InlineData(@"C:\r\.git\modules\sub", @"C:\r\.git\modules\sub")]
+    [InlineData(@"E:\Repos\worktrees\.git", @"E:\Repos\worktrees\.git")]
+    [InlineData(@"E:\bare.git\worktrees\wt", @"E:\bare.git")]
+    public void A_linked_worktree_shares_its_repository_s_git_directory(string? gitDir, string? common) =>
+        YardGitJobs.CommonGitDir(gitDir).ShouldBe(common);
+
+    [Fact]
+    public async Task An_outcome_is_only_for_a_panel_of_the_working_tree_the_job_ran_in()
+    {
+        var jobs = yardJobs();
+        await jobs.PullAsync(@"C:\wt", "main", "app", () => false, key: @"C:\r\.git", tree: @"C:\r\.git\worktrees\wt");
+
+        jobs.TakeOutcome(@"C:\r\.git", @"C:\r\.git").ShouldBeNull("the main checkout did not pull, its linked worktree did");
+        jobs.TakeOutcome(@"C:\r\.git", @"c:\R\.git\worktrees\WT").ShouldNotBeNull().Message.ShouldBe("app is on main, 3 new commits.");
+
+        YardGitJobs yardJobs() => new(new GitPuller(_pullGit.RunAsync), new ImmediateDispatcher(), _time, NullLogger.Instance);
     }
 
     private sealed class FakeSource : IBrowserSource
