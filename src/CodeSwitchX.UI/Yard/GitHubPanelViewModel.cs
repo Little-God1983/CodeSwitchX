@@ -183,7 +183,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         ActionMessage = null;
-        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name);
+        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking);
     }
 
     private bool CanPull() => _checkout is not null && _repo.DefaultBranch is not null;

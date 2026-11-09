@@ -17,7 +17,7 @@ public partial class GitHubListViewModelTests
 {
     private readonly FakePullGit _git = new();
 
-    private YardGitJobs NewJobs() => new(new GitPuller(_git.RunAsync), new ImmediateDispatcher(), NullLogger.Instance);
+    private YardGitJobs NewJobs() => new(new GitPuller(_git.RunAsync), new ImmediateDispatcher(), _time, NullLogger.Instance);
 
     /// <summary>A panel opened from a line in <c>C:\app</c> on <paramref name="branch"/>, of a repository whose default branch is <paramref name="main"/>.</summary>
     private async Task<GitHubPanelViewModel> OpenOnLine(string? branch = "feature/x", string? main = "main", Func<bool>? working = null, YardGitJobs? jobs = null)
@@ -136,6 +136,38 @@ public partial class GitHubListViewModelTests
         third.PullText.ShouldBe("Switch to main and pull", "the line, read since, knows the branch better than an old outcome");
         first.IsPulling.ShouldBeTrue("a closed panel is let go of");
         (await OpenOnLine(jobs: jobs)).ActionMessage.ShouldBeNull("an outcome is shown once");
+    }
+
+    [Fact]
+    public async Task A_chat_that_starts_working_while_the_fetch_runs_stops_the_pull_before_the_switch()
+    {
+        var working = false;
+        var model = await OpenOnLine(working: () => working);
+        _git.Hold();
+
+        model.PullCommand.Execute(null);
+        working = true;
+        _git.Release();
+
+        await Eventually(() => !model.IsPulling);
+        model.ActionMessage.ShouldBe("Pull stopped: a chat started working here.");
+        _git.Ran.ShouldNotContain(r => r.StartsWith("switch", StringComparison.Ordinal) || r.StartsWith("update-ref", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_outcome_no_panel_took_is_dropped_after_a_while()
+    {
+        var jobs = NewJobs();
+        var model = await OpenOnLine(jobs: jobs);
+        _git.Hold();
+        model.PullCommand.Execute(null);
+        model.CloseCommand.Execute(null);
+        _git.Release();
+        await Eventually(() => !jobs.IsRunning(@"C:\app"));
+
+        _time.Advance(YardGitJobs.OutcomeLifetime);
+
+        (await OpenOnLine(jobs: jobs)).ActionMessage.ShouldBeNull("a panel opened later does not say \"3 new commits\" of a pull long gone");
     }
 
     [Fact]

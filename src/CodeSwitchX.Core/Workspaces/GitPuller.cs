@@ -33,27 +33,18 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
     /// <param name="checkout">The checkout's folder (a repository line's).</param>
     /// <param name="branch">The default branch, as GitHub names it.</param>
     /// <param name="name">What the success line calls the checkout: the repository's name.</param>
-    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct)
+    /// <param name="lastCheck">
+    /// Asked right before anything changes, after the fetch, which can take a while: a reason to stop (a chat started working meanwhile),
+    /// or null to go on. None goes on.
+    /// </param>
+    public async Task<PullOutcome> PullAsync(string checkout, string branch, string name, CancellationToken ct, Func<CancellationToken, Task<string?>>? lastCheck = null)
     {
-        // Tracked files only: untracked ones go along with the switch, and git refuses on its own when one would be overwritten.
-        var status = await _run(checkout, ["status", "--porcelain", "--untracked-files=no"], ReadTimeout, ct).ConfigureAwait(false);
-        if (status.Output is null)
-        {
-            return Failed(status, "git couldn't read the checkout.");
-        }
-
-        var changed = Lines(status.Output).Count;
-        if (changed > 0)
-        {
-            return new PullOutcome(false, changed == 1 ? "1 file has uncommitted changes." : $"{changed} files have uncommitted changes.");
-        }
-
         // An explicit refspec: the remote's own fetch setting may leave the default branch out (a single-branch clone).
         var remote = $"refs/remotes/origin/{branch}";
         var fetch = await _run(checkout, ["fetch", "--no-tags", "origin", $"+refs/heads/{branch}:{remote}"], WriteTimeout, ct).ConfigureAwait(false);
         if (fetch.Output is null)
         {
-            return fetch.TimedOut ? new PullOutcome(false, "Fetching from GitHub took too long.") : Failed(fetch, "Couldn't fetch from GitHub.");
+            return Failed(fetch, "Couldn't fetch from GitHub.");
         }
 
         var local = $"refs/heads/{branch}";
@@ -76,6 +67,31 @@ public sealed class GitPuller(Func<string, IReadOnlyList<string>, TimeSpan, Canc
         if (current.Output is null)
         {
             return Failed(current, "git couldn't read the checkout's branch.");
+        }
+
+        // A detached HEAD may hold commits of its own that a switch would leave behind, reachable only from the reflog (review of #407).
+        if (current.Output.Trim().Length == 0)
+        {
+            return new PullOutcome(false, "the checkout is not on a branch.");
+        }
+
+        if (lastCheck is not null && await lastCheck(ct).ConfigureAwait(false) is { } reason)
+        {
+            return new PullOutcome(false, reason);
+        }
+
+        // Checked last, right before the switch: an edit made while the fetch ran would be carried across (review of #407). Tracked files
+        // only: untracked ones go along with the switch, and git refuses on its own when one would be overwritten.
+        var status = await _run(checkout, ["status", "--porcelain", "--untracked-files=no"], ReadTimeout, ct).ConfigureAwait(false);
+        if (status.Output is null)
+        {
+            return Failed(status, "git couldn't read the checkout.");
+        }
+
+        var changed = Lines(status.Output).Count;
+        if (changed > 0)
+        {
+            return new PullOutcome(false, changed == 1 ? "1 file has uncommitted changes." : $"{changed} files have uncommitted changes.");
         }
 
         var onAnotherBranch = current.Output.Trim() != branch;

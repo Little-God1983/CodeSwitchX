@@ -1,6 +1,7 @@
 using CodeSwitchX.Core.Persistence;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
+using CodeSwitchX.UI.Yard;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -26,7 +27,7 @@ public partial class YardGitHubTests
         panel.PullText.ShouldBe("Pull main", "the line is on main, GitHub's default branch");
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
-        _pullGit.Ran[0].ShouldStartWith("status");
+        _pullGit.Ran[0].ShouldStartWith("fetch");
     }
 
     [Fact]
@@ -43,6 +44,28 @@ public partial class YardGitHubTests
         _pullGit.Release();
 
         await Eventually(() => yard.RefreshMessage == "Pull stopped: 1 file has uncommitted changes.");
+    }
+
+    [Fact]
+    public async Task A_timed_round_leaves_a_pulls_failure_on_the_line_and_says_nothing_of_its_own()
+    {
+        var (yard, app) = await SettledYard();
+        yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
+        var panel = yard.GitHubPanel.ShouldNotBeNull();
+        _pullGit.Status = " M a.txt\n";
+        _pullGit.Hold();
+        panel.PullCommand.Execute(null);
+        panel.CloseCommand.Execute(null);
+        _pullGit.Release();
+        await Eventually(() => yard.RefreshMessage is not null);
+        _gh.Fail = true;
+        var before = _gh.Reads;
+
+        _time.Advance(YardViewModel.GitHubRefreshInterval);
+        await Eventually(() => _gh.Reads > before);
+        await Quiet();
+
+        yard.RefreshMessage.ShouldBe("Pull stopped: 1 file has uncommitted changes.");
     }
 
     [Fact]

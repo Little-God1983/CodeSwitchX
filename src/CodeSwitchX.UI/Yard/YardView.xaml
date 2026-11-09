@@ -497,8 +497,9 @@
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
-        <!-- Pull (#407): the line's checkout to the default branch, fast-forward. Off while a pull of this checkout runs; what it said stays
-             below it, amber when it was refused or failed. -->
+        <!-- Pull (#407): the line's checkout to the default branch, fast-forward. While a pull of this checkout runs the button says so and a
+             press does nothing; it stays enabled on purpose: WPF drops the keyboard from a focused button that turns itself off. What the pull
+             said stays below it, amber when it was refused or failed. -->
         <StackPanel DockPanel.Dock="Top" Margin="16,0,16,8" Visibility="{Binding PullText, Converter={StaticResource NullToCollapsed}}">
           <Button Content="{Binding PullText}" Command="{Binding PullCommand}" HorizontalAlignment="Left" Padding="10,3"
                   AutomationProperties.Name="{Binding PullAutomationName}"

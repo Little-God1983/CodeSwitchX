@@ -185,6 +185,44 @@ public class GitPullerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_detached_head_refuses_so_its_commits_are_not_left_behind()
+    {
+        await Arrange();
+        await Git(Work, "switch", "-q", "--detach");
+        await Commit(Work, "loose.txt", "only here");
+
+        (await Pull()).ShouldBe(new PullOutcome(false, "the checkout is not on a branch."));
+
+        (await Git(Work, "log", "-1", "--format=%s")).ShouldBe("loose.txt: only here");
+    }
+
+    [Fact]
+    public async Task The_last_check_can_stop_the_pull_after_the_fetch_and_nothing_switches()
+    {
+        await Arrange();
+
+        var outcome = await _puller.PullAsync(Work, "main", "work", TestContext.Current.CancellationToken, _ => Task.FromResult<string?>("a chat started working here."));
+
+        outcome.ShouldBe(new PullOutcome(false, "a chat started working here."));
+        (await Git(Work, "branch", "--show-current")).ShouldBe("feature/x");
+    }
+
+    [Fact]
+    public async Task An_edit_made_while_the_fetch_ran_refuses_the_switch()
+    {
+        await Arrange();
+
+        var outcome = await _puller.PullAsync(Work, "main", "work", TestContext.Current.CancellationToken, async ct =>
+        {
+            await File.WriteAllTextAsync(Path.Combine(Work, "a.txt"), "edited meanwhile", ct);
+            return null;
+        });
+
+        outcome.ShouldBe(new PullOutcome(false, "1 file has uncommitted changes."));
+        (await Git(Work, "branch", "--show-current")).ShouldBe("feature/x");
+    }
+
+    [Fact]
     public async Task A_checkout_without_a_local_main_gets_one_from_GitHub()
     {
         await Arrange();

@@ -293,7 +293,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         GitPuller? puller = null)
     {
         RowMenu = rowMenu;
-        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, logger);
+        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, time, logger);
         GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
@@ -817,16 +817,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         var round = await RefreshGitHubAsync(Tiles.SelectMany(t => t.GitLines).Where(HasRepository).Select(l => l.Path).OfType<string>().Distinct().ToList()).ConfigureAwait(false);
         _ui.Post(() =>
         {
-            if (pressed || RefreshMessage is not null)
+            // A pull's failure on the line is not a round's: the timer's rounds leave it, and do not start saying what they found (review of #407).
+            if (pressed || (RefreshMessage is not null && !_refreshMessageIsJobs))
             {
                 RefreshMessage = FailureLine(round);
+                _refreshMessageIsJobs = false;
             }
         });
     }
 
     /// <summary>A click on the failure line puts it away; only another press can bring it back.</summary>
     [RelayCommand]
-    private void DismissRefreshMessage() => RefreshMessage = null;
+    private void DismissRefreshMessage()
+    {
+        RefreshMessage = null;
+        _refreshMessageIsJobs = false;
+    }
 
     /// <summary>One repository that cannot be read is no failure of GitHub, and "any pills": a gh that never answered has read none.</summary>
     private static string? FailureLine(GitHubRoundResult round)
@@ -905,17 +911,22 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Every tile's line of the checkout: a folder can be on the tiles of several workspaces.</summary>
-    private IEnumerable<GitLine> LinesOf(string path) =>
-        Tiles.SelectMany(t => t.GitLines).Where(l => l.Path is { } p && YardGitJobs.Key(p) == YardGitJobs.Key(path));
-
-    /// <summary>
-    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile that shows it: the Yard
-    /// never switches a branch under one (#407). By tile, not by chat folder: it errs on the careful side.
-    /// </summary>
-    private bool ChatIsWorkingIn(string path)
+    private IEnumerable<GitLine> LinesOf(string path)
     {
         var key = YardGitJobs.Key(path);
-        return Tiles.Any(t => (t.IsWorking || t.NeedsAttention) && t.GitLines.Any(l => l.Path is { } p && YardGitJobs.Key(p) == key));
+        return Tiles.SelectMany(t => t.GitLines).Where(l => l.Path is { } p && YardGitJobs.Key(p) == key);
+    }
+
+    /// <summary>
+    /// A chat working in the checkout, or waiting mid-turn for an answer (a permission, a question), on any tile with a line of the folder
+    /// or of the same GitHub repository (a workspace on a subfolder of it): the Yard never switches a branch under one (#407). By tile,
+    /// not by chat folder, and another clone of the repository counts too: it errs on the careful side.
+    /// </summary>
+    private bool ChatIsWorkingIn(string path, GitHubRepo repo)
+    {
+        var key = YardGitJobs.Key(path);
+        return Tiles.Any(t => (t.IsWorking || t.NeedsAttention)
+            && t.GitLines.Any(l => (l.Path is { } p && YardGitJobs.Key(p) == key) || l.GitHub?.Repo == repo));
     }
 
     /// <summary>
@@ -1168,7 +1179,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
-        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(path), GitJobs) : null;
+        var checkout = line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => ChatIsWorkingIn(path, activity.Repo), GitJobs) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
             closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;
@@ -1190,6 +1201,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         if (!taken && !outcome.Succeeded)
         {
             RefreshMessage = outcome.Message;
+            _refreshMessageIsJobs = true;
         }
 
         _ = RefreshGitAfterJobAsync();
@@ -1216,6 +1228,9 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
 
     /// <summary>Says what could not be read when the button asked. A round that reads everything takes it away, the button's or the timer's, and so does a click on it.</summary>
     [ObservableProperty] private string? _refreshMessage;
+
+    /// <summary><see cref="RefreshMessage"/> is a pull's failure (#407), not a round's. UI thread.</summary>
+    private bool _refreshMessageIsJobs;
 
     /// <summary>
     /// The button on the Yard's top bar (#382): the git info of every tile, then the GitHub pills of the lines that gives, without waiting
