@@ -161,9 +161,10 @@
     </DataTemplate>
     <!-- A tile's line on GitHub (#406): the whole line is one button that opens the repository's panel, lit under the pointer. The
          border's thickness never changes and its negative margin gives back what it and the padding take, so the line has the room
-         of a plain one and nothing moves. No tooltip: a pill has none above it (#335). -->
+         of a plain one and nothing moves. No tooltip: a pill has none above it (#335). Stretched against the theme's Button style
+         (Left, Center): the pills stay at the line's right edge and a click anywhere on the line is the line's. -->
     <DataTemplate x:Key="GitLineButton" DataType="{x:Type yard:GitLine}">
-      <Button Content="{Binding}" ContentTemplate="{StaticResource GitLineContent}" Cursor="Hand"
+      <Button Content="{Binding}" ContentTemplate="{StaticResource GitLineContent}" Cursor="Hand" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
               Command="{Binding DataContext.OpenGitHubLineCommand, RelativeSource={RelativeSource AncestorType=yard:YardView}}" CommandParameter="{Binding}"
               AutomationProperties.Name="{Binding OpenGitHubText}">
         <Button.Template>

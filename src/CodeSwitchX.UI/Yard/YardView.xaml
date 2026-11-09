@@ -417,6 +417,8 @@
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="Foreground" Value="#B0B0B0" />
+            <!-- the theme's focus ring: a style of its own drops it, and the classic dotted one is black on the dark panel -->
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource DefaultControlFocusVisualStyle}" />
             <Setter Property="Template">
               <Setter.Value>
                 <ControlTemplate TargetType="Button">

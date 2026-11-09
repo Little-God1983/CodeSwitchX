@@ -776,6 +776,18 @@ public class GitHubListViewModelTests
     }
 
     [Fact]
+    public void The_tab_buttons_show_the_theme_s_focus_ring()
+    {
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+        var style = YardViewXaml().Descendants(Wpf + "Style").Single(s => (string?)s.Attribute(x + "Key") == "GitHubTabButton");
+
+        // without it the four tab stops fall back to a black dotted rectangle on the dark panel: no visible focus (review of #406)
+        style.Elements(Wpf + "Setter").ShouldContain(s => (string?)s.Attribute("Property") == "FocusVisualStyle"
+            && (string?)s.Attribute("Value") == "{DynamicResource DefaultControlFocusVisualStyle}");
+    }
+
+    [Fact]
     public void Tab_stays_inside_the_panel()
     {
         XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
