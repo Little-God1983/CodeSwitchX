@@ -610,8 +610,11 @@
                             AutomationProperties.Name="{Binding TabAutomationName}">
                       <StackPanel Orientation="Horizontal">
                         <TextBlock Text="{Binding TabName}" />
-                        <!-- room for three digits, the same width each -->
-                        <TextBlock Text="{Binding Count}" Margin="4,0,0,0" MinWidth="24" Typography.NumeralAlignment="Tabular" />
+                        <!-- room for three digits, the same width each: a hidden "000" in the same font holds the width, also under text scaling -->
+                        <Grid Margin="4,0,0,0">
+                          <TextBlock Text="000" Visibility="Hidden" Typography.NumeralAlignment="Tabular" />
+                          <TextBlock Text="{Binding Count}" Typography.NumeralAlignment="Tabular" />
+                        </Grid>
                       </StackPanel>
                     </Button>
                     <Button Content="&#x2197;" Command="{Binding DataContext.OpenOnGitHubCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
