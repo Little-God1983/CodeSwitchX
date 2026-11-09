@@ -786,7 +786,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>The line with the pills of the issues and pull requests last read for its repository; a count of zero has none.</summary>
+    /// <summary>The line with the pills of the issues and pull requests last read for its repository (a count of zero has none), and what was read, which opens the panel (#406).</summary>
     private GitLine WithGitHub(GitLine line)
     {
         var activity = HasRepository(line) && line.Path is { } path ? _gitHub?.ForFolder(path) : null;
@@ -794,6 +794,7 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         {
             Issues = activity is { OpenIssues: > 0 } ? new GitHubPill(activity, GitHubItemKind.Issue) : null,
             PullRequests = activity is { OpenPullRequests: > 0 } ? new GitHubPill(activity, GitHubItemKind.PullRequest) : null,
+            GitHub = activity,
         };
     }
 
