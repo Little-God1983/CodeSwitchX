@@ -190,6 +190,7 @@ public partial class YardGitHubTests
         other.PullCommand.Execute(null);
         _pullGit.Release();
         await Eventually(() => !other.IsBusy);
+        other.ActionMessage.ShouldBe("app is on main, 3 new commits.", "the subfolder's panel shows what the pull of its checkout came to");
         _pullGit.Ran.Count(r => r.Contains("fetch", StringComparison.Ordinal)).ShouldBe(1, "one pull, not two on one .git");
     }
 
@@ -214,13 +215,13 @@ public partial class YardGitHubTests
         YardGitJobs.CommonGitDir(gitDir).ShouldBe(common);
 
     [Fact]
-    public async Task An_outcome_is_only_for_a_panel_of_the_folder_the_job_ran_in()
+    public async Task An_outcome_is_only_for_a_panel_of_the_working_tree_the_job_ran_in()
     {
         var jobs = yardJobs();
-        await jobs.PullAsync(@"C:\wt", "main", "app", () => false, key: @"C:\r\.git");
+        await jobs.PullAsync(@"C:\wt", "main", "app", () => false, key: @"C:\r\.git", tree: @"C:\r\.git\worktrees\wt");
 
-        jobs.TakeOutcome(@"C:\r\.git", @"C:\r").ShouldBeNull("the main checkout did not pull, its linked worktree did");
-        jobs.TakeOutcome(@"C:\r\.git", @"c:\WT").ShouldNotBeNull().Message.ShouldBe("app is on main, 3 new commits.");
+        jobs.TakeOutcome(@"C:\r\.git", @"C:\r\.git").ShouldBeNull("the main checkout did not pull, its linked worktree did");
+        jobs.TakeOutcome(@"C:\r\.git", @"c:\R\.git\worktrees\WT").ShouldNotBeNull().Message.ShouldBe("app is on main, 3 new commits.");
 
         YardGitJobs yardJobs() => new(new GitPuller(_pullGit.RunAsync), new ImmediateDispatcher(), _time, NullLogger.Instance);
     }

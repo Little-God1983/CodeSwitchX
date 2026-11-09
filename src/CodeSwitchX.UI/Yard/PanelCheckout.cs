@@ -15,4 +15,7 @@ public sealed record PanelCheckout(string Path, string? Branch, Func<bool> ChatI
     /// do a linked worktree and the main one, whose refs a pull writes alike. Worked out on each read: a copy made with <c>with</c> keeps no stale one.
     /// </summary>
     public string Key => YardGitJobs.Key(YardGitJobs.CommonGitDir(GitDir) ?? Path);
+
+    /// <summary>The working tree, by its own git directory: shared by a line on a subfolder, not by a linked worktree. An outcome goes to a panel of it.</summary>
+    public string Tree => YardGitJobs.Key(GitDir ?? Path);
 }

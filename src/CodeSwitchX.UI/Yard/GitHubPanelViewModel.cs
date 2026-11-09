@@ -206,7 +206,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         ActionMessage = null;
         // An open strip worked out its choices from the branch the pull is about to change (review of #408).
         MergeStrip = null;
-        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking, _checkout.Key);
+        _ = _checkout.Jobs.PullAsync(_checkout.Path, main, _repo.Repo.Name, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
     }
 
     private bool CanPull() => _checkout is not null && _repo.DefaultBranch is not null;
@@ -263,7 +263,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         MergeStrip = null;
         ActionMessage = null;
         _ = _checkout.Jobs.MergeAsync(_checkout.Path, _repo.Repo.Name, _repo.Repo, _repo.Account, strip.Row.Item.Number, strip.BaseBranch,
-            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key);
+            pull && strip.OffersPull ? _repo.DefaultBranch : null, _checkout.ChatIsWorking, _checkout.Key, _checkout.Tree);
     }
 
     private void OnJobChanged(string key)
@@ -286,7 +286,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         // The outcome first, then the button back: the panel is never idle without saying what the job came to.
-        if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Path) is { } outcome)
+        if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Tree) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
             if (outcome.Pulled && !opening)
