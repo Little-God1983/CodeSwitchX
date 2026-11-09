@@ -84,7 +84,7 @@ public sealed partial class GitHubListViewModel : ObservableObject
     public string CountText => Count > 999 ? "999+" : Count.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>What a screen reader hears for the tab (#410): its count, and whether it is in front, which only its colours show.</summary>
-    public string TabAutomationName => $"{TabName}, {Count} open, {(IsShown ? "shown" : "not shown")}";
+    public string TabAutomationName => string.Create(CultureInfo.InvariantCulture, $"{TabName}, {Count} open, {(IsShown ? "shown" : "not shown")}");
 
     /// <summary>The tab's arrow: its tooltip and its name for a screen reader.</summary>
     public string OpenAllText => $"Open all {(Kind == GitHubItemKind.PullRequest ? "pull requests" : "issues")} on GitHub";

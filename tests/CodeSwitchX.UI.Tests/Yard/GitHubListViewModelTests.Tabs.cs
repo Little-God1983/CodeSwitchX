@@ -71,17 +71,16 @@ public partial class GitHubListViewModelTests
                 .TranslatePoint(new Point(0, 0), view).X;
             var before = IssuesTabX();
 
-            foreach (var count in new[] { 12, 99, 999, 1500 })
+            foreach (var (count, shown) in new[] { (12, "12"), (99, "99"), (999, "999"), (1000, "999+"), (1500, "999+") })
             {
                 model.PullRequests.Count = count;
                 view.UpdateLayout();
 
                 IssuesTabX().ShouldBe(before, $"at {count}");
+                // what the tab shows, not only where the next one sits: the count is the visible one of the two in the pull requests tab
+                var tab = Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Pull requests,", StringComparison.Ordinal));
+                Descendants<TextBlock>(tab).Where(t => t.Visibility == Visibility.Visible).Select(t => t.Text).ShouldBe(["Pull requests", shown], $"at {count}");
             }
-
-            // what the tab shows, not only where the next one sits: the count is the visible one of the two in the pull requests tab
-            var tab = Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith("Pull requests,", StringComparison.Ordinal));
-            Descendants<TextBlock>(tab).Where(t => t.Visibility == Visibility.Visible).Select(t => t.Text).ShouldBe(["Pull requests", "999+"]);
         });
     }
 
@@ -97,13 +96,21 @@ public partial class GitHubListViewModelTests
             Border TabOf(string name) => (Border)Ancestors(Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith(name, StringComparison.Ordinal)))
                 .First(e => e is Border { CornerRadius.TopLeft: 6 });
 
+            Button NameOf(string name) => Descendants<Button>(view).Single(b => AutomationProperties.GetName(b).StartsWith(name, StringComparison.Ordinal));
+            bool Plain(Border tab) => ((System.Windows.Media.SolidColorBrush)tab.Background).Color.A == 0;
+
             TabOf("Pull requests,").Background.ShouldBeSameAs(view.FindResource("PullRequestPillBack"));
-            ((System.Windows.Media.SolidColorBrush)TabOf("Issues,").Background).Color.A.ShouldBe((byte)0);
+            NameOf("Pull requests,").Foreground.ShouldBeSameAs(view.FindResource("PullRequestPillText"));
+            Plain(TabOf("Issues,")).ShouldBeTrue();
+            NameOf("Issues,").Foreground.ShouldNotBeSameAs(view.FindResource("IssuePillText"));
 
             model.ShowCommand.Execute(GitHubItemKind.Issue);
             view.UpdateLayout();
 
             TabOf("Issues,").Background.ShouldBeSameAs(view.FindResource("IssuePillBack"));
+            NameOf("Issues,").Foreground.ShouldBeSameAs(view.FindResource("IssuePillText"));
+            Plain(TabOf("Pull requests,")).ShouldBeTrue("the tab that left the front goes plain again");
+            NameOf("Pull requests,").Foreground.ShouldNotBeSameAs(view.FindResource("PullRequestPillText"));
         });
     }
 
