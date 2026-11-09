@@ -289,9 +289,12 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         IEventBus bus, IUiDispatcher ui, TimeProvider time, ILogger<YardViewModel> logger, IVsCodeOpenTabs? openTabs = null,
         Func<string, TabConversation?>? writtenInAt = null, Func<IReadOnlyDictionary<string, bool>>? runningTabs = null,
         Func<CancellationToken, Task<IReadOnlyDictionary<Guid, DateTimeOffset>>>? storedLastUse = null, GitHubActivity? gitHub = null,
-        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null)
+        GitHubReader? gitHubReader = null, GitHubBrowsers? gitHubBrowsers = null, ITextClipboard? clipboard = null, IChatRowMenu? rowMenu = null,
+        GitPuller? puller = null)
     {
         RowMenu = rowMenu;
+        GitJobs = new YardGitJobs(puller ?? new GitPuller(), ui, logger);
+        GitJobs.Ended += OnGitJobEnded;
         _gitHub = gitHub;
         _gitHubReader = gitHubReader;
         _gitHubBrowsers = gitHubBrowsers;
@@ -1102,9 +1105,17 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     /// <summary>The panel a repository line or a pill opens with the repository's open pull requests and issues; null when closed. Another opening replaces it.</summary>
     [ObservableProperty] private GitHubPanelViewModel? _gitHubPanel;
 
-    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab. Without the readers (tests, no gh) it does nothing.</summary>
+    /// <summary>The pulls the panel starts (#407): they outlive the panel.</summary>
+    public YardGitJobs GitJobs { get; }
+
+    /// <summary>A click on a pill opens the repository's panel over the Yard, on that pill's tab: it is still a click on its line (#406). Without the readers (tests, no gh) it does nothing.</summary>
     [RelayCommand]
-    private void OpenGitHubList(GitHubPill pill) => OpenPanel(pill.Activity, pill.Kind);
+    private void OpenGitHubList(GitHubPill pill)
+    {
+        var (tile, line) = Tiles.SelectMany(t => t.GitLines.Select(l => (Tile: t, Line: l)))
+            .FirstOrDefault(p => ReferenceEquals(p.Line.Issues, pill) || ReferenceEquals(p.Line.PullRequests, pill));
+        OpenPanel(pill.Activity, pill.Kind, tile, line);
+    }
 
     /// <summary>
     /// A click on a tile's repository line opens its panel (#406), on pull requests when any are open; a line with nothing open opens
@@ -1116,11 +1127,13 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
     {
         if (line?.GitHub is { } activity)
         {
-            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity));
+            OpenPanel(activity, GitHubPanelViewModel.DefaultKind(activity), Tiles.FirstOrDefault(t => t.GitLines.Contains(line)), line);
         }
     }
 
-    private void OpenPanel(RepoActivity activity, GitHubItemKind kind)
+    /// <param name="tile">The tile of the line, whose chats decide whether the panel may switch its branch (#407); null when it is gone.</param>
+    /// <param name="line">The line the panel was opened from: where its Pull acts. Null when it is gone; then the panel has no Pull.</param>
+    private void OpenPanel(RepoActivity activity, GitHubItemKind kind, WorkspaceTileViewModel? tile, GitLine? line)
     {
         if (_gitHub is null || _gitHubReader is null || _gitHubBrowsers is null)
         {
@@ -1128,11 +1141,38 @@ public sealed partial class YardViewModel : ObservableObject, IDisposable
         }
 
         GitHubPanel?.CloseCommand.Execute(null);
+        var checkout = tile is not null && line?.Path is { } path ? new PanelCheckout(path, line.Branch, () => tile.IsWorking, GitJobs) : null;
         var panel = new GitHubPanelViewModel(activity, kind, _gitHubReader, _gitHub, _gitHubBrowsers, _clipboard, _ui, _time, _logger,
-            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } });
+            closed => { if (ReferenceEquals(GitHubPanel, closed)) { GitHubPanel = null; } }, checkout);
         GitHubPanel = panel;
         // Not on the UI thread: the load starts its first gh before its first await.
         _ = Task.Run(() => panel.LoadAsync(_gitHubStop.Token));
+    }
+
+    /// <summary>
+    /// A pull ended (#407): the lines are read again, so the branch shows what git did. A failure no panel showed goes on the failure line,
+    /// so a panel closed while it ran does not hide it.
+    /// </summary>
+    private void OnGitJobEnded(GitJobOutcome outcome, bool taken)
+    {
+        if (!taken && !outcome.Succeeded)
+        {
+            RefreshMessage = outcome.Message;
+        }
+
+        _ = RefreshGitAfterJobAsync();
+    }
+
+    private async Task RefreshGitAfterJobAsync()
+    {
+        try
+        {
+            await RefreshGitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The git refresh after a pull failed");
+        }
     }
 
     /// <summary>A refresh the button asked for is running.</summary>

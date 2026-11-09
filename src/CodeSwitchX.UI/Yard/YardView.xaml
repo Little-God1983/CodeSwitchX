@@ -497,6 +497,26 @@
             <TextBlock Text="{Binding AccountLine}" Opacity="0.7" Margin="0,2,0,0" TextWrapping="Wrap" />
           </StackPanel>
         </DockPanel>
+        <!-- Pull (#407): the line's checkout to the default branch, fast-forward. Off while a pull of this checkout runs; what it said stays
+             below it, amber when it was refused or failed. -->
+        <StackPanel DockPanel.Dock="Top" Margin="16,0,16,8" Visibility="{Binding PullText, Converter={StaticResource NullToCollapsed}}">
+          <Button Content="{Binding PullText}" Command="{Binding PullCommand}" HorizontalAlignment="Left" Padding="10,3"
+                  AutomationProperties.Name="{Binding PullAutomationName}"
+                  ToolTip="Switches this checkout to the default branch and brings it up to date with GitHub, fast-forward only" />
+          <TextBlock Text="{Binding ActionMessage}" Margin="0,6,0,0" TextWrapping="Wrap"
+                     Visibility="{Binding ActionMessage, Converter={StaticResource NullToCollapsed}}">
+            <TextBlock.Style>
+              <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="#B0B0B0" />
+                <Style.Triggers>
+                  <DataTrigger Binding="{Binding IsActionFailed}" Value="True">
+                    <Setter Property="Foreground" Value="#F0C674" />
+                  </DataTrigger>
+                </Style.Triggers>
+              </Style>
+            </TextBlock.Style>
+          </TextBlock>
+        </StackPanel>
         <!-- The tabs (#406): a tab's name shows its list, its arrow opens all of that kind on GitHub. The tab in front has its pill's colours. -->
         <Border DockPanel.Dock="Top" Margin="16,0,16,8" BorderThickness="0,0,0,1" BorderBrush="#40FFFFFF">
           <StackPanel Orientation="Horizontal">

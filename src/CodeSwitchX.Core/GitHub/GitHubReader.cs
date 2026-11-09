@@ -19,7 +19,7 @@ public sealed record RepoRead(RepoActivity? Activity, bool NobodySeesIt = false)
 public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null)
 {
     private const string QueryTemplate = """
-        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission
+        query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission defaultBranchRef{name}
          issues(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt labels(first:10){nodes{name color}}}}
          pullRequests(states:OPEN,first:PREVIEW,orderBy:{field:CREATED_AT,direction:DESC}){totalCount nodes{number title url updatedAt headRefName author{login} labels(first:10){nodes{name color}}}}}}
         """;
@@ -151,7 +151,10 @@ public sealed class GitHubReader(IGhCli gh, ILogger<GitHubReader>? logger = null
                 return new AccountRead();
             }
 
-            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests);
+            // An empty repository has no default branch; then nothing is pulled (#407).
+            var defaultBranch = node.TryGetProperty("defaultBranchRef", out var d) && d.ValueKind == JsonValueKind.Object
+                && d.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+            var activity = new RepoActivity(repo, account, issueCount, pullRequestCount, newestIssues, newestPullRequests, defaultBranch);
             var permission = node.TryGetProperty("viewerPermission", out var p) ? p.GetString() : null;
             return new AccountRead(activity, Array.IndexOf(PermissionOrder, permission));
         }
