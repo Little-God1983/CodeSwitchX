@@ -76,9 +76,14 @@ public sealed class YardGitJobs
             return null;
         }
 
+        // Only where git puts them: <repo>\.git\worktrees\<name>, or <repo>.git\worktrees\<name> of a bare one. A repository whose own folder
+        // is called "worktrees" (E:\Repos\worktrees\.git) is no linked worktree (review of #412).
         var trimmed = Path.TrimEndingDirectorySeparator(gitDir);
         var parent = Path.GetDirectoryName(trimmed);
-        return parent is not null && string.Equals(Path.GetFileName(parent), "worktrees", StringComparison.OrdinalIgnoreCase) && Path.GetDirectoryName(parent) is { } common
+        var common = parent is null ? null : Path.GetDirectoryName(parent);
+        return parent is not null && common is not null
+            && string.Equals(Path.GetFileName(parent), "worktrees", StringComparison.OrdinalIgnoreCase)
+            && Path.GetFileName(common).EndsWith(".git", StringComparison.OrdinalIgnoreCase)
             ? common
             : trimmed;
     }
@@ -89,8 +94,21 @@ public sealed class YardGitJobs
     public string? RunningText(string checkout) => _running.GetValueOrDefault(Key(checkout));
 
     /// <summary>The outcome of the checkout's last job, once: a panel shows it, and no other panel shows it again.</summary>
-    public GitJobOutcome? TakeOutcome(string checkout) =>
-        _outcomes.Remove(Key(checkout), out var left) && _time.GetUtcNow() - left.At < OutcomeLifetime ? left.Outcome : null;
+    /// <param name="folder">
+    /// The folder of the panel that asks: an outcome is only for a panel of the folder the job ran in, as a linked worktree and its main
+    /// checkout share one key (review of #412). One for another folder stays, for its own panel or the Yard. None asks for any.
+    /// </param>
+    public GitJobOutcome? TakeOutcome(string checkout, string? folder = null)
+    {
+        var key = Key(checkout);
+        if (!_outcomes.TryGetValue(key, out var left) || (folder is not null && Key(left.Outcome.Checkout) != Key(folder)))
+        {
+            return null;
+        }
+
+        _outcomes.Remove(key);
+        return _time.GetUtcNow() - left.At < OutcomeLifetime ? left.Outcome : null;
+    }
 
     /// <summary>
     /// Switches the checkout to <paramref name="branch"/> and pulls it (<see cref="GitPuller"/>), unless a job of it runs already. The

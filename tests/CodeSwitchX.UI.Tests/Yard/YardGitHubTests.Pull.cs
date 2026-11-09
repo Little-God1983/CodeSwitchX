@@ -1,4 +1,5 @@
 using CodeSwitchX.Core.Persistence;
+using CodeSwitchX.Core.Workspaces;
 using CodeSwitchX.Hosting.Browsers;
 using CodeSwitchX.UI.GitHub;
 using CodeSwitchX.UI.Yard;
@@ -29,6 +30,11 @@ public partial class YardGitHubTests
         panel.PullText.ShouldBe("Pull main", "the line is on main, GitHub's default branch");
         panel.PullCommand.Execute(null);
         await Eventually(() => panel.ActionMessage == "app is on main, 3 new commits.");
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH_COMMAND")) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH")))
+        {
+            return; // an ssh command in the environment always wins: no probe, no batch mode
+        }
+
         // the ssh probe, then the fetch (in batch mode: nothing configures ssh here), before anything else
         _pullGit.Ran[0].ShouldBe("config --get core.sshCommand");
         _pullGit.Ran[1].ShouldStartWith("-c core.sshCommand=ssh -o BatchMode=yes fetch");
@@ -84,7 +90,7 @@ public partial class YardGitHubTests
 
         panel.PullCommand.Execute(null);
 
-        await Eventually(() => panel.ActionMessage is not null && !yard.GitJobs.IsRunning(app.RootPath));
+        await Eventually(() => panel.ActionMessage is not null && !panel.IsBusy);
         panel.IsActionFailed.ShouldBeTrue();
         yard.FailureLineText.ShouldBeNull();
     }
@@ -118,7 +124,7 @@ public partial class YardGitHubTests
         _pullGit.Status = string.Empty;
         yard.OpenGitHubLineCommand.Execute(yard.FindTile(app.Id)!.GitLines[0]);
         var again = yard.GitHubPanel.ShouldNotBeNull();
-        await Eventually(() => !yard.GitJobs.IsRunning(app.RootPath));
+        await Eventually(() => !again.IsBusy);
 
         again.PullCommand.Execute(null);
 
@@ -202,8 +208,22 @@ public partial class YardGitHubTests
     [InlineData(@"C:\r\.git", @"C:\r\.git")]
     [InlineData(@"C:\r\.git\worktrees\wt", @"C:\r\.git")]
     [InlineData(@"C:\r\.git\modules\sub", @"C:\r\.git\modules\sub")]
+    [InlineData(@"E:\Repos\worktrees\.git", @"E:\Repos\worktrees\.git")]
+    [InlineData(@"E:\bare.git\worktrees\wt", @"E:\bare.git")]
     public void A_linked_worktree_shares_its_repository_s_git_directory(string? gitDir, string? common) =>
         YardGitJobs.CommonGitDir(gitDir).ShouldBe(common);
+
+    [Fact]
+    public async Task An_outcome_is_only_for_a_panel_of_the_folder_the_job_ran_in()
+    {
+        var jobs = yardJobs();
+        await jobs.PullAsync(@"C:\wt", "main", "app", () => false, key: @"C:\r\.git");
+
+        jobs.TakeOutcome(@"C:\r\.git", @"C:\r").ShouldBeNull("the main checkout did not pull, its linked worktree did");
+        jobs.TakeOutcome(@"C:\r\.git", @"c:\WT").ShouldNotBeNull().Message.ShouldBe("app is on main, 3 new commits.");
+
+        YardGitJobs yardJobs() => new(new GitPuller(_pullGit.RunAsync), new ImmediateDispatcher(), _time, NullLogger.Instance);
+    }
 
     private sealed class FakeSource : IBrowserSource
     {

@@ -204,9 +204,10 @@ public sealed class GitPuller
             return false;
         }
 
-        // Exit code 1 (and no output) when it is not set; a config git cannot read leaves it to git as it is.
+        // Only a command git names is the user's; not set (exit code 1), and a probe that failed or ran out of time, are batch mode, so a
+        // stalled probe cannot bring the wait back (review of #412).
         var configured = await _run(checkout, ["config", "--get", "core.sshCommand"], ReadTimeout, ct).ConfigureAwait(false);
-        return configured.ExitCode == 1 || (configured.Output is not null && configured.Output.Trim().Length == 0);
+        return string.IsNullOrWhiteSpace(configured.Output);
     }
 
     /// <summary>What git said, in short, or <paramref name="otherwise"/> when it said nothing (it did not start, or ran out of time).</summary>

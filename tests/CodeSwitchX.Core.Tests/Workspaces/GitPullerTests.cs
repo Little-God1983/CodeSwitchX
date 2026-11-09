@@ -275,7 +275,8 @@ public class GitPullerTests : IDisposable
     [InlineData(null, 1, true)]
     [InlineData("", 0, true)]
     [InlineData("C:/Windows/System32/OpenSSH/ssh.exe", 0, false)]
-    public async Task Ssh_fails_at_once_unless_an_ssh_command_is_configured(string? configured, int exitCode, bool batch)
+    [InlineData(null, null, true)]
+    public async Task Ssh_fails_at_once_unless_an_ssh_command_is_configured(string? configured, int? exitCode, bool batch)
     {
         if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH_COMMAND")) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("GIT_SSH")))
         {

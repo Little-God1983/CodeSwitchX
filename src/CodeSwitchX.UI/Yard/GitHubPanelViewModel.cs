@@ -286,7 +286,7 @@ public sealed partial class GitHubPanelViewModel : ObservableObject
         }
 
         // The outcome first, then the button back: the panel is never idle without saying what the job came to.
-        if (!busy && jobs.TakeOutcome(_checkout.Key) is { } outcome)
+        if (!busy && jobs.TakeOutcome(_checkout.Key, _checkout.Path) is { } outcome)
         {
             ShowAction(outcome.Message, failed: !outcome.Succeeded);
             if (outcome.Pulled && !opening)
